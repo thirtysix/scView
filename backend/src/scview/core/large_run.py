@@ -118,7 +118,9 @@ from scview.core.pipeline import (
     skipped_event,
     subset_lean,
 )
-from scview.core.run_watchdog import RunCancelled, RunControl, cancelled_reason, default_before_step, others_stop
+from scview.core.run_watchdog import (
+    RunCancelled, RunControl, cancelled_reason, default_before_step, others_stop, room_for_step,
+)
 from scview.core.uns_keys import BATCH_MIXING_KEY, repair_slash_keys
 
 # The h5ad is created with HDF5's free-space manager kept in the file, so the in-place
@@ -1256,7 +1258,9 @@ class LargeRun:
             message = self.memory_check(step)
         except Exception:  # noqa: BLE001 — a broken check must not stop a run
             logger.warning("The pre-step check failed before %s; running it", step, exc_info=True)
-            return None
+            message = None
+        if c.cancelled:  # while the check waited for other work (``room_for_step``)
+            return "cancelled", cancelled_reason("before", step)
         return ("stopped", message) if message else None
 
     def memory_check(self, step: str) -> str | None:
@@ -1271,12 +1275,14 @@ class LargeRun:
         write = not self._written and step in preflight._CHUNKED_READS_X
         need = preflight.chunked_step_peak(step, self.shape_for_estimate(), self.params,
                                            write=write, doublets=self._doublet_plan(step))
-        others = self.control.others_growth(avail.used_bytes) if self.control is not None else 0
-        if need * (1 - preflight.ERROR_BAND) <= avail.available_bytes - others:
+        room = room_for_step(self.control, step, need)  # waits while other work holds the room
+        if room.verdict in ("fits", "cancelled"):  # cancelled: ``halt_before`` says so
             return None
         label = step.replace("_", " ")
-        if need * (1 - preflight.ERROR_BAND) <= avail.available_bytes:
-            return others_stop(f"Stopped before {label}: in large-dataset mode it needs", need, avail, others)
+        avail = room.avail
+        if room.verdict == "others":
+            return others_stop(f"Stopped before {label}: in large-dataset mode it needs", need, avail,
+                               room.others, room.waited)
         return (f"Stopped before {label}: in large-dataset mode it needs about {need / GB:.1f} GB "
                 f"more at its peak, and scView has {avail.available_bytes / GB:.1f} GB free of its "
                 f"{avail.limit_bytes / GB:.1f} GB limit, so the system would have stopped the "

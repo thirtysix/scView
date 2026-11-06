@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import dataclasses
+import itertools
 import unicodedata
 from collections import Counter
 from collections.abc import Callable
@@ -126,6 +127,12 @@ class RunReservation:
     need: int
     remaining: Callable[[], int] | None = None
     label: str = ""  # a request's read (``DatasetManager.hold_read``): what it is doing
+    # A run's place in the queue (runs started earlier have lower numbers), and whether it
+    # is waiting before a step for other work's growth (``run_watchdog.room_for_step``):
+    # paused between steps, it does not grow, so an earlier run's pre-step check leaves
+    # it out (``DatasetManager.outstanding(pre_step=True)``).
+    seq: int = 0
+    waiting: bool = False
 
     def outstanding(self, used_now: int) -> int:
         """Bytes the run is still expected to grow by from ``used_now``."""
@@ -153,6 +160,7 @@ RESERVE_RANGE = (0.05, 0.5)
 RESERVE_MIN = 1024**3
 # How long a load that does not fit waits for memory a finished run is still freeing.
 REFUSAL_WAIT_SECONDS = 10
+_RUN_SEQ = itertools.count(1)  # the order runs reserved in (``RunReservation.seq``)
 
 
 def reserve_share() -> float:
@@ -390,7 +398,8 @@ class DatasetManager:
         if need <= 0 or budget.used_bytes is None:
             return None
         base = budget.used_bytes + self.outstanding(budget.used_bytes, dataset_id)
-        self._runs[dataset_id] = r = RunReservation(dataset_id, base, int(need), remaining)
+        self._runs[dataset_id] = r = RunReservation(dataset_id, base, int(need), remaining,
+                                                    seq=next(_RUN_SEQ))
         logger.info("Run on %s reserves %.1f GB over the %.1f GB used", dataset_id,
                     need / 1024**3, budget.used_bytes / 1024**3)
         return r
@@ -429,13 +438,32 @@ class DatasetManager:
 
         return release
 
-    def outstanding(self, used_now: int, keep: str | None = None) -> int:
+    def outstanding(self, used_now: int, keep: str | None = None, pre_step: bool = False) -> int:
         """Bytes the running runs (other than the one on ``keep``) and the requests reading
         a dataset (``hold_read``, on any dataset: each reads its own copy) are still
         expected to grow by from ``used_now``: counted as used by ``free_memory_for`` and
-        by a run's pre-step check, which calls this from the run's thread."""
-        return (sum(r.outstanding(used_now) for d, r in list(self._runs.items()) if d != keep)
-                + sum(r.outstanding(used_now) for r in list(self._reads.values())))
+        by a run's pre-step check, which calls this from the run's thread (``pre_step``:
+        without the runs that started after ``keep``'s and wait before a step for it)."""
+        return sum(r.outstanding(used_now) for r in self._growing(keep, pre_step))
+
+    def _growing(self, keep: str | None, pre_step: bool) -> list[RunReservation]:
+        mine = self._runs.get(keep) if pre_step and keep is not None else None
+        runs = [r for d, r in list(self._runs.items()) if d != keep
+                and not (mine is not None and r.waiting and r.seq > mine.seq)]
+        return runs + list(self._reads.values())
+
+    def waits_for(self, used_now: int, keep: str) -> list[str]:
+        """What a pre-step wait of the run on ``keep`` waits for, in words: each run or read
+        still expected to grow (``outstanding(pre_step=True)``), largest first."""
+        held = sorted(((r.outstanding(used_now), r) for r in self._growing(keep, True)),
+                      key=lambda x: -x[0])
+        return [r.label or f"the run on {self.dataset_name(r.dataset_id)}" for b, r in held if b > 0]
+
+    def set_waiting(self, dataset_id: str, waiting: bool) -> None:
+        """The run on ``dataset_id`` waits before a step (or goes on): ``RunReservation.waiting``."""
+        r = self._runs.get(dataset_id)
+        if r is not None:
+            r.waiting = bool(waiting)
 
     def _run_holding(self, keep: str, need: int, free: int | None) -> tuple[RunReservation, int, int] | None:
         """When ``need`` bytes are refused only because of the running runs' and reads'

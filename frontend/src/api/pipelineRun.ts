@@ -24,6 +24,22 @@ export type WatchdogEvent =
        *  missing when the run had no estimate (an older backend, or no plan). */
       expected_s?: [number, number];
       expected_text?: string;
+    }
+  | {
+      type: "watchdog";
+      /** Before a step that fits only once other work (another run, a read) has finished:
+       *  the run waits for it (backend run_watchdog.room_for_step); Cancel still works. */
+      kind: "waiting";
+      step: string;
+      /** What it waits for, in words ("the run on Kang"). */
+      waiting_for: string[];
+      waited_s: number;
+      max_wait_s: number;
+      need_gb: number | null;
+      others_gb: number | null;
+      available_gb: number | null;
+      /** The backend's sentence. */
+      message: string;
     };
 
 /** How a run ended: every step ran; a step failed (the steps that need it were skipped, the
@@ -89,6 +105,9 @@ export function watchdogMessage(e: WatchdogEvent, label: (step: string) => strin
       `Memory at ${e.pct}% ${of}. If it runs out, the system stops the backend; ` +
       "Cancel keeps the dataset as it was."
     );
+  }
+  if (e.kind === "waiting") {
+    return e.waited_s >= 60 ? `${e.message} Waiting for ${elapsedText(e.waited_s)} so far.` : e.message;
   }
   const sofar = `${label(e.step)}: ${elapsedText(e.elapsed_s)} so far`;
   if (!e.expected_s || !e.expected_text) return `${sofar}.`;

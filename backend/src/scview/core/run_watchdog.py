@@ -11,7 +11,9 @@ run's stream:
 - ``kind: "slow_step"`` every ``SLOW_STEP_SECONDS`` one step keeps running, with the
   step's preflight time range (``expected_s``, ``expected_text``) when the run has one
   (``expected``, set by ``core/processing.py``), so the page can say whether the step is
-  still inside its estimate or past it.
+  still inside its estimate or past it;
+- ``kind: "waiting"`` (sent by the pre-step check, not the sampler) while the run waits
+  before a step for other work to finish (``room_for_step``), with the sentence to show.
 
 "Use" is the container's memory minus its inactive file cache (what ``docker
 stats`` shows): the kernel drops that cache before it kills anything, and
@@ -53,6 +55,16 @@ MEMORY_THRESHOLDS = (0.8, 0.9)
 REARM_MARGIN = 0.05
 SLOW_STEP_SECONDS = 60.0
 GB = 1024**3
+# A run whose next step fits only once other work has finished (another run's or a read's
+# reserved growth, ``DatasetManager.outstanding``) waits for it before the step instead of
+# stopping (``room_for_step``): it checks again every ``QUEUE_POLL_SECONDS``, sends a
+# ``kind: "waiting"`` event at once and then every ``QUEUE_NOTE_SECONDS``, and stops as
+# before once it has waited ``QUEUE_WAIT_SECONDS`` (30 min: about the longest step of a
+# large in-memory run; a whole 1.3M-cell run takes 1 h 45 min, so a queue behind one stops
+# rather than holding its dataset for that long). 0 turns the wait off.
+QUEUE_WAIT_SECONDS = 30 * 60.0
+QUEUE_POLL_SECONDS = 2.0
+QUEUE_NOTE_SECONDS = 60.0
 
 
 class Memory(NamedTuple):
@@ -179,10 +191,17 @@ class RunWatchdog:
                  "used_gb": _gb(mem.used), "limit_gb": _gb(mem.limit),
                  "pct": int(round(share * 100)), "limited": mem.limited, "step": self._step}]
 
+    def note(self, event: dict[str, Any]) -> None:
+        """Send an event that is not a warning (``kind: "waiting"``): logged and streamed,
+        not kept for the run's result."""
+        self._send(event)
+
     def _send(self, event: dict[str, Any]) -> None:
         if event["kind"] == "memory":
             logger.warning("Run memory at %s%% of %s GB (step %s)",
                            event["pct"], event["limit_gb"], event["step"])
+        elif event["kind"] == "waiting":
+            logger.info("Run waits before %s: %s", event["step"], event["message"])
         else:
             logger.info("Step %s still running after %s s", event["step"], event["elapsed_s"])
         if self.emit is None:
@@ -291,22 +310,85 @@ def log_only_stop(step: str, adata: Any) -> str | None:
             f"Nothing was saved: the dataset is as it was before the run.")
 
 
-def others_stop(lead: str, need: int, avail: Any, others: int) -> str:
+def others_stop(lead: str, need: int, avail: Any, others: int, waited: float = 0.0) -> str:
     """The stop of a step that fits by itself but not beside what other work still running
     is expected to grow by (``DatasetManager.outstanding``): that fits again once it ends,
-    so the sentence says to run it again, not to raise the limit."""
+    so the sentence says to run it again, not to raise the limit. ``waited``: seconds the
+    run waited for that work first (``room_for_step``)."""
+    after = f" It waited {_minutes(waited)} for that work to finish first." if waited >= 1 else ""
     return (f"{lead} about {need / GB:.1f} GB more at its peak, and of the "
             f"{avail.available_bytes / GB:.1f} GB scView has free ({avail.limit_bytes / GB:.1f} GB limit) other "
             f"work still running will take about {others / GB:.1f} GB, so together they would get the backend "
-            "stopped. Nothing was saved: the dataset is as it was before the run. Run it again once that work "
-            "has finished.")
+            f"stopped.{after} Nothing was saved: the dataset is as it was before the run. Run it again once that "
+            "work has finished.")
+
+
+def _minutes(seconds: float) -> str:
+    m = int(round(seconds / 60))
+    return f"{m} min" if m >= 1 else f"{int(round(seconds))} s"
+
+
+class Room(NamedTuple):
+    """``room_for_step``'s answer: ``verdict`` "fits" | "others" (fits only once other
+    work has finished, and waiting for it did not help) | "never" (not even with nothing
+    else running) | "cancelled" (while waiting), with the last reading."""
+
+    verdict: str
+    avail: Any
+    others: int
+    waited: float = 0.0
+
+
+def room_for_step(control: RunControl | None, step: str, need: int) -> Room:
+    """Whether ``need`` more bytes (the step's estimated peak) fit before ``step``: the low
+    end of the estimate's error band (``preflight.ERROR_BAND``) against what is free less
+    what other runs and reads are still expected to grow by (``RunControl.others_growth``).
+
+    When it fits only once that other work has finished, a run wired for it
+    (``RunControl.waiting_on``, set by ``core/processing.py``) waits instead of stopping,
+    in its worker thread: it is marked waiting with the manager (``on_wait``), so a run
+    that started earlier no longer counts its growth and goes on (a later run waits for an
+    earlier one, never the reverse: two runs cannot wait on each other), checks again every
+    ``QUEUE_POLL_SECONDS``, sends a ``kind: "waiting"`` event, and gives up after
+    ``QUEUE_WAIT_SECONDS``. Cancel ends the wait at once. Without a container limit it
+    always fits (the check would be a guess)."""
+    from scview.core import preflight
+
+    low = need * (1 - preflight.ERROR_BAND)
+    started: float | None = None
+    next_note = 0.0
+    try:
+        while True:
+            avail = preflight.available_memory()
+            if not avail.limited or avail.available_bytes is None or avail.limit_bytes is None:
+                return Room("fits", avail, 0)
+            others = control.others_growth(avail.used_bytes) if control is not None else 0
+            waited = 0.0 if started is None else time.monotonic() - started
+            if low <= avail.available_bytes - others:
+                return Room("fits", avail, others, waited)
+            if low > avail.available_bytes:
+                return Room("never", avail, others, waited)
+            if control is None or control.waiting_on is None or waited >= QUEUE_WAIT_SECONDS:
+                return Room("others", avail, others, waited)
+            if started is None:
+                started = time.monotonic()
+                control.set_waiting(True)
+            if waited >= next_note:
+                control.note_waiting(step, need, avail, others, waited)
+                next_note += QUEUE_NOTE_SECONDS
+            if control.wait_cancelled(QUEUE_POLL_SECONDS):
+                return Room("cancelled", avail, others, waited)
+    finally:
+        if started is not None and control is not None:
+            control.set_waiting(False)
 
 
 def default_before_step(step: str, adata: Any, params: Any) -> str | None:
     """The check every pipeline run makes before each step: stop before a step the
     preflight estimate says cannot fit in the memory left, which is what is free less
     what other runs and reads are still expected to grow by (``RunControl.others_growth``):
-    two runs that each pass alone can overrun together.
+    two runs that each pass alone can overrun together. A step that would fit once that
+    other work has finished waits for it first (``room_for_step``).
 
     A step that outgrows the container limit gets the backend killed, which loses
     the whole run; the watchdog's 2 s sampler cannot warn in time (Scrublet on Kang
@@ -335,13 +417,13 @@ def default_before_step(step: str, adata: Any, params: Any) -> str | None:
     if not avail.limited or avail.available_bytes is None or avail.limit_bytes is None:
         return None
     need = preflight.step_peak_for(adata, step, params)
-    control = current()
-    others = control.others_growth(avail.used_bytes) if control is not None else 0
-    if need * (1 - preflight.ERROR_BAND) <= avail.available_bytes - others:
+    room = room_for_step(current(), step, need)  # waits while other work holds the room
+    if room.verdict in ("fits", "cancelled"):  # cancelled: ``halt_before`` says so
         return None
     label = step.replace("_", " ")
-    if need * (1 - preflight.ERROR_BAND) <= avail.available_bytes:
-        return others_stop(f"Stopped before {label}: it needs", need, avail, others)
+    avail = room.avail
+    if room.verdict == "others":
+        return others_stop(f"Stopped before {label}: it needs", need, avail, room.others, room.waited)
     return (f"Stopped before {label}: it needs about {need / GB:.1f} GB more at its peak, and scView "
             f"has {avail.available_bytes / GB:.1f} GB free of its {avail.limit_bytes / GB:.1f} GB limit, "
             f"so the system would have stopped the backend. Nothing was saved: the dataset is as it "
@@ -382,6 +464,11 @@ class RunControl:
         # Bytes other runs and reads are still expected to grow by, from the bytes used
         # now (``DatasetManager.outstanding`` without this run): set by core/processing.py.
         self.other_growth: Callable[[int], int] | None = None
+        # Set by core/processing.py: what a pre-step wait waits for, in words, from the
+        # bytes used now (``DatasetManager.waits_for``); None: the run never waits, it
+        # stops (``room_for_step``). ``on_wait`` tells the manager it waits or goes on.
+        self.waiting_on: Callable[[int], list[str]] | None = None
+        self.on_wait: Callable[[bool], None] | None = None
         # Looked up now, so a check plugged into default_before_step applies.
         self.before_step = default_before_step if before_step is _DEFAULT else before_step
         self._cancel = threading.Event()
@@ -403,6 +490,37 @@ class RunControl:
             logger.warning("Could not read the other runs' reservations", exc_info=True)
             return 0
 
+    def set_waiting(self, waiting: bool) -> None:
+        if self.on_wait is None:
+            return
+        try:
+            self.on_wait(waiting)
+        except Exception:  # noqa: BLE001 — the wait goes on without it
+            logger.warning("Could not mark the run as waiting", exc_info=True)
+
+    def wait_cancelled(self, seconds: float) -> bool:
+        """Sleep ``seconds``, or less when the run is cancelled meanwhile; whether it was."""
+        return self._cancel.wait(seconds)
+
+    def note_waiting(self, step: str, need: int, avail: Any, others: int, waited: float) -> None:
+        """The ``kind: "waiting"`` event: what the run waits for before ``step``, and why."""
+        try:
+            holders = list(self.waiting_on(avail.used_bytes)) if self.waiting_on is not None else []
+        except Exception:  # noqa: BLE001 — the sentence goes on without names
+            logger.warning("Could not name the work this run waits for", exc_info=True)
+            holders = []
+        names = [h[:1].lower() + h[1:] for h in holders]
+        who = "; ".join(names) if names else "other work still running"
+        label = step.replace("_", " ")
+        message = (f"Waiting before {label}: it needs about {need / GB:.1f} GB more at its peak, and of the "
+                   f"{avail.available_bytes / GB:.1f} GB free, {who} will still take about {others / GB:.1f} GB. "
+                   f"The run goes on once that has finished (it waits up to "
+                   f"{_minutes(QUEUE_WAIT_SECONDS)}); Cancel stops it without saving.")
+        self.watchdog.note({"type": "watchdog", "kind": "waiting", "step": step, "waiting_for": holders,
+                            "waited_s": int(round(waited)), "max_wait_s": int(QUEUE_WAIT_SECONDS),
+                            "need_gb": _gb(need), "others_gb": _gb(others),
+                            "available_gb": _gb(avail.available_bytes), "message": message})
+
     def cancel(self) -> None:
         """Ask the run to stop at the next step boundary; end a child process now."""
         self._cancel.set()
@@ -423,9 +541,11 @@ class RunControl:
             message = self.before_step(step, adata, params)
         except Exception:  # noqa: BLE001 — a broken check must not stop a run
             logger.warning("The pre-step check failed before %s; running it", step, exc_info=True)
-            return None
+            message = None
         finally:
             _CURRENT.reset(token)
+        if self.cancelled:  # while the check waited for other work (``room_for_step``)
+            return "cancelled", cancelled_reason("before", step)
         return ("stopped", str(message)) if message else None
 
     @contextlib.contextmanager

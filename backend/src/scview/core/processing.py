@@ -101,6 +101,16 @@ async def _claim(dm: DatasetManager, dataset_id: str) -> tuple[AnnDataAdaptor, C
     return adaptor, release
 
 
+def _queue(dm: DatasetManager, dataset_id: str, control: RunControl) -> None:
+    """Wire the run's pre-step check to the manager: it counts what the other runs and
+    reads still grow by, and when a step fits only once they have finished it waits for
+    them (``run_watchdog.room_for_step``), marked waiting so that a run started earlier
+    leaves it out and goes on first (``DatasetManager.outstanding(pre_step=True)``)."""
+    control.other_growth = lambda used: dm.outstanding(used, dataset_id, pre_step=True)
+    control.waiting_on = lambda used: dm.waits_for(used, dataset_id)
+    control.on_wait = lambda waiting: dm.set_waiting(dataset_id, waiting)
+
+
 async def _make_run_room(dm: DatasetManager, dataset_id: str, adaptor: AnnDataAdaptor,
                          control: RunControl | None) -> AnnDataAdaptor:
     """Before a run: with a plan, the mode (``large_run.choose_mode``, set as
@@ -112,8 +122,8 @@ async def _make_run_room(dm: DatasetManager, dataset_id: str, adaptor: AnnDataAd
     way the run's expected growth is reserved (``_reserve_run``) until it ends. Returns
     the adaptor the work gets."""
     need = None
-    if control is not None:  # its pre-step check counts what the others still grow by
-        control.other_growth = lambda used: dm.outstanding(used, dataset_id)
+    if control is not None:
+        _queue(dm, dataset_id, control)
     if control is not None and control.plan is not None:
         from scview.core import large_run, preflight
 

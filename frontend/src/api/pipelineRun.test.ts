@@ -56,6 +56,21 @@ describe("watchdogMessage", () => {
   });
 });
 
+describe("watchdogMessage for a run waiting before a step", () => {
+  const waiting = (s: number): WatchdogEvent => ({
+    type: "watchdog", kind: "waiting", step: "pca", waiting_for: ["the run on Kang"], waited_s: s,
+    max_wait_s: 1800, need_gb: 4, others_gb: 5, available_gb: 8,
+    message: "Waiting before pca: it needs about 4.0 GB more at its peak.",
+  });
+
+  it("gives the backend's sentence, then how long it has waited", () => {
+    expect(watchdogMessage(waiting(0), label)).toBe("Waiting before pca: it needs about 4.0 GB more at its peak.");
+    expect(watchdogMessage(waiting(125), label)).toBe(
+      "Waiting before pca: it needs about 4.0 GB more at its peak. Waiting for 2 min so far.",
+    );
+  });
+});
+
 describe("runOutcome", () => {
   it("is null for a run that ran to its end, and for an older backend without status", () => {
     expect(runOutcome({ steps_run: ["qc_metrics"], status: "complete" }, label)).toBeNull();
