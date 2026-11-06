@@ -32,6 +32,8 @@ from scipy import stats
 TMIN = 5  # decoupler's default: fewer targets measured than this, no score
 _EPS = 2.2e-16  # decoupler's guard in the t-value at r = +-1
 _ROWS = 20_000  # cells per block when every source is scored
+KEEP_BLOCK_BYTES = 64 * 1024**2  # working copies of one block of cells while CellScores fills
+_BLOCK_COPIES = 8  # float64 cells x sources arrays _t and the product hold at once, about
 
 
 def tval(r: np.ndarray, df: int) -> np.ndarray:
@@ -290,26 +292,64 @@ class CellModel:
             xw = xw.toarray() if sp.issparse(xw) else np.asarray(xw)
             yield sl, self._t(xw, sl, slice(None))
 
-    def all(self) -> np.ndarray:
+    def all(self, rows: int = _ROWS) -> np.ndarray:
         """cells x sources activity (float32); memory grows with both."""
         out = np.empty((self.M.shape[0], len(self.net.sources)), dtype=np.float32)
-        for sl, t in self.blocks():
+        for sl, t in self.blocks(rows):
             out[sl] = t
         return out
 
     def group_means(self, codes: np.ndarray, n_groups: int) -> tuple[np.ndarray, np.ndarray]:
         """(groups x sources mean activity, cells per group); code -1 = no group."""
-        sums = np.zeros((n_groups, len(self.net.sources)))
-        sizes = np.bincount(codes[codes >= 0], minlength=n_groups)
-        for sl, t in self.blocks():
-            c = codes[sl]
-            ok = c >= 0
-            onehot = sp.csr_matrix((np.ones(ok.sum()), (c[ok], np.flatnonzero(ok))),
-                                   shape=(n_groups, t.shape[0]))
-            sums += onehot @ t
-        with np.errstate(invalid="ignore"):
-            means = sums / sizes[:, None]
-        return means, sizes
+        return _group_means(self.blocks(), len(self.net.sources), codes, n_groups)
+
+
+def _group_means(blocks, n_sources: int, codes: np.ndarray, n_groups: int) -> tuple[np.ndarray, np.ndarray]:
+    sums = np.zeros((n_groups, n_sources))
+    sizes = np.bincount(codes[codes >= 0], minlength=n_groups)
+    for sl, t in blocks:
+        c = codes[sl]
+        ok = c >= 0
+        onehot = sp.csr_matrix((np.ones(ok.sum()), (c[ok], np.flatnonzero(ok))),
+                               shape=(n_groups, t.shape[0]))
+        sums += onehot @ t
+    with np.errstate(invalid="ignore"):
+        means = sums / sizes[:, None]
+    return means, sizes
+
+
+def kept_bytes(n_cells: int, n_sources: int) -> int:
+    """What ``CellScores`` keeps: every cell's activity for every source, float32."""
+    return 4 * int(n_cells) * int(n_sources)
+
+
+@dataclass
+class CellScores:
+    """Every cell's activity for every source of one network, kept in place of the
+    ``CellModel`` it was scored with, and used as one (``net``, ``source``, ``group_means``).
+    A backed dataset's model holds its matrix read from the file; these are ``kept_bytes``
+    (Kang's 14k cells x CollecTRI's ~600 sources scored: 34 MB). Filled with
+    ``KEEP_BLOCK_BYTES`` of working copies beside them at most."""
+
+    net: Network
+    scores: np.ndarray  # cells x sources, float32
+
+    @classmethod
+    def of(cls, model: CellModel) -> "CellScores":
+        rows = max(1, KEEP_BLOCK_BYTES // (_BLOCK_COPIES * 8 * max(1, len(model.net.sources))))
+        return cls(net=model.net, scores=model.all(rows=min(rows, _ROWS)))
+
+    def source(self, name: str) -> np.ndarray:
+        return self.scores[:, self.net.sources.index(name)]
+
+    def blocks(self, rows: int = _ROWS):
+        n = self.scores.shape[0]
+        for i in range(0, n, rows):
+            sl = slice(i, min(n, i + rows))
+            yield sl, self.scores[sl]
+
+    def group_means(self, codes: np.ndarray, n_groups: int) -> tuple[np.ndarray, np.ndarray]:
+        return _group_means(self.blocks(), len(self.net.sources), codes, n_groups)
 
 
 def score_profile(values, genes, net: pd.DataFrame, tmin: int = TMIN) -> pd.DataFrame:

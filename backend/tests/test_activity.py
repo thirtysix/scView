@@ -212,6 +212,25 @@ def test_blocks_cover_every_cell(monkeypatch):
     np.testing.assert_allclose(model.all(), whole)
 
 
+@pytest.mark.parametrize("block_bytes", [64 * 1024**2, 1])  # one block; a cell at a time
+def test_kept_scores_answer_as_the_model_does(monkeypatch, block_bytes):
+    a = _lognorm(_cells())
+    model = activity.CellModel.build(a.X, a.var_names, _net("collectri"))
+    monkeypatch.setattr(activity, "KEEP_BLOCK_BYTES", block_bytes)
+    kept = activity.CellScores.of(model)
+    assert kept.net is model.net and kept.scores.dtype == np.float32
+    assert kept.scores.nbytes == activity.kept_bytes(a.n_obs, len(model.net.sources))
+    np.testing.assert_array_equal(kept.scores, model.all())
+    for source in ("STAT1", "TP53"):
+        np.testing.assert_allclose(kept.source(source), model.source(source), rtol=1e-5, atol=1e-6)
+    codes = np.r_[np.zeros(100, int), np.ones(100, int)]
+    codes[0] = -1
+    means, sizes = kept.group_means(codes, 2)
+    ref_means, ref_sizes = model.group_means(codes, 2)
+    assert sizes.tolist() == ref_sizes.tolist() == [99, 100]
+    np.testing.assert_allclose(means, ref_means, rtol=1e-5, atol=1e-6)
+
+
 def test_profile_scores_match_the_regression_and_rank_the_planted_tf():
     rng = np.random.default_rng(3)
     genes = [f"G{i}" for i in range(N_GENES)]
