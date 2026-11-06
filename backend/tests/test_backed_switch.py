@@ -156,3 +156,19 @@ async def test_a_read_held_by_reading_survives_another_request_reading_the_datas
     await asyncio.wait_for(asyncio.gather(de(), edit()), 30)
     assert "error" not in out, repr(out.get("error"))
     assert not adaptor.adata.isbacked and not adata.file.is_open
+
+
+def test_a_copy_read_in_leaves_the_shared_file_open(tmp_path: Path) -> None:
+    """Spot composition reads a copy of a cached backed dataset into memory: the
+    adaptor's file stays open for the other requests reading it (anndata's own
+    ``to_memory`` closed it)."""
+    path = tmp_path / "d.h5ad"
+    _counts().write_h5ad(path)
+    shared = ad.read_h5ad(path, backed="r")
+    M = shared.X  # another request's handle on the backed matrix
+    copy = anndata_adaptor._read_in_keeping_open(shared)
+    assert not getattr(copy, "isbacked", False)
+    assert shared.file.is_open
+    np.testing.assert_array_equal(working_copy.read_rows(M, np.ones(shared.n_obs, dtype=bool)).toarray(),
+                                  copy.X.toarray())
+    shared.file.close()
