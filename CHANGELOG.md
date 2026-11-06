@@ -6,6 +6,50 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- **Cell Ontology ids for cell-type labels.** The AI annotator asks the model for each label's Cell Ontology (CL)
+  id and keeps it only when the term exists and the label agrees with its name or an exact synonym; otherwise the
+  label is matched by name, or gets no id. Matching is strict: the same name, the same exact synonym, or the same
+  once case, plurals, "+" (positive), hyphens and a trailing "cells" are set aside. Abbreviations such as "CD14 Mono"
+  get no id rather than a guess. The Cell-type annotation card lists each label of the column it wrote with its CL
+  id, linking to the term's page. Any label column can be mapped through
+  `GET /datasets/{id}/annotation/ontology?column=` or the MCP tool `cell_ontology_ids`. The ids are stored with the
+  dataset, written in by the replay script and named in the co-pilot's cell-type fact. The Cell Ontology download is
+  pinned to release 2026-06-08 (sha256-checked); a file already on disk is kept and the status says whether it is
+  the pinned one.
+
+### Changed
+- **TF and pathway activity on a dataset opened from its file reads the matrix once.** The first request keeps every
+  cell's scores (Kang x CollecTRI: about 34 MB), so colouring by one TF after another and the group heatmap no longer
+  re-read the expression matrix: 0.17 s to 0.03 s per TF on Kang. The room for the scores is held with that first
+  read; they are kept only below 512 MB and 1/16 of the memory limit, and only when they fit without closing another
+  dataset. Otherwise requests behave as before.
+- **Time estimates.** The "first run" notes on Compare methods, the variable-gene check, the merge check, the
+  count-split check and layout stability count numba's compile only while it is still to come: any neighbour graph
+  or UMAP built in the server compiles it, and a restart keeps only a shorter import. Kang's Compare methods now says
+  14 s after a restart (took 15) and 6 s once warm (took 7); both said 26 s. The merge check's "+70 s" is about 28 s,
+  then none. WNN, velocity and the pipeline's neighbour step leave out a compile already done (neighbours once warm:
+  0.6-2.5 s, was 16-64 s). Spot composition's time model is now a per-spot part plus fit genes x types squared:
+  estimates had been 1.8-3.3x high and are within 20% on Visium HD 16 um bins (7-37 types), CytAssist spots and the
+  Lymph Node. The ATAC likelihood-ratio estimate scales a fit's cost per cell with the cells (E18 mouse brain: says
+  74 s, took 63; said 112).
+
+### Fixed
+- **The AI annotator matched numeric clusters by line order.** The cluster id was stripped from each line of the
+  model's reply, so every numbered clustering (all Leiden runs) fell back to reading the labels in order, and one
+  extra line in the reply shifted every label by one. Each line's id is now read, "Cluster 13" no longer matches
+  cluster 3, and a cluster the reply leaves out stays Unknown. The reply's length limit grows with the number of
+  clusters (it was 800 tokens, about 30 clusters).
+- **Start scripts no longer suggest more memory than Docker or Podman has.** The 4 GB minimum was applied after the
+  cap, so a fresh Windows install with a 3.8 GB Podman machine was offered 4 GB, above what the machine has. The
+  suggestion is now at most the engine's memory minus 0.5 GB; when Docker or Podman is the limit, the script says
+  so and how to give it more (macOS Podman: `podman machine set --memory`; Docker Desktop: Settings > Resources;
+  Windows: the README's `.wslconfig` section). A saved limit above the engine's memory is warned about on every
+  start. start.sh no longer stops silently on an older `.env` without the `SCVIEW_MEMORY_GB` line.
+- **Spot composition's estimate when a run starts counted 20 types** whenever no label was left out or merged; it
+  now counts the column's own, so the two agree (the Lymph Node's 33-type run said 46 s at the start, 79 s in the
+  reference check).
+
 ## [0.63.0] - 2026-11-06
 
 Runs queue for memory instead of stopping each other, backed datasets work across the analyses built on log-normalised expression, and History reads in words.
