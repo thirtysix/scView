@@ -418,7 +418,7 @@ export function HvgSensitivityPanel({ datasetId, onClose }: { datasetId: string;
               {tooMany
                 ? `Pick at most ${info.max_settings} settings.`
                 : estimate != null && selected.length > 0
-                  ? `About ${formatDuration(estimate)} for ${selected.length} setting${selected.length === 1 ? "" : "s"} (the first run after the server starts adds ~${formatDuration(info.first_run_seconds)}).`
+                  ? `About ${formatDuration(estimate)} for ${selected.length} setting${selected.length === 1 ? "" : "s"}${info.first_run_seconds > 0 ? ` (the first run after the server starts adds ~${formatDuration(info.first_run_seconds)})` : ""}.`
                   : "Pick at least one setting."}
             </span>
           )}

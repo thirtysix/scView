@@ -63,7 +63,7 @@ import pandas as pd
 import scipy.sparse as sp
 
 from scview.core import embedding_reliability as er
-from scview.core import provenance
+from scview.core import numba_warm, provenance
 from scview.core.object_cache import ObjectCache
 from scview.core.qc_groups import group_codes
 
@@ -92,9 +92,11 @@ THUMB_CELLS = 5_000  # cells per thumbnail (the same cells in every layout)
 MAX_THUMB_CELLS = 20_000
 SAME_TOL = 1e-3  # a layout equal to the current plot within this (max abs difference)
 
-FIRST_RUN_SECONDS = 30  # numba compiles UMAP and the neighbour search once per server start
 # Measured on 2 cores: Kang 13,836 cells 200 epochs 4.3 / 4.9 / 6.2 s per layout at
 # k 10 / 15 / 30 and 2.0 s per graph; paul15 2,730 cells 500 epochs 2.0 / 2.3 / 2.9 s.
+# The first run in a process also compiles UMAP and the neighbour search
+# (``first_run_seconds``): 2026-11-06, Kang's 9 layouts 86 s in a restarted server
+# against 58 s after its pipeline had run (estimate 52 s).
 _SECONDS_PER_EPOCH_CELL = 1.6e-6
 _SECONDS_PER_GRAPH_CELL = 1.5e-4
 
@@ -207,6 +209,12 @@ def estimate_seconds(n_cells: int, ks: list[int], seeds: list[int]) -> float:
     for k in ks:
         total += len(seeds) * (0.3 + epochs * m * _SECONDS_PER_EPOCH_CELL * (0.6 + 0.4 * k / 15))
     return round(total, 1)
+
+
+def first_run_seconds(n_cells: int) -> float:
+    """numba's compile of the neighbour search and UMAP still to come in this process
+    (``core/numba_warm.py``); none once a graph and a UMAP were made in it."""
+    return round(numba_warm.umap_seconds(min(n_cells, MAX_CELLS)), 1)
 
 
 # ---------------------------------------------------------------------------
@@ -706,7 +714,7 @@ def iter_run(adata, plan: Plan, stop: Callable[[], bool] | None = None,
     run.thumb = np.sort(np.random.default_rng(SAMPLE_SEED + 1).choice(
         plan.rows.size, size=min(THUMB_CELLS, plan.rows.size), replace=False))
     est = estimate_seconds(plan.n_cells, plan.ks, plan.seeds)
-    yield "start", {**plan.to_dict(), "estimate_seconds": est, "first_run_seconds": FIRST_RUN_SECONDS}
+    yield "start", {**plan.to_dict(), "estimate_seconds": est, "first_run_seconds": first_run_seconds(plan.n_cells)}
     X = _representation(adata, rec, plan.rows)
     # The reference graph for placement: the dataset's own k, on the laid-out cells.
     k_ref = rec.n_neighbors if rec.n_neighbors < X.shape[0] else X.shape[0] - 1

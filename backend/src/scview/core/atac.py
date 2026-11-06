@@ -388,7 +388,13 @@ _DA_SECONDS_PER_VALUE = 3.5e-7
 _DA_SECONDS_PER_VALUE_GROUP = 1.4e-8
 _DA_LR_SECONDS_PER_VALUE = 1.5e-7
 _DA_LR_SECONDS_PER_VALUE_GROUP = 1.0e-8
-_DA_LR_SECONDS_PER_CELL_FIT = 9e-8
+# A fit's cost per cell falls with fewer cells (same IRLS steps, 6.1-6.3 per fit, and the same
+# block size; it follows numpy's BLAS threads inside the 2-thread pool: with 1 BLAS thread both
+# datasets cost 4.3-4.9e-8): PBMC 10k (11,898 cells) 7.5e-8 against E18 mouse brain (4,878) 4.8e-8
+# at 2 CPUs with 2 BLAS threads, 2026-11-06, about the square root of the cells. The constant sits
+# between this laptop's PBMC run (240.7 s) and the earlier ones (281 s at 24 groups, 311 s at 21).
+_DA_LR_SECONDS_PER_CELL_FIT = 8.3e-8
+_DA_LR_SCALE_CELLS = 11_898  # the cell cost above at this many cells; below, x sqrt(cells / it), at least 0.5
 _RUN_FIRST_SECONDS = 20.0
 _BASE_BYTES = 600 * 1024**2  # scanpy, numba, umap-learn and pynndescent loaded
 _BLOCK_BYTES = BLOCK_VALUES * 40  # one block read, its TF-IDF copies and transposed product
@@ -429,11 +435,14 @@ def estimate_da_seconds(nnz: int, n_groups: int = 1, test: str = "wilcoxon", *, 
     """Differential accessibility at 2 CPUs: detection, then the batches of peaks; each group's
     bookkeeping per value. PBMC 10k, 104M values: 40 s with 3 groups tested, 76 s with 24.
     ``lr``: detection, the score pass (per value x group), and the fits, each costing per cell.
-    PBMC 10k, 21 groups, 210,000 fits: 311 s (estimate 268), 602 s at 1 CPU; mouse E18, 4,878 cells: 80 s (112)."""
+    PBMC 10k, 21 groups, 210,000 fits: 241 s (estimate 250; 311 s and 281 s at 24 groups in earlier runs);
+    mouse E18, 4,878 cells, 21 groups: 63 s (74; 80 s earlier; 112 when the cell cost was flat)."""
     if test == "lr":
         fits = LRT_PER_GROUP * n_groups if n_fits is None else n_fits
+        n = max(n_cells, 1)
+        per_cell = _DA_LR_SECONDS_PER_CELL_FIT * min(1.0, max(0.5, (n / _DA_LR_SCALE_CELLS) ** 0.5))
         return round(5.0 + nnz * (_DA_LR_SECONDS_PER_VALUE + n_groups * _DA_LR_SECONDS_PER_VALUE_GROUP)
-                     + fits * max(n_cells, 1) * _DA_LR_SECONDS_PER_CELL_FIT, 0)
+                     + fits * n * per_cell, 0)
     return round(5.0 + nnz * (_DA_SECONDS_PER_VALUE + n_groups * _DA_SECONDS_PER_VALUE_GROUP), 0)
 
 

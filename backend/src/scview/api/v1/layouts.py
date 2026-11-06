@@ -60,7 +60,7 @@ async def _adaptor(dm: DatasetManager, dataset_id: str):
 def _limits() -> dict[str, Any]:
     return {"max_cells": ls.MAX_CELLS, "max_layouts": ls.MAX_LAYOUTS, "max_seeds": ls.MAX_SEEDS,
             "neighbor_range": [ls.MIN_NEIGHBORS, ls.MAX_NEIGHBORS], "max_groups": ls.MAX_GROUPS,
-            "first_run_seconds": ls.FIRST_RUN_SECONDS, "rule": ls.TOUCH_RULE}
+            "rule": ls.TOUCH_RULE}
 
 
 @router.get("/datasets/{dataset_id}/layouts")
@@ -75,7 +75,8 @@ async def layouts_info(
     adata = (await _adaptor(dm, dataset_id)).adata
 
     def _info() -> dict[str, Any]:
-        base = {"n_cells": int(adata.n_obs), **_limits(), "running": dataset_id in _running}
+        base = {"n_cells": int(adata.n_obs), **_limits(), "running": dataset_id in _running,
+                "first_run_seconds": ls.first_run_seconds(int(adata.n_obs))}
         try:
             plan = ls.make_plan(adata, embedding=embedding, group_by=group_by)
         except ls.LayoutError as exc:

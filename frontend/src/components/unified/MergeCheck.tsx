@@ -229,8 +229,11 @@ export function MergeCheck({
         !result && (
           <p className="text-[10px] text-slate-400">
             Checks {prettyObsLabel(info.reference ?? "")}
-            {info.estimate_seconds != null ? `: about ${formatDuration(info.estimate_seconds)}` : ""} (the first run after
-            the server starts adds ~{formatDuration(info.first_run_seconds)}).
+            {info.estimate_seconds != null ? `: about ${formatDuration(info.estimate_seconds)}` : ""}
+            {info.first_run_seconds > 0
+              ? ` (the first run after the server starts adds ~${formatDuration(info.first_run_seconds)})`
+              : ""}
+            .
           </p>
         )
       )}

@@ -268,13 +268,13 @@ async def subcluster_group(
 _hvg_running: set[str] = set()  # datasets with a check running: one at a time each
 
 
-def _hvg_limits() -> dict[str, Any]:
+def _hvg_limits(n_cells: int) -> dict[str, Any]:
     return {
         "max_settings": hs.MAX_SETTINGS,
         "min_genes": hs.MIN_GENES,
         "max_genes": hs.MAX_GENES,
         "max_cells": hs.MAX_CELLS,
-        "first_run_seconds": hs.FIRST_RUN_SECONDS,
+        "first_run_seconds": hs.first_run_seconds(n_cells),  # 0 once compiled in this process
     }
 
 
@@ -289,7 +289,7 @@ async def hvg_sensitivity_info(
     adata = (await _adata(dm, dataset_id)).adata
 
     def _info() -> dict[str, Any]:
-        base = {"n_cells": int(adata.n_obs), "n_genes": int(adata.n_vars), **_hvg_limits()}
+        base = {"n_cells": int(adata.n_obs), "n_genes": int(adata.n_vars), **_hvg_limits(adata.n_obs)}
         try:
             hs.check(adata)
             rec = hs.recorded(adata, reference)
@@ -480,13 +480,13 @@ class MergeSaveRequest(MergeCheckRequest):
     pairs: list[list[str]]
 
 
-def _merge_limits() -> dict[str, Any]:
+def _merge_limits(n_cells: int) -> dict[str, Any]:
     return {
         "merge_max_genes": mc.MERGE_MAX_GENES,
         "padj": mc.DE_PADJ,
         "log2fc": mc.DE_LOG2FC,
         "max_cells_per_side": mc.MAX_CELLS_PER_SIDE,
-        "first_run_seconds": mc.FIRST_RUN_SECONDS,
+        "first_run_seconds": mc.first_run_seconds(n_cells),  # 0 once compiled in this process
     }
 
 
@@ -503,7 +503,7 @@ async def merge_check_info(
     adata = (await _adata(dm, dataset_id)).adata
 
     def _info() -> dict[str, Any]:
-        base = {"n_cells": int(adata.n_obs), **_merge_limits()}
+        base = {"n_cells": int(adata.n_obs), **_merge_limits(adata.n_obs)}
         try:
             p = mc.plan(adata, reference, resolution, method)
         except mc.MergeCheckError as exc:
