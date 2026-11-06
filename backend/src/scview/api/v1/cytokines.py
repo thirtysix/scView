@@ -34,8 +34,15 @@ class CytokineRequest(BaseModel):
     groupby: str = Field(default="", max_length=256)
     reference: Literal["rest", "all"] = "rest"
     condition: str = Field(default="", max_length=256)
-    a: str = Field(default="", max_length=256)
-    b: str = Field(default="", max_length=256)
+    # Side convention (kept: scripts, replays and clients depend on it): a = TEST, b = BASELINE,
+    # profile = a minus b. The communication compare has them the other way round
+    # (api/v1/communication.py).
+    a: str = Field(default="", max_length=256, description=(
+        "conditions mode: the TEST value of `condition`. Each profile is a minus b, so a positive z "
+        "means a looks more like a response to the cytokine than b does. The response names it as `test`."))
+    b: str = Field(default="", max_length=256, description=(
+        "conditions mode: the BASELINE (reference) value of `condition`, subtracted from a. "
+        "The response names it as `baseline`."))
     n_permutations: int = Field(default=ca.N_PERMUTATIONS, ge=100, le=ca.N_PERMUTATIONS)
 
 
@@ -73,6 +80,12 @@ def _check(req: CytokineRequest, obs) -> None:
                                 detail=f"'{req.groupby}' has {n} groups; at most {MAX_GROUPS}.")
 
 
+def _sides(req: CytokineRequest) -> dict[str, str | None]:
+    """The two conditions by role: a is the test and b the baseline (both None per group)."""
+    cond = req.mode == "conditions"
+    return {"test": (req.a or None) if cond else None, "baseline": (req.b or None) if cond else None}
+
+
 @router.post("/datasets/{dataset_id}/cytokines/activity")
 async def cytokine_activity(
     dataset_id: str,
@@ -90,7 +103,7 @@ async def cytokine_activity(
     stored = ca.recall(adaptor, key)
     if stored is not None:
         ca.remember(adaptor, key, stored)  # the co-pilot's fact follows what is shown
-        return {**stored, "reused": True}
+        return {**stored, **_sides(body), "reused": True}  # also one stored before the sides were named
 
     def _run() -> dict:
         t0 = time.time()
@@ -123,7 +136,7 @@ async def cytokine_activity(
                        n_perm=body.n_permutations)
         return {
             **res, "mode": body.mode, "groupby": body.groupby or None, "reference": body.reference,
-            "condition": body.condition or None, "a": body.a or None, "b": body.b or None,
+            "condition": body.condition or None, "a": body.a or None, "b": body.b or None, **_sides(body),
             "species": species, "mapped_by": match.mapped_by, "matrix_source": source,
             "citation": ca.CITATION, "source_url": ca.URL, "licence": ca.LICENCE,
             "elapsed_seconds": round(time.time() - t0, 2),

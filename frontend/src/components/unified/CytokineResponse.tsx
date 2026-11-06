@@ -158,7 +158,7 @@ export function CytokineResponse({ groupByColumn, setGroupByColumn }: Props) {
         {mode === "conditions" && condition && (
           <>
             <label className="text-[11px] font-medium text-slate-500">
-              Condition A
+              Test condition (A)
               <select value={a} onChange={(e) => setA(e.target.value)} className={`mt-1 ${selectCls}`}>
                 {condValues.map((v) => (
                   <option key={v} value={v}>{v}</option>
@@ -166,7 +166,7 @@ export function CytokineResponse({ groupByColumn, setGroupByColumn }: Props) {
               </select>
             </label>
             <label className="text-[11px] font-medium text-slate-500">
-              vs condition B
+              vs baseline (B)
               <select value={b} onChange={(e) => setB(e.target.value)} className={`mt-1 ${selectCls}`}>
                 {condValues.map((v) => (
                   <option key={v} value={v}>{v}</option>

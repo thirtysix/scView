@@ -339,8 +339,14 @@ async def communication_csv(dataset_id: str, result_id: str):
 class CompareRequest(BaseModel):
     groupby: str = Field(min_length=1, max_length=256)
     condition: str = Field(min_length=1, max_length=256)
-    a: str = Field(min_length=1, max_length=1024)
-    b: str = Field(min_length=1, max_length=1024)
+    # Side convention (kept: scripts, replays and clients depend on it): a = BASELINE, b = TEST,
+    # delta = b minus a. The cytokine route has them the other way round (api/v1/cytokines.py).
+    a: str = Field(min_length=1, max_length=1024, description=(
+        "The BASELINE (reference) value of `condition`. Differences are b minus a: delta = "
+        "lr_means_b - lr_means_a, so 'gained' means higher in b. The response names it as `baseline`."))
+    b: str = Field(min_length=1, max_length=1024, description=(
+        "The TEST value of `condition`, compared against the baseline a (delta = b minus a). "
+        "The response names it as `test`."))
     sample_key: str | None = Field(default="auto", max_length=256)  # auto | a column | null (no test)
     resource: str = Field(default="auto", max_length=32)
     expr_prop: float = Field(default=ccc.EXPR_PROP, ge=0.0, le=1.0)
@@ -362,6 +368,8 @@ def compare_body(r: ccc_compare.CompareResult) -> dict[str, Any]:
         "condition": r.condition,
         "a": r.a,
         "b": r.b,
+        "baseline": r.a,  # a is the baseline here (delta = b minus a); the cytokine route differs
+        "test": r.b,
         "resource": r.resource,
         "resource_label": RESOURCE_LABELS[r.resource],
         "species": r.species,
@@ -455,6 +463,7 @@ async def compare_communication(
                 put("start", {"n_cells": n_a + n_b, "n_groups": n_groups, "resource": resource,
                               "resource_label": RESOURCE_LABELS[resource], "species": species,
                               "species_evidence": why, "n_perms": body.n_perms, "a": body.a, "b": body.b,
+                              "baseline": body.a, "test": body.b,
                               "estimate_seconds": ccc_compare.estimate_seconds(n_a, n_b, n_groups,
                                                                                 body.n_perms)})
                 M, genes, source = lognorm_matrix(adata)

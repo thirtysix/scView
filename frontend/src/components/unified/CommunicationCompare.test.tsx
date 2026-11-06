@@ -77,9 +77,9 @@ describe("Communication: compare conditions", () => {
   it("compares two conditions: heatmap about 0, filtered table, donor plot", async () => {
     render(<UnifiedCommunicationSubtab groupByColumn="cell" />);
     fireEvent.click(screen.getByRole("button", { name: "Compare conditions" }));
-    await waitFor(() => screen.getByLabelText("Reference (A)"));
-    expect((screen.getByLabelText("Reference (A)") as HTMLSelectElement).value).toBe("CTRL");
-    expect((screen.getByLabelText("Compared (B)") as HTMLSelectElement).value).toBe("STIM");
+    await waitFor(() => screen.getByLabelText("Baseline (A)"));
+    expect((screen.getByLabelText("Baseline (A)") as HTMLSelectElement).value).toBe("CTRL");
+    expect((screen.getByLabelText("Test (B)") as HTMLSelectElement).value).toBe("STIM");
     fireEvent.click(screen.getByRole("button", { name: /^Compare$/ }));
     await waitFor(() => screen.getByText("CXCL10"));
     expect(runCommunicationCompare).toHaveBeenCalledWith(

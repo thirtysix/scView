@@ -54,8 +54,8 @@ const COLUMNS: { key: CompareSortKey; label: string; title: string; num?: boolea
   { key: "ligand_complex", label: "Ligand", title: "Ligand (a complex as A_B)" },
   { key: "receptor_complex", label: "Receptor", title: "Receptor (a complex as A_B)" },
   { key: "call", label: "Call", title: "Gained / lost: specific in one condition only, LR mean 1.5x or more higher there; changed: specific in both, LR means 1.5x apart" },
-  { key: "lr_means_a", label: "A", title: "Ligand-receptor mean in the reference condition (A)", num: true },
-  { key: "lr_means_b", label: "B", title: "Ligand-receptor mean in the compared condition (B)", num: true },
+  { key: "lr_means_a", label: "A", title: "Ligand-receptor mean in the baseline condition (A)", num: true },
+  { key: "lr_means_b", label: "B", title: "Ligand-receptor mean in the test condition (B)", num: true },
   { key: "abs_delta", label: "Δ", title: "B minus A (LR mean); sorted by its size", num: true },
   { key: "p_adj", label: "adj. p", title: "Donor-level test of the ligand x receptor product, Benjamini-Hochberg across the tested interactions; – without replicates", num: true },
 ];
@@ -201,7 +201,7 @@ export function CommunicationCompare({ datasetId, datasetName, groupby, options 
         </div>
         <div>
           <label htmlFor="ccc-cmp-a" className="mb-1 block text-[11px] font-medium text-slate-500">
-            Reference (A)
+            Baseline (A)
           </label>
           <select id="ccc-cmp-a" value={a} onChange={(e) => update({ compareA: e.target.value })} className={sel}>
             {values.map((v) => (
@@ -213,7 +213,7 @@ export function CommunicationCompare({ datasetId, datasetName, groupby, options 
         </div>
         <div>
           <label htmlFor="ccc-cmp-b" className="mb-1 block text-[11px] font-medium text-slate-500">
-            Compared (B)
+            Test (B)
           </label>
           <select id="ccc-cmp-b" value={b} onChange={(e) => update({ compareB: e.target.value })} className={sel}>
             {values
