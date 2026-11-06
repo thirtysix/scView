@@ -84,7 +84,7 @@ describe("cytokine helpers", () => {
     expect(h.y).toEqual(["TNFA", "IFNG", "IFN1"]); // strongest drawn on top (last)
     expect(h.zmax).toBe(48.6);
     expect(h.z[2]).toEqual([41.9, 48.6]);
-    expect(comparisonText(RESULT)).toBe("STIM vs CTRL within each cell_type group");
+    expect(comparisonText(RESULT)).toBe("STIM (test) vs CTRL (baseline) within each cell_type group");
     expect(comparisonText({ ...RESULT, mode: "groups", reference: "all", groupby: "leiden" })).toBe(
       "each leiden group vs all cells",
     );
@@ -112,8 +112,8 @@ describe("CytokineResponse", () => {
     render(<CytokineResponse groupByColumn="cell_type" setGroupByColumn={() => {}} />);
     fireEvent.click(screen.getByLabelText("Two conditions"));
     fireEvent.change(screen.getByLabelText("Condition column"), { target: { value: "stim" } });
-    expect((screen.getByLabelText("Condition A") as HTMLSelectElement).value).toBe("STIM");
-    expect((screen.getByLabelText("vs condition B") as HTMLSelectElement).value).toBe("CTRL");
+    expect((screen.getByLabelText("Test condition (A)") as HTMLSelectElement).value).toBe("STIM");
+    expect((screen.getByLabelText("vs baseline (B)") as HTMLSelectElement).value).toBe("CTRL");
     fireEvent.click(screen.getByRole("button", { name: "Score cytokine response" }));
     await waitFor(() => screen.getByTestId("plot"));
     expect(getCytokineActivity).toHaveBeenCalledWith("d1", {
@@ -124,7 +124,7 @@ describe("CytokineResponse", () => {
     expect(screen.getByTestId("cytokine-top").textContent).toContain("IFN1 (z 41.9), IFNG (z 25.5)");
     expect(screen.getByTestId("cytokine-top").textContent).toContain("IFN1 (z 48.6)");
     const caption = screen.getByTestId("cytokine-caption").textContent ?? "";
-    expect(caption).toContain("STIM vs CTRL within each cell_type group");
+    expect(caption).toContain("STIM (test) vs CTRL (baseline) within each cell_type group");
     expect(caption).toContain("n = 2 groups; 4,669 of 4,800 signature genes.");
     expect(screen.getByText(/Left out: pDC/)).toBeTruthy();
   });

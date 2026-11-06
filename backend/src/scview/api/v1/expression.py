@@ -368,12 +368,20 @@ async def get_coexpression(
 @router.get("/datasets/{dataset_id}/genes")
 async def list_genes(
     dataset_id: str,
+    layer: str = Query(default="", description="Expression layer key (e.g. raw, X); empty: the default layer"),
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
+    """The genes ``GET /expression`` finds in ``layer``: a client checks a name here
+    first instead of asking for it and getting a 404."""
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
-    return {"genes": adaptor.gene_names()}
+    if not layer:
+        return {"genes": adaptor.gene_names()}
+    try:
+        return {"genes": adaptor._var_names_for_layer(layer), "layer": layer}
+    except KeyError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.get("/datasets/{dataset_id}/genes/search")

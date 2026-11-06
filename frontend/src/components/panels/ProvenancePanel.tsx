@@ -17,7 +17,7 @@ import {
   type RerunPlan,
 } from "@/api/provenance";
 import { getDataset } from "@/api/datasets";
-import { keptRerunParams, lastRunText, paramText } from "@/lib/provenanceParams";
+import { keptRerunParams, lastRunText, paramChips } from "@/lib/provenanceParams";
 import { RecipeViewer } from "@/components/panels/RecipeViewer";
 import { ResultsList } from "@/components/panels/ResultsList";
 import { useDatasetStore } from "@/stores/datasetStore";
@@ -309,9 +309,7 @@ export function ProvenancePanel() {
 }
 
 function StepRow({ step }: { step: ProvStep }) {
-  const params = Object.entries(step.params ?? {}).filter(
-    ([, v]) => v !== null && v !== "" && !(Array.isArray(v) && v.length === 0)
-  );
+  const params = paramChips(step);
   return (
     <div className="flex min-w-0 flex-1 gap-3">
       <Clock className="mt-0.5 h-4 w-4 shrink-0 text-slate-300" />
@@ -323,9 +321,9 @@ function StepRow({ step }: { step: ProvStep }) {
         </div>
         {params.length > 0 && (
           <div className="mt-1 flex flex-wrap gap-1">
-            {params.map(([k, v]) => (
+            {params.map(([k, text]) => (
               <span key={k} className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">
-                {paramText(k, v)}
+                {text}
               </span>
             ))}
           </div>

@@ -503,7 +503,7 @@ def _removed(adata, column: str, value: str, n_kept: int) -> dict:
             sel = np.zeros(codes.size, dtype=bool)
         else:
             sel = codes == cats.index(value)
-        bits = np.asarray(rec.get("criterion_bits"), dtype=np.uint8)
+        bits = qc_filter.criterion_bits(rec)
         criteria = [str(c) for c in np.atleast_1d(np.asarray(rec.get("criteria"), dtype=object))]
         by = {c: int((((bits >> b) & 1) > 0)[sel].sum()) for b, c in enumerate(criteria)} if bits.size else {}
         k = int(sel.sum())
