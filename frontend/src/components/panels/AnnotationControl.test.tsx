@@ -10,6 +10,8 @@ const { getCellTypistModels, getCellTypistSummary } = vi.hoisted(() => ({
 vi.mock("@/api/annotation", () => ({ getCellTypistModels, getCellTypistSummary }));
 const { getLlmStatus } = vi.hoisted(() => ({ getLlmStatus: vi.fn() }));
 vi.mock("@/api/assistant", () => ({ getLlmStatus }));
+const { getLabelMatches } = vi.hoisted(() => ({ getLabelMatches: vi.fn() }));
+vi.mock("@/api/ontology", () => ({ getLabelMatches }));
 
 import { AnnotationControl } from "./AnnotationControl";
 import { useDatasetStore } from "@/stores/datasetStore";
@@ -54,6 +56,43 @@ describe("AnnotationControl (CellTypist)", () => {
     getLlmStatus.mockReset().mockResolvedValue({ available: true });
     getCellTypistSummary.mockReset().mockImplementation((_id: string, column?: string) =>
       Promise.resolve({ columns: ["ct"], dataset_species: "mouse", result: column ? summary() : null }));
+    getLabelMatches.mockReset().mockImplementation((_id: string, column: string) =>
+      Promise.resolve({
+        column, n_labels: 2, n_matched: 1, annotator: true, version: "cl/releases/2026-06-08/cl-basic.owl",
+        labels: [
+          { label: "NK cells", n_cells: 31, cl_id: "CL:0000623", cl_name: "natural killer cell", how: "normalised",
+            how_text: "same name or exact synonym, case, plurals, '+' and hyphens aside", source: "model",
+            model_cl_id: "CL:0000623", url: "https://www.ebi.ac.uk/ols4/ontologies/cl/classes?obo_id=CL:0000623" },
+          { label: "CD14 Mono", n_cells: 91, cl_id: null, cl_name: null, how: "none", how_text: "no term",
+            source: "", model_cl_id: null, url: null },
+        ],
+      }));
+  });
+
+  it("lists the written column's Cell Ontology ids after a run, a link only where a label matched", async () => {
+    const onAnnotate = vi.fn().mockResolvedValue(undefined);
+    render(<AnnotationControl onAnnotate={onAnnotate} running={false} species="human" />);
+    expect(screen.queryByTestId("ontology-ids")).toBeNull(); // the output column does not exist yet
+    fireEvent.click(screen.getByText("Annotate cell types"));
+    const card = await screen.findByTestId("ontology-ids");
+    expect(getLabelMatches).toHaveBeenCalledWith("d1", "paul15_clusters_celltypeAnno");
+    expect(card).toHaveTextContent("1 of 2 labels matched · CL 2026-06-08");
+    const link = screen.getByRole("link", { name: /CL:0000623/ });
+    expect(link).toHaveAttribute("href", "https://www.ebi.ac.uk/ols4/ontologies/cl/classes?obo_id=CL:0000623");
+    expect(screen.getByText("NK cells").closest("tr")).toHaveTextContent("AI · normalised");
+    const mono = screen.getByText("CD14 Mono").closest("tr")!;
+    expect(mono.querySelector("a")).toBeNull();
+    expect(mono).not.toHaveTextContent("none");
+    for (const h of ["Label", "CL id", "Match"]) expect(screen.getByText(h)).toHaveAttribute("title");
+  });
+
+  it("says why when the ontology cannot be had", async () => {
+    getLabelMatches.mockRejectedValue(new Error("The Cell Ontology is not downloaded and MARKER_DB_AUTO_DOWNLOAD is off."));
+    useDatasetStore.setState({
+      currentDataset: { ...DATASET, obs_columns: [...DATASET.obs_columns, { name: "paul15_clusters_celltypeAnno", dtype: "category", n_unique: 5 }] } as DatasetInfo,
+    });
+    render(<AnnotationControl onAnnotate={vi.fn()} running={false} species="human" />);
+    expect(await screen.findByTestId("ontology-ids-error")).toHaveTextContent("MARKER_DB_AUTO_DOWNLOAD is off");
   });
 
   it("lists mouse models first for a mouse dataset, preselects none, and warns on a human pick", async () => {
