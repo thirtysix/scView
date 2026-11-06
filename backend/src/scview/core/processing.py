@@ -119,9 +119,12 @@ async def _make_run_room(dm: DatasetManager, dataset_id: str, adaptor: AnnDataAd
     memory its estimated peak needs (the pre-step check, in the worker thread, can only
     stop the run). In large-dataset mode: the cached copy dropped, room for that mode's
     peak, and a fresh adaptor of the same file (it reads nothing until asked). Either
-    way the run's expected growth is reserved (``_reserve_run``) until it ends. Returns
-    the adaptor the work gets."""
+    way the run's expected growth is reserved (``_reserve_run``) until it ends. Work
+    without a plan that estimates its own growth (``control.step_needs``: the mito
+    re-filter) gets the same room and reservation from that estimate. Returns the adaptor
+    the work gets."""
     need = None
+    own: dict[str, int] = {}
     if control is not None:
         _queue(dm, dataset_id, control)
     if control is not None and control.plan is not None:
@@ -190,7 +193,15 @@ async def _make_run_room(dm: DatasetManager, dataset_id: str, adaptor: AnnDataAd
         path = getattr(adaptor, "h5ad_path", None)
         if await asyncio.to_thread(large_run.large_info, path) is not None:
             raise HTTPException(status_code=422, detail=LARGE_REFUSED)
-    await working_copy.make_room(dm, dataset_id, adaptor, then=need or 0)
+        if control is not None and control.step_needs is not None:
+            try:
+                own = await asyncio.to_thread(control.step_needs, adaptor)
+            except Exception as e:  # noqa: BLE001 - never block the work on the estimate itself
+                logger.warning("No estimate for the work on %s: %s", dataset_id, e)
+    own_need = max(own.values(), default=0)
+    await working_copy.make_room(dm, dataset_id, adaptor, then=need or own_need)
+    if own_need > 0 and control is not None:
+        await _reserve_run(dm, dataset_id, control, own_need, lambda: own)
     if need:
         from scview.core import preflight
 

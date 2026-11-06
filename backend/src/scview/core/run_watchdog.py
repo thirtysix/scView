@@ -458,6 +458,10 @@ class RunControl:
         # (steps, PipelineParams) the run will make: before it starts, core/processing.py
         # closes other open datasets whose memory its estimated peak needs.
         self.plan = plan
+        # Work without a plan that estimates its own growth (the re-filter re-processes the
+        # original upload, not the dataset: ``mito_refilter.run_step_needs``): per step, the
+        # bytes it needs beyond what it holds; core/processing.py reserves it like a run's.
+        self.step_needs: Callable[[Any], dict[str, int]] | None = None  # called with the adaptor
         # In memory or in large-dataset mode (core/large_run.py ModeChoice): chosen by
         # core/processing.py before the run starts; None: not chosen (in memory).
         self.mode: Any = None

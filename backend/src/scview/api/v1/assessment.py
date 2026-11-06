@@ -965,6 +965,8 @@ async def run_mito_refilter(
         raise HTTPException(status_code=e.status, detail=str(e))
 
     control = RunControl()  # watchdog, Cancel and the pre-step memory check, as for any run
+    # Its growth reserved as a run's (core/processing.py), estimated from the original upload.
+    control.step_needs = lambda run_adaptor: mito_refilter.run_step_needs(dm, dataset_id, run_adaptor)
 
     def _events(adaptor):
         output = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))

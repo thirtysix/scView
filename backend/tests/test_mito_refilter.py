@@ -314,3 +314,82 @@ async def test_the_floor_never_removes_a_cell_pass_1_kept(client, pass1, dataset
     assert filt["qc_mito_type_floor"] is True and filt["qc_mito_types"]["floor"] is True
     card = (await client.get(f"{API}/datasets/tp1/qc/mito-by-type")).json()
     assert card["filter_type_floor"] is True and "never stricter" in card["summary"]
+
+
+# -- the re-processing's memory reservation (core/processing.py) ----------------------
+
+
+GB = 1024**3
+
+
+@pytest.fixture()
+def roomy(monkeypatch):
+    """A 64 GB limit with 1 GB used: every check passes, every reservation is recorded."""
+    from scview.core import memory_budget
+
+    monkeypatch.setattr(memory_budget, "read_budget", lambda *_a, **_k: memory_budget.MemoryBudget(
+        64 * GB, 1 * GB, True, "container limit"))
+    monkeypatch.setattr(memory_budget, "release_memory", lambda: None)
+
+
+def test_the_re_processing_is_estimated_from_the_original_upload(pass1):
+    from scview.core.anndata_adaptor import AnnDataAdaptor
+
+    dm, orig, cur = pass1
+    adaptor = AnnDataAdaptor(str(Path(dm.data_dir) / "derived" / "tp1" / "raw.h5ad"))
+    needs = mito_refilter.run_step_needs(dm, "tp1", adaptor)
+    assert list(needs) == PASS1 + ["save"]
+    assert all(v >= 0 for v in needs.values()) and max(needs.values()) > 0
+
+
+def _spy_run(monkeypatch, dm, seen: list, then=None):
+    """Record the run reservations as the re-processing starts; ``then(control)`` first."""
+    from scview.core import pipeline, processing
+
+    real = getattr(pipeline.run_pipeline_streamed, "real", pipeline.run_pipeline_streamed)
+
+    def spy(adata, steps, params, output_path, control=None):
+        seen.append({d: r.need for d, r in dm.run_reservations().items()})
+        if then is not None:
+            then(processing.active_run("tp1"))
+        yield from real(adata, steps, params, output_path, control=control)
+
+    spy.real = real  # a second spy wraps the pipeline's, not this one
+    monkeypatch.setattr(pipeline, "run_pipeline_streamed", spy)
+
+
+async def test_the_re_filter_holds_a_run_reservation_until_it_ends(client, pass1, dataset_manager, roomy,
+                                                                    monkeypatch):
+    seen: list = []
+    _spy_run(monkeypatch, dataset_manager, seen)
+    needs: list = []
+    real = mito_refilter.run_step_needs
+
+    def estimate(*a):
+        needs.append(real(*a))
+        return needs[-1]
+
+    monkeypatch.setattr(mito_refilter, "run_step_needs", estimate)
+    r = await client.post(f"{API}/datasets/tp1/qc/mito-refilter-stream", json={})
+    assert "event: complete" in r.text and "event: error" not in r.text
+    assert seen == [{"tp1": max(needs[0].values())}]  # held while it re-processed
+    assert dataset_manager.run_reservations() == {}  # and released after
+
+
+async def test_the_reservation_goes_when_the_re_filter_fails_or_is_cancelled(client, pass1, dataset_manager,
+                                                                            roomy, monkeypatch):
+    seen: list = []
+
+    def boom(_control):
+        raise RuntimeError("boom")
+
+    _spy_run(monkeypatch, dataset_manager, seen, boom)
+    r = await client.post(f"{API}/datasets/tp1/qc/mito-refilter-stream", json={})
+    assert "event: error" in r.text and "boom" in r.text
+    assert list(seen[0]) == ["tp1"] and dataset_manager.run_reservations() == {}
+
+    seen.clear()
+    _spy_run(monkeypatch, dataset_manager, seen, lambda control: control.cancel())
+    r = await client.post(f"{API}/datasets/tp1/qc/mito-refilter-stream", json={})
+    assert '"status": "cancelled"' in r.text
+    assert list(seen[0]) == ["tp1"] and dataset_manager.run_reservations() == {}

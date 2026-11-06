@@ -376,6 +376,29 @@ def read_need(dm, dataset_id: str) -> int:
         return 0
 
 
+def run_step_needs(dm, dataset_id: str, adaptor) -> dict[str, int]:
+    """Per step of the re-processing (and its save), the memory it needs beyond the
+    original upload held in memory (``preflight.estimate_run`` on its header, with the
+    steps and params ``plan_params`` gives, reset to counts first when pass 1 did): what
+    ``core/processing.py`` reserves for the run, as for any pipeline run, so a load meanwhile
+    counts it. Reading the original in is ``read_need``'s, held by the endpoint. {} without
+    an original upload."""
+    from scview.core import preflight
+
+    src = source_file(dm, dataset_id)
+    if src is None:
+        return {}
+    cur = adaptor.adata
+    steps, params, _ = plan_params(cur)
+    if "reset_to_counts" in {h.get("step") for h in provenance.read_provenance(cur).get("history", [])}:
+        steps = ["reset_to_counts", *steps]
+    h = preflight.read_header(src, "h5ad")
+    if hasattr(h, "backed"):
+        h.backed = False  # read whole, whatever its size
+    est = preflight.estimate_run(h, steps=steps, params=params, warm=preflight.process_warm())
+    return {e.step: max(0, int(e.peak_bytes - est.start_bytes)) for e in est.steps}
+
+
 def prepare(dm, dataset_id: str, adaptor, column: str | None, mito_mode: str = "per_type",
             floor: bool = False) -> Prepared:
     """Read the original upload and type every cell (module docstring). ``floor``:
