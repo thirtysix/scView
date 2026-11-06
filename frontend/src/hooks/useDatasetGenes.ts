@@ -12,19 +12,33 @@ export interface DatasetGenes {
 
 /**
  * The names the dataset's expression is looked up by (`GET /datasets/{id}/genes`,
- * the same list the gene search searches), fetched once per dataset, to tell
- * which genes of a list it has. Null while loading or without a dataset.
+ * the same list the gene search searches), fetched once per dataset and layer, to
+ * tell which genes of a list it has. `layer` ("" or absent: the default layer) as
+ * `GET /expression` takes it. `genes` is null while loading or without a dataset;
+ * `failed` when the list could not be read (an unknown layer: 400).
  */
-export function useDatasetGenes(datasetId: string | null | undefined): DatasetGenes | null {
-  const { data } = useQuery({
-    queryKey: ["dataset-genes", datasetId],
-    queryFn: () => apiFetch<{ genes: string[] }>(`/datasets/${datasetId}/genes`),
+export function useDatasetGenesState(
+  datasetId: string | null | undefined,
+  layer = "",
+): { genes: DatasetGenes | null; failed: boolean } {
+  const { data, isError } = useQuery({
+    queryKey: ["dataset-genes", datasetId, layer],
+    queryFn: () =>
+      apiFetch<{ genes: string[] }>(
+        `/datasets/${datasetId}/genes${layer ? `?layer=${encodeURIComponent(layer)}` : ""}`,
+      ),
     enabled: !!datasetId,
     staleTime: 10 * 60 * 1000,
   });
-  return useMemo(() => {
+  const genes = useMemo(() => {
     if (!data) return null;
     const list = data.genes ?? [];
     return { list, set: new Set(list), byUpper: genesByUpper(list) };
   }, [data]);
+  return { genes, failed: isError };
+}
+
+/** The dataset's genes (default layer), or null while loading or without a dataset. */
+export function useDatasetGenes(datasetId: string | null | undefined): DatasetGenes | null {
+  return useDatasetGenesState(datasetId).genes;
 }

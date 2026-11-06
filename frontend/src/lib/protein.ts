@@ -53,6 +53,17 @@ export function targetGenes(protein: string): string[] {
   return [...new Set([...listed, own, own.toUpperCase()])];
 }
 
+/** Of `candidates`, the genes the RNA layer has, by the layer's own spelling (a case
+ *  match counts), in order and once each: asked for first, so a target with no gene
+ *  is never requested (that request is a 404). */
+export function genesInLayer(
+  candidates: string[],
+  genes: { set: ReadonlySet<string>; byUpper: ReadonlyMap<string, string> },
+): string[] {
+  const out = candidates.map((c) => (genes.set.has(c) ? c : genes.byUpper.get(c.toUpperCase())));
+  return [...new Set(out.filter((g): g is string => !!g))];
+}
+
 function ranks(v: ArrayLike<number>): Float64Array {
   const n = v.length;
   const order = Array.from({ length: n }, (_, i) => i).sort((a, b) => v[a]! - v[b]!);
