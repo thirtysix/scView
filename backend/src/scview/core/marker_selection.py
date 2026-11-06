@@ -175,13 +175,14 @@ def _lookup(table, group: str, genes: np.ndarray) -> np.ndarray | None:
 def _fractions(adata, groupby: str, groups: list[str]) -> tuple[pd.DataFrame, pd.DataFrame] | None:
     """Fraction of cells expressing each gene in each group and in the rest of the
     cells, from the log-normalised matrix, as scanpy's pts/pts_rest. Sparse- and
-    dense-safe, counted in blocks of cells. None when it can't be counted."""
+    dense-safe, counted in blocks of cells: a backed dataset's matrix is read a block at
+    a time, never whole. None when it can't be counted."""
     if groupby not in adata.obs.columns:
         return None
-    from scview.core.activity import lognorm_matrix
+    from scview.core.activity import lognorm_source
 
     try:
-        M, var_names, _ = lognorm_matrix(adata)
+        choice = lognorm_source(adata)
     except ValueError as exc:
         logger.warning("marker selection: no fraction expressing for %s: %s", groupby, exc)
         return None
@@ -195,10 +196,10 @@ def _fractions(adata, groupby: str, groups: list[str]) -> tuple[pd.DataFrame, pd
          (codes[codes >= 0], np.flatnonzero(codes >= 0))),
         shape=(len(groups), labels.size),
     )
-    counts = np.zeros((len(groups), M.shape[1]))
-    total = np.zeros(M.shape[1])
-    for start in range(0, M.shape[0], _CHUNK):
-        block = M[start:start + _CHUNK]
+    var_names = choice.names
+    counts = np.zeros((len(groups), len(var_names)))
+    total = np.zeros(len(var_names))
+    for start, block in choice.blocks(_CHUNK):
         if sp.issparse(block):
             block = sp.csr_matrix(block)
             nz = sp.csr_matrix((block.data != 0, block.indices, block.indptr),

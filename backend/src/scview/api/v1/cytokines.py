@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from scview.config import Settings
-from scview.core import activity, cytokine_activity as ca, large_mode, orthologs
+from scview.core import activity, cytokine_activity as ca, large_mode, orthologs, working_copy
 from scview.core.dataset_manager import DatasetManager
 from scview.core.species import detect_species
 from scview.dependencies import get_dataset_manager, get_settings_dep
@@ -129,7 +129,7 @@ async def cytokine_activity(
             sums, sizes = ca.group_sums_store(store, match.positions, design.codes, design.k)
             source = "log-normalised X (gene store)"
         else:
-            M, genes, source = activity.lognorm_matrix(adata)
+            M, genes, source = activity.lognorm_matrix(adata, read=True)  # room held below
             match = ca.match_genes(sig, genes, species, table, why)
             sums, sizes = ca.group_sums(M, match.positions, design.codes, design.k)
         res = ca.score(match, design, sums, sizes, reference=body.reference,
@@ -143,7 +143,11 @@ async def cytokine_activity(
         }
 
     try:
-        result = await asyncio.to_thread(_run)
+        # A backed dataset's matrix is read whole (the gene store of a large one is not).
+        need = 0 if large_mode.is_large(adaptor) else await asyncio.to_thread(activity.lognorm_bytes, adaptor)
+        async with working_copy.reading(dm, dataset_id, need,
+                                        working_copy.subject(dm, dataset_id, need, "Cytokine response")) as held:
+            result = await held.run(_run)
     except ca.SignatureUnavailable as e:
         raise HTTPException(status_code=503, detail=str(e))
     except ValueError as e:

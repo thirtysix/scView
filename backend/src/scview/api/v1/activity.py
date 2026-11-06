@@ -21,7 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from scview.config import Settings
-from scview.core import activity, activity_nets, de_results, large_mode, orthologs, targeted_panel
+from scview.core import activity, activity_nets, de_results, large_mode, orthologs, targeted_panel, working_copy
 from scview.core.dataset_manager import DatasetManager
 from scview.core.object_cache import ObjectCache
 from scview.core.species import detect_species
@@ -40,7 +40,8 @@ MOUSE_NOTE = (
 )
 
 # (loaded dataset object, network) -> activity.CellModel. A pipeline run drops the
-# object, so a model never outlives the expression values it was built from.
+# object, so a model never outlives the expression values it was built from. A backed
+# dataset's model is not kept: it holds the matrix read from the file, outside any room held.
 _MODELS = ObjectCache()
 
 
@@ -72,11 +73,15 @@ def _network(network: str, dest: Path, species: str = "human") -> pd.DataFrame:
     return activity_nets.load_for(network, dest, species)
 
 
-async def _dataset(dm: DatasetManager, dataset_id: str):
+async def _adaptor(dm: DatasetManager, dataset_id: str):
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
-    return adaptor.adata
+    return adaptor
+
+
+async def _dataset(dm: DatasetManager, dataset_id: str):
+    return (await _adaptor(dm, dataset_id)).adata
 
 
 def _species(adata) -> str:
@@ -84,21 +89,34 @@ def _species(adata) -> str:
     return detect_species(adata).species
 
 
-def _model(adata, network: str, dest: Path, species: str = "human") -> tuple[activity.CellModel, str]:
-    """The cached ULM model for this loaded dataset, built on first use (worker thread)."""
+def _model(adata, network: str, dest: Path, species: str = "human",
+           matrix: tuple | None = None) -> tuple[activity.CellModel, str]:
+    """The cached ULM model for this loaded dataset, built on first use (worker thread):
+    inside ``_in_thread(reading=...)`` (a backed dataset's matrix is read whole), or on
+    ``matrix``, the caller's ``activity.lognorm_matrix``."""
     large_mode.check(adata, "TF and pathway activity", large_mode.WHOLE_MATRIX)
     cached = _MODELS.get(adata, network)
     if cached is not None:
         return cached
-    M, genes, source = activity.lognorm_matrix(adata)
+    M, genes, source = matrix or activity.lognorm_matrix(adata, read=True)
     model = activity.CellModel.build(M, genes, _network(network, dest, species))
-    _MODELS.put(adata, (model, source), key=network)
+    if not getattr(adata, "isbacked", False):
+        _MODELS.put(adata, (model, source), key=network)
     return model, source
 
 
-async def _in_thread(fn, *args):
+async def _in_thread(fn, *args, reading: tuple | None = None):
+    """``fn`` in a worker thread, its errors as HTTP ones; ``reading`` (dm, dataset_id,
+    adaptor): inside ``working_copy.reading``, room held for its matrix read whole when backed."""
     try:
-        return await asyncio.to_thread(fn, *args)
+        if reading is None:
+            return await asyncio.to_thread(fn, *args)
+        dm, dataset_id, adaptor = reading
+        large_mode.check(adaptor, "TF and pathway activity", large_mode.WHOLE_MATRIX)
+        need = await asyncio.to_thread(activity.lognorm_bytes, adaptor)
+        what = working_copy.subject(dm, dataset_id, need, "TF and pathway activity")
+        async with working_copy.reading(dm, dataset_id, need, what) as held:
+            return await held.run(fn, *args)
     except HTTPException:
         raise
     except activity_nets.NetworkUnavailable as e:
@@ -154,7 +172,8 @@ async def activity_summary(
     """The sources scored on this dataset and, with ``groupby``, each group's mean
     activity per source (for the heatmap)."""
     s = _spec(network)
-    adata = await _dataset(dm, dataset_id)
+    adaptor = await _adaptor(dm, dataset_id)
+    adata = adaptor.adata
     species = _species(adata)
     if groupby:
         if groupby not in adata.obs.columns:
@@ -188,7 +207,7 @@ async def activity_summary(
         body["elapsed_seconds"] = round(time.time() - t0, 2)
         return body
 
-    return await _in_thread(_run)
+    return await _in_thread(_run, reading=(dm, dataset_id, adaptor))
 
 
 @router.get("/datasets/{dataset_id}/activity/{network}/cells")
@@ -201,7 +220,8 @@ async def activity_cells(
 ):
     """Every cell's activity for one source, in cell order (to colour the embedding)."""
     s = _spec(network)
-    adata = await _dataset(dm, dataset_id)
+    adaptor = await _adaptor(dm, dataset_id)
+    adata = adaptor.adata
     species = _species(adata)
 
     def _run() -> dict:
@@ -216,7 +236,7 @@ async def activity_cells(
         return {"network": s.name, "source": source, "n_targets": int(model.net.n_targets[j]),
                 "scores": _round(model.source(source))}
 
-    return await _in_thread(_run)
+    return await _in_thread(_run, reading=(dm, dataset_id, adaptor))
 
 
 @router.post("/datasets/{dataset_id}/activity/{network}/de")

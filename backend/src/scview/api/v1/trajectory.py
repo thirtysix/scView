@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 
 from scview.core import large_run
 from scview.core import pseudotime_genes as ptg
-from scview.core import large_mode, uns_history
+from scview.core import activity, large_mode, uns_history, working_copy
 from scview.core.dataset_manager import DatasetManager, DatasetMemoryError
 from scview.core.obs_writes import uns_snapshot, write_derived
 from scview.core.processing import run_exclusive
@@ -388,11 +388,22 @@ async def rank_trend_genes(
             status_code=404,
             detail=f"Column '{column}' is not a recognised pseudotime column.",
         )
+    adata = adaptor.adata
+
+    def _run() -> dict:
+        return ptg.trend_genes(adata, column, n_top=body.n_top, n_bins=body.n_bins,
+                               groups_column=body.groups_column, groups=body.groups)
+
     try:
-        result = await asyncio.to_thread(
-            ptg.trend_genes, adaptor.adata, column, n_top=body.n_top, n_bins=body.n_bins,
-            groups_column=body.groups_column, groups=body.groups,
-        )
+        # A backed dataset's tested cells are read: room for them held until the fit ends.
+        idx, _ = ptg.cells_used(adata, column, body.groups_column, body.groups)
+        try:
+            need = await asyncio.to_thread(activity.lognorm_bytes, adaptor, len(idx))
+        except ValueError:  # nothing to test: trend_genes says so
+            need = 0
+        what = working_copy.subject(dm, dataset_id, need, "Genes along pseudotime")
+        async with working_copy.reading(dm, dataset_id, need, what) as held:
+            result = await held.run(_run)
     except ptg.TrendError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"dataset_id": dataset_id, **result}

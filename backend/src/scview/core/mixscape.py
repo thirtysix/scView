@@ -170,17 +170,28 @@ class Plan:
 
 
 def _expression(adata):
-    from scview.core.activity import lognorm_matrix
+    """The log-normalised matrix (``activity.Lognorm``): a backed dataset's is read a block
+    of cells at a time (``_moments``, ``_subset``), never whole."""
+    from scview.core.activity import lognorm_source
 
     try:
-        return lognorm_matrix(adata)
+        return lognorm_source(adata)
     except ValueError as e:
         raise MixscapeError(str(e), 422) from None
 
 
-def _variable_genes(adata, M, var_names) -> tuple[np.ndarray, str]:
-    """Columns of ``M`` to test: the dataset's variable genes, else the ``N_HVG``
-    with the highest variance of the log values."""
+def _moments(M) -> tuple[np.ndarray, np.ndarray]:
+    """Each column's mean and mean square of an in-memory ``M``."""
+    if sp.issparse(M):
+        Mc = sp.csr_matrix(M)
+        return np.asarray(Mc.mean(axis=0)).ravel(), np.asarray(Mc.multiply(Mc).mean(axis=0)).ravel()
+    A = np.asarray(M, dtype=np.float64)
+    return A.mean(axis=0), (A * A).mean(axis=0)
+
+
+def _variable_genes(adata, expr, var_names) -> tuple[np.ndarray, str]:
+    """Columns of ``expr`` (``_expression``) to test: the dataset's variable genes, else
+    the ``N_HVG`` with the highest variance of the log values."""
     names = pd.Index(np.asarray(var_names).astype(str))
     hv = adata.var.get("highly_variable") if hasattr(adata, "var") else None
     if hv is not None and bool(np.asarray(hv, dtype=bool).any()):
@@ -189,13 +200,15 @@ def _variable_genes(adata, M, var_names) -> tuple[np.ndarray, str]:
         idx = np.sort(idx[idx >= 0])
         if idx.size >= MIN_DE_GENES:
             return idx, f"{idx.size:,} variable genes (var highly_variable)"
-    if sp.issparse(M):
-        Mc = sp.csr_matrix(M)
-        mean = np.asarray(Mc.mean(axis=0)).ravel()
-        sq = np.asarray(Mc.multiply(Mc).mean(axis=0)).ravel()
+    if expr.on_disk:
+        s1, s2 = np.zeros(names.size), np.zeros(names.size)
+        for _, block in expr.blocks():
+            m, q = _moments(block)
+            s1 += m * block.shape[0]
+            s2 += q * block.shape[0]
+        mean, sq = s1 / expr.M.shape[0], s2 / expr.M.shape[0]
     else:
-        A = np.asarray(M, dtype=np.float64)
-        mean, sq = A.mean(axis=0), (A * A).mean(axis=0)
+        mean, sq = _moments(expr.whole())
     var = sq - mean * mean
     n = min(N_HVG, names.size)
     idx = np.sort(np.argsort(-var, kind="stable")[:n])
@@ -258,11 +271,11 @@ def plan(adata, params: Params) -> Plan:
             where = f" in '{p.split_by}' = {name}" if p.split_by else ""
             raise MixscapeError(f"Only {n_ctrl} control cells{where}: the signature needs at least "
                                 f"{p.n_neighbors} (lower the neighbours, or drop the split).")
-    M, var_names, where = _expression(adata)
-    gene_idx, gene_source = _variable_genes(adata, M, var_names)
+    expr = _expression(adata)
+    gene_idx, gene_source = _variable_genes(adata, expr, expr.names)
     return Plan(params=p, rows=rows, labels=labels, targets=sorted(targets), skipped=skipped, splits=splits,
-                gene_idx=gene_idx, gene_names=np.asarray(var_names).astype(str)[gene_idx],
-                gene_source=gene_source, expression_source=where, n_cells_total=int(adata.n_obs))
+                gene_idx=gene_idx, gene_names=np.asarray(expr.names).astype(str)[gene_idx],
+                gene_source=gene_source, expression_source=expr.source, n_cells_total=int(adata.n_obs))
 
 
 # ---------------------------------------------------------------------------
@@ -271,8 +284,19 @@ def plan(adata, params: Params) -> Plan:
 
 
 def _subset(adata, pl: Plan):
-    """The tested genes of the used cells: CSR float32 (or dense float32)."""
-    M, _, _ = _expression(adata)
+    """The tested genes of the used cells: CSR float32 (or dense float32). A backed
+    dataset's are cut from a block of cells at a time."""
+    expr = _expression(adata)
+    if expr.on_disk:
+        keep = np.zeros(expr.M.shape[0], dtype=bool)
+        keep[pl.rows] = True
+        parts = [block[keep[start:start + block.shape[0]]][:, pl.gene_idx] for start, block in expr.blocks()]
+        if sp.issparse(parts[0]):
+            E = sp.csr_matrix(sp.vstack([sp.csr_matrix(b) for b in parts], format="csr"), dtype=np.float32)
+            E.sort_indices()
+            return E
+        return np.asarray(np.vstack(parts), dtype=np.float32)
+    M = expr.whole()
     if sp.issparse(M):
         E = sp.csr_matrix(M)[pl.rows][:, pl.gene_idx]
         E = sp.csr_matrix(E, dtype=np.float32)

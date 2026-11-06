@@ -155,8 +155,15 @@ class HeldRead:
         self.tasks: list[asyncio.Future] = []
 
     async def run(self, fn, *args):
+        return await self.run_with(None, fn, *args)
+
+    async def run_with(self, edit, fn, *args):
+        """``run``, the thread also waited for by ``edit`` (``obs_writes.dataset_edit``'s):
+        work that reads a backed dataset and saves an edit of it."""
         task = asyncio.ensure_future(asyncio.to_thread(fn, *args))
         self.tasks.append(task)
+        if edit is not None:
+            edit.tasks.append(task)
         return await asyncio.shield(task)
 
 
@@ -176,6 +183,25 @@ def _pin(dm, ids: tuple[str, ...]):
             u()
 
     return unpin
+
+
+def subject(dm, dataset_id: str, need: int, what: str) -> str:
+    """A refusal's subject naming the dataset (looked up only when there is a read to refuse)."""
+    return f"{what} on {dm.dataset_name(dataset_id)}" if need else what
+
+
+def hold(dm, dataset_id: str, need: int, what: str):
+    """``reading`` for a stream: after ``dm.reserve(dataset_id, need, what=what, strict=True)``
+    before the response (its 507), the read is held and the dataset pinned once the stream
+    starts, until the release this returns (safe to call twice) when its work has ended."""
+    unpin = _pin(dm, (dataset_id,))
+    release_read = dm.hold_read(dataset_id, need, what) if need > 0 else (lambda: None)
+
+    def release() -> None:
+        release_read()
+        unpin()
+
+    return release
 
 
 @asynccontextmanager

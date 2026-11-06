@@ -325,18 +325,36 @@ def library_labels(adata) -> np.ndarray:
     return np.full(adata.n_obs, "", dtype=object)
 
 
-def values_matrix(adata, layer: str | None):
-    """(spots x genes matrix, gene names, where from)."""
+def values_matrix(adata, layer: str | None, rows: np.ndarray | None = None):
+    """(spots x genes matrix, gene names, where from); ``rows``: only those spots (ascending
+    positions; None: all). A backed dataset's matrix is read: only ``rows`` of it, with the
+    room held by the endpoint (``read_bytes``)."""
     if layer:
         if layer not in adata.layers:
             raise KeyError(f"Layer '{layer}' not found.")
-        return adata.layers[layer], adata.var_names, f"layer:{layer}"
-    from scview.core.activity import lognorm_matrix
+        M = adata.layers[layer]
+        return (M if rows is None else M[rows]), adata.var_names, f"layer:{layer}"
+    from scview.core.activity import lognorm_source
 
     try:
-        return lognorm_matrix(adata)
+        choice = lognorm_source(adata)
     except ValueError as e:
         raise SpatialAutocorrError(str(e)) from None
+    return (choice.whole() if rows is None else choice.rows(rows)), choice.names, choice.source
+
+
+def read_bytes(adaptor, library_id: str | None, layer: str | None) -> int:
+    """Memory ``values_matrix`` adds reading a backed dataset's matrix (the section's spots):
+    0 for a large dataset (its gene store), a layer (in memory) or a dataset in memory."""
+    from scview.core.activity import lognorm_bytes
+
+    if layer or large_mode.is_large(adaptor):
+        return 0
+    n = int((library_labels(adaptor.adata) == str(library_id)).sum()) if library_id else None
+    try:
+        return lognorm_bytes(adaptor, n)
+    except ValueError:  # nothing to test: the run says so
+        return 0
 
 
 def select_genes(adata, names, choice) -> tuple[np.ndarray, str, list[str]]:
@@ -410,13 +428,11 @@ def run(adata, *, genes: Any = "hvg", library_id: str | None = None, layer: str 
     large = large_mode.is_large(adata)
     if large and layer:
         raise SpatialAutocorrError("A large dataset's layers stay on disk: run this on its expression values.")
-    M, names, source = _large_values(adata) if large else values_matrix(adata, layer)
+    some = rows if len(rows) < adata.n_obs else None
+    M, names, source = _large_values(adata) if large else values_matrix(adata, layer, some)
     idx, choice, notes = select_genes(adata, names, genes)
-    if not large:
-        if len(rows) < adata.n_obs:
-            M = M[rows]
-        if len(idx) < M.shape[1]:
-            M = M[:, idx]
+    if not large and len(idx) < M.shape[1]:
+        M = M[:, idx]
     grid = is_grid(adata)
     k = neighbours_of(adata)
     W = spatial_weights(coords, libs[rows], grid, k)

@@ -552,7 +552,7 @@ async def test_api_activity_agrees_from_collectri(client, dataset_manager, test_
     _species_human(monkeypatch)
     from scview.api.v1 import tf_motifs as api
 
-    monkeypatch.setattr(api, "_activity", lambda adata, column, settings, species: (
+    monkeypatch.setattr(api, "_activity", lambda adata, column, settings, species, matrix=None: (
         tm.activity_ranks(["A", "B"], ["TFA", "TFC"] + [f"X{i}" for i in range(10)],
                           np.array([[2.0, -1.0] + [0.0] * 10, [-2.0, 1.0] + [0.0] * 10]), np.array([40, 40])),
         None))
