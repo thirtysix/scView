@@ -479,6 +479,17 @@ class _DM:
     async def get_or_load_dataset(self, _id):
         return self._a
 
+    # Under a cgroup memory limit (a capped test container) the DE estimate is nonzero,
+    # so the read is reserved and named: room is always there for these small tests.
+    def dataset_name(self, _id):
+        return "x"
+
+    async def reserve(self, *_a, **_k):
+        return None
+
+    def hold_read(self, *_a, **_k):
+        return lambda: None
+
 
 async def test_wilcoxon_de_returns_its_z_scores():
     a = _lognorm(_cells())
