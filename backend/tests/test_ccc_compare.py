@@ -206,6 +206,9 @@ async def test_compare_streams_result_csv_donors_and_copilot(client, dataset_man
     prog = [d for e, d in events if e == "progress"]
     assert {p["condition"] for p in prog} == {"CTRL", "STIM"}
     res = dict(events)["result"]
+    assert (res["baseline"], res["test"]) == ("CTRL", "STIM")  # a is the baseline here
+    start = dict(events)["start"]
+    assert (start["baseline"], start["test"]) == ("CTRL", "STIM")
     assert res["groups"] == ["Mono", "T", "B"] and "tiny" in res["dropped_groups"]
     assert res["calls"]["gained"] >= 1 and res["calls"]["lost"] >= 1
     assert res["replicates"]["paired"] is True
@@ -233,6 +236,16 @@ async def test_compare_streams_result_csv_donors_and_copilot(client, dataset_man
     context, sources = build_grounding_context(adaptor, {"groups"})
     assert "compared between conditions" in context and "gained: Mono -> T: LUP -> TREC" in context
     assert any(s.ref == "result:communication_compare" for s in sources)
+
+
+def test_request_fields_say_which_side_is_the_baseline():
+    """a is the baseline and b the test here, the other way round from the cytokine route:
+    each field's description says so (the OpenAPI schema clients read)."""
+    from scview.api.v1.communication import CompareRequest
+
+    fields = CompareRequest.model_json_schema()["properties"]
+    assert "BASELINE" in fields["a"]["description"] and "b minus a" in fields["a"]["description"]
+    assert "TEST" in fields["b"]["description"]
 
 
 async def test_compare_refuses_bad_requests(client, dataset_manager, toy_resource):

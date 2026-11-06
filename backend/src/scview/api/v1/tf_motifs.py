@@ -25,7 +25,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from scview.config import Settings
-from scview.core import large_mode
+from scview.core import large_mode, working_copy
 from scview.core import tf_motifs as tm
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import dataset_edit, save_edit, uns_snapshot
@@ -143,9 +143,11 @@ async def prepare(body: PrepareRequest, settings: Settings = Depends(get_setting
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
-def _activity(adata, column: str, settings: Settings, species: str) -> tuple[dict | None, str | None]:
+def _activity(adata, column: str, settings: Settings, species: str,
+              matrix: tuple | None = None) -> tuple[dict | None, str | None]:
     """CollecTRI group-vs-rest ranks for the agreement column, when the network is on disk
-    (never fetched from here); (None, why) otherwise."""
+    (never fetched from here); (None, why) otherwise. ``matrix``: the run's
+    ``activity.lognorm_matrix``, not read a second time."""
     from scview.api.v1 import activity as activity_api
     from scview.core import activity_nets
 
@@ -154,7 +156,7 @@ def _activity(adata, column: str, settings: Settings, species: str) -> tuple[dic
             species == "mouse" and activity_nets.read_mouse_meta(net_dir, "collectri") is None):
         return None, ACTIVITY_HINT
     try:
-        model, _ = activity_api._model(adata, "collectri", net_dir, species)
+        model, _ = activity_api._model(adata, "collectri", net_dir, species, matrix)
         groups, codes = activity_api._group_codes(adata.obs[column])
         means, sizes = model.group_means(codes, len(groups))
     except Exception as e:  # noqa: BLE001 - the agreement column is optional
@@ -203,13 +205,13 @@ async def run(
             if not markers:
                 raise ValueError(f"No marker genes are stored for '{body.column}': compute marker "
                                  "genes for it first (Markers tab).")
-            M, genes, source = activity.lognorm_matrix(adata)
+            M, genes, source = activity.lognorm_matrix(adata, read=True)  # room held below
             measured = activity.measured_genes(M)
             universe = [str(g) for g, ok in zip(genes, measured) if ok]
             res = tm.enrich(table, universe, markers)
             tfs = {t for g in res["groups"] for r in g["rows"] for t in r["tfs"]}
             stats = tm.marker_stats(adata, body.column, tfs, M, genes)
-            act, hint = _activity(adata, body.column, settings, species)
+            act, hint = _activity(adata, body.column, settings, species, (M, genes, source))
             tm.annotate(res, stats, act)
             counts = adata.obs[body.column].astype(str).value_counts()
             for g in res["groups"]:
@@ -230,14 +232,20 @@ async def run(
             save_edit(adaptor, adata, output_path, before)
             return result
 
-        try:
-            result = await held.run(_run)
+        try:  # a backed dataset's matrix is read whole: room for it held while the run reads it
+            need = await asyncio.to_thread(activity.lognorm_bytes, adaptor)
         except ValueError as e:
             raise HTTPException(status_code=422, detail=str(e))
-        except Exception as e:
-            dm.evict(dataset_id)  # the cached copy may hold the step without it being saved
-            logger.error("TF motif enrichment failed for %s: %s", dataset_id, e, exc_info=True)
-            raise HTTPException(status_code=500, detail=f"Could not test the promoter motifs: {e!s}")
+        what = working_copy.subject(dm, dataset_id, need, "Upstream TF candidates")
+        async with working_copy.reading(dm, dataset_id, need, what) as reading:
+            try:
+                result = await reading.run_with(held, _run)
+            except ValueError as e:
+                raise HTTPException(status_code=422, detail=str(e))
+            except Exception as e:
+                dm.evict(dataset_id)  # the cached copy may hold the step without it being saved
+                logger.error("TF motif enrichment failed for %s: %s", dataset_id, e, exc_info=True)
+                raise HTTPException(status_code=500, detail=f"Could not test the promoter motifs: {e!s}")
         dm.saved_in_place(dataset_id, adaptor, output_path)
         tm.remember(adaptor, result)  # after the step is recorded: stored as current
         return result

@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from scview.config import Settings
-from scview.core import activity, cytokine_activity as ca, large_mode, orthologs
+from scview.core import activity, cytokine_activity as ca, large_mode, orthologs, working_copy
 from scview.core.dataset_manager import DatasetManager
 from scview.core.species import detect_species
 from scview.dependencies import get_dataset_manager, get_settings_dep
@@ -34,8 +34,15 @@ class CytokineRequest(BaseModel):
     groupby: str = Field(default="", max_length=256)
     reference: Literal["rest", "all"] = "rest"
     condition: str = Field(default="", max_length=256)
-    a: str = Field(default="", max_length=256)
-    b: str = Field(default="", max_length=256)
+    # Side convention (kept: scripts, replays and clients depend on it): a = TEST, b = BASELINE,
+    # profile = a minus b. The communication compare has them the other way round
+    # (api/v1/communication.py).
+    a: str = Field(default="", max_length=256, description=(
+        "conditions mode: the TEST value of `condition`. Each profile is a minus b, so a positive z "
+        "means a looks more like a response to the cytokine than b does. The response names it as `test`."))
+    b: str = Field(default="", max_length=256, description=(
+        "conditions mode: the BASELINE (reference) value of `condition`, subtracted from a. "
+        "The response names it as `baseline`."))
     n_permutations: int = Field(default=ca.N_PERMUTATIONS, ge=100, le=ca.N_PERMUTATIONS)
 
 
@@ -73,6 +80,12 @@ def _check(req: CytokineRequest, obs) -> None:
                                 detail=f"'{req.groupby}' has {n} groups; at most {MAX_GROUPS}.")
 
 
+def _sides(req: CytokineRequest) -> dict[str, str | None]:
+    """The two conditions by role: a is the test and b the baseline (both None per group)."""
+    cond = req.mode == "conditions"
+    return {"test": (req.a or None) if cond else None, "baseline": (req.b or None) if cond else None}
+
+
 @router.post("/datasets/{dataset_id}/cytokines/activity")
 async def cytokine_activity(
     dataset_id: str,
@@ -90,7 +103,7 @@ async def cytokine_activity(
     stored = ca.recall(adaptor, key)
     if stored is not None:
         ca.remember(adaptor, key, stored)  # the co-pilot's fact follows what is shown
-        return {**stored, "reused": True}
+        return {**stored, **_sides(body), "reused": True}  # also one stored before the sides were named
 
     def _run() -> dict:
         t0 = time.time()
@@ -116,21 +129,25 @@ async def cytokine_activity(
             sums, sizes = ca.group_sums_store(store, match.positions, design.codes, design.k)
             source = "log-normalised X (gene store)"
         else:
-            M, genes, source = activity.lognorm_matrix(adata)
+            M, genes, source = activity.lognorm_matrix(adata, read=True)  # room held below
             match = ca.match_genes(sig, genes, species, table, why)
             sums, sizes = ca.group_sums(M, match.positions, design.codes, design.k)
         res = ca.score(match, design, sums, sizes, reference=body.reference,
                        n_perm=body.n_permutations)
         return {
             **res, "mode": body.mode, "groupby": body.groupby or None, "reference": body.reference,
-            "condition": body.condition or None, "a": body.a or None, "b": body.b or None,
+            "condition": body.condition or None, "a": body.a or None, "b": body.b or None, **_sides(body),
             "species": species, "mapped_by": match.mapped_by, "matrix_source": source,
             "citation": ca.CITATION, "source_url": ca.URL, "licence": ca.LICENCE,
             "elapsed_seconds": round(time.time() - t0, 2),
         }
 
     try:
-        result = await asyncio.to_thread(_run)
+        # A backed dataset's matrix is read whole (the gene store of a large one is not).
+        need = 0 if large_mode.is_large(adaptor) else await asyncio.to_thread(activity.lognorm_bytes, adaptor)
+        async with working_copy.reading(dm, dataset_id, need,
+                                        working_copy.subject(dm, dataset_id, need, "Cytokine response")) as held:
+            result = await held.run(_run)
     except ca.SignatureUnavailable as e:
         raise HTTPException(status_code=503, detail=str(e))
     except ValueError as e:

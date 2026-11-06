@@ -1297,6 +1297,17 @@ RECORD_KEY = "scview_qc_removed"
 RECORD_VERSION = 1
 RECORD_MAX_CELLS = 200_000  # removed cells kept in the record (the counts say how many there were)
 RECORD_MAX_COLUMNS = 8
+# One bit per criterion and cell. uint8 until v0.62 (8 criteria at most), uint16 since: a 9th
+# criterion would have been dropped without a word. Read with ``criterion_bits``, never by
+# casting to a narrower type (that cuts the high bits of a newer record).
+BITS_DTYPE = np.uint16
+MAX_CRITERIA = np.iinfo(BITS_DTYPE).bits
+
+
+def criterion_bits(rec: dict) -> np.ndarray:
+    """A removal record's ``criterion_bits`` (uint8 in older records, uint16 now) as uint32,
+    bit ``b`` set when the ``b``-th of its ``criteria`` removed the cell."""
+    return np.asarray(rec.get("criterion_bits")).astype(np.uint32)
 
 
 def record_columns(adata, sample_column: str | None, type_column: str | None = None) -> list[str]:
@@ -1340,10 +1351,12 @@ def removal_record(adata, cells: dict, removed: dict[str, np.ndarray], drop: np.
     as it always was."""
     idx = np.flatnonzero(drop)
     crit = list(removed)
+    if len(crit) > MAX_CRITERIA:
+        raise ValueError(f"{len(crit)} filtering criteria: the removal record holds {MAX_CRITERIA} at most")
     keep_idx = idx[:RECORD_MAX_CELLS]
-    bits = np.zeros(keep_idx.size, dtype=np.uint8)
+    bits = np.zeros(keep_idx.size, dtype=BITS_DTYPE)
     for b, c in enumerate(crit):
-        bits |= np.asarray(removed[c])[keep_idx].astype(np.uint8) << b
+        bits |= np.asarray(removed[c])[keep_idx].astype(BITS_DTYPE) << BITS_DTYPE(b)
     cols = record_columns(adata, sample_column, types.column if types is not None else None)
     columns = {}
     for j, c in enumerate(cols):
@@ -1482,7 +1495,7 @@ def recorded_bits(adata, criterion: str) -> np.ndarray | None:
     if not isinstance(rec, dict):
         return None
     try:
-        bits = np.asarray(rec.get("criterion_bits"), dtype=np.uint8)
+        bits = criterion_bits(rec)
         crit = _strs(rec.get("criteria"))
         if criterion not in crit:
             return np.zeros(bits.size, dtype=bool)
@@ -1537,7 +1550,7 @@ def _recorded_audit(adata, rec: dict, label_column: str | None, condition_column
         return names, np.concatenate([codes, remap[rec_codes]])
 
     drop = np.concatenate([np.zeros(n_kept, dtype=bool), np.ones(m, dtype=bool)])
-    bits = np.asarray(rec.get("criterion_bits"), dtype=np.uint8)
+    bits = criterion_bits(rec)
     removed = {c: np.concatenate([np.zeros(n_kept, dtype=bool), (bits >> b) & 1 > 0])
                for b, c in enumerate(_strs(rec.get("criteria")))}
     if head["truncated"]:

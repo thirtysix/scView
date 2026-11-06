@@ -93,34 +93,139 @@ def restrict(net: pd.DataFrame, genes, measured: np.ndarray, tmin: int = TMIN) -
 
 
 def _non_negative(M) -> bool:
+    from scview.core.working_copy import on_disk
+
+    if on_disk(M):  # a backed dataset's matrix: its first rows, read (a CSR or an array)
+        M = M[: min(M.shape[0], 1000)]
     sample = M.data[:200_000] if sp.issparse(M) else np.asarray(M[:1000])
     return sample.size == 0 or float(np.min(sample)) >= 0
 
 
-def lognorm_matrix(adata):
-    """Log-normalised expression to score: (matrix, gene names, where from).
+class OnDiskMatrix(ValueError):
+    """``lognorm_matrix`` asked to read a backed dataset's matrix whole without ``read``:
+    its caller holds no room for it (``working_copy.reading`` with ``lognorm_bytes``)."""
+
+
+@dataclass
+class Lognorm:
+    """The matrix ``lognorm_matrix`` scores, before anything is read. For a dataset opened
+    backed (``core/working_copy.py``) ``M`` is its X or .raw's X on disk, read as indexed."""
+
+    M: object
+    names: pd.Index
+    source: str
+    counts: bool  # M holds raw counts: their shifted log is taken, a cell (row) at a time
+    where: str | None  # the h5ad matrix M is ("X", "raw/X"), for its size; None: in memory
+    cols: np.ndarray | None = None  # M's columns of ``names`` (on-disk counts in .raw only)
+
+    @property
+    def on_disk(self) -> bool:
+        from scview.core.working_copy import on_disk
+
+        return on_disk(self.M)
+
+    def _log(self, block):
+        from scview.core.normalization import shifted_log
+
+        if self.cols is not None:
+            block = block[:, self.cols]
+        return shifted_log(block) if self.counts else block
+
+    def whole(self):
+        """All of it in memory: a backed dataset's matrix read whole (hold the room first)."""
+        from scview.core.working_copy import read_matrix
+
+        return self._log(read_matrix(self.M))
+
+    def rows(self, keep: np.ndarray):
+        """The cells ``keep`` (a mask, or ascending positions) in memory: ``whole()[keep]``,
+        with only those rows read (the shifted log is per cell)."""
+        from scview.core.working_copy import read_rows
+
+        keep = np.asarray(keep)
+        if keep.dtype != bool:
+            mask = np.zeros(self.M.shape[0], dtype=bool)
+            mask[keep] = True
+            keep = mask
+        return self._log(read_rows(self.M, keep) if self.on_disk else self.M[keep])
+
+    def blocks(self, rows: int = _ROWS):
+        """(first cell, the next ``rows`` cells in memory), every cell in order: a backed
+        dataset's matrix is read a block at a time, never whole."""
+        for start in range(0, self.M.shape[0], rows):
+            yield start, self._log(self.M[start:start + rows])
+
+
+def lognorm_source(adata) -> Lognorm:
+    """Which matrix to score, read only to judge it (a backed dataset's first rows).
 
     ``.raw`` after scView's pipeline (under either normalisation method), else X
     when it holds log values, else the shifted log of the counts. Never z-scores or
     Pearson residuals: ULM regresses expression levels on the network weights."""
-    from scview.core.normalization import find_counts, shifted_log
+    from scview.core import large_mode
+    from scview.core.normalization import find_counts
     from scview.core.pipeline import looks_like_counts
+    from scview.core.working_copy import on_disk
 
     def is_lognorm(M) -> bool:
         return not looks_like_counts(M) and _non_negative(M)
 
-    if adata.raw is not None and is_lognorm(adata.raw.X):
-        return adata.raw.X, adata.raw.var_names, "log-normalised .raw"
+    raw = adata.raw
+    if raw is not None and is_lognorm(raw.X):
+        return Lognorm(raw.X, raw.var_names, "log-normalised .raw", False, "raw/X")
     if is_lognorm(adata.X):
-        return adata.X, adata.var_names, "log-normalised X"
+        return Lognorm(adata.X, adata.var_names, "log-normalised X", False, "X")
+    if (raw is not None and on_disk(raw.X) and not raw.var_names.equals(adata.var_names)
+            and not large_mode.is_large(adata)
+            and not ("counts" in adata.layers and looks_like_counts(adata.layers["counts"]))
+            and not len(adata.var_names.difference(raw.var_names)) and looks_like_counts(raw.X)):
+        # find_counts's choice, but cut to X's genes as it is read: find_counts cuts it whole
+        return Lognorm(raw.X, adata.var_names, "shifted log of the counts in .raw", True, "raw/X",
+                       cols=raw.var_names.get_indexer(adata.var_names))
     try:
-        counts, source = find_counts(adata)
+        counts, source = find_counts(adata, read_only=True)
     except ValueError:
         raise ValueError(
             "No log-normalised expression or raw counts to score activity on: run "
             "normalization and log transform first."
         ) from None
-    return shifted_log(counts), adata.var_names, f"shifted log of the counts in {source}"
+    where = {".raw": "raw/X", "X": "X"}.get(source) if on_disk(counts) else None
+    return Lognorm(counts, adata.var_names, f"shifted log of the counts in {source}", True, where)
+
+
+def lognorm_matrix(adata, read: bool = False):
+    """Log-normalised expression to score, in memory: (matrix, gene names, where from), as
+    ``lognorm_source`` picks it. A backed dataset's matrix is read whole only with ``read``,
+    by a caller holding the room for it (``lognorm_bytes``); else ``OnDiskMatrix``."""
+    choice = lognorm_source(adata)
+    if choice.on_disk and not read:
+        raise OnDiskMatrix(
+            "This dataset is read from its file as it is used (it opened backed), and this "
+            "would read its whole expression matrix into memory without room held for it."
+        )
+    return choice.whole(), choice.names, choice.source
+
+
+def lognorm_bytes(adaptor, n_rows: int | None = None) -> int:
+    """Memory ``lognorm_matrix(read=True)`` adds on a backed dataset (``n_rows``: of
+    ``Lognorm.rows`` of that many cells), from the file header: the rows read, and when they
+    are counts the shifted log's two float64 copies. 0 when the matrix is in memory."""
+    from scview.core import preflight
+
+    adata = adaptor.adata
+    if not getattr(adata, "isbacked", False):
+        return 0
+    choice = lognorm_source(adata)
+    if not choice.on_disk or choice.where is None:
+        return 0
+    mm = preflight.read_header(adaptor.h5ad_path, "h5ad").matrix(choice.where)
+    if mm is None or not mm.n_cells:
+        return 0
+    n = int(adata.n_obs if n_rows is None else n_rows)
+    need = preflight.rows_bytes(mm, n)
+    if choice.counts:  # astype(float64) and the scaled copy: values and indices
+        need += 2 * 12 * int(mm.nnz * min(1.0, n / mm.n_cells))
+    return int(need)
 
 
 def measured_genes(M) -> np.ndarray:

@@ -7,7 +7,9 @@ export interface CytokineRequest {
   groupby?: string;
   reference?: "rest" | "all";
   condition?: string;
+  /** conditions: the TEST value (profile = a minus b). The ligand-receptor compare has a as the baseline. */
   a?: string;
+  /** conditions: the BASELINE value. */
   b?: string;
   n_permutations?: number;
 }
@@ -25,6 +27,9 @@ export interface CytokineResult {
   condition: string | null;
   a: string | null;
   b: string | null;
+  /** = a and b by role, null per group (absent from older backends). */
+  test?: string | null;
+  baseline?: string | null;
   cytokines: string[];
   groups: string[];
   /** Cells per group: [n] (groups) or [n_a, n_b] (conditions). */

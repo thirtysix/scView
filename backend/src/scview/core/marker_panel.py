@@ -127,10 +127,9 @@ def expression_names(adaptor) -> pd.Index:
     adata = adaptor.adata
     if adaptor.is_large:
         return pd.Index(adata.var_names.astype(str))
-    from scview.core.activity import lognorm_matrix
+    from scview.core.activity import lognorm_source
 
-    _, names, _ = lognorm_matrix(adata)
-    return pd.Index(pd.Index(names).astype(str))
+    return pd.Index(pd.Index(lognorm_source(adata).names).astype(str))
 
 
 def make_plan(adaptor, groupby: str, *, size: int = SIZE_DEFAULT, per_group: int = PER_GROUP_DEFAULT,
@@ -236,15 +235,13 @@ def read_matrix(adaptor, genes: list[str], cells: np.ndarray) -> np.ndarray:
     if adaptor.is_large:
         block = adaptor.gene_block(genes, cells)
         return np.asarray(block.toarray(), dtype=np.float64)
-    from scview.core.activity import lognorm_matrix
+    from scview.core.activity import lognorm_source
 
-    M, names, _ = lognorm_matrix(adaptor.adata)
-    pos = pd.Index(pd.Index(names).astype(str)).get_indexer(genes)
+    choice = lognorm_source(adaptor.adata)
+    pos = pd.Index(pd.Index(choice.names).astype(str)).get_indexer(genes)
     if (pos < 0).any():
         raise KeyError("Genes not in the dataset: " + ", ".join(np.asarray(genes)[pos < 0][:5]))
-    rows = M[cells]
-    if hasattr(rows, "to_memory"):
-        rows = rows.to_memory()
+    rows = choice.rows(cells)  # a backed dataset's: only the sampled cells read
     order, inverse = np.unique(pos, return_inverse=True)
     sub = rows[:, order]
     dense = sub.toarray() if sp.issparse(sub) else np.asarray(sub)

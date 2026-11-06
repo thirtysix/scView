@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import logging
 import os
 import shutil
 import threading
 import weakref
+from collections.abc import Callable
 from pathlib import Path
 
 import anndata as ad
@@ -222,6 +224,30 @@ def _has_mt_genes(adata) -> bool:
     return any(bool(n.str.startswith(("MT-", "mt-")).any()) for n in names)
 
 
+def _keep_open() -> None:
+    """Stands in for the file manager's ``close`` during ``_read_in_keeping_open``."""
+
+
+def _read_in_keeping_open(adata: ad.AnnData) -> ad.AnnData:
+    """anndata's ``AnnData.to_memory`` of the backed ``adata``, without the file close it
+    ends with: a request may still be reading the backed matrices in another thread
+    (``AnnDataAdaptor.pin``), and the adaptor closes the file once it is done
+    (``_close_file``). The close is shadowed on this file manager only, for this call."""
+    manager = adata.file
+    manager.close = _keep_open
+    try:
+        return adata.to_memory()
+    finally:
+        del manager.close
+
+
+def _close_file(adata: ad.AnnData) -> None:
+    """Close a backed object's file (the class's close: never the stand-in above)."""
+    manager = getattr(adata, "file", None)
+    if manager is not None:
+        type(manager).close(manager)
+
+
 # Layer key -> obsm key of the protein modality (core/protein.py).
 PROTEIN_LAYERS = {"protein": protein.CLR_KEY, "protein_counts": protein.COUNTS_KEY,
                   "protein_dsb": protein.DSB_KEY}
@@ -239,6 +265,11 @@ class AnnDataAdaptor:
         self.force_backed = bool(backed)
         self._adata: ad.AnnData | None = None
         self._memory_lock = threading.Lock()  # one read of a backed file into memory at a time
+        # Requests reading the backed object (``pin``), and the backed objects let go of
+        # while they read (``to_memory``, ``close``): their files are closed at the last unpin.
+        self._pin_lock = threading.Lock()
+        self._pins = 0
+        self._retired: list[ad.AnnData] = []
         self._qc_cache: dict | None = None
         self._qc_cells: dict | None = None
         self._fingerprint: tuple[pd.Index, str] | None = None  # (obs_names hashed, hash)
@@ -292,22 +323,70 @@ class AnnDataAdaptor:
         return self._large.large
 
     def to_memory(self) -> ad.AnnData:
-        """The dataset in memory from now on: a backed one is read whole (anndata closes
-        its file) and this adaptor serves the in-memory copy, so the backed object and
-        its file handle are let go; one already in memory is returned as it is.
-        Callers make room first (``core/working_copy.py``). A large dataset is never
-        read in (``LargeDatasetError``): work on it reads its files in chunks."""
+        """The dataset in memory from now on: a backed one is read whole and this adaptor
+        serves the in-memory copy, so the backed object and its file handle are let go
+        (``_retire``: at once, or when the last request reading it ends); one already in
+        memory is returned as it is. Callers make room first (``core/working_copy.py``).
+        A large dataset is never read in (``LargeDatasetError``): work on it reads its
+        files in chunks."""
         if self.is_large:
             large_mode.refuse("Reading this dataset into memory", large_mode.REPROCESS)
         with self._memory_lock:
             adata = self.adata
             if getattr(adata, "isbacked", False):
-                mem = adata.to_memory()  # the arrays already in memory are shared, not copied
+                mem = _read_in_keeping_open(adata)  # arrays already in memory are shared
                 protein.adopt_obsm(mem)  # as an in-memory open does
                 spatial.adopt(mem)
                 self._adata = mem
+                self._retire(adata)
                 logger.info("Read %s into memory (%d x %d)", self.h5ad_path, mem.n_obs, mem.n_vars)
             return self._adata
+
+    # -- requests reading the backed object ----------------------------------
+
+    def pin(self) -> Callable[[], None]:
+        """Record that a request is reading this dataset (in a worker thread): a backed
+        object the adaptor lets go of meanwhile (``to_memory``, ``close``) keeps its file
+        open until the last such request ends, so a read that took the backed matrix
+        before the switch finishes on it. Never waits. Returns the unpin (safe to call
+        twice); call it when the read has ended, errors included.
+
+        Without it, anndata's ``to_memory`` closed the file under a DE test that was
+        reading the backed X in another thread (h5py: invalid identifier)."""
+        with self._pin_lock:
+            self._pins += 1
+        done = False
+
+        def unpin() -> None:
+            nonlocal done
+            with self._pin_lock:
+                if done:
+                    return
+                done = True
+                self._pins -= 1
+                retired, self._retired = (self._retired, []) if self._pins == 0 else ([], self._retired)
+            for old in retired:
+                _close_file(old)
+
+        return unpin
+
+    @contextlib.contextmanager
+    def pinned(self):
+        """``pin`` for the length of a block."""
+        unpin = self.pin()
+        try:
+            yield self
+        finally:
+            unpin()
+
+    def _retire(self, old: ad.AnnData) -> None:
+        """A backed object this adaptor no longer serves: its file is closed now, or by the
+        last unpin while requests read it."""
+        with self._pin_lock:
+            if self._pins:
+                self._retired.append(old)
+                return
+        _close_file(old)
 
     # ------------------------------------------------------------------
     # Shape
@@ -1048,9 +1127,8 @@ class AnnDataAdaptor:
                 self._adata.file.close()
             return
         if self._adata is not None and getattr(self._adata, "isbacked", False):
-            if self._adata.file is not None:
-                self._adata.file.close()
-            self._adata = None
+            old, self._adata = self._adata, None
+            self._retire(old)  # after the requests still reading it
 
     # ------------------------------------------------------------------
     # Large datasets: matrices on disk (core/large_mode.py)

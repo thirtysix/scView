@@ -19,10 +19,10 @@ export function cytokineHeatmap(r: CytokineResult, n: number = r.cytokines.lengt
   return { x: r.groups, y: rows.map((x) => x.c).reverse(), z: z.reverse(), zmax };
 }
 
-/** "STIM vs CTRL within each cell_type group", "each leiden group vs the rest". */
+/** "STIM (test) vs CTRL (baseline) within each cell_type group", "each leiden group vs the rest". */
 export function comparisonText(r: CytokineResult): string {
   if (r.mode === "conditions") {
-    return `${r.a} vs ${r.b}${r.groupby ? ` within each ${r.groupby} group` : ", all cells"}`;
+    return `${r.a} (test) vs ${r.b} (baseline)${r.groupby ? ` within each ${r.groupby} group` : ", all cells"}`;
   }
   return `each ${r.groupby} group vs ${r.reference === "rest" ? "the rest" : "all cells"}`;
 }

@@ -110,6 +110,9 @@ def dataset_id_of(adaptor: Any) -> str | None:
 
 # Recorded steps that only add a result or a new column (Moran's I, programs, a
 # pseudotime, a label column): earlier results were computed on data they leave alone.
+# Every kind in core/step_kinds.py is here, in LABEL_STEPS, or data-changing
+# (tests/test_step_kinds.py). Add a NEW kind freely; moving a kind that histories already
+# hold changes their counts, so results stored before would all turn stale once.
 ADDITIVE_STEPS = frozenset({
     "spatial_autocorr", "gene_programs", "pseudotime", "paga", "cnv", "label_transfer",
     "annotation_crosscheck", "annotation_confidence", "annotation_confidence_unknown", "qc_state_label",

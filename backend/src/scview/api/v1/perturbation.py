@@ -25,7 +25,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from scview.core import crispr, mixscape
+from scview.core import crispr, mixscape, working_copy
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import dataset_edit, edit_room, editable, save_edit, uns_snapshot
 from scview.core.sse import keepalive
@@ -199,7 +199,10 @@ async def run_mixscape(dataset_id: str, body: MixscapeRequest, dm: DatasetManage
     adata = adaptor.adata
     try:
         params = _params(adata, body)
-        pl = await asyncio.to_thread(mixscape.plan, adata, params)
+        # A backed dataset's matrix is read a block at a time (mixscape._expression): pinned,
+        # so a switch to memory meanwhile leaves its file open until the read ends.
+        async with working_copy.reading(dm, dataset_id, 0, "Mixscape") as held:
+            pl = await held.run(mixscape.plan, adata, params)
     except mixscape.MixscapeError as e:
         raise HTTPException(status_code=e.status, detail=str(e))
     if dataset_id in _running:
@@ -211,6 +214,7 @@ async def run_mixscape(dataset_id: str, body: MixscapeRequest, dm: DatasetManage
             yield _sse("error", {"error": "Mixscape is already running on this dataset."})
             return
         _running.add(dataset_id)
+        unpin = working_copy.hold(dm, dataset_id, 0, "Mixscape")
         stop = threading.Event()
         gen = mixscape.iter_mixscape(adata, pl, stop=stop.is_set)
         pending: asyncio.Future | None = None
@@ -219,6 +223,7 @@ async def run_mixscape(dataset_id: str, body: MixscapeRequest, dm: DatasetManage
             if fut is not None and not fut.cancelled():
                 fut.exception()  # retrieved: a stopped run is not an error
             gen.close()
+            unpin()
             _running.discard(dataset_id)
 
         try:

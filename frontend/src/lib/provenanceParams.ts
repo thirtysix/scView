@@ -5,6 +5,7 @@ import { clearedText } from "@/lib/runErrors";
 import { correctionText, isCorrectionSamples, pct } from "@/lib/ambient";
 import { doubletMethodText } from "@/lib/doubletMethods";
 import { batchParamText } from "@/lib/batchMethods";
+import { ingestParamText } from "@/lib/ingestParams";
 
 const LIST_SHOWN = 12;
 
@@ -94,9 +95,14 @@ function convertedText(rows: ConvertedEntry[]): string {
 
 /** A recorded step param as the History panel's chip shows it: lists joined (a long
  *  one cut to its first items and count), the filtering step's per-sample thresholds
- *  (an object per sample) and the doublet step's channels summarised, any other object
- *  as short JSON. */
-export function paramText(key: string, value: unknown): string {
+ *  (an object per sample) and the doublet step's channels summarised, the ingest
+ *  step's (`step` "ingest") in words, any other object as short JSON. "" for a param
+ *  not worth a chip. */
+export function paramText(key: string, value: unknown, step?: string): string {
+  if (step === "ingest") {
+    const text = ingestParamText(key, value);
+    if (text !== null) return text;
+  }
   if (key === "channels" && Array.isArray(value) && value.length && typeof value[0] === "object")
     return channelsText(value as ChannelRun[]);
   if (isCorrectionSamples(key, value)) return correctionText(value);
@@ -142,4 +148,13 @@ export function paramText(key: string, value: unknown): string {
     return `${key}=${json.length > 80 ? `${json.slice(0, 77)}...` : json}`;
   }
   return `${key}=${String(value)}`;
+}
+
+/** A recorded step's chips for History and the recipe: [param, text], empty values and
+ *  params not worth a chip left out. */
+export function paramChips(step: { step: string; params?: Record<string, unknown> | null }): [string, string][] {
+  return Object.entries(step.params ?? {})
+    .filter(([, v]) => v !== null && v !== "" && !(Array.isArray(v) && v.length === 0))
+    .map(([k, v]): [string, string] => [k, paramText(k, v, step.step)])
+    .filter(([, text]) => text !== "");
 }

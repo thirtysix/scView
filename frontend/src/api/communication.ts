@@ -151,7 +151,9 @@ export function communicationCsvUrl(datasetId: string, resultId: string): string
 export interface CompareRequest {
   groupby: string;
   condition: string;
+  /** The BASELINE value of `condition` (delta = b minus a). The cytokine route has a as the test. */
   a: string;
+  /** The TEST value of `condition`. */
   b: string;
   /** "auto" finds the donor column; null: no test */
   sample_key?: string | null;
@@ -201,6 +203,9 @@ export interface CompareResult {
   condition: string;
   a: string;
   b: string;
+  /** = a and b by role (absent from older backends). */
+  baseline?: string;
+  test?: string;
   resource: LRResource;
   resource_label: string;
   species: string;
@@ -240,6 +245,8 @@ export interface CompareResult {
 export interface CompareStart extends CommunicationStart {
   a: string;
   b: string;
+  baseline?: string;
+  test?: string;
 }
 
 /** One compared row's ligand x receptor product per donor (GET .../donors/{row}). */

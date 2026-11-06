@@ -27,8 +27,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from scview.config import Settings
-from scview.core import ccc, ccc_compare, large_mode, lr_resource
-from scview.core.activity import lognorm_matrix
+from scview.core import ccc, ccc_compare, large_mode, lr_resource, working_copy
+from scview.core.activity import lognorm_bytes, lognorm_matrix, lognorm_source
 from scview.core.confounding import condition_columns
 from scview.core.dataset_manager import DatasetManager
 from scview.core.species import detect_species
@@ -68,6 +68,20 @@ async def _adaptor(dm: DatasetManager, dataset_id: str):
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
     return adaptor
+
+
+async def _reserve(dm: DatasetManager, dataset_id: str, adaptor, n_cells: int | None = None) -> tuple[int, str]:
+    """Room for a run's read of a backed dataset's log-normalised matrix (``n_cells`` rows, else
+    all): a 507 before the stream starts when it cannot fit, held once it starts
+    (``working_copy.hold``). (bytes, the refusal's subject); 0 bytes for a dataset in memory."""
+    try:
+        need = await asyncio.to_thread(lognorm_bytes, adaptor, n_cells)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    what = working_copy.subject(dm, dataset_id, need, "Ligand-receptor communication")
+    if need:
+        await dm.reserve(dataset_id, need, what=what, strict=True)
+    return need, what
 
 
 def _groups(obs: pd.DataFrame, col: str, mask: np.ndarray | None = None) -> int:
@@ -231,12 +245,14 @@ async def run_communication(
     n_cells = int(adata.n_obs if mask is None else mask.sum())
     subset = (body.subset_column, str(body.subset_value)) if mask is not None else None
     res_dir = _res_dir(settings)
+    need, what = await _reserve(dm, dataset_id, adaptor, n_cells)
 
     async def events():
         if dataset_id in _running:
             yield _sse("error", {"error": "A communication run is already going on this dataset."})
             return
         _running.add(dataset_id)
+        held = working_copy.hold(dm, dataset_id, need, what)
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue = asyncio.Queue()
         stop = threading.Event()
@@ -253,10 +269,11 @@ async def run_communication(
                               "resource_label": RESOURCE_LABELS[resource], "species": species,
                               "species_evidence": why, "n_perms": body.n_perms,
                               "estimate_seconds": ccc.estimate_seconds(n_cells, n_groups, body.n_perms)})
-                M, genes, source = lognorm_matrix(adata)
+                choice = lognorm_source(adata)  # a backed dataset's chosen rows read: room held
+                M, genes, source = (choice.whole() if mask is None else choice.rows(mask)), choice.names, choice.source
                 labels = obs[body.groupby]
                 if mask is not None:
-                    M, labels = M[mask], labels[mask]
+                    labels = labels[mask]
                 prep = ccc.prepare(M, genes, labels, lr_resource.select(table, resource))
                 del M
                 out = ccc.score(prep, expr_prop=body.expr_prop, n_perms=body.n_perms,
@@ -299,9 +316,10 @@ async def run_communication(
 
             def release(_f) -> None:
                 _running.discard(dataset_id)
+                held()
 
             if fut.done():
-                _running.discard(dataset_id)
+                release(fut)
             else:
                 fut.add_done_callback(release)
 
@@ -339,8 +357,14 @@ async def communication_csv(dataset_id: str, result_id: str):
 class CompareRequest(BaseModel):
     groupby: str = Field(min_length=1, max_length=256)
     condition: str = Field(min_length=1, max_length=256)
-    a: str = Field(min_length=1, max_length=1024)
-    b: str = Field(min_length=1, max_length=1024)
+    # Side convention (kept: scripts, replays and clients depend on it): a = BASELINE, b = TEST,
+    # delta = b minus a. The cytokine route has them the other way round (api/v1/cytokines.py).
+    a: str = Field(min_length=1, max_length=1024, description=(
+        "The BASELINE (reference) value of `condition`. Differences are b minus a: delta = "
+        "lr_means_b - lr_means_a, so 'gained' means higher in b. The response names it as `baseline`."))
+    b: str = Field(min_length=1, max_length=1024, description=(
+        "The TEST value of `condition`, compared against the baseline a (delta = b minus a). "
+        "The response names it as `test`."))
     sample_key: str | None = Field(default="auto", max_length=256)  # auto | a column | null (no test)
     resource: str = Field(default="auto", max_length=32)
     expr_prop: float = Field(default=ccc.EXPR_PROP, ge=0.0, le=1.0)
@@ -362,6 +386,8 @@ def compare_body(r: ccc_compare.CompareResult) -> dict[str, Any]:
         "condition": r.condition,
         "a": r.a,
         "b": r.b,
+        "baseline": r.a,  # a is the baseline here (delta = b minus a); the cytokine route differs
+        "test": r.b,
         "resource": r.resource,
         "resource_label": RESOURCE_LABELS[r.resource],
         "species": r.species,
@@ -434,12 +460,14 @@ async def compare_communication(
     if dataset_id in _running:
         raise HTTPException(status_code=409, detail="A communication run is already going on this dataset.")
     res_dir = _res_dir(settings)
+    need, what = await _reserve(dm, dataset_id, adaptor)
 
     async def events():
         if dataset_id in _running:
             yield _sse("error", {"error": "A communication run is already going on this dataset."})
             return
         _running.add(dataset_id)
+        held = working_copy.hold(dm, dataset_id, need, what)
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue = asyncio.Queue()
         stop = threading.Event()
@@ -455,9 +483,10 @@ async def compare_communication(
                 put("start", {"n_cells": n_a + n_b, "n_groups": n_groups, "resource": resource,
                               "resource_label": RESOURCE_LABELS[resource], "species": species,
                               "species_evidence": why, "n_perms": body.n_perms, "a": body.a, "b": body.b,
+                              "baseline": body.a, "test": body.b,
                               "estimate_seconds": ccc_compare.estimate_seconds(n_a, n_b, n_groups,
                                                                                 body.n_perms)})
-                M, genes, source = lognorm_matrix(adata)
+                M, genes, source = lognorm_matrix(adata, read=True)  # room held: _reserve
                 parts = ccc_compare.compare(
                     M, genes, obs, body.groupby, body.condition, body.a, body.b,
                     lr_resource.select(table, resource), expr_prop=body.expr_prop, n_perms=body.n_perms,
@@ -498,9 +527,10 @@ async def compare_communication(
 
             def release(_f) -> None:
                 _running.discard(dataset_id)
+                held()
 
             if fut.done():
-                _running.discard(dataset_id)
+                release(fut)
             else:
                 fut.add_done_callback(release)
 

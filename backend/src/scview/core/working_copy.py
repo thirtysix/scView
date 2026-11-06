@@ -23,7 +23,9 @@ a joint embedding) reads those: ``on_disk`` / ``read_rows`` / ``read_matrix``, w
 closing the file others read (``AnnData.to_memory`` closes it, and a request reading it at
 that moment fails). It takes ``reading``: room for what it reads, a 507 naming the dataset
 when that cannot fit, and a reservation until the work has ended, so requests running at
-the same time count each other.
+the same time count each other. It also pins the datasets it reads (``AnnDataAdaptor.pin``):
+a run or an edit that reads one into memory meanwhile leaves the backed file open until the
+read has ended, so a test that took the backed matrix before the switch finishes on it.
 """
 
 from __future__ import annotations
@@ -153,9 +155,53 @@ class HeldRead:
         self.tasks: list[asyncio.Future] = []
 
     async def run(self, fn, *args):
+        return await self.run_with(None, fn, *args)
+
+    async def run_with(self, edit, fn, *args):
+        """``run``, the thread also waited for by ``edit`` (``obs_writes.dataset_edit``'s):
+        work that reads a backed dataset and saves an edit of it."""
         task = asyncio.ensure_future(asyncio.to_thread(fn, *args))
         self.tasks.append(task)
+        if edit is not None:
+            edit.tasks.append(task)
         return await asyncio.shield(task)
+
+
+def _pin(dm, ids: tuple[str, ...]):
+    """Pin the cached adaptors of ``ids`` (``AnnDataAdaptor.pin``): a backed object one of
+    them lets go of while the read works (a run or an edit reading it into memory) keeps
+    its file open until the read ends. Returns the unpin of all of them."""
+    get = getattr(dm, "get_dataset", None)
+    unpins = []
+    for i in dict.fromkeys(ids):
+        adaptor = get(i) if get is not None else None
+        if adaptor is not None and hasattr(adaptor, "pin"):
+            unpins.append(adaptor.pin())
+
+    def unpin() -> None:
+        for u in unpins:
+            u()
+
+    return unpin
+
+
+def subject(dm, dataset_id: str, need: int, what: str) -> str:
+    """A refusal's subject naming the dataset (looked up only when there is a read to refuse)."""
+    return f"{what} on {dm.dataset_name(dataset_id)}" if need else what
+
+
+def hold(dm, dataset_id: str, need: int, what: str):
+    """``reading`` for a stream: after ``dm.reserve(dataset_id, need, what=what, strict=True)``
+    before the response (its 507), the read is held and the dataset pinned once the stream
+    starts, until the release this returns (safe to call twice) when its work has ended."""
+    unpin = _pin(dm, (dataset_id,))
+    release_read = dm.hold_read(dataset_id, need, what) if need > 0 else (lambda: None)
+
+    def release() -> None:
+        release_read()
+        unpin()
+
+    return release
 
 
 @asynccontextmanager
@@ -164,18 +210,27 @@ async def reading(dm, dataset_id: str, need: int, what: str, also: tuple[str, ..
     the block and the threads it started with ``held.run`` have ended, however they end.
     ``DatasetManager.reserve`` first: other open datasets closed, least recently used (never
     ``dataset_id`` or ``also``, the datasets read), and ``DatasetMemoryError`` (a 507) with
-    ``what`` as the sentence's subject when it cannot fit."""
+    ``what`` as the sentence's subject when it cannot fit. The datasets read are pinned
+    (``_pin``) for as long, whatever ``need``: their backed files stay open under the read."""
     held = HeldRead()
-    if need <= 0:
-        yield held
-        return
     ids = (dataset_id, *also)
-    guard = dm.hold_read(ids, 0)  # not dropped to make the room
-    try:
-        await dm.reserve(dataset_id, need, what=what, strict=True)
-        release = dm.hold_read(ids, need, what)
-    finally:
-        guard()
+    release = unpin = _pin(dm, ids)
+    if need > 0:
+        try:
+            guard = dm.hold_read(ids, 0)  # not dropped to make the room
+            try:
+                await dm.reserve(dataset_id, need, what=what, strict=True)
+                hold = dm.hold_read(ids, need, what)
+            finally:
+                guard()
+        except BaseException:
+            unpin()
+            raise
+
+        def release() -> None:
+            hold()
+            unpin()
+
     try:
         yield held
     finally:

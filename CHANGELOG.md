@@ -6,6 +6,41 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.63.0] - 2026-11-06
+
+Runs queue for memory instead of stopping each other, backed datasets work across the analyses built on log-normalised expression, and History reads in words.
+
+### Changed
+- **A run whose next step fits only once another run or read has finished now waits for it instead of stopping.**
+  Its progress shows what it is waiting for and for how long; Cancel still works, and it stops as before after 30
+  minutes of waiting. A run that started later waits for an earlier one, never the reverse, so two runs cannot wait
+  on each other. A step too big even with nothing else running still stops at once, nothing saved.
+- **The ligand-receptor comparison and cytokine response name their two conditions as baseline and test**, on
+  screen ("Baseline (A) / Test (B)" and "Test condition (A) / vs baseline (B)") and in the API (field descriptions
+  and explicit `baseline` and `test` values in the responses). The meaning of `a` and `b` is unchanged: `a` is the
+  baseline in the ligand-receptor comparison and the test in cytokine response.
+
+### Fixed
+- **TF and pathway activity, cytokine response, upstream TF candidates, ligand-receptor communication, genes
+  along pseudotime, spatially variable genes, Mixscape, the marker panel and the shared marker choice failed on a
+  dataset opened from its file** (a processed dataset over the backed-mode size, 2 GB by default, reopened after a
+  restart). They now give the same results as in memory, and those that read the whole matrix first hold room for
+  it or refuse with a 507 naming the dataset.
+- **A DE test or another read of a backed dataset no longer fails when a run or an edit reads that dataset into
+  memory at the same time**: the file stays open until the read has finished. Spot composition no longer closes
+  the shared file when it reads its own copy of the spots.
+- **Re-filtering by per-type % mito reserves the memory its re-processing needs**, like any pipeline run, so
+  opening another dataset meanwhile is counted against it instead of risking the backend being stopped.
+- History and the recipe give every recorded step a readable name, and the import step's details read as words
+  instead of raw JSON.
+- The Protein tab no longer asks for RNA expression of an antibody whose target gene is not in the data, so the
+  browser no longer logs a 404.
+- The QC filtering record holds up to 16 filtering criteria; a ninth would have been lost. Records written before
+  still read.
+
+### Added
+- `GET /datasets/{id}/genes` takes an optional `layer`.
+
 ## [0.62.0] - 2026-11-05
 
 edgeR QL joins the pseudobulk models, DESeq2 runs about 20x faster on scView's own engine, and CELLxGENE uploads get gene symbols.

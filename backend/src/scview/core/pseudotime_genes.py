@@ -150,7 +150,7 @@ def trend_genes(
     pseudotime of the fitted peak and a ``pattern``: rising, falling (peak at the
     start) or transient.
     """
-    from scview.core.activity import lognorm_matrix
+    from scview.core.activity import lognorm_source
 
     idx, restrict = cells_used(adata, column, groups_column, groups)
     n = len(idx)
@@ -168,14 +168,14 @@ def trend_genes(
     p = Q.shape[1]
 
     try:
-        M, names, source = lognorm_matrix(adata)
+        choice = lognorm_source(adata)
     except ValueError:
         raise TrendError(
             "No log-normalised expression or raw counts to test: run normalization and "
             "log transform first."
         ) from None
-    names = np.asarray(names, dtype=object)
-    X = M[idx]
+    names, source = np.asarray(choice.names, dtype=object), choice.source
+    X = choice.rows(idx)  # a backed dataset's: these cells read (the endpoint holds the room)
     s1, s2, qtx, detected = _moments(X, Q)
 
     tss = s2 - s1 ** 2 / n

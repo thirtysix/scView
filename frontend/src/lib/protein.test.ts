@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { spearman, targetGenes } from "./protein";
+import { genesInLayer, spearman, targetGenes } from "./protein";
+import { genesByUpper } from "./geneLists";
 
 describe("targetGenes", () => {
   it("maps antibody targets to their genes, the name itself last", () => {
@@ -10,6 +11,20 @@ describe("targetGenes", () => {
     expect(targetGenes("TIGIT")).toEqual(["TIGIT", "Tigit"]);
     expect(targetGenes("anti-CD3")[0]).toBe("CD3E");
     expect(targetGenes("NovelTarget")).toEqual(["NovelTarget", "NOVELTARGET"]);
+  });
+});
+
+describe("genesInLayer", () => {
+  const layer = (names: string[]) => ({ set: new Set(names), byUpper: genesByUpper(names) });
+
+  it("keeps the candidates the layer has, by its own spelling, once each", () => {
+    expect(genesInLayer(targetGenes("CD19"), layer(["CD3E", "CD19"]))).toEqual(["CD19"]);
+    expect(genesInLayer(targetGenes("CD19"), layer(["Cd19", "Cd3e"]))).toEqual(["Cd19"]);
+    expect(genesInLayer(["cd19"], layer(["CD19"]))).toEqual(["CD19"]); // a case match counts
+  });
+
+  it("is empty when the layer has none of them: nothing is asked for", () => {
+    expect(genesInLayer(targetGenes("CD3"), layer(["CD19", "MS4A1"]))).toEqual([]);
   });
 });
 

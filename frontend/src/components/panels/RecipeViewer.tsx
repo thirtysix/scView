@@ -3,7 +3,7 @@ import { ChevronDown, ChevronRight, FileCode2, FileJson, FileText, Loader2 } fro
 
 import { getRecipe, type RecipeStep } from "@/api/provenance";
 import { downloadRecipeFile, type RecipeFile } from "@/api/export";
-import { paramText } from "@/lib/provenanceParams";
+import { paramChips } from "@/lib/provenanceParams";
 import { REPLAY_LABELS, replayCounts, replayStatus } from "@/lib/replayStatus";
 import { useViewStore } from "@/stores/viewStore";
 import { stepLabel } from "@/lib/stepLabel";
@@ -137,9 +137,7 @@ export function RecipeViewer({ datasetId }: { datasetId: string }) {
 
 function RecipeRow({ index, step }: { index: number; step: RecipeStep }) {
   const meta = REPLAY_LABELS[replayStatus(step)];
-  const params = Object.entries(step.params ?? {}).filter(
-    ([, v]) => v !== null && v !== "" && !(Array.isArray(v) && v.length === 0),
-  );
+  const params = paramChips(step);
   return (
     <li className="flex gap-3 py-2">
       <span className="w-5 shrink-0 text-right tabular-nums text-slate-400">{index}</span>
@@ -158,9 +156,9 @@ function RecipeRow({ index, step }: { index: number; step: RecipeStep }) {
         {step.replay?.note && <div className="mt-0.5 text-slate-500">{step.replay.note}</div>}
         {params.length > 0 && (
           <div className="mt-1 flex flex-wrap gap-1">
-            {params.map(([k, v]) => (
+            {params.map(([k, text]) => (
               <span key={k} className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-600">
-                {paramText(k, v)}
+                {text}
               </span>
             ))}
           </div>

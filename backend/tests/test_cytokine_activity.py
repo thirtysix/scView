@@ -219,8 +219,10 @@ async def test_stim_vs_ctrl_puts_ifn1_on_top_and_is_reused(client, dataset_manag
     for t in res["top"]:
         assert t["cytokines"][0]["cytokine"] == "IFN1" and t["cytokines"][0]["z"] > 5
     assert not res["reused"]
+    assert (res["test"], res["baseline"]) == ("STIM", "CTRL")  # a is the test here
     again = (await client.post(f"{API}/datasets/{did}/cytokines/activity", json=body)).json()
     assert again["reused"] and again["z"] == res["z"]
+    assert (again["test"], again["baseline"]) == ("STIM", "CTRL")
 
     # The co-pilot's fact names the comparison and the top cytokine.
     from scview.core.assistant import build_grounding_context
@@ -243,9 +245,20 @@ async def test_groups_vs_the_rest(client, dataset_manager, signature):
     z = dict(zip(res["groups"], res["z"]))
     j = res["cytokines"].index("IFN1")
     assert z["STIM"][j] > 5 and z["CTRL"][j] < -5
+    assert res["test"] is None and res["baseline"] is None  # no condition sides per group
     alls = (await client.post(f"{API}/datasets/{did}/cytokines/activity",
                               json={"groupby": "stim", "reference": "all", "n_permutations": 200})).json()
     assert alls["reference"] == "all" and alls["z"][alls["groups"].index("STIM")][j] > 5
+
+
+def test_request_fields_say_which_side_is_the_test():
+    """a is the test and b the baseline here, the other way round from the ligand-receptor
+    compare: each field's description says so (the OpenAPI schema clients read)."""
+    from scview.api.v1.cytokines import CytokineRequest
+
+    fields = CytokineRequest.model_json_schema()["properties"]
+    assert "TEST" in fields["a"]["description"] and "a minus b" in fields["a"]["description"]
+    assert "BASELINE" in fields["b"]["description"]
 
 
 async def test_bad_requests_too_few_genes_and_offline(client, dataset_manager, signature, monkeypatch):

@@ -36,6 +36,7 @@ from pydantic import BaseModel, Field
 
 from scview.core import large_mode, preflight, working_copy
 from scview.core import spot_deconvolution as sd
+from scview.core.anndata_adaptor import _read_in_keeping_open
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import dataset_edit, edit_room, editable, save_edit, uns_snapshot
 from scview.core.run_watchdog import RunWatchdog
@@ -325,7 +326,9 @@ def _preparer(dm: DatasetManager, dataset_id: str, reference_id: str, paths: lis
     def prepare(spot_adaptor) -> sd.Prepared:
         spots = spot_adaptor.adata
         if getattr(spots, "isbacked", False) and not spot_adaptor.is_large:
-            spots = spots.to_memory()  # a large one's counts are read by row blocks
+            # A copy for this run; the shared backed file stays open for other readers
+            # (anndata's own to_memory closes it). A large one's counts are read by row blocks.
+            spots = _read_in_keeping_open(spots)
         kw = {"celltype_column": column, "ref_info": ref_info, "ref_fallback": paths[1:],
               "spot_fallback": dm.h5ad_candidates(dataset_id)[1:], "cluster_column": cluster_column,
               "check": check, "seed": seed, "min_umi": min_umi,

@@ -54,7 +54,14 @@ export function RunWatchNotes({
         </p>
       )}
       {slow && (
-        <p className="flex items-start gap-1.5 text-blue-700" title="Sent every minute one step keeps running.">
+        <p
+          className="flex items-start gap-1.5 text-blue-700"
+          title={
+            slow.kind === "waiting"
+              ? "The next step fits only once other work has finished: the run waits for it, checking every 2 s."
+              : "Sent every minute one step keeps running."
+          }
+        >
           <Clock className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
           <span>{watchdogMessage(slow, label)}</span>
         </p>

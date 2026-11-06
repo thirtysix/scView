@@ -27,6 +27,16 @@ vi.mock("@/components/common/GeneSearch", () => ({
     <button onClick={() => onSelect("MS4A1")}>pick MS4A1</button>
   ),
 }));
+// The RNA layer's genes (GET /genes?layer=): CD19 and MS4A1, not CD3E. One object, as the
+// hook's memo gives, so the effect that reads it does not run again on every render.
+const { geneState, useDatasetGenesState } = vi.hoisted(() => {
+  const list = ["CD19", "MS4A1"];
+  const genes = { list, set: new Set(list), byUpper: new Map(list.map((g) => [g.toUpperCase(), g])) };
+  const geneState = { current: { genes, failed: false } as { genes: typeof genes | null; failed: boolean } };
+  type Hook = (datasetId: string, layer: string) => typeof geneState.current;
+  return { geneState, useDatasetGenesState: vi.fn<Hook>(() => geneState.current) };
+});
+vi.mock("@/hooks/useDatasetGenes", () => ({ useDatasetGenesState }));
 // The WNN card has its own tests (WnnCard.test.tsx).
 vi.mock("./WnnCard", () => ({
   WnnCard: ({ groupByColumn }: { groupByColumn: string }) => <div data-testid="wnn-card">{groupByColumn}</div>,
@@ -45,7 +55,10 @@ const PROTEIN: ProteinInfo = {
 };
 
 describe("UnifiedProteinSubtab", () => {
+  const LOADED = geneState.current;
   beforeEach(() => {
+    geneState.current = LOADED;
+    useDatasetGenesState.mockClear();
     decodeArrowBuffer.mockReset().mockImplementation((b: unknown) => b);
     apiFetchBinary.mockReset().mockImplementation(async (path: string) => {
       if (path.includes("layer=protein")) return { CD19: new Float32Array([0, 1, 3, 4]) };
@@ -95,7 +108,9 @@ describe("UnifiedProteinSubtab", () => {
     renderTab({ activeProtein: "CD19" });
     await waitFor(() => screen.getByTestId("protein-rna-stats"));
     expect(apiFetchBinary).toHaveBeenCalledWith("/datasets/d1/expression?genes=CD19&layer=protein");
-    expect(apiFetchBinary).toHaveBeenCalledWith("/datasets/d1/expression?genes=CD19,Cd19&layer=raw");
+    // Only the candidates the layer has are asked for (Cd19 is not there).
+    expect(useDatasetGenesState).toHaveBeenCalledWith("d1", "raw");
+    expect(apiFetchBinary).toHaveBeenCalledWith("/datasets/d1/expression?genes=CD19&layer=raw");
     expect(screen.getByTestId("plot").textContent).toBe("scattergl:4");
     const stats = screen.getByTestId("protein-rna-stats").textContent!;
     expect(stats).toMatch(/Spearman ρ 0\.95 over 4 cells/);
@@ -125,5 +140,21 @@ describe("UnifiedProteinSubtab", () => {
     await waitFor(() => expect(screen.getByTestId("protein-rna-stats").textContent).toMatch(/MS4A1 RNA is not detected in 100%/));
     fireEvent.change(screen.getByLabelText("Protein to compare"), { target: { value: "CD3" } });
     await waitFor(() => screen.getByText(/No gene for CD3 found in the RNA \(tried CD3E/));
+    // Known missing from the RNA gene list: no RNA request is made, so no 404 in the browser.
+    const rna = apiFetchBinary.mock.calls.map(([p]) => String(p)).filter((p) => !p.includes("layer=protein"));
+    expect(rna.filter((p) => p.includes("CD3"))).toEqual([]);
+  });
+
+  it("asks for every candidate when the gene list cannot be read, as before", async () => {
+    geneState.current = { genes: null, failed: true };
+    renderTab({ activeProtein: "CD19" });
+    await waitFor(() => screen.getByTestId("protein-rna-stats"));
+    expect(apiFetchBinary).toHaveBeenCalledWith("/datasets/d1/expression?genes=CD19,Cd19&layer=raw");
+  });
+
+  it("waits for the gene list before asking for anything", () => {
+    geneState.current = { genes: null, failed: false };
+    renderTab({ activeProtein: "CD19" });
+    expect(apiFetchBinary).not.toHaveBeenCalled();
   });
 });

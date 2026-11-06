@@ -4,7 +4,8 @@ import type { ProteinInfo } from "@/api/types";
 import { apiFetchBinary } from "@/api/client";
 import { decodeArrowBuffer } from "@/lib/arrow";
 import { plotConfig } from "@/lib/plotConfig";
-import { spearman, targetGenes } from "@/lib/protein";
+import { genesInLayer, spearman, targetGenes } from "@/lib/protein";
+import { useDatasetGenesState } from "@/hooks/useDatasetGenes";
 import { normLabel, proteinLayerFor, type ProteinNorm } from "@/lib/dsb";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -198,6 +199,9 @@ function ProteinVsRna({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  // The RNA layer's genes, so a target with no gene is never asked for (a 404).
+  const { genes: rnaGenes, failed: noGeneList } = useDatasetGenesState(datasetId, rnaLayer);
+
   // Follow the protein clicked above until one is picked here.
   useEffect(() => setProteinName(initial), [initial]);
   useEffect(() => setChosenGene(null), [proteinName]);
@@ -207,17 +211,30 @@ function ProteinVsRna({
     let cancelled = false;
     setLoading(true);
     setError(null);
+    if (!rnaGenes && !noGeneList) return; // the gene list first
     const candidates = chosenGene ? [chosenGene] : targetGenes(proteinName);
+    const notFound = () =>
+      chosenGene
+        ? `${chosenGene} is not in the RNA layer.`
+        : `No gene for ${proteinName} found in the RNA (tried ${candidates.join(", ")}). Pick one below.`;
+    // Without the list (it could not be read) every candidate is asked for, as before.
+    const present = rnaGenes ? genesInLayer(candidates, rnaGenes) : candidates;
+    if (present.length === 0) {
+      setPair(null);
+      setError(notFound());
+      setLoading(false);
+      return;
+    }
     const layerQ = rnaLayer ? `&layer=${encodeURIComponent(rnaLayer)}` : "";
     Promise.all([
       apiFetchBinary(`/datasets/${datasetId}/expression?genes=${encodeURIComponent(proteinName)}&layer=${encodeURIComponent(proteinLayer)}`),
-      apiFetchBinary(`/datasets/${datasetId}/expression?genes=${candidates.map(encodeURIComponent).join(",")}${layerQ}`),
+      apiFetchBinary(`/datasets/${datasetId}/expression?genes=${present.map(encodeURIComponent).join(",")}${layerQ}`),
     ])
       .then(([pBuf, gBuf]) => {
         if (cancelled) return;
         const p = decodeArrowBuffer(pBuf);
         const g = decodeArrowBuffer(gBuf);
-        const gene = candidates.find((c) => c in g);
+        const gene = present.find((c) => c in g);
         const y = toFloat(p[proteinName] ?? Object.values(p)[0]);
         const x = gene ? toFloat(g[gene]) : null;
         if (!x || !y || !gene) throw new Error("not found");
@@ -226,17 +243,13 @@ function ProteinVsRna({
       .catch(() => {
         if (cancelled) return;
         setPair(null);
-        setError(
-          chosenGene
-            ? `${chosenGene} is not in the RNA layer.`
-            : `No gene for ${proteinName} found in the RNA (tried ${candidates.join(", ")}). Pick one below.`,
-        );
+        setError(notFound());
       })
       .finally(() => !cancelled && setLoading(false));
     return () => {
       cancelled = true;
     };
-  }, [datasetId, proteinName, chosenGene, proteinLayer, rnaLayer]);
+  }, [datasetId, proteinName, chosenGene, proteinLayer, rnaLayer, rnaGenes, noGeneList]);
 
   const stats = useMemo(() => {
     if (!pair) return null;

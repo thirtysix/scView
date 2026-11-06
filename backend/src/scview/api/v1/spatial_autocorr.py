@@ -22,7 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from scview.core import results_store
+from scview.core import results_store, working_copy
 from scview.core import spatial_autocorr as sa
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import dataset_edit, save_edit, uns_snapshot
@@ -95,18 +95,21 @@ async def _run_and_save(dm: DatasetManager, dataset_id: str, body: AutocorrReque
         save_edit(adaptor, adata, output_path, before)
         return r
 
-    try:
-        r = await held.run(_run)
-    except sa.SpatialAutocorrError as e:
-        raise HTTPException(status_code=422, detail=str(e))
-    except KeyError as e:
-        raise HTTPException(status_code=404, detail=str(e).strip("'\""))
-    except _Stopped:
-        raise
-    except Exception as e:
-        dm.evict(dataset_id)  # the cached copy may hold the step without it being saved
-        logger.error("Moran's I failed for %s: %s", dataset_id, e, exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Could not compute spatially variable genes: {e!s}")
+    # A backed dataset's matrix (the section's spots) is read: room for it held until the run ends.
+    need = await asyncio.to_thread(sa.read_bytes, adaptor, body.library_id, body.layer)
+    async with working_copy.reading(dm, dataset_id, need, working_copy.subject(dm, dataset_id, need, WHAT)) as reading:
+        try:
+            r = await reading.run_with(held, _run)
+        except sa.SpatialAutocorrError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        except KeyError as e:
+            raise HTTPException(status_code=404, detail=str(e).strip("'\""))
+        except _Stopped:
+            raise
+        except Exception as e:
+            dm.evict(dataset_id)  # the cached copy may hold the step without it being saved
+            logger.error("Moran's I failed for %s: %s", dataset_id, e, exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Could not compute spatially variable genes: {e!s}")
     dm.saved_in_place(dataset_id, adaptor, output_path)
     sa.remember(adaptor, r)  # after the step is recorded: stored as current
     return result_body(r)
