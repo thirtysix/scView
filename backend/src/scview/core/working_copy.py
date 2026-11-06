@@ -23,7 +23,9 @@ a joint embedding) reads those: ``on_disk`` / ``read_rows`` / ``read_matrix``, w
 closing the file others read (``AnnData.to_memory`` closes it, and a request reading it at
 that moment fails). It takes ``reading``: room for what it reads, a 507 naming the dataset
 when that cannot fit, and a reservation until the work has ended, so requests running at
-the same time count each other.
+the same time count each other. It also pins the datasets it reads (``AnnDataAdaptor.pin``):
+a run or an edit that reads one into memory meanwhile leaves the backed file open until the
+read has ended, so a test that took the backed matrix before the switch finishes on it.
 """
 
 from __future__ import annotations
@@ -158,24 +160,51 @@ class HeldRead:
         return await asyncio.shield(task)
 
 
+def _pin(dm, ids: tuple[str, ...]):
+    """Pin the cached adaptors of ``ids`` (``AnnDataAdaptor.pin``): a backed object one of
+    them lets go of while the read works (a run or an edit reading it into memory) keeps
+    its file open until the read ends. Returns the unpin of all of them."""
+    get = getattr(dm, "get_dataset", None)
+    unpins = []
+    for i in dict.fromkeys(ids):
+        adaptor = get(i) if get is not None else None
+        if adaptor is not None and hasattr(adaptor, "pin"):
+            unpins.append(adaptor.pin())
+
+    def unpin() -> None:
+        for u in unpins:
+            u()
+
+    return unpin
+
+
 @asynccontextmanager
 async def reading(dm, dataset_id: str, need: int, what: str, also: tuple[str, ...] | list[str] = ()):
     """Hold room for a read of ``need`` bytes (0: nothing to read, nothing is checked) until
     the block and the threads it started with ``held.run`` have ended, however they end.
     ``DatasetManager.reserve`` first: other open datasets closed, least recently used (never
     ``dataset_id`` or ``also``, the datasets read), and ``DatasetMemoryError`` (a 507) with
-    ``what`` as the sentence's subject when it cannot fit."""
+    ``what`` as the sentence's subject when it cannot fit. The datasets read are pinned
+    (``_pin``) for as long, whatever ``need``: their backed files stay open under the read."""
     held = HeldRead()
-    if need <= 0:
-        yield held
-        return
     ids = (dataset_id, *also)
-    guard = dm.hold_read(ids, 0)  # not dropped to make the room
-    try:
-        await dm.reserve(dataset_id, need, what=what, strict=True)
-        release = dm.hold_read(ids, need, what)
-    finally:
-        guard()
+    release = unpin = _pin(dm, ids)
+    if need > 0:
+        try:
+            guard = dm.hold_read(ids, 0)  # not dropped to make the room
+            try:
+                await dm.reserve(dataset_id, need, what=what, strict=True)
+                hold = dm.hold_read(ids, need, what)
+            finally:
+                guard()
+        except BaseException:
+            unpin()
+            raise
+
+        def release() -> None:
+            hold()
+            unpin()
+
     try:
         yield held
     finally:
