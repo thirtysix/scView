@@ -1,4 +1,6 @@
-"""``core/step_kinds.RECORDED_STEPS`` is every step kind the source can record."""
+"""``core/step_kinds.RECORDED_STEPS`` is every step kind the source can record, and each
+kind is sorted for staleness: a step that only adds a result (Moran's I, programs, a
+label column) must not make earlier stored results stale."""
 
 from __future__ import annotations
 
@@ -6,6 +8,7 @@ import ast
 from pathlib import Path
 
 import scview
+from scview.core import results_store
 from scview.core.pipeline import ALL_STEPS
 from scview.core.replay_script import _STEP_CODE
 from scview.core.step_kinds import RECORDED_STEPS
@@ -21,6 +24,18 @@ DYNAMIC = {
 }
 # Modules whose ``_record(adata, "<step>", ...)`` wraps record_step.
 WRAPPERS = {"core/user_labels.py", "core/vdj.py"}
+
+# Recorded steps that change the data earlier results were computed on: the cells, the
+# matrix, the clustering or a label column a result may have grouped by. Everything else
+# is in ADDITIVE_STEPS or LABEL_STEPS. A new step kind goes in one or the other.
+DATA_CHANGING = {
+    "ingest", "integrate", *ALL_STEPS, "run_errors",
+    "subcluster", "merge_clusters", "keep_resolution", "keep_hvg_setting", "keep_layout",
+    "doublet_threshold", "mito_refilter",
+    "protein_dsb", "hashing_demux", "hashing_samples",
+    "vdj_attach", "vdj_clonotypes", "vdj_remove", "crispr_assign", "mixscape",
+}
+
 
 def _scan() -> tuple[set[str], set[tuple[str, str]]]:
     """(step kinds named at record_step / wrapper calls, (module, function) of calls naming
@@ -66,3 +81,36 @@ def test_every_recorded_step_kind_is_listed():
     assert set(ALL_STEPS) <= set(RECORDED_STEPS)
     assert set(_STEP_CODE) <= set(RECORDED_STEPS)  # the replay script knows no kind nobody records
     assert len(set(RECORDED_STEPS)) == len(RECORDED_STEPS)
+
+
+def test_every_step_kind_is_sorted_for_staleness():
+    additive, label = results_store.ADDITIVE_STEPS, results_store.LABEL_STEPS
+    assert not additive & label and not (additive | label) & DATA_CHANGING
+    assert (additive | label) <= set(RECORDED_STEPS)
+    assert set(RECORDED_STEPS) - additive - label == DATA_CHANGING, (
+        "a new step kind: ADDITIVE_STEPS when it only adds a result or a new column, else DATA_CHANGING")
+
+
+def test_an_additive_step_leaves_stored_results_current():
+    """Moran's I (and every other additive kind) adds a step but not to the count a
+    stored result is compared by; a data-changing step does."""
+
+    class Adaptor:
+        def __init__(self, steps):
+            import anndata as ad
+            import numpy as np
+
+            from scview.core import provenance
+
+            self.adata = ad.AnnData(np.zeros((3, 2), dtype=np.float32))
+            for s in steps:
+                provenance.record_step(self.adata, step=s, tool="test")
+
+        def cells_fingerprint(self):
+            return "cells"
+
+    base = ["ingest", "qc_metrics", "clustering"]
+    stored = results_store.fingerprint(Adaptor(base))
+    for kind in sorted(results_store.ADDITIVE_STEPS):
+        assert not results_store._is_stale(stored, results_store.fingerprint(Adaptor([*base, kind]))), kind
+    assert results_store._is_stale(stored, results_store.fingerprint(Adaptor([*base, "filtering"])))
