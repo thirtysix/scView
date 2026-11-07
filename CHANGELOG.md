@@ -6,6 +6,10 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.65.0] - 2026-11-07
+
+Every supported chat model answers without spending its reply budget thinking, a cut annotator reply is asked again, DC2 labels get the cDC2 id, and the variable-gene, merge and compare-methods time estimates are refit.
+
 ### Fixed
 - **Thinking is turned off the way each chat model accepts it.** The AI annotator, co-pilot, claims judge and QC
   report used to switch thinking off for DeepSeek only, so a `RAG_CHAT_MODEL` or annotator model from another
