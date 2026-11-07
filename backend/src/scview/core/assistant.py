@@ -217,6 +217,19 @@ def _celltype_cluster_map(adata, acol: str) -> dict[str, str]:
         return {}
 
 
+def _annotator_cl_ids(adata, acol: str) -> dict[str, str]:
+    """label -> " (Cell Ontology CL:..., name)" for the ids the LLM annotator kept
+    (core/cell_ontology.py, checked against the label when the run stored them)."""
+    from scview.core import cell_ontology
+
+    out = {}
+    for label, row in cell_ontology.annotator_record(adata, acol).items():
+        if row.get("cl_id"):
+            name = f", {row['cl_name']}" if row.get("cl_name") else ""
+            out[label] = f" (Cell Ontology {row['cl_id']}{name})"
+    return out
+
+
 def _add_qc_states(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """The low-RP / high-mito QC state per group (core/qc_states.py), when fitted."""
     try:
@@ -1033,13 +1046,14 @@ def build_grounding_context(
                      f"[result:celltypes:{acol}]")
         start = len(lines)
         shares = _doublet_shares(adata, acol)
+        cl_ids = _annotator_cl_ids(adata, acol)
         for cl, ct in list(mapping.items())[:_MAX_CATEGORICAL_UNIQUE]:
             # A label on a cluster that is mostly predicted doublets carries the caution:
             # the annotators never see the doublet calls (capture 2026-10-28, joint cluster 9).
             caution = (f" (caution: {shares[cl]:.0%} of its cells are predicted doublets, "
                        "so the label may describe two cell types captured together)"
                        if shares.get(cl, 0.0) >= _MOSTLY_DOUBLETS else "")
-            lines.append(f"- cluster **{cl}** = {ct}{caution}")
+            lines.append(f"- cluster **{cl}** = {ct}{cl_ids.get(ct, '')}{caution}")
         sources.append(ChatSource(
             kind="result", ref=f"result:celltypes:{acol}",
             detail=f"{acol}: " + "; ".join(f"{k}={v}" for k, v in list(mapping.items())[:12]),

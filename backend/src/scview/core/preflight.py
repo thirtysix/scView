@@ -1500,6 +1500,20 @@ def _step_neighbors(s: _State, params) -> tuple[int, _State, float]:
     return g, s, (10.0 + 1e-3 * s.n) if s.n <= 4096 else (28.0 + 3e-4 * s.n)
 
 
+# A neighbour graph once numba has compiled its code in this process: Kang (13,836 cells)
+# 1.4 s in a warm server against 28-31 s first (2026-11-06, 2 CPUs).
+NEIGHBORS_WARM_SECONDS_PER_CELL = 1e-4
+
+
+def neighbors_seconds_compiled(n: int, secs: float) -> float:
+    """The neighbour step's ``secs`` less the compile this process has already done
+    (``core/numba_warm.py``), never under the warm graph's own time."""
+    from scview.core import numba_warm
+
+    done = numba_warm.neighbours_cold_seconds(n) - numba_warm.neighbours_seconds(n)
+    return max(secs - done, NEIGHBORS_WARM_SECONDS_PER_CELL * n) if done > 0 else secs
+
+
 # Leiden's time (core/leiden.py; one thread in its child, so more CPUs do not speed it
 # up): the small-data line measured on the calibration runs, or a power law in the cells,
 # whichever is larger. The power laws are fits to the same saved graph of the brain data
@@ -1801,7 +1815,8 @@ def estimate_run(shape: tuple[int, int] | Header, nnz: int | None = None, dense:
     transient) over the steps, as the dataset's state changes through them (reset
     to counts replaces X, filtering cuts each matrix once and the opened copy gives
     its matrices up, scaling sets .raw to X itself), then saving and reopening the result. ``warm``: the
-    process already paid its one-time imports (default: looked up). ``doublets``: the
+    process already paid its one-time imports (default: looked up); then the neighbour step also
+    leaves out the numba compile this process has done. ``doublets``: the
     doublet step's channels (``doublet_plan``; None: all cells as one)."""
     from scview.core.pipeline import ALL_STEPS
 
@@ -1823,6 +1838,8 @@ def estimate_run(shape: tuple[int, int] | Header, nnz: int | None = None, dense:
         t, s, secs = (_step_doublet(s, params, doublets) if model is _step_doublet
                       else model(s, params))
         secs = _cpu_free(step, secs, cpus)
+        if step == "neighbors" and warm and secs:  # numba's compile already done here
+            secs = neighbors_seconds_compiled(s.n, secs)
         w = _warm(step, warm)
         warm_held += w
         total += secs
@@ -3077,7 +3094,7 @@ def cnv_need(n_cells: int, n_genes: int, n_windows: int) -> int:
 # x8 pancreas 1.42 / 1.46, steady 1.15 / 1.19, dentate 1.15 / 1.16. Seconds, first run in a process:
 # 27 / 26, 20 / 26, 17 / 25, 77 / 82, 74 / 82, 75 / 71. Time is the three passes over the store, the
 # moments, fit and graph, and the neighbours when computed (numba compiles their search once per
-# process: about 20 s, left out once this module has done it; a pipeline run may have done it too).
+# process: about 20 s, left out once this module or any other neighbour graph has done it).
 VELOCITY_FIT_GENES_SHARE = 9800  # fitted genes hold 9,800 / the store's genes of the values at 2,000 genes: 35% of
 # pancreas's 27,998 genes, 70% of dentate gyrus's 13,913 (from their measured peaks)
 VELOCITY_SECOND_SHARE = 0.7  # second moments' stored values over those
@@ -3097,6 +3114,7 @@ def estimate_velocity(n_dataset: int, n_store: int, nnz_spliced: int, nnz_unspli
     """Memory and time of a velocity run, from the store's header. The peak is the fit: S and U on
     the fitted genes, Ms and Mu dense (each a file past core/velocity.MEMMAP_BYTES, so only pages
     in use), the weights, one block of genes' working arrays and, stochastic, the second moments."""
+    from scview.core import numba_warm
     from scview.core import velocity as vel
 
     n = min(n_dataset, n_store) if n_store else n_dataset
@@ -3119,7 +3137,7 @@ def estimate_velocity(n_dataset: int, n_store: int, nnz_spliced: int, nnz_unspli
     compile_secs = 0.0
     if not has_graph:
         secs += VELOCITY_SECONDS_PER_CELL_KNN * n if n >= 4096 else 1.0
-        if not vel.knn_compiled():
+        if not (vel.knn_compiled() or numba_warm.neighbours_seconds(n) == 0):  # any graph in this process
             compile_secs = VELOCITY_SECONDS_KNN_COMPILE
         if not has_pca:
             secs += VELOCITY_SECONDS_PER_CELL_PCA * n

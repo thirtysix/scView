@@ -4,7 +4,8 @@ Per cell (to colour the embedding by one source, and a group x source heatmap of
 the mean), and on a DE result's per-gene statistics (which TFs and pathways the
 comparison moves). Computed on demand, never written to the dataset: one sparse
 product scores every cell (0.5 s for Kang's 14k cells x 625 TFs on 2 cores), and
-the per-dataset model is kept in memory for the loaded dataset object only.
+the per-dataset model is kept in memory for the loaded dataset object only (for a
+dataset opened backed, its every score instead: ``_model``).
 See ``core/activity.py`` and ``core/activity_nets.py``.
 """
 
@@ -21,8 +22,17 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from scview.config import Settings
-from scview.core import activity, activity_nets, de_results, large_mode, orthologs, targeted_panel, working_copy
-from scview.core.dataset_manager import DatasetManager
+from scview.core import (
+    activity,
+    activity_nets,
+    de_results,
+    large_mode,
+    memory_budget,
+    orthologs,
+    targeted_panel,
+    working_copy,
+)
+from scview.core.dataset_manager import LOAD_MARGIN, DatasetManager, working_reserve
 from scview.core.object_cache import ObjectCache
 from scview.core.species import detect_species
 from scview.dependencies import get_dataset_manager, get_settings_dep
@@ -39,10 +49,18 @@ MOUSE_NOTE = (
     "HGNC HCOP orthologs, as decoupler does; a gene with no confident ortholog is left out."
 )
 
-# (loaded dataset object, network) -> activity.CellModel. A pipeline run drops the
-# object, so a model never outlives the expression values it was built from. A backed
-# dataset's model is not kept: it holds the matrix read from the file, outside any room held.
+# (loaded dataset object, network) -> (activity.CellModel, matrix source). A pipeline run
+# drops the object, so a model never outlives the expression values it was built from. A
+# backed dataset's model is not kept: it holds the matrix read from the file, outside any
+# room held. Its every score is kept instead (activity.CellScores, cells x sources float32),
+# so colouring by one TF after another reads the file once: room for them is held with the
+# read (_read_need), and they are kept only up to KEEP_MAX_BYTES and KEEP_MAX_SHARE of the
+# memory limit, and when they fit beside the read now, with the working reserve and no open
+# dataset closed for them (else the request reads as it did, and nothing is kept). A dataset
+# dropped from memory takes them with it.
 _MODELS = ObjectCache()
+KEEP_MAX_BYTES = 512 * 1024**2
+KEEP_MAX_SHARE = 1 / 16  # of the limit: 256 MB at 4 GB, KEEP_MAX_BYTES from 8 GB (Kang x CollecTRI: 34 MB)
 
 
 class DEActivityRequest(BaseModel):
@@ -90,10 +108,11 @@ def _species(adata) -> str:
 
 
 def _model(adata, network: str, dest: Path, species: str = "human",
-           matrix: tuple | None = None) -> tuple[activity.CellModel, str]:
+           matrix: tuple | None = None, room: int = 0) -> tuple[activity.CellModel | activity.CellScores, str]:
     """The cached ULM model for this loaded dataset, built on first use (worker thread):
     inside ``_in_thread(reading=...)`` (a backed dataset's matrix is read whole), or on
-    ``matrix``, the caller's ``activity.lognorm_matrix``."""
+    ``matrix``, the caller's ``activity.lognorm_matrix``. A backed dataset's every score is
+    kept instead when they and their working copies fit ``room`` (``_read_need``)."""
     large_mode.check(adata, "TF and pathway activity", large_mode.WHOLE_MATRIX)
     cached = _MODELS.get(adata, network)
     if cached is not None:
@@ -102,21 +121,63 @@ def _model(adata, network: str, dest: Path, species: str = "human",
     model = activity.CellModel.build(M, genes, _network(network, dest, species))
     if not getattr(adata, "isbacked", False):
         _MODELS.put(adata, (model, source), key=network)
+    elif room and activity.kept_bytes(model.M.shape[0], len(model.net.sources)) \
+            + activity.KEEP_BLOCK_BYTES <= room:
+        kept = activity.CellScores.of(model), source
+        _MODELS.put(adata, kept, key=network)
+        return kept
     return model, source
+
+
+def _keep_room(adata, network: str, dest: Path) -> int:
+    """Room to hold for keeping a backed dataset's scores of ``network`` (``_model``): at
+    most its every source as fetched, and the working copies scoring them; 0 (not kept) when
+    the network is not on disk yet or they would pass KEEP_MAX_BYTES or KEEP_MAX_SHARE of
+    the memory limit."""
+    n_sources = (activity_nets.read_meta(dest, network) or {}).get("n_sources")
+    if not n_sources:
+        return 0
+    keep = activity.kept_bytes(adata.n_obs, n_sources)
+    limit = memory_budget.read_budget().limit_bytes
+    if keep > KEEP_MAX_BYTES or (limit and keep > limit * KEEP_MAX_SHARE):
+        return 0
+    return keep + activity.KEEP_BLOCK_BYTES
+
+
+def _fits_now(dm, dataset_id: str, need: int) -> bool:
+    """``need`` fits in what is free now, with the working reserve, no open dataset closed."""
+    budget = memory_budget.read_budget()
+    if not budget.limited or budget.limit_bytes is None or budget.used_bytes is None:
+        return True
+    free = budget.limit_bytes - budget.used_bytes - dm.outstanding(budget.used_bytes, dataset_id)
+    return free >= need * LOAD_MARGIN + working_reserve(budget.limit_bytes)
+
+
+def _read_need(dm, dataset_id: str, adaptor, adata, network: str, dest: Path) -> tuple[int, int]:
+    """(bytes to hold while the request scores ``adata``, of which room for keeping its
+    scores): none when they are kept already, nothing is read."""
+    if _MODELS.get(adata, network) is not None:
+        return 0, 0
+    need = activity.lognorm_bytes(adaptor)
+    room = _keep_room(adata, network, dest) if need else 0
+    if room and not _fits_now(dm, dataset_id, need + room):
+        room = 0
+    return need + room, room
 
 
 async def _in_thread(fn, *args, reading: tuple | None = None):
     """``fn`` in a worker thread, its errors as HTTP ones; ``reading`` (dm, dataset_id,
-    adaptor): inside ``working_copy.reading``, room held for its matrix read whole when backed."""
+    adaptor, adata, network, network dir): ``fn(*args, room)`` inside ``working_copy.reading``,
+    room held for a backed dataset's matrix read whole and its scores kept (``_read_need``)."""
     try:
         if reading is None:
             return await asyncio.to_thread(fn, *args)
-        dm, dataset_id, adaptor = reading
+        dm, dataset_id, adaptor, adata, network, dest = reading
         large_mode.check(adaptor, "TF and pathway activity", large_mode.WHOLE_MATRIX)
-        need = await asyncio.to_thread(activity.lognorm_bytes, adaptor)
+        need, room = await asyncio.to_thread(_read_need, dm, dataset_id, adaptor, adata, network, dest)
         what = working_copy.subject(dm, dataset_id, need, "TF and pathway activity")
         async with working_copy.reading(dm, dataset_id, need, what) as held:
-            return await held.run(fn, *args)
+            return await held.run(fn, *args, room)
     except HTTPException:
         raise
     except activity_nets.NetworkUnavailable as e:
@@ -185,9 +246,9 @@ async def activity_summary(
                 detail=f"'{groupby}' has {n_groups} groups; activity is averaged over at most {MAX_GROUPS}.",
             )
 
-    def _run() -> dict:
+    def _run(room: int) -> dict:
         t0 = time.time()
-        model, source = _model(adata, network, _net_dir(settings), species)
+        model, source = _model(adata, network, _net_dir(settings), species, room=room)
         net = model.net
         body = {
             "network": s.name, "label": s.label, "kind": s.kind, "citation": s.citation,
@@ -207,7 +268,7 @@ async def activity_summary(
         body["elapsed_seconds"] = round(time.time() - t0, 2)
         return body
 
-    return await _in_thread(_run, reading=(dm, dataset_id, adaptor))
+    return await _in_thread(_run, reading=(dm, dataset_id, adaptor, adata, network, _net_dir(settings)))
 
 
 @router.get("/datasets/{dataset_id}/activity/{network}/cells")
@@ -224,8 +285,8 @@ async def activity_cells(
     adata = adaptor.adata
     species = _species(adata)
 
-    def _run() -> dict:
-        model, _ = _model(adata, network, _net_dir(settings), species)
+    def _run(room: int) -> dict:
+        model, _ = _model(adata, network, _net_dir(settings), species, room=room)
         if source not in model.net.sources:
             raise HTTPException(
                 status_code=404,
@@ -236,7 +297,7 @@ async def activity_cells(
         return {"network": s.name, "source": source, "n_targets": int(model.net.n_targets[j]),
                 "scores": _round(model.source(source))}
 
-    return await _in_thread(_run, reading=(dm, dataset_id, adaptor))
+    return await _in_thread(_run, reading=(dm, dataset_id, adaptor, adata, network, _net_dir(settings)))
 
 
 @router.post("/datasets/{dataset_id}/activity/{network}/de")

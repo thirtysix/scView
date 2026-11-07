@@ -63,7 +63,7 @@ async def split_markers_info(
     adata = (await _adaptor(dm, dataset_id)).adata
 
     def _info() -> dict[str, Any]:
-        base = {"n_cells": int(adata.n_obs), "first_run_seconds": mc.FIRST_RUN_SECONDS}
+        base = {"n_cells": int(adata.n_obs), "first_run_seconds": mc.first_run_seconds(adata.n_obs)}
         try:
             p = sm.plan(adata, column)
         except sm.SplitMarkersError as exc:

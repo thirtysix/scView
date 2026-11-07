@@ -106,10 +106,12 @@ PROBE_ITERATIONS = 2  # Leiden passes for a quick count
 # Time (Kang copy, 13,836 cells, 2 cores, measured 2026-10-21, server warm): the
 # fit and the split 7-8 s, the training run 18-45 s (Leiden is slower at high
 # resolution), matching the cluster count 20-45 s, the pairs 0.15 s each: 83 s at
-# resolution 1.0, 100 s at 2.5. The first run after a server start adds ~70 s.
+# resolution 1.0, 100 s at 2.5. The first run in a process also compiles the
+# neighbour search (``first_run_seconds``): 2026-11-06, Kang at resolution 0.5,
+# 63 s in a restarted server against 33 s after its pipeline had run.
 EXTRA_SECONDS_PER_1K_CELLS = 4.5  # on top of one variable-gene setting's estimate
 SECONDS_PER_PAIR = 0.15
-FIRST_RUN_SECONDS = 70.0  # numba compiling the neighbour search and more, after a server start
+first_run_seconds = hs.first_run_seconds  # numba's compile still to come (core/numba_warm.py)
 
 
 class MergeCheckError(ValueError):

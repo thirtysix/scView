@@ -128,7 +128,7 @@ export function BatchMethodCompare({
             {info.estimate_seconds != null && (
               <span
                 className="text-white/80"
-                title={info.first_run ? "The first comparison in a session compiles BBKNN's graph code (about 16 s of this)" : undefined}
+                title={info.first_run ? `BBKNN's graph code is not compiled in this backend yet (about ${Math.max(1, Math.round(info.compile_seconds ?? 12))} s of this)` : undefined}
               >
                 (~{Math.max(1, Math.round(info.estimate_seconds))} s{info.first_run ? ", first run" : ""})
               </span>

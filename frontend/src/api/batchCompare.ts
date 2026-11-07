@@ -26,8 +26,10 @@ export interface CompareInfo {
   label_column?: string | null;
   label_kind?: "shared" | "within_dataset" | null;
   estimate_seconds?: number;
-  /** The estimate counts BBKNN's one-off compilation (no comparison has run in this backend yet) */
+  /** The estimate counts BBKNN's one-off compilation (no neighbour graph has been built in this backend yet) */
   first_run?: boolean;
+  /** Seconds of that compilation in the estimate (0 once compiled) */
+  compile_seconds?: number;
 }
 
 export interface CompareRow {

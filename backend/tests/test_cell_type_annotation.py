@@ -219,3 +219,25 @@ def test_annotator_sends_informative_markers_and_records_the_tissue(monkeypatch)
     assert "tissue" in sent[0] and "monocytes, not macrophages" in sent[0]
     assert set(a.obs["cell_type"].astype(str)) == {"T cells"}
     assert a.uns["cell_type_llm_tissue"] == "blood"
+
+
+def test_parse_numeric_cluster_ids_by_id_not_line_order():
+    """Numeric ids were stripped with the list marks, so a reply with one extra line
+    shifted every label by one (positional fallback)."""
+    from scview.core.pipeline import _parse_cluster_labels
+
+    raw = ("Here are the annotations:\ntissue: blood\n2: NK cells | CL:0000623\n0: B cells\n"
+           "- 1: Monocytes\n**10**: pDC\nCluster 13: Platelets\n3. 3: T cells")
+    out = _parse_cluster_labels(raw, ["0", "1", "2", "3", "10", "13"])
+    assert out == {"0": "B cells", "1": "Monocytes", "2": "NK cells | CL:0000623", "3": "T cells",
+                   "10": "pDC", "13": "Platelets"}
+    # A cluster the model left out stays out (Unknown), it does not take a neighbour's label.
+    assert _parse_cluster_labels("0: B cells\n2: NK cells", ["0", "1", "2"]) == {"0": "B cells", "2": "NK cells"}
+
+
+def test_annotation_max_tokens_grows_with_clusters():
+    from scview.core.pipeline import _annotation_max_tokens
+
+    assert _annotation_max_tokens(14) >= 14 * 25 + 100
+    assert _annotation_max_tokens(74) >= 74 * 25 + 100  # GTEx v9: 74 groups
+    assert _annotation_max_tokens(10_000) == 8192

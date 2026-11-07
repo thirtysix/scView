@@ -128,10 +128,11 @@ echo   [ok] Settings saved to .env
 
 rem Memory limit (SCVIEW_MEMORY_GB, docker-compose.yml): a dataset too big for
 rem the computer stops scView, not Windows. Suggested once: free memory minus
-rem 3 GB to the nearest GB, at most what Docker/Podman has minus 1 GB, at least 4.
+rem 3 GB to the nearest GB, at least 4 (WANTGB), then at most what Docker/Podman
+rem has minus 0.5 GB, rounded down, at least 1 (CAPGB). A limit above what the
+rem engine has lets its machine run out of memory before the limit stops scView.
 set "MEMGB="
 for /f "tokens=2 delims==" %%a in ('findstr /b /c:"SCVIEW_MEMORY_GB=" .env 2^>nul') do set "MEMGB=%%a"
-if defined MEMGB goto :memory_ready
 set "ENGINE_BYTES=0"
 if "%ENGINE%"=="podman" (
     for /f %%b in ('podman info --format "{{.Host.MemTotal}}" 2^>nul') do set "ENGINE_BYTES=%%b"
@@ -141,13 +142,24 @@ if "%ENGINE%"=="podman" (
 set "FREEGB=?"
 set "ENGGB=?"
 set "SUGGEST=4"
-for /f "tokens=1-3" %%a in ('powershell -NoProfile -Command "$c=[cultureinfo]::InvariantCulture; $f=(Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory/1MB; $e=%ENGINE_BYTES%/1GB; $s=[math]::Round($f-3); if ($e -gt 0 -and $s -gt [math]::Floor($e-1)) {$s=[math]::Floor($e-1)}; if ($s -lt 4) {$s=4}; $f.ToString('F1',$c)+' '+$e.ToString('F1',$c)+' '+$s"') do (
+set "WANTGB=4"
+set "CAPGB=0"
+for /f "tokens=1-5" %%a in ('powershell -NoProfile -Command "$c=[cultureinfo]::InvariantCulture; $f=(Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory/1MB; $e=%ENGINE_BYTES%/1GB; $w=[math]::Round($f-3); if ($w -lt 4) {$w=4}; $x=0; if ($e -gt 0) {$x=[math]::Max(1,[math]::Floor($e-0.5))}; $s=$w; if ($x -gt 0 -and $s -gt $x) {$s=$x}; $f.ToString('F1',$c)+' '+$e.ToString('F1',$c)+' '+$s+' '+$w+' '+$x"') do (
     set "FREEGB=%%a"
     set "ENGGB=%%b"
     set "SUGGEST=%%c"
+    set "WANTGB=%%d"
+    set "CAPGB=%%e"
 )
+if defined MEMGB goto :memory_ready
 echo.
 echo   Free memory now: %FREEGB% GB (%ENGINE_APP% has %ENGGB% GB).
+if %SUGGEST% geq %WANTGB% goto :memory_ask
+echo   %ENGINE_APP% has only %ENGGB% GB of memory, so scView can use at most %SUGGEST% GB.
+echo   To give it more, see "Windows troubleshooting" in the README: a .wslconfig
+echo   file in your user folder sets it. Then change SCVIEW_MEMORY_GB in the .env
+echo   file, or delete that line to be asked again.
+:memory_ask
 echo   How much memory may scView use? A dataset that needs more stops
 echo   scView, not the computer. Press Enter for the suggestion.
 set "ANSWER="
@@ -161,6 +173,13 @@ findstr /v /b /c:"SCVIEW_MEMORY_GB=" .env > .env.tmp
 move /y .env.tmp .env >nul
 :memory_ready
 echo   [ok] Memory limit: %MEMGB% GB (SCVIEW_MEMORY_GB in the .env file)
+if %CAPGB% equ 0 goto :memory_fits
+if %MEMGB% leq %CAPGB% goto :memory_fits
+echo   %ENGINE_APP% has only %ENGGB% GB of memory: at %MEMGB% GB a big dataset can run
+echo   it out of memory before scView's own limit stops it. Set SCVIEW_MEMORY_GB in
+echo   the .env file to %CAPGB% or less. To give %ENGINE_APP% more, see
+echo   "Windows troubleshooting" in the README: a .wslconfig file in your user folder.
+:memory_fits
 if %MEMGB% lss 4 echo   Under 4 GB: processing a 14,000-cell dataset needs about 3.5 GB.
 
 echo.

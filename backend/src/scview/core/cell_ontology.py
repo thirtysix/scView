@@ -13,6 +13,15 @@ only shown, never stored. ``UNKNOWN`` is allowed as a term, the value CELLxGENE 
 cells of no known type. A renamed label keeps its term; a label merged into another
 takes the other's term. Entries of labels that left a column are kept, so an undone
 labelling brings its term back; only present labels are reported.
+
+``match_label`` is the strict matcher: the same name, the same exact synonym, or the
+same once case, plurals, "+"/"positive", hyphens and a trailing "cell(s)" are set
+aside. Nothing nearer than that: a wrong id is worse than none. The LLM annotator
+keeps the id the model gave each label in ``uns[f"{column}_llm_cl"]``, used only when
+it agrees with the label by those rules (``resolve``). ``map_column`` gives every
+label of any column its strict match, ``cl_distance`` counts the is_a steps between
+two terms (a benchmark's partial credit). Both work from Python alone:
+``match_label("NK cells")``.
 """
 
 from __future__ import annotations
@@ -28,7 +37,7 @@ from typing import Any
 import pandas as pd
 
 from scview.core import marker_db as mdb
-from scview.core.marker_names import HOW_TEXT, Matcher, Ontology, norm, toks
+from scview.core.marker_names import HOW_TEXT, Matcher, Ontology, _greek, norm, toks
 
 logger = logging.getLogger(__name__)
 
@@ -160,6 +169,7 @@ class Index:
     _onto: Ontology | None = None
     _match: Matcher | None = None
     _names: dict[str, str] = field(default_factory=dict)
+    _strict_tables: Any = None  # _Strict, built on the first strict match
 
     def __post_init__(self):
         for cid, t in self.terms.items():
@@ -339,6 +349,196 @@ class Index:
         return [{**self.describe(c), "how": how, "how_text": text.get(how, how)} for c, how in picked]
 
 
+# ---------------------------------------------------------------------------
+# Strict label matching (the annotator's ids, benchmarks)
+
+HOW_STRICT_TEXT = {
+    "exact_name": "same name",
+    "exact_synonym": "same exact synonym",
+    "normalised": "same name or exact synonym, case, plurals, '+' and hyphens aside",
+    "none": "no term",
+}
+# Exact synonyms that single-cell labels use in another sense: never matched. CL lists
+# "CD16+ monocyte" under the intermediate CD14+CD16+ term (CL:0002397), but a "CD16+
+# monocyte" cluster is the non-classical one (CL:0002396, ``_ATLAS``).
+_MISREAD = frozenset({("cd16", "positive", "monocyte")})
+
+
+def strict_key(text: str) -> tuple[str, ...]:
+    """A label's words, in order, once case, Greek letters, "+" (= "positive"), a
+    trailing minus (= "negative"), hyphens and punctuation, plurals and a trailing
+    "cell" are set aside: "CD14+ Monocytes" = "CD14-positive monocyte", "NK" = "NK cell"."""
+    s = _greek(_signs(str(text))).lower().replace("+", " positive ")
+    words = [w[:-1] if len(w) >= 3 and w.endswith("s") and not w.endswith("ss") else w
+             for w in re.findall(r"[a-z0-9]+", s)]
+    if len(words) > 1 and words[-1] == "cell":
+        words = words[:-1]
+    return tuple(words)
+
+
+@dataclass
+class _Strict:
+    name: dict[str, set[str]]
+    synonym: dict[str, set[str]]
+    name_key: dict[tuple, set[str]]
+    synonym_key: dict[tuple, set[str]]
+
+
+_strict_lock = threading.Lock()
+
+
+def _strict(index: Index) -> _Strict:
+    """Exact names and exact synonyms, as written and as ``strict_key``s (built once)."""
+    st = index._strict_tables
+    if st is None:
+        with _strict_lock:
+            st = index._strict_tables
+            if st is None:
+                st = _Strict({}, {}, {}, {})
+                for cid, t in index.terms.items():
+                    st.name.setdefault(t.name, set()).add(cid)
+                    st.name_key.setdefault(strict_key(t.name), set()).add(cid)
+                    for s, scope in t.synonyms:
+                        if scope == "EXACT":
+                            st.synonym.setdefault(s, set()).add(cid)
+                            st.synonym_key.setdefault(strict_key(s), set()).add(cid)
+                index._strict_tables = st
+    return st
+
+
+def _no_type(label: str) -> bool:
+    k = strict_key(label)
+    return not k or _flat(label) in _NO_TYPE or k in _MISREAD
+
+
+def _strict_match(index: Index, label: str) -> tuple[str | None, str]:
+    label = str(label).strip()
+    if _no_type(label):
+        return None, "none"
+    st, k = _strict(index), strict_key(label)
+    for table, key, how in ((st.name, label, "exact_name"), (st.synonym, label, "exact_synonym"),
+                            (st.name_key, k, "normalised"), (st.synonym_key, k, "normalised")):
+        ids = table.get(key, set())
+        if len(ids) == 1:
+            return next(iter(ids)), how
+        if ids:  # two terms share it: none rather than a guess
+            return None, "none"
+    return None, "none"
+
+
+def agrees(index: Index, label: str, cid: str | None) -> str | None:
+    """How ``label`` names term ``cid`` (exact_name | exact_synonym | normalised), or None
+    when there is no such term or its name and exact synonyms are other words."""
+    t = index.terms.get(clean_id(cid) or "") if isinstance(cid, str) else None
+    label = str(label).strip()
+    if t is None or _no_type(label):
+        return None
+    syns = [s for s, scope in t.synonyms if scope == "EXACT"]
+    if label == t.name:
+        return "exact_name"
+    if label in syns:
+        return "exact_synonym"
+    k = strict_key(label)
+    if k == strict_key(t.name) or any(k == strict_key(s) for s in syns):
+        return "normalised"
+    return None
+
+
+def resolve(index: Index, label: str, model_id: str | None = None) -> dict[str, Any]:
+    """A label's term: the model's id when it exists and agrees with the label
+    (``source`` "model"), else the label's strict match ("label"), else none ("")."""
+    mid = clean_id(model_id) if isinstance(model_id, str) else None
+    how = agrees(index, label, mid) if mid else None
+    if how:
+        cid, source = mid, "model"
+    else:
+        cid, how = _strict_match(index, label)
+        source = "label" if cid else ""
+    return {"label": str(label), "cl_id": cid, "cl_name": index.name(cid) if cid else None, "how": how,
+            "how_text": HOW_STRICT_TEXT[how], "source": source, "model_cl_id": mid,
+            "url": OLS_URL.format(cid) if cid else None}
+
+
+def match_label(text: str, index: Index | None = None) -> tuple[str | None, str | None, str]:
+    """``(cl_id, cl_name, how)`` for a free-text label; how is exact_name | exact_synonym
+    | normalised | none. Without ``index``, the ontology on disk (fetched first when
+    missing and allowed)."""
+    idx = index or get_index()
+    cid, how = _strict_match(idx, text)
+    return cid, (idx.name(cid) if cid else None), how
+
+
+def cl_distance(a: str, b: str, index: Index | None = None) -> int | None:
+    """The fewest is_a steps from ``a`` up to a shared ancestor and down to ``b`` (0 for
+    the same term, 1 for parent and child), or None when either is not a term."""
+    idx = index or get_index()
+    a, b = clean_id(a or "") or "", clean_id(b or "") or ""
+    if a not in idx.terms or b not in idx.terms:
+        return None
+
+    def up(cid: str) -> dict[str, int]:
+        depth, frontier = {cid: 0}, [cid]
+        while frontier:
+            nxt = []
+            for x in frontier:
+                for p in idx.terms[x].parents if x in idx.terms else ():
+                    if p not in depth:
+                        depth[p] = depth[x] + 1
+                        nxt.append(p)
+            frontier = nxt
+        return depth
+
+    da, db = up(a), up(b)
+    shared = da.keys() & db.keys()
+    return min(da[c] + db[c] for c in shared) if shared else None
+
+
+# ---------------------------------------------------------------------------
+# The LLM annotator's ids, and any column's strict matches
+
+
+def annotator_key(column: str) -> str:
+    return f"{column}_llm_cl"
+
+
+def record_annotator_ids(adata, column: str, model_ids: dict[str, str | None],
+                         index: Index | None) -> dict[str, Any]:
+    """Keep the id the model gave each label of ``column`` (JSON in uns: a label may hold
+    a '/'), with what it resolved to against ``index`` when one is loaded."""
+    labels = {}
+    for label, mid in model_ids.items():
+        row = (resolve(index, label, mid) if index is not None
+               else {"cl_id": None, "cl_name": None, "how": "none", "source": "",
+                     "model_cl_id": clean_id(mid) if isinstance(mid, str) else None})
+        labels[str(label)] = {k: row[k] for k in ("model_cl_id", "cl_id", "cl_name", "how", "source")}
+    rec = {"version": index.version if index is not None else None, "labels": labels}
+    adata.uns[annotator_key(column)] = json.dumps(rec, sort_keys=True)
+    return rec
+
+
+def annotator_record(adata, column: str) -> dict[str, dict]:
+    """label -> the annotator's stored entry (``record_annotator_ids``), or {}."""
+    raw = adata.uns.get(annotator_key(column))
+    try:
+        rec = json.loads(raw) if isinstance(raw, str) else {}
+    except ValueError:
+        return {}
+    labels = rec.get("labels") if isinstance(rec, dict) else None
+    return {str(k): v for k, v in labels.items() if isinstance(v, dict)} if isinstance(labels, dict) else {}
+
+
+def map_column(adata, column: str, index: Index) -> dict[str, Any]:
+    """Every present label of ``column`` with its strict term; for a column the LLM
+    annotator wrote, the model's id is tried first (``resolve``)."""
+    labels, counts, _ = labels_of(adata, column)
+    model = annotator_record(adata, column)
+    rows = [{**resolve(index, label, (model.get(label) or {}).get("model_cl_id")),
+             "n_cells": counts.get(label, 0)} for label in labels]
+    return {"column": column, "labels": rows, "n_labels": len(rows),
+            "n_matched": sum(bool(r["cl_id"]) for r in rows), "annotator": bool(model),
+            "version": index.version}
+
+
 _cache: dict[str, tuple[tuple, Index]] = {}
 _cache_lock = threading.Lock()
 
@@ -391,11 +591,21 @@ def cached() -> Index | None:
     return hit[1] if hit else None
 
 
+_pin_checked: set[str] = set()  # dirs whose pre-v0.64.0 unpinned ontology was looked at
+
+
 def get_index(dest: Path | None = None, *, auto_download: bool | None = None, retry: bool = False,
               client=None) -> Index:
     """The index, fetching ``cl-basic.obo`` first when missing and allowed (call in a
-    worker thread). Raises ``OntologyUnavailable`` saying why."""
+    worker thread). An unpinned fetch from before v0.64.0 is replaced by the pinned
+    release on the first call (once per process; the old file stays when that fails).
+    Raises ``OntologyUnavailable`` saying why."""
     dest = dest or mdb.marker_db_dir()
+    if str(dest) not in _pin_checked:
+        _pin_checked.add(str(dest))
+        auto = mdb.auto_download_enabled() if auto_download is None else auto_download
+        if auto and mdb.ontology_needs_pinning(dest):
+            mdb.ensure(dest, auto_download=True, retry=retry, client=client, parts=("ontology",))
 
     def from_disk() -> Index | None:
         try:
@@ -595,10 +805,17 @@ def term_ids(adata, column: str) -> pd.Series | None:
 def suggest(adata, column: str, index: Index) -> dict[str, Any]:
     labels, counts, _ = labels_of(adata, column)
     m = stored(adata, column)
+    model = annotator_record(adata, column)
     rows = []
     for label in labels:
+        found = index.suggest(label)
+        mine = resolve(index, label, (model.get(label) or {}).get("model_cl_id")) if model else None
+        if mine and mine["source"] == "model":  # the AI annotator's id, checked against the label
+            found = [{**index.describe(mine["cl_id"]), "how": "annotator",
+                      "how_text": "the AI annotator's term, agreeing with the label"},
+                     *(s for s in found if s["id"] != mine["cl_id"])][:N_SUGGEST]
         rows.append({"label": label, "n_cells": counts.get(label, 0), "current": m.get(label),
-                     "suggestions": index.suggest(label)})
+                     "suggestions": found})
     return {"column": column, "labels": rows, "n_labels": len(rows),
             "n_suggested": sum(bool(r["suggestions"]) for r in rows), "version": index.version}
 

@@ -2666,6 +2666,14 @@ adata.obs[{_lit(target + "_confidence")}] = np.asarray(pred.probability_matrix.m
                 f"adata.obs[{_lit(target)}] = adata.obs[groupby].astype(str).map(",
                 '    lambda g: mapping.get(g, "Unknown")).astype("category")',
             ]
+            cl_key = f"{target}_llm_cl"
+            cl_record = getattr(ctx.adata, "uns", {}).get(cl_key) if ctx.adata is not None else None
+            if isinstance(cl_record, str) and cl_record:
+                code += [
+                    "# The Cell Ontology id the model gave each label and what scView kept",
+                    "# (JSON: the model's id when it agrees with the label, else the label's own match).",
+                    f"adata.uns[{_lit(cl_key)}] = {_lit(cl_record)}",
+                ]
         else:
             return Snippet(NOT_REPLAYABLE, [
                 "# An LLM named each cluster from its top markers; its answer is not stored",

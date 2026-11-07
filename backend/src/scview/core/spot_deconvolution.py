@@ -153,13 +153,24 @@ CHECK_CELLS = (2, 10)
 CHECK_DEPTHS = (20000, 5000)
 CHECK_ALPHA = 0.5
 
-# Estimates at 2 CPUs (calibrated on V1_Human_Lymph_Node x the lymphoid atlas, see estimate_seconds).
-SECONDS_FIXED = 8.0
-SECONDS_PER_REF_CELL = 2.5e-4
-SECONDS_PER_SPOT_TYPE2 = 1.2e-5
-# Bins hold few counts and settle faster, and the near-empty ones are not fitted. Measured on
-# one core with 13 types: 16 um (98,896 bins) 84 s, 8 um (393,491 bins, 278,322 fitted) 266 s.
-SECONDS_PER_BIN_TYPE2 = 5.5e-6
+# Estimates at 2 CPUs with 2 BLAS threads (2026-11-06; see estimate_seconds). A spot's Newton
+# step costs its fit genes x types^2 (the Hessian) on top of a per-spot part (the likelihood
+# table, the k x k solve), and the fit genes grow with the types (those up in some type): on
+# the mouse brain reference 1,994 / 1,541 / 2,196 / 3,393 genes at 7 / 16 / 27 / 38 types.
+# Measured, whole run: HD 16 um (98,896 bins) at 7 / 16 / 26 / 37 types 85 / 89 / 166 / 424 s;
+# CytAssist mouse brain (2,310 spots) at 15 / 37 types 8.7 / 17.0 s; V1_Human_Lymph_Node (4,035
+# spots) x the lymphoid atlas (73,260 cells, 33 types) 31 s. The earlier types^2 constants, set
+# before the fit was made faster, gave 157-763 s, 24-56 s and 79 s for these. BLAS threads past
+# the CPU quota (no OMP_NUM_THREADS in a --cpus container) make the fit about 8x slower.
+SECONDS_FIXED = 3.0
+SECONDS_PER_TYPE = 0.12  # the noise search on 200 spots and the likelihood table
+SECONDS_PER_REF_CELL = 7e-5  # reading the reference and its profiles
+FIT_GENES_PER_TYPE, FIT_GENES_MIN, FIT_GENES_MAX = 90, 1500, 3500
+SECONDS_PER_SPOT = 9e-4  # deeper spots take more Newton steps than bins
+SECONDS_PER_SPOT_GENE_TYPE2 = 7.5e-10
+# Bins hold few counts and settle faster, and the near-empty ones are not fitted.
+SECONDS_PER_BIN = 5.8e-4
+SECONDS_PER_BIN_GENE_TYPE2 = 8.05e-10
 NEED_FIXED = 400 * 1024 * 1024
 NEED_COUNTS_COPIES = 2.5
 # A large side (core/large_mode.py) is never read whole: one pass over its counts by row
@@ -932,21 +943,28 @@ NOT_SPOTS = ("Spot composition needs Visium spots or Visium HD bins: this datase
 
 def estimate_seconds(n_ref: int, n_spots: int, n_types: int, method: str = "rctd", *,
                      ref_values: int = 0, spot_values: int = 0, check: bool = False, bins: bool = False) -> float:
-    """Wall time at 2 CPUs: reading the reference, then the fit (types^2 per spot dominate).
-    ``ref_values`` / ``spot_values``: the stored values of a large side's counts, read by
-    row blocks (a large reference's second pass for the self-check), instead of the
-    reference read in."""
+    """Wall time at 2 CPUs: reading the reference, then the fit (per spot: a fixed part, and
+    the fit genes x types^2, ``fit_genes``). ``ref_values`` / ``spot_values``: the stored
+    values of a large side's counts, read by row blocks (a large reference's second pass for
+    the self-check), instead of the reference read in."""
+    k = max(n_types, 2)
     if ref_values:
         secs = SECONDS_FIXED + LARGE_SECONDS_PER_VALUE * ref_values * (LARGE_CHECK_FACTOR if check else 1)
     else:
         secs = SECONDS_FIXED + SECONDS_PER_REF_CELL * n_ref
     secs += LARGE_SECONDS_PER_VALUE * spot_values
     if method == "rctd":
-        per = SECONDS_PER_BIN_TYPE2 if bins else SECONDS_PER_SPOT_TYPE2
-        secs += per * n_spots * max(n_types, 2) ** 2
+        base, per = ((SECONDS_PER_BIN, SECONDS_PER_BIN_GENE_TYPE2) if bins
+                     else (SECONDS_PER_SPOT, SECONDS_PER_SPOT_GENE_TYPE2))
+        secs += SECONDS_PER_TYPE * k + n_spots * (base + per * fit_genes(k) * k ** 2)
     else:
         secs += 2e-3 * n_spots
     return round(secs, 1)
+
+
+def fit_genes(n_types: int) -> int:
+    """The fit genes a reference of ``n_types`` types usually gives (``sd_select_genes``), for the estimate."""
+    return int(min(FIT_GENES_MAX, max(FIT_GENES_MIN, FIT_GENES_PER_TYPE * n_types)))
 
 
 def _large_pass_bytes(h) -> int:

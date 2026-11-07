@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import queue
+import re
 import threading
 import time
 from dataclasses import dataclass, field, asdict
@@ -1614,30 +1615,52 @@ def _top_markers_per_group(adata: ad.AnnData, groupby: str, n: int = 25) -> dict
     return group_markers(adata, groupby, n=n)
 
 
+_LIST_MARK = re.compile(r"^(?:[-*•]+\s*|\d+[.)]\s+)")
+_ID_PREFIX = re.compile(r"^(?:cluster|group)\s*", re.I)
+
+
+def _reply_cluster_id(cid: str, cluster_set: set[str]) -> str | None:
+    """The cluster a reply line's id names: exact, then without "Cluster"/"#"/case, then
+    the LONGEST cluster the id ends with at a word boundary ("Cluster 13" is 13, not 3)."""
+    if cid in cluster_set:
+        return cid
+    bare = _ID_PREFIX.sub("", cid).strip(" #`'\"")
+    if bare in cluster_set:
+        return bare
+    by_lower = {c.lower(): c for c in cluster_set}
+    if bare.lower() in by_lower:
+        return by_lower[bare.lower()]
+    ends = [c for c in cluster_set if cid.endswith(c) and (len(cid) == len(c) or not cid[-len(c) - 1].isalnum())]
+    return max(ends, key=len) if ends else None
+
+
 def _parse_cluster_labels(raw: str, clusters: list[str]) -> dict[str, str]:
-    """Parse an LLM reply ('cluster_id: cell type' per line) into {cluster: label}."""
+    """Parse an LLM reply ('cluster_id: cell type' per line) into {cluster: label}.
+
+    Only a list mark is taken off the front ("- ", "* ", "1. "): numeric cluster ids
+    ("3: B cells") used to be stripped with it, so every numeric clustering fell back
+    to line order, and one extra line in the reply shifted every label."""
     cluster_set = {str(c) for c in clusters}
     out: dict[str, str] = {}
     for line in raw.splitlines():
-        line = line.strip().lstrip("-*0123456789. ").strip()
+        line = _LIST_MARK.sub("", line.strip()).replace("**", "").strip()
         if ":" not in line:
             continue
         cid, label = (p.strip() for p in line.split(":", 1))
-        if cid in cluster_set:
-            out[cid] = label
-        else:
-            for c in cluster_set:
-                if cid.endswith(c):
-                    out[c] = label
-                    break
+        c = _reply_cluster_id(cid, cluster_set)
+        if c is not None and c not in out:
+            out[c] = label
     if not out:  # fall back to positional zip if the model ignored the id format
-        labels = [ln.strip().split(":", 1)[-1].strip() for ln in raw.splitlines()
-                  if ln.strip() and not ln.strip().lower().startswith("tissue:")]
+        labels = []
+        for ln in raw.splitlines():
+            if ln.strip() and not ln.strip().lower().startswith("tissue:"):
+                lab, cl = _split_cl_id(ln.strip())  # the colon of "CL:..." is not the id's
+                labels.append(lab.split(":", 1)[-1].strip() + (f" | {cl}" if cl else ""))
         out = {str(c): lab for c, lab in zip(clusters, labels)}
     return out
 
 
-def _annotate_llm(adata: ad.AnnData, params: PipelineParams, groupby: str, target: str) -> None:
+def _annotate_llm(adata: ad.AnnData, params: PipelineParams, groupby: str, target: str) -> dict[str, Any]:
     """Tissue-agnostic annotation: name each cluster's cell type from its top markers via an LLM.
 
     No reference model to choose — works for any tissue (GPTCelltype-style). Best treated as a
@@ -1672,23 +1695,76 @@ def _annotate_llm(adata: ad.AnnData, params: PipelineParams, groupby: str, targe
         **chat_extra(model),
         messages=[{"role": "user", "content": prompt}],
         temperature=0.0,
-        max_tokens=800,
+        max_tokens=_annotation_max_tokens(len(marker_map)),
     )
     raw = resp.choices[0].message.content or ""
+    if getattr(resp.choices[0], "finish_reason", None) == "length":
+        logger.warning("LLM annotation reply cut at max_tokens (%d clusters): later clusters may be Unknown",
+                       len(marker_map))
     tissue = _parse_tissue_line(raw) or hint
     labels = _parse_cluster_labels(raw, list(marker_map.keys()))
 
-    mapping = {str(g): _label_case(labels.get(str(g), "Unknown")) for g in marker_map}
+    mapping, model_ids = {}, {}
+    for g in marker_map:
+        label, cid = _split_cl_id(labels.get(str(g), "Unknown"))
+        mapping[str(g)] = _label_case(label or "Unknown")
+        if cid and not model_ids.get(mapping[str(g)]):
+            model_ids[mapping[str(g)]] = cid
     adata.obs[target] = (
         adata.obs[groupby].astype(str).map(lambda g: mapping.get(g, "Unknown")).astype("category")
     )
     adata.uns[f"{target}_llm_mapping"] = mapping
     if tissue:
         adata.uns[f"{target}_llm_tissue"] = tissue
+    cl = _record_llm_cl_ids(adata, target, {lab: model_ids.get(lab) for lab in dict.fromkeys(mapping.values())})
     logger.info(
-        "LLM annotation: %d clusters -> obs['%s'] (model=%s, groupby=%s, tissue=%s)",
-        len(mapping), target, model, groupby, tissue or "?",
+        "LLM annotation: %d clusters -> obs['%s'] (model=%s, groupby=%s, tissue=%s, CL ids %s)",
+        len(mapping), target, model, groupby, tissue or "?", cl.get("cl_ids", "not checked"),
     )
+    return cl
+
+
+def _annotation_max_tokens(n_clusters: int) -> int:
+    """Room for the tissue line plus one 'id: label | CL:0000000' line per cluster (about
+    25 tokens; 40 allowed). A fixed 800 cut the reply at about 30 clusters."""
+    return min(8192, 200 + 40 * max(1, n_clusters))
+
+
+_CL_SUFFIX = re.compile(r"\s*[|(\[,;]?\s*(?:CL[:_ ]?(\d{7,})|CL[:_ ]?none)\s*[)\]]?\s*$", re.I)
+# What a malformed reply leaves after the suffix is gone: "CL:none | CL:none" (no label at
+# all) or "Endothelial cells | CL" (the id cut off). Never kept in the label text.
+_CL_LEFTOVER = re.compile(r"\s*\|\s*CL\s*$|^\s*CL[:_ ]?(?:none|\d{7,})\s*$", re.I)
+
+
+def _split_cl_id(text: str) -> tuple[str, str | None]:
+    """'B cells | CL:0000236' -> ('B cells', 'CL:0000236'); 'NK | CL:none' -> ('NK', None).
+
+    An id of the wrong length ('CL:00002077', seen from gemma-4) is dropped, not guessed."""
+    text = (text or "").strip()
+    m = _CL_SUFFIX.search(text)
+    label, digits = (text[: m.start()], m.group(1)) if m else (text, None)
+    cl = f"CL:{digits}" if digits and len(digits) == 7 else None
+    return _CL_LEFTOVER.sub("", label).strip(), cl
+
+
+def _record_llm_cl_ids(adata: ad.AnnData, target: str, model_ids: dict[str, str | None]) -> dict[str, Any]:
+    """Keep the model's CL id per label (core/cell_ontology.py): used only when the term
+    exists and its name or exact synonyms agree with the label, else the label's strict
+    match. Best effort: without the ontology (offline, download off) the model's ids
+    are kept unchecked and checked when the labels are next mapped."""
+    from scview.core import cell_ontology
+
+    try:
+        index = cell_ontology.get_index()
+    except Exception as exc:  # offline, download off, unreadable file
+        logger.info("LLM annotation: Cell Ontology unavailable (%s); CL ids not checked", exc)
+        index = None
+    rec = cell_ontology.record_annotator_ids(adata, target, model_ids, index)
+    if index is None:
+        return {}
+    rows = rec["labels"].values()
+    return {"cl_ids": sum(bool(r["cl_id"]) for r in rows), "cl_from_model": sum(r["source"] == "model" for r in rows),
+            "cl_version": rec["version"]}
 
 
 def _annotation_prompt(listing: str, tissue_hint: str = "", panel_line: str = "") -> str:
@@ -1713,8 +1789,10 @@ def _annotation_prompt(listing: str, tissue_hint: str = "", panel_line: str = ""
         "even with NKG7/GZMB; plasmacytoid dendritic cells (LILRA4, IL3RA, CLEC4C, TCF4, IRF7) "
         "are not plasma cells (MZB1, XBP1, SDC1 with high immunoglobulin genes), though both "
         "express JCHAIN. If a cluster shows two lineages, name the mixture (e.g. "
-        "'NK cells / CD8+ T cells'). Output one line per cluster as 'cluster_id: cell type', "
-        "with concise standard cell-type names, and nothing else.\n\n"
+        "'NK cells / CD8+ T cells'). Output one line per cluster as "
+        "'cluster_id: cell type | CL id', with concise standard cell-type names and the "
+        "Cell Ontology id of that cell type (e.g. 'B cells | CL:0000236'; 'CL:none' when "
+        "no term fits or you are unsure), and nothing else.\n\n"
         "Clusters and marker genes:\n" + listing
     )
 
@@ -1886,13 +1964,17 @@ def _run_cell_type_annotation(
     if method == "celltypist":
         fit = _annotate_celltypist(adata, params, groupby, target)
     elif method == "llm":
-        _annotate_llm(adata, params, groupby, target)
+        fit = _annotate_llm(adata, params, groupby, target)
     elif method == "marker_score":
         fit = _annotate_marker_score(adata, params, groupby, target)
     else:
         raise ValueError(
             f"Unknown annotation method '{method}' (expected celltypist | llm | marker_score)."
         )
+    if method != "llm":  # an earlier LLM run's CL ids named other labels
+        from scview.core.cell_ontology import annotator_key
+
+        adata.uns.pop(annotator_key(target), None)
     if method != "celltypist":
         from scview.core.annotation_confidence import drop_reference_probabilities
         from scview.core.celltypist_fit import drop_run

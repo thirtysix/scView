@@ -51,7 +51,7 @@ import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 
-from scview.core import leiden, normalization, provenance
+from scview.core import leiden, normalization, numba_warm, provenance
 from scview.core import resolution_sweep as rs
 from scview.core.anndata_adaptor import CLUSTERING_CANDIDATES
 from scview.core.obs_writes import forget_column_results
@@ -83,7 +83,13 @@ PART = 0.1  # a new cluster holding this share of a cluster's cells is one of it
 SECONDS_PER_1K_CELLS = 1.0
 HARMONY_SECONDS_PER_1K_CELLS = 0.05
 GRAPH_SECONDS_PER_1K_CELLS = 0.9  # a setting sharing another's PCs: the graph and Leiden (Kang: 13-19 s)
-FIRST_RUN_SECONDS = 30.0  # numba compiling the neighbour search after a server start
+
+
+def first_run_seconds(n_cells: int) -> float:
+    """numba's compile of the neighbour search still to come in this process
+    (``core/numba_warm.py``). Kang, 9 default settings: 95 s in a restarted server, 65 s
+    after its pipeline had run; none once any neighbour graph was built in the process."""
+    return round(numba_warm.neighbours_seconds(n_cells), 1)
 
 _DEFAULT_GENES = 2000
 _CACHE_SIZE = 24  # settings' labels kept for "keep", across datasets

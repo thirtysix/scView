@@ -20,8 +20,9 @@ import pytest
 import scanpy as sc
 import scipy.sparse as sp
 
+from scview.api.v1 import activity as activity_api
 from scview.api.v1 import communication as communication_api
-from scview.core import activity, anndata_adaptor, marker_selection, mixscape
+from scview.core import activity, activity_nets, anndata_adaptor, marker_selection, mixscape, working_copy
 from scview.core import spatial_autocorr as sa
 from scview.core import tf_motifs as tm
 from scview.core.anndata_adaptor import AnnDataAdaptor
@@ -255,17 +256,90 @@ async def test_tf_and_pathway_activity(client, dataset_manager, networks, monkey
     assert cells.json() == in_memory.json()
 
 
-async def test_a_backed_model_is_not_kept(client, dataset_manager, networks, monkeypatch):  # noqa: F811
-    """It holds the matrix read from the file: kept, it would sit outside any room held."""
+def _spy_activity(monkeypatch) -> tuple[list[int], list[int]]:
+    """(each activity request's room held, each whole read of the matrix)."""
+    held: list[int] = []
+    reads: list[int] = []
+    real_reading, real_whole = working_copy.reading, activity.Lognorm.whole
+
+    def reading(dm, dataset_id, need, what, also=()):
+        held.append(need)
+        return real_reading(dm, dataset_id, need, what, also)
+
+    monkeypatch.setattr(activity_api.working_copy, "reading", reading)
+    monkeypatch.setattr(activity.Lognorm, "whole", lambda self: reads.append(1) or real_whole(self))
+    return held, reads
+
+
+async def test_a_backed_dataset_keeps_its_scores_not_its_matrix(client, dataset_manager, networks,  # noqa: F811
+                                                                monkeypatch):
+    """The model holds the matrix read from the file: kept, it would sit outside any room held.
+    Its every score is kept instead, so colouring by one TF after another reads the file once."""
+    a = _lognorm(_act_cells())
+    did = _register(dataset_manager, a, "act")
+    expected = {}
+    for source in ("STAT1", "TP53"):  # in memory first
+        r = await client.get(f"{API}/datasets/{did}/activity/collectri/cells", params={"source": source})
+        expected[source] = r.json()
+    summary = (await client.get(f"{API}/datasets/{did}/activity/collectri", params={"groupby": "stim"})).json()
+    dataset_manager.evict(did)
+    monkeypatch.setattr(anndata_adaptor, "BACKED_MIN_BYTES", 0)
+    _budget(monkeypatch, limit=8.0, used=1.0)
+    held, reads = _spy_activity(monkeypatch)
+    for source in ("STAT1", "TP53", "STAT1"):
+        r = await client.get(f"{API}/datasets/{did}/activity/collectri/cells", params={"source": source})
+        assert r.status_code == 200, r.text
+        assert r.json() == expected[source]
+    backed = await client.get(f"{API}/datasets/{did}/activity/collectri", params={"groupby": "stim"})
+    assert _no_timing(backed.json()) == _no_timing(summary)
+    adata = (await dataset_manager.get_or_load_dataset(did)).adata
+    assert adata.isbacked and reads == [1]
+    kept, source = activity_api._MODELS.get(adata, "collectri")
+    assert isinstance(kept, activity.CellScores) and not hasattr(kept, "M")
+    # room for the read and for the scores kept beside it; nothing held once they are kept
+    n_sources = activity_nets.read_meta(networks, "collectri")["n_sources"]
+    room = activity.kept_bytes(a.n_obs, n_sources) + activity.KEEP_BLOCK_BYTES
+    assert held == [activity.lognorm_bytes(dataset_manager.get_dataset(did)) + room, 0, 0, 0]
+
+    dataset_manager.evict(did)  # a dataset dropped from memory takes them with it
+    r = await client.get(f"{API}/datasets/{did}/activity/collectri/cells", params={"source": "STAT1"})
+    assert r.status_code == 200 and reads == [1, 1]
+
+
+@pytest.mark.parametrize("why", ["too big", "share of the limit", "network not on disk yet", "no room beside the read"])
+async def test_scores_too_big_to_keep_are_scored_per_request(client, dataset_manager, networks,  # noqa: F811
+                                                            monkeypatch, why):
     did = _register(dataset_manager, _lognorm(_act_cells()), "act")
     monkeypatch.setattr(anndata_adaptor, "BACKED_MIN_BYTES", 0)
-    built = []
-    real = activity.CellModel.build
-    monkeypatch.setattr(activity.CellModel, "build", lambda *a, **k: built.append(1) or real(*a, **k))
+    _budget(monkeypatch, limit=8.0, used=1.0)
+    if why == "too big":
+        monkeypatch.setattr(activity_api, "KEEP_MAX_BYTES", 1000)
+    elif why == "share of the limit":
+        monkeypatch.setattr(activity_api, "KEEP_MAX_SHARE", 1000 / (8 * GB))
+    elif why == "network not on disk yet":
+        monkeypatch.setattr(activity_nets, "read_meta", lambda *_a: None)
+    else:  # the read alone fits (7 GB free, 2 GB working reserve), with the scores it would not
+        monkeypatch.setattr(activity, "lognorm_bytes", lambda *_a: int(4.5 * GB))
+    held, reads = _spy_activity(monkeypatch)
     for _ in range(2):
-        r = await client.get(f"{API}/datasets/{did}/activity/collectri")
+        r = await client.get(f"{API}/datasets/{did}/activity/collectri/cells", params={"source": "STAT1"})
         assert r.status_code == 200, r.text
-    assert len(built) == 2
+    assert reads == [1, 1] and activity_api._MODELS.get(dataset_manager.get_dataset(did).adata, "collectri") is None
+    assert held == [activity.lognorm_bytes(dataset_manager.get_dataset(did))] * 2  # the read only
+
+
+async def test_scores_more_than_the_room_held_are_not_kept(client, dataset_manager, networks,  # noqa: F811
+                                                          monkeypatch):
+    """A mouse network mapped through orthologs can score more sources than the human one has."""
+    did = _register(dataset_manager, _lognorm(_act_cells()), "act")
+    monkeypatch.setattr(anndata_adaptor, "BACKED_MIN_BYTES", 0)
+    meta = activity_nets.read_meta(networks, "collectri")
+    monkeypatch.setattr(activity_nets, "read_meta", lambda *_a: {**meta, "n_sources": 1})
+    held, reads = _spy_activity(monkeypatch)
+    for _ in range(2):
+        r = await client.get(f"{API}/datasets/{did}/activity/collectri/cells", params={"source": "STAT1"})
+        assert r.status_code == 200, r.text
+    assert reads == [1, 1]
 
 
 async def test_upstream_tf_candidates(client, dataset_manager, test_settings, monkeypatch):
@@ -427,15 +501,19 @@ async def test_the_room_is_held_while_the_matrix_is_read_and_let_go(client, data
                                                                     readers_ready, monkeypatch, where):
     did, call = await _setup(where, client, dataset_manager, test_settings, monkeypatch)
     monkeypatch.setattr(anndata_adaptor, "BACKED_MIN_BYTES", 0)
-    await dataset_manager.get_or_load_dataset(did)
+    adata = (await dataset_manager.get_or_load_dataset(did)).adata
     _budget(monkeypatch, limit=8.0, used=1.0)
     _needs(monkeypatch, 1.0)
+    # activity also holds room for the scores it keeps beside the read
+    kept = (activity_api._keep_room(adata, "collectri", Path(test_settings.DATA_DIR) / "networks")
+            if where == "activity" else 0)
+    assert kept > 0 or where != "activity"
     seen = _spy_reads(monkeypatch, dataset_manager)
     r = await call()
     assert r.status_code == 200, r.text
     if where == "communication":
         assert [e for e, _ in _events(r.text)][-1] == "complete", r.text
-    assert seen and set(seen) == {GB}  # counted by every other request while it read
+    assert seen and set(seen) == {GB + kept}  # counted by every other request while it read
     for _ in range(50):  # a stream lets go once its worker thread has ended
         if not dataset_manager._reads:
             break

@@ -377,7 +377,9 @@ def test_the_estimates_grow_with_the_cells_and_name_a_slow_leiden():
     from scview.core import preflight
 
     # pbmc10k measured 79 s for a first run; 1.3M cells: two UMAPs and Leiden dominate.
-    assert 60 < wnn.estimate_seconds(7_798) < 100
+    assert 60 < wnn.estimate_seconds(7_798, warm=False) < 100
+    # numba's compile is left out once the process has built a graph and a UMAP
+    assert wnn.estimate_seconds(7_798, warm=False) - wnn.estimate_seconds(7_798, warm=True) == wnn.FIRST_RUN_SECONDS
     big, fast = wnn.estimate_seconds(1_300_000, -1), wnn.estimate_seconds(1_300_000, 2)
     assert big - fast == pytest.approx(preflight.leiden_seconds(1_300_000, -1)
                                        - preflight.leiden_seconds(1_300_000, 2), abs=1)

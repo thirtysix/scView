@@ -755,6 +755,23 @@ async def annotate_celltypist(
                   "target_column": target_column, "next": "job_status(job_id, wait_seconds=50)"})
 
 
+@tool(READ)
+async def cell_ontology_ids(
+    dataset_id: DatasetId,
+    column: Annotated[str, Field(description="Obs column of cell-type labels (an annotator's or the author's).")],
+) -> str:
+    """Each label of a column with its Cell Ontology (CL) id by strict name matching only: the
+    same name or exact synonym, or the same once case, plurals, '+'/'positive', hyphens and a
+    trailing 'cells' are set aside. Abbreviations ('CD14 Mono', 'Mk') get no id. For a column the
+    LLM annotator wrote, the id the model gave is kept when it agrees with the label (source
+    'model'). The ontology (a pinned CL release) is downloaded on first use."""
+    d = await _get(f"{_ds(dataset_id)}/annotation/ontology", column=column)
+    cols = ["label", "cl_id", "cl_name", "how", "source", "n_cells"]
+    return dumps({"dataset_id": dataset_id, "column": column, "version": d.get("version"),
+                  "n_labels": d["n_labels"], "n_matched": d["n_matched"], "columns": cols,
+                  "labels": [[r.get(c) for c in cols] for r in d["labels"]]})
+
+
 @tool(WRITE)
 async def set_labels(
     dataset_id: DatasetId,

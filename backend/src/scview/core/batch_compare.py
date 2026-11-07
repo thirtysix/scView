@@ -35,6 +35,7 @@ import numpy as np
 import pandas as pd
 
 from scview.core import batch_methods as bm
+from scview.core import numba_warm
 from scview.core.integration import (
     MIXING_MAX_SCORED,
     OVERCORRECTION_DROP,
@@ -304,32 +305,45 @@ def recommend(rows: list[dict[str, Any]], label_column: str | None, kind: str) -
 def estimate_seconds(n_cells: int, methods: list[str] | None = None, *,
                      warm: bool | None = None) -> float:
     """Rough total seconds for the comparison, scoring included: per method
-    ``SECONDS_AT_SCALE`` x (cells / ``SCALE_CELLS``) ^ ``POWER``, plus ``COMPILE_SECONDS``
-    when BBKNN is among the methods and has not run in this process yet (``warm``:
-    the process's own state unless given). Batches add time the model does not see
-    (Scanorama matches every pair of them): a 40,000-cell subsample of a 23-sample atlas
-    took 97 s against 58 s estimated, so with many batches read it as a lower bound."""
+    ``SECONDS_AT_SCALE`` x (cells / ``SCALE_CELLS``) ^ ``POWER``, plus what BBKNN still has
+    to compile when it is among the methods (``compile_seconds``). Batches add time the
+    model does not see (Scanorama matches every pair of them): Kang by donor (8 batches)
+    took 19 s against 6.4 s by stimulation (2), and a 40,000-cell subsample of a 23-sample
+    atlas 97 s against 58 s estimated then, so with many batches read it as a lower bound."""
     methods = [m for m in (methods or METHODS) if m in METHODS]
     n = max(1, int(n_cells))
     total = max(OVERHEAD_SECONDS,
                 sum(SECONDS_AT_SCALE[m] * (n / SCALE_CELLS) ** POWER[m] for m in methods))
-    if bm.BBKNN in methods and not (_bbknn_warm if warm is None else warm):
-        total += COMPILE_SECONDS
+    if bm.BBKNN in methods:
+        total += compile_seconds(warm)
     return float(total)
 
 
+def compile_seconds(warm: bool | None = None) -> float:
+    """What BBKNN's run still has to compile: umap-learn's graph weights, and its import.
+    ``warm`` True: nothing; False: a fresh process with no numba cache on disk
+    (``COMPILE_SECONDS``); None: this process's own state (``core/numba_warm.py``), so
+    nothing once BBKNN or any other neighbour graph has run in it, and a shorter import
+    once an earlier process in this container left pynndescent's cache on disk."""
+    if warm is None:
+        return 0.0 if _bbknn_warm else numba_warm.graph_seconds()
+    return 0.0 if warm else COMPILE_SECONDS
+
+
 def bbknn_warm() -> bool:
-    """Whether BBKNN has run in this process (its first run compiles UMAP's code)."""
-    return _bbknn_warm
+    """Whether BBKNN's graph code is compiled in this process (by BBKNN or any neighbour graph)."""
+    return _bbknn_warm or numba_warm.graph_compiled()
 
 
-# Per method at SCALE_CELLS (Kang, 13,836 cells, 2 batches, 50 PCs, 2 CPUs, numba warm),
-# scoring included, 2026-10-31: none 0.33 s, Harmony 0.74, Scanorama 5.5, BBKNN 3.0; a
-# 2,700-cell subsample 0.02 / 0.09 / 0.25 / 0.52, which sets the powers. BBKNN's first
-# run in a process compiles UMAP's connectivities: 16.3 s cold against 0.5 s warm.
+# Per method at SCALE_CELLS (Kang, 13,836 cells, 2 batches, 50 PCs, 2 CPUs with 2 BLAS
+# threads, numba warm), scoring included, 2026-11-06: none 0.26 s, Harmony 0.54, Scanorama
+# 3.8, BBKNN 1.8 (6.4 s; 7.1 s in a server after its pipeline, 5.6 s at 4 CPUs live). A
+# 2,700-cell subsample took 0.45 s (estimate 0.51); the powers are the first fit's
+# (2026-10-31, 2,700 cells 0.02 / 0.09 / 0.25 / 0.52). BBKNN's first run in a fresh
+# process took 13.4 s against 1.8 warm, 9.9 s after a container restart.
 SCALE_CELLS = 13_836
-SECONDS_AT_SCALE = {NONE: 0.33, bm.HARMONY: 0.74, bm.SCANORAMA: 5.5, bm.BBKNN: 3.0}
+SECONDS_AT_SCALE = {NONE: 0.26, bm.HARMONY: 0.54, bm.SCANORAMA: 3.8, bm.BBKNN: 1.8}
 POWER = {NONE: 1.0, bm.HARMONY: 1.2, bm.SCANORAMA: 1.9, bm.BBKNN: 1.3}
-COMPILE_SECONDS = 16.0
+COMPILE_SECONDS = numba_warm.IMPORT_COLD_SECONDS + numba_warm.GRAPH_SECONDS
 OVERHEAD_SECONDS = 0.5  # the least a comparison takes (streaming, scoring set-up)
 _bbknn_warm = False  # set once BBKNN has run in this process

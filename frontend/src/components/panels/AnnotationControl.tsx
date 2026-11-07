@@ -3,6 +3,7 @@ import { AlertTriangle, Tags, Loader2, Check } from "lucide-react";
 import { getCellTypistModels, getCellTypistSummary, type CellTypistModel } from "@/api/annotation";
 import { getLlmStatus } from "@/api/assistant";
 import { CellTypistSummary } from "@/components/panels/CellTypistSummary";
+import { AnnotationOntologyIds } from "@/components/annotation/AnnotationOntologyIds";
 import { defaultModel, orderModels, speciesMismatch, type DatasetSpecies } from "@/lib/celltypistModels";
 import { prettyObsLabel, isRedundantClusterCol } from "@/lib/formatting";
 import { useDatasetStore } from "@/stores/datasetStore";
@@ -145,6 +146,11 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
       : ctColumns.includes(target.trim())
         ? target.trim()
         : null;
+  // The labels' Cell Ontology ids: the column just written, else the output column if it
+  // exists, else `cell_type` (what the pipeline's annotation step writes) if that exists.
+  const hasColumn = (name: string) => !!dataset?.obs_columns?.some((c) => c.name === name);
+  const ontologyColumn =
+    lastWritten ?? (hasColumn(target.trim()) ? target.trim() : hasColumn("cell_type") ? "cell_type" : null);
 
   const handleAnnotate = async () => {
     const tgt = target.trim() || "cell_type";
@@ -354,6 +360,9 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
       </div>
       {datasetId && summaryColumn && (
         <CellTypistSummary datasetId={datasetId} column={summaryColumn} refreshKey={ctRuns} />
+      )}
+      {datasetId && ontologyColumn && !busy && (
+        <AnnotationOntologyIds datasetId={datasetId} column={ontologyColumn} refreshKey={ctRuns} />
       )}
     </div>
   );

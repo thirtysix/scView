@@ -366,7 +366,7 @@ export function LayoutStabilityPanel({ datasetId, onClose }: { datasetId: string
               {info.running
                 ? "A check is already running on this dataset."
                 : info.estimate_seconds != null && plan
-                  ? `About ${formatDuration(info.estimate_seconds)} for ${total} layouts of ${plan.n_laid_out.toLocaleString()} cells (the first run after the server starts adds ~${formatDuration(info.first_run_seconds)}).`
+                  ? `About ${formatDuration(info.estimate_seconds)} for ${total} layouts of ${plan.n_laid_out.toLocaleString()} cells${info.first_run_seconds > 0 ? ` (the first run after the server starts adds ~${formatDuration(info.first_run_seconds)})` : ""}.`
                   : null}
             </span>
           )}

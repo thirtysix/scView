@@ -122,3 +122,33 @@ export function suggestLabelTerms(datasetId: string, column: string): Promise<La
     body: JSON.stringify({ column }),
   });
 }
+
+/** One label's strict Cell Ontology match (core/cell_ontology.py `map_column`). */
+export interface LabelMatch {
+  label: string;
+  n_cells: number;
+  cl_id: string | null;
+  cl_name: string | null;
+  how: "exact_name" | "exact_synonym" | "normalised" | "none";
+  how_text: string;
+  /** "model": the AI annotator's id, agreeing with the label; "label": the label's own match; "": none */
+  source: "model" | "label" | "";
+  /** The id the AI annotator gave, kept or not */
+  model_cl_id: string | null;
+  url: string | null;
+}
+
+export interface LabelMatches {
+  column: string;
+  labels: LabelMatch[];
+  n_labels: number;
+  n_matched: number;
+  /** The column has the AI annotator's ids */
+  annotator: boolean;
+  version: string | null;
+}
+
+/** Each label of `column` with its strict Cell Ontology match; nothing is saved. */
+export function getLabelMatches(datasetId: string, column: string): Promise<LabelMatches> {
+  return call(`/datasets/${datasetId}/annotation/ontology?${new URLSearchParams({ column }).toString()}`);
+}

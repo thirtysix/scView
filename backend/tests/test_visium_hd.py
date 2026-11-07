@@ -581,8 +581,10 @@ def test_spot_composition_accepts_bins_and_its_refusal_names_them():
     from scview.core import spot_deconvolution as sd
 
     assert "Visium HD bins" in sd.NOT_SPOTS and spatial.is_spot_data(_grid())
-    # Measured: 8 um, 393,491 bins, 13 types, 291 s on one core (a Visium spot's rate would say 823 s).
-    assert sd.estimate_seconds(3250, 393_491, 13, bins=True) < 450 < sd.estimate_seconds(3250, 393_491, 13)
+    # Measured: 8 um, 393,491 bins, 13 types, 291 s on one core. Bins have their own per-unit rate,
+    # under a Visium spot's (model refit in batch 42: 313 s for bins, 434 s at the spot rate).
+    bins = sd.estimate_seconds(3250, 393_491, 13, bins=True)
+    assert abs(bins / 291 - 1) < 0.2 and bins < sd.estimate_seconds(3250, 393_491, 13)
 
 
 def test_guide_and_router_know_bins():

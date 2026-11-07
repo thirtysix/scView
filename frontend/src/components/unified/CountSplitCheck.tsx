@@ -177,7 +177,7 @@ export function CountSplitCheck({
             {info.cached
               ? ": the last run is kept, no waiting."
               : info.estimate_seconds != null
-                ? `: about ${formatDuration(info.estimate_seconds)} (the first run after the server starts adds ~${formatDuration(info.first_run_seconds)}).`
+                ? `: about ${formatDuration(info.estimate_seconds)}${info.first_run_seconds > 0 ? ` (the first run after the server starts adds ~${formatDuration(info.first_run_seconds)})` : ""}.`
                 : "."}
           </p>
         )
