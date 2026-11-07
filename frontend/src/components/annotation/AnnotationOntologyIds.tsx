@@ -10,6 +10,7 @@ const HOW: Record<LabelMatch["how"], string> = {
   exact_name: "name",
   exact_synonym: "synonym",
   normalised: "normalised",
+  single_cell: "single-cell name",
   none: "",
 };
 

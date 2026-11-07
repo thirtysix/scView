@@ -16,12 +16,14 @@ labelling brings its term back; only present labels are reported.
 
 ``match_label`` is the strict matcher: the same name, the same exact synonym, or the
 same once case, plurals, "+"/"positive", hyphens and a trailing "cell(s)" are set
-aside. Nothing nearer than that: a wrong id is worse than none. The LLM annotator
-keeps the id the model gave each label in ``uns[f"{column}_llm_cl"]``, used only when
-it agrees with the label by those rules (``resolve``). ``map_column`` gives every
-label of any column its strict match, ``cl_distance`` counts the is_a steps between
-two terms (a benchmark's partial credit). Both work from Python alone:
-``match_label("NK cells")``.
+aside. Nothing nearer than that: a wrong id is worse than none. A few names mean
+another term in single-cell work than the CL synonym they match ("DC2" is cDC2, not
+CL's legacy pDC synonym): ``_MISREAD`` match nothing, ``_SINGLE_CELL`` their meant
+term only. The LLM annotator keeps the id the model gave each label in
+``uns[f"{column}_llm_cl"]``, used only when it agrees with the label by those rules
+(``resolve``). ``map_column`` gives every label of any column its strict match,
+``cl_distance`` counts the is_a steps between two terms (a benchmark's partial
+credit). Both work from Python alone: ``match_label("NK cells")``.
 """
 
 from __future__ import annotations
@@ -330,9 +332,12 @@ class Index:
         atlas = _ATLAS.get(" ".join(label.lower().split()))
         if atlas in self.terms:
             add([atlas], "atlas")
+        meant = _SINGLE_CELL.get(strict_key(label))
+        if meant in self.terms:
+            add([meant], "atlas")
 
         for k in (_key(label), _key(label, abbr=True)):
-            if k:
+            if k and not meant:  # "DC2": not pDC, the term CL lists it under
                 add(self._same(k), "exact")
         if not picked:
             k = _key(label, abbr=True)
@@ -356,12 +361,23 @@ HOW_STRICT_TEXT = {
     "exact_name": "same name",
     "exact_synonym": "same exact synonym",
     "normalised": "same name or exact synonym, case, plurals, '+' and hyphens aside",
+    "single_cell": "what single-cell references mean by this name (CL lists it under another term)",
     "none": "no term",
 }
 # Exact synonyms that single-cell labels use in another sense: never matched. CL lists
 # "CD16+ monocyte" under the intermediate CD14+CD16+ term (CL:0002397), but a "CD16+
 # monocyte" cluster is the non-classical one (CL:0002396, ``_ATLAS``).
 _MISREAD = frozenset({("cd16", "positive", "monocyte")})
+# Names with one single-cell meaning that CL files under another term, by ``strict_key``:
+# matched to the meant term (how "single_cell"), never to the listed one. CL keeps the
+# legacy "DC2" as an exact synonym of plasmacytoid DC and "DC1" of conventional DC, but
+# CellTypist's and Villani 2017's DC1 / DC2 are cDC1 / cDC2, which CL's own term
+# descriptions name CD141+ (CL:0002394) and CD1c+ (CL:0002399) myeloid DCs. A CellTypist
+# "DC2" cluster was matched to pDC (annotation benchmark, 2026-11-07).
+_SINGLE_CELL = {
+    ("dc1",): "CL:0002394", ("cdc1",): "CL:0002394",
+    ("dc2",): "CL:0002399", ("cdc2",): "CL:0002399",
+}
 
 
 def strict_key(text: str) -> tuple[str, ...]:
@@ -416,6 +432,9 @@ def _strict_match(index: Index, label: str) -> tuple[str | None, str]:
     if _no_type(label):
         return None, "none"
     st, k = _strict(index), strict_key(label)
+    if k in _SINGLE_CELL:  # never the term CL lists the name under
+        meant = _SINGLE_CELL[k]
+        return (meant, "single_cell") if meant in index.terms else (None, "none")
     for table, key, how in ((st.name, label, "exact_name"), (st.synonym, label, "exact_synonym"),
                             (st.name_key, k, "normalised"), (st.synonym_key, k, "normalised")):
         ids = table.get(key, set())
@@ -427,12 +446,16 @@ def _strict_match(index: Index, label: str) -> tuple[str | None, str]:
 
 
 def agrees(index: Index, label: str, cid: str | None) -> str | None:
-    """How ``label`` names term ``cid`` (exact_name | exact_synonym | normalised), or None
-    when there is no such term or its name and exact synonyms are other words."""
+    """How ``label`` names term ``cid`` (exact_name | exact_synonym | normalised |
+    single_cell), or None when there is no such term or its name and exact synonyms are
+    other words. A ``_SINGLE_CELL`` name agrees with its meant term only."""
     t = index.terms.get(clean_id(cid) or "") if isinstance(cid, str) else None
     label = str(label).strip()
     if t is None or _no_type(label):
         return None
+    meant = _SINGLE_CELL.get(strict_key(label))
+    if meant:
+        return "single_cell" if t.id == meant else None
     syns = [s for s, scope in t.synonyms if scope == "EXACT"]
     if label == t.name:
         return "exact_name"
@@ -461,8 +484,8 @@ def resolve(index: Index, label: str, model_id: str | None = None) -> dict[str, 
 
 def match_label(text: str, index: Index | None = None) -> tuple[str | None, str | None, str]:
     """``(cl_id, cl_name, how)`` for a free-text label; how is exact_name | exact_synonym
-    | normalised | none. Without ``index``, the ontology on disk (fetched first when
-    missing and allowed)."""
+    | normalised | single_cell | none. Without ``index``, the ontology on disk (fetched
+    first when missing and allowed)."""
     idx = index or get_index()
     cid, how = _strict_match(idx, text)
     return cid, (idx.name(cid) if cid else None), how

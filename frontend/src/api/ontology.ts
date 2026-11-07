@@ -129,7 +129,7 @@ export interface LabelMatch {
   n_cells: number;
   cl_id: string | null;
   cl_name: string | null;
-  how: "exact_name" | "exact_synonym" | "normalised" | "none";
+  how: "exact_name" | "exact_synonym" | "normalised" | "single_cell" | "none";
   how_text: string;
   /** "model": the AI annotator's id, agreeing with the label; "label": the label's own match; "": none */
   source: "model" | "label" | "";

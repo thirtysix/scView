@@ -51,6 +51,11 @@ ABBR = {  # label token -> expansion (mode C)
     "pc": "plasma", "smc": "smooth muscle", "nkt": "natural killer t",
     "opc": "oligodendrocyte precursor", "ec": "endothelial", "microglial": "microglia",
 }
+# CL keeps "DC1" / "DC2" as legacy exact synonyms of conventional / plasmacytoid DC;
+# single-cell DC1 / DC2 (CellTypist, Villani 2017) are cDC1 / cDC2, CL's CD141+ and CD1c+
+# myeloid DCs (as ``cell_ontology._SINGLE_CELL``). Label key -> the term it means.
+SINGLE_CELL_SENSE = {frozenset({"dc1"}): "CL:0002394", frozenset({"cdc1"}): "CL:0002394",
+                     frozenset({"dc2"}): "CL:0002399", frozenset({"cdc2"}): "CL:0002399"}
 GENERIC_DESC = 400  # CL terms with more descendants than this are too generic for an ancestor match
 MAX_ANCESTOR_STEPS = 3
 
@@ -108,6 +113,10 @@ class Ontology:
                 k = norm(n)
                 if k:
                     key[k].add(cid)
+        for k, meant in SINGLE_CELL_SENSE.items():  # never the legacy CL synonym's term
+            key.pop(k, None)
+            if meant in self.terms:
+                key[k] = {meant}
         self.key = dict(key)
 
     def parents(self, cid: str) -> list[str]:
