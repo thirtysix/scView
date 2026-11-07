@@ -407,8 +407,9 @@ ACT_DELAY = 0.05  # seconds before each request: a small server
 # One pinned Cell Ontology release (the same bytes as the versioned OBO PURL
 # purl.obolibrary.org/obo/cl/releases/2026-06-08/cl-basic.obo), so CL ids and the
 # annotator benchmark's distances do not move under a dataset. A cl-basic.obo put in
-# raw/ by hand (or fetched unpinned before v0.64.0) is used as it is; the manifest
-# says whether it is the pinned release.
+# raw/ by hand is used as it is; the manifest says whether it is the pinned release.
+# One fetched from the unpinned PURL before v0.64.0 is replaced by the pinned release
+# once, on first use (``ontology_needs_pinning``), and kept while that fails.
 ONTOLOGY_RELEASE = "2026-06-08"
 ONTOLOGY_URL = f"https://github.com/obophenotype/cell-ontology/releases/download/v{ONTOLOGY_RELEASE}/cl-basic.obo"
 ONTOLOGY_SHA256 = "73996c6349283e7a8cbd8183367a1cb810d0077e9c291ae0c72bd31e869f8c1c"
@@ -680,14 +681,25 @@ def _install_source(spec: SourceSpec, dest: Path, client: httpx.Client | None) -
         (dest / f"{spec.name}.tsv.gz.part").unlink(missing_ok=True)
 
 
-def _install_ontology(dest: Path, client: httpx.Client | None) -> dict:
+def ontology_needs_pinning(dest: Path, m: dict | None = None) -> bool:
+    """The ontology on disk was fetched (not put in raw/ by hand) and is not the pinned
+    release: an unpinned PURL download from before v0.64.0. Fetch the pinned one."""
+    if not _installed(dest, "ontology"):
+        return False
+    e = (m if m is not None else read_manifest(dest)).get("sources", {}).get("ontology") or {}
+    return str(e.get("served_from", "")).startswith("http") and e.get("sha256") != ONTOLOGY_SHA256
+
+
+def _install_ontology(dest: Path, client: httpx.Client | None, fresh: bool = False) -> dict:
+    """Parse ``raw/cl-basic.obo`` (or fetch the pinned release when it is missing, or
+    when ``fresh``) into the compact table. A failed fetch leaves what is on disk."""
     raw_dir = dest / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
     raw = raw_dir / ONTOLOGY_FILE
     part = raw_dir / f"{ONTOLOGY_FILE}.part"
     entry: dict[str, Any] = {"label": "Cell Ontology"}
     try:
-        if raw.is_file():
+        if raw.is_file() and not fresh:
             src, entry["served_from"], entry["sha256"] = raw, "local file", _sha256(raw)
         else:
             c, own = _client(client)
@@ -760,7 +772,8 @@ def ensure(
     names = [*SOURCES, "ontology"]  # CellMarker 3.0 is tried before its 2.0 fallback
     if parts is not None:
         names = [n for n in names if n in parts]
-    if all(_installed(dest, n) or not _needed(dest, n) for n in names):
+    repin = "ontology" in names and auto and ontology_needs_pinning(dest)
+    if not repin and all(_installed(dest, n) or not _needed(dest, n) for n in names):
         return status(dest, auto_download=auto)
     with _fetch_lock:
         try:
@@ -804,7 +817,8 @@ def _ensure_locked(dest: Path, names: list[str], auto: bool, retry: bool, client
     m = read_manifest(dest)
     sources, failures = m.setdefault("sources", {}), m.setdefault("failures", {})
     for name in names:
-        if _installed(dest, name) or not _needed(dest, name):
+        fresh = name == "ontology" and auto and ontology_needs_pinning(dest, m)
+        if not fresh and (_installed(dest, name) or not _needed(dest, name)):
             continue
         if not auto and not _raw_complete(dest, name):
             continue
@@ -813,7 +827,8 @@ def _ensure_locked(dest: Path, names: list[str], auto: bool, retry: bool, client
             continue
         t0 = time.monotonic()
         try:
-            entry = _install_ontology(dest, client) if name == "ontology" else _install_source(SOURCES[name], dest, client)
+            entry = (_install_ontology(dest, client, fresh) if name == "ontology"
+                     else _install_source(SOURCES[name], dest, client))
             entry["seconds"] = round(time.monotonic() - t0, 1)
             sources[name] = entry
             failures.pop(name, None)
@@ -870,7 +885,8 @@ def status(dest: Path, *, auto_download: bool | None = None) -> dict:
         "ontology": {
             "downloaded": _installed(dest, "ontology"), "url": ONTOLOGY_URL,
             "version": onto.get("version"), "fetched_at": onto.get("fetched_at"),
-            "release": ONTOLOGY_RELEASE, "pinned": onto.get("pinned"),
+            # from the bytes, so a pre-v0.64.0 entry (no "pinned" key) reads right too
+            "release": ONTOLOGY_RELEASE, "pinned": onto.get("sha256") == ONTOLOGY_SHA256 if onto else None,
             "error": of.get("error") if of and not _installed(dest, "ontology") else None,
         },
     }

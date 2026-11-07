@@ -15,8 +15,9 @@ All notable changes to scView are documented here. The format is based on
   id, linking to the term's page. Any label column can be mapped through
   `GET /datasets/{id}/annotation/ontology?column=` or the MCP tool `cell_ontology_ids`. The ids are stored with the
   dataset, written in by the replay script and named in the co-pilot's cell-type fact. The Cell Ontology download is
-  pinned to release 2026-06-08 (sha256-checked); a file already on disk is kept and the status says whether it is
-  the pinned one.
+  pinned to release 2026-06-08 (sha256-checked). A file put in place by hand is kept and the status says whether it
+  is the pinned one; a file fetched unpinned by an earlier version is replaced by the pinned release once, on first
+  use (the old file stays in use if that download fails).
 
 ### Changed
 - **TF and pathway activity on a dataset opened from its file reads the matrix once.** The first request keeps every

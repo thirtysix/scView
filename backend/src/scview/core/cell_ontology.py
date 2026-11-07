@@ -591,11 +591,21 @@ def cached() -> Index | None:
     return hit[1] if hit else None
 
 
+_pin_checked: set[str] = set()  # dirs whose pre-v0.64.0 unpinned ontology was looked at
+
+
 def get_index(dest: Path | None = None, *, auto_download: bool | None = None, retry: bool = False,
               client=None) -> Index:
     """The index, fetching ``cl-basic.obo`` first when missing and allowed (call in a
-    worker thread). Raises ``OntologyUnavailable`` saying why."""
+    worker thread). An unpinned fetch from before v0.64.0 is replaced by the pinned
+    release on the first call (once per process; the old file stays when that fails).
+    Raises ``OntologyUnavailable`` saying why."""
     dest = dest or mdb.marker_db_dir()
+    if str(dest) not in _pin_checked:
+        _pin_checked.add(str(dest))
+        auto = mdb.auto_download_enabled() if auto_download is None else auto_download
+        if auto and mdb.ontology_needs_pinning(dest):
+            mdb.ensure(dest, auto_download=True, retry=retry, client=client, parts=("ontology",))
 
     def from_disk() -> Index | None:
         try:

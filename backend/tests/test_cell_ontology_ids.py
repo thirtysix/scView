@@ -427,3 +427,66 @@ def test_another_release_is_refused_and_a_hand_placed_file_is_kept(tmp_path, mon
     st = mdb.status(tmp_path / "c")["ontology"]
     assert st["downloaded"] and st["pinned"] is False and st["release"] == mdb.ONTOLOGY_RELEASE
     co._cache.clear()
+
+
+def test_an_unpinned_fetch_from_before_v064_is_replaced_once(tmp_path, monkeypatch):
+    """A cl-basic.obo fetched from the unpinned PURL (manifest: served_from a URL, other
+    bytes, no "pinned" key) is replaced by the pinned release on first use; while the
+    fetch fails, or with downloads off, the old file keeps working."""
+    monkeypatch.setattr(mdb, "ONTOLOGY_URL", "https://cl.test/cl-basic.obo")
+    monkeypatch.setattr(mdb, "ONTOLOGY_MIN_TERMS", 5)
+    body = FIX.read_bytes()
+    monkeypatch.setattr(mdb, "ONTOLOGY_SHA256", hashlib.sha256(body).hexdigest())
+    old = body.replace(b"data-version: cl/releases/2026-06-08/cl-basic.owl", b"data-version: cl/releases/2025-01-01/cl-basic.owl")
+    assert old != body
+
+    def unpinned(dest: Path) -> Path:
+        (dest / "raw").mkdir(parents=True)
+        (dest / "raw" / mdb.ONTOLOGY_FILE).write_bytes(old)
+        mdb.ensure(dest, auto_download=False, parts=("ontology",))  # builds the table from raw/
+        m = mdb.read_manifest(dest)
+        m["sources"]["ontology"].update(served_from="http://purl.obolibrary.org/obo/cl/cl-basic.obo",
+                                        sha256=hashlib.sha256(old).hexdigest())
+        m["sources"]["ontology"].pop("pinned", None)
+        mdb._write_manifest(dest, m)
+        assert mdb.ontology_needs_pinning(dest) and mdb.status(dest)["ontology"]["pinned"] is False
+        return dest
+
+    calls: list[str] = []
+
+    def ok(req):
+        calls.append(str(req.url))
+        return httpx.Response(200, content=body)
+
+    co._cache.clear()
+    co._pin_checked.clear()
+    a = unpinned(tmp_path / "a")
+    idx = co.get_index(a, auto_download=True, client=httpx.Client(transport=httpx.MockTransport(ok)))
+    assert calls == ["https://cl.test/cl-basic.obo"]
+    assert idx.version == "cl/releases/2026-06-08/cl-basic.owl"
+    assert (a / "raw" / mdb.ONTOLOGY_FILE).read_bytes() == body
+    assert mdb.status(a)["ontology"]["pinned"] is True and not mdb.ontology_needs_pinning(a)
+    co._pin_checked.clear()
+    co.get_index(a, auto_download=True, client=httpx.Client(transport=httpx.MockTransport(ok)))
+    assert len(calls) == 1  # pinned now: never fetched again
+
+    # the fetch fails: the old file is still used, and is not retried within the process
+    co._cache.clear()
+    b = unpinned(tmp_path / "b")
+    down = []
+
+    def fail(req):
+        down.append(1)
+        return httpx.Response(503)
+
+    idx = co.get_index(b, auto_download=True, client=httpx.Client(transport=httpx.MockTransport(fail)))
+    assert idx.version == "cl/releases/2025-01-01/cl-basic.owl" and (b / "raw" / mdb.ONTOLOGY_FILE).read_bytes() == old
+    co.get_index(b, auto_download=True, client=httpx.Client(transport=httpx.MockTransport(fail)))
+    assert len(down) == 1 and mdb.ontology_needs_pinning(b)
+
+    # downloads off: nothing fetched, the old file used
+    c = unpinned(tmp_path / "c")
+    idx = co.get_index(c, auto_download=False, client=httpx.Client(transport=httpx.MockTransport(fail)))
+    assert len(down) == 1 and idx.version == "cl/releases/2025-01-01/cl-basic.owl"
+    co._cache.clear()
+    co._pin_checked.clear()
