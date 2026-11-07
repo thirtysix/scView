@@ -45,7 +45,7 @@ from scview.core import (
 from scview.core.run_watchdog import RunCancelled, RunControl, cancelled_reason
 from scview.core.anndata_adaptor import per_cell_qc
 from scview.core.cell_cycle import near_zero_phase_calls
-from scview.core.llm import chat_extra
+from scview.core.llm import chat_extra, reply_room
 from scview.core.geneset_sources import (
     ResolvedGeneSets,
     match_query_case,
@@ -1695,7 +1695,7 @@ def _annotate_llm(adata: ad.AnnData, params: PipelineParams, groupby: str, targe
         **chat_extra(model),
         messages=[{"role": "user", "content": prompt}],
         temperature=0.0,
-        max_tokens=_annotation_max_tokens(len(marker_map)),
+        max_tokens=_annotation_max_tokens(len(marker_map), reply_room(model)),
     )
     raw = resp.choices[0].message.content or ""
     if getattr(resp.choices[0], "finish_reason", None) == "length":
@@ -1724,10 +1724,11 @@ def _annotate_llm(adata: ad.AnnData, params: PipelineParams, groupby: str, targe
     return cl
 
 
-def _annotation_max_tokens(n_clusters: int) -> int:
+def _annotation_max_tokens(n_clusters: int, room: int = 0) -> int:
     """Room for the tissue line plus one 'id: label | CL:0000000' line per cluster (about
-    25 tokens; 40 allowed). A fixed 800 cut the reply at about 30 clusters."""
-    return min(8192, 200 + 40 * max(1, n_clusters))
+    25 tokens; 40 allowed), plus ``room`` for a model that reasons first (``llm.reply_room``).
+    A fixed 800 cut the reply at about 30 clusters."""
+    return min(8192, 200 + 40 * max(1, n_clusters) + room)
 
 
 _CL_SUFFIX = re.compile(r"\s*[|(\[,;]?\s*(?:CL[:_ ]?(\d{7,})|CL[:_ ]?none)\s*[)\]]?\s*$", re.I)
