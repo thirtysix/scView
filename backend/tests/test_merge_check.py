@@ -194,6 +194,26 @@ def test_resolution_for_count_clusters_the_choice_with_the_recorded_passes(monke
     assert seen[-1] == -1  # a clustering made in full is matched in full
 
 
+def test_estimate_follows_the_measured_warm_runs():
+    from tests.test_hvg_sensitivity import _rec
+
+    # 2 CPUs with 2 BLAS threads, warm (2026-11-07), runs that matched the cluster count:
+    # Kang at 0.5 (13 groups) 34 s (the old model said 84), at 1.0 (16) 32 s; 8,000 of its
+    # cells at 1.0 (14) 18 s, at 2.0 (22) 26 s; paul15 at 1.0 (11) 9.8 s.
+    for n, res, groups, measured in [(13_836, 0.5, 13, 34.2), (13_836, 1.0, 16, 31.9),
+                                     (8_000, 1.0, 14, 18.4), (8_000, 2.0, 22, 25.5),
+                                     (2_730, 1.0, 11, 9.8)]:
+        est = mc.estimate_seconds(n, _rec(resolution=res), groups)
+        assert abs(est - measured) <= 0.2 * measured, (n, res, est, measured)
+    # Matching the count is the larger part; a run asked not to match skips it (one whose
+    # training half already has the count does too, which shows only once it is clustered).
+    rec = _rec()
+    full = mc.estimate_seconds(13_836, rec, 13)
+    assert mc.estimate_seconds(13_836, rec, 13, match_count=False) < 0.6 * full
+    assert mc.estimate_seconds(13_836, rec, 40) > mc.estimate_seconds(13_836, rec, 13)
+    assert mc.estimate_seconds(13_836, _rec(resolution=2.0), 23) > full
+
+
 def test_merged_labels_join_sets_in_the_columns_order():
     s = pd.Series(pd.Categorical(["a", "b", "c", "d", None], categories=["d", "c", "b", "a"]))
     out = mc.merged_labels(s, [("a", "c"), ("c", "b")])

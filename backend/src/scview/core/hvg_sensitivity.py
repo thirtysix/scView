@@ -72,17 +72,35 @@ MIN_NEIGHBORS, MAX_NEIGHBORS = 5, 100
 NEIGHBOR_CHOICES = (10, 30)  # tried by default besides the recorded k (scanpy's default 15)
 MIN_CELLS = 50
 # Each setting re-runs PCA, the neighbour graph and the clustering on every cell:
-# about 1 s per 1,000 cells on 2 cores (Kang, 13,836 cells: 10-15 s a setting).
+# about 0.6 s per 1,000 cells on 2 cores (Kang, 13,836 cells: 6-11 s a setting).
 MAX_CELLS = 100_000
 MAX_REFERENCE_GROUPS = 500
 STABLE = 0.75  # Jaccard: Hennig (2007), a cluster found again at 0.75 or more is stable
 PART = 0.1  # a new cluster holding this share of a cluster's cells is one of its parts
 
-# Time estimate (Kang copy, 13,836 cells, 2 cores, measured 2026-10-17): 9-20 s a
-# setting once warm, 65 s for the five defaults; Harmony adds 0.3 s.
-SECONDS_PER_1K_CELLS = 1.0
-HARMONY_SECONDS_PER_1K_CELLS = 0.05
-GRAPH_SECONDS_PER_1K_CELLS = 0.9  # a setting sharing another's PCs: the graph and Leiden (Kang: 13-19 s)
+# Time estimate, warm (2 CPUs with 2 BLAS threads, measured 2026-11-07 on Kang, 13,836
+# cells, its 4,000- and 8,000-cell subsamples and paul15, 2,730 cells). A setting is its
+# PCs (variable genes, scaling, PCA: Kang 2.7 s), the neighbour graph (Kang 1.3-2 s;
+# below scanpy's exact-search size well under a second) and the clustering, which takes
+# most of it: Leiden runs in a child process (0.85 s to start) and its full optimisation
+# took 3-11 s on Kang (more passes at a higher resolution, not steadily), two passes
+# (fast Leiden) 2.8 s, Louvain 0.2-0.6 s. Kang's 9 defaults: 67 s (the 2026-10-17 model
+# said 122). Harmony itself takes 0.1 s, but Leiden on its corrected graph took longer:
+# Kang by stimulation, 9 defaults 82 s. Estimates within 20% of the measured runs except
+# Harmony's single settings (Kang by stimulation, one setting: 15 s, its Leiden 11 s).
+EMBED_SECONDS_PER_1K_CELLS = 0.18
+HARMONY_SECONDS_PER_1K_CELLS = 0.18  # per setting: the correction and the slower clustering
+GRAPH_SECONDS_PER_1K_CELLS = 0.12  # pynndescent's search, from numba_warm.SEARCH_MIN_CELLS
+EXACT_GRAPH_SECONDS_PER_1K_CELLS = 0.02  # scanpy's exact search below it
+LEIDEN_START_SECONDS = 0.85  # the child process (core/leiden.py)
+# The full optimisation: (LEIDEN_SECONDS + LEIDEN_SECONDS_PER_RESOLUTION x resolution)
+# x (cells / 1,000) ^ LEIDEN_POWER (more passes on more cells)
+LEIDEN_SECONDS = 0.06
+LEIDEN_SECONDS_PER_RESOLUTION = 0.12
+LEIDEN_POWER = 1.2
+FAST_LEIDEN_SECONDS_PER_1K_CELLS = 0.14  # two passes, whatever the resolution
+LOUVAIN_SECONDS_PER_1K_CELLS = 0.03
+OVERHEAD_SECONDS = 0.5  # the inputs (normalised counts) and the comparisons
 
 
 def first_run_seconds(n_cells: int) -> float:
@@ -465,13 +483,47 @@ def clean_settings(adata, rec: Recorded, values: list[dict[str, Any]] | None) ->
     return out
 
 
+def graph_seconds(n_cells: int) -> float:
+    """The neighbour graph, warm (numba's first compile: ``first_run_seconds``)."""
+    per = (GRAPH_SECONDS_PER_1K_CELLS if n_cells >= numba_warm.SEARCH_MIN_CELLS
+           else EXACT_GRAPH_SECONDS_PER_1K_CELLS)
+    return per * n_cells / 1000
+
+
+def cluster_seconds(n_cells: int, method: str, resolution: float,
+                    n_iterations: int = leiden.N_ITERATIONS) -> float:
+    """One clustering of a neighbour graph of ``n_cells``: Leiden in its child process,
+    fully optimised (``n_iterations`` -1, more passes at a higher resolution) or two
+    passes (fast Leiden), or Louvain."""
+    k = n_cells / 1000
+    if method != "leiden":
+        return LOUVAIN_SECONDS_PER_1K_CELLS * k
+    if n_iterations == leiden.FAST_ITERATIONS:
+        return LEIDEN_START_SECONDS + FAST_LEIDEN_SECONDS_PER_1K_CELLS * k
+    return LEIDEN_START_SECONDS + ((LEIDEN_SECONDS + LEIDEN_SECONDS_PER_RESOLUTION * resolution)
+                                   * k ** LEIDEN_POWER)
+
+
+def embed_seconds(n_cells: int) -> float:
+    """One setting's PCs: its variable genes, the scaling (or Pearson residuals) and PCA."""
+    return EMBED_SECONDS_PER_1K_CELLS * n_cells / 1000
+
+
+def graph_setting_seconds(n_cells: int, rec: Recorded) -> float:
+    """A setting from its PCs on: Harmony's correction, the graph and the clustering."""
+    harmony = HARMONY_SECONDS_PER_1K_CELLS * n_cells / 1000 if rec.batch_key else 0.0
+    return (harmony + graph_seconds(n_cells)
+            + cluster_seconds(n_cells, rec.method, rec.resolution, rec.leiden_iterations))
+
+
 def estimate_seconds(n_cells: int, n_settings: int, rec: Recorded, n_embeddings: int | None = None) -> float:
     """Seconds for ``n_settings``, of which ``n_embeddings`` (default all) need
-    their own PCs; the others re-run only the graph and the clustering."""
-    per = SECONDS_PER_1K_CELLS + (HARMONY_SECONDS_PER_1K_CELLS if rec.batch_key else 0.0)
+    their own PCs; the others re-run only the graph and the clustering. Each setting is
+    timed as clustered with the recorded method (the other method's setting, Louvain
+    for a Leiden clustering, is quicker: Kang 1.7 s against 5-8)."""
     n_emb = n_settings if n_embeddings is None else n_embeddings
-    graph_only = (n_settings - n_emb) * GRAPH_SECONDS_PER_1K_CELLS
-    return round((n_emb * per + graph_only) * n_cells / 1000 + 2, 1)
+    return round(OVERHEAD_SECONDS + n_emb * embed_seconds(n_cells)
+                 + n_settings * graph_setting_seconds(n_cells, rec), 1)
 
 
 def column_name(rec: Recorded, setting: Setting) -> str:
