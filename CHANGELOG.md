@@ -6,6 +6,10 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.64.0] - 2026-11-07
+
+Cell-type labels carry Cell Ontology ids, the AI annotator reads numbered clusters by id, and the start scripts never offer more memory than Docker or Podman has.
+
 ### Added
 - **Cell Ontology ids for cell-type labels.** The AI annotator asks the model for each label's Cell Ontology (CL)
   id and keeps it only when the term exists and the label agrees with its name or an exact synonym; otherwise the
