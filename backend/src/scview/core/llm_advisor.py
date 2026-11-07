@@ -12,7 +12,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from scview.core.llm import chat_extra
+from scview.core.llm import chat_extra, reply_room
 
 logger = logging.getLogger(__name__)
 
@@ -238,7 +238,7 @@ async def get_llm_suggestions(
                 {"role": "user", "content": user_message},
             ],
             temperature=0.3,
-            max_tokens=2048,
+            max_tokens=2048 + reply_room(model),
         )
 
         raw_response = response.choices[0].message.content or ""

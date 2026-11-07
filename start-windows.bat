@@ -6,6 +6,8 @@ rem production stack, and opens http://localhost:3000.
 setlocal EnableExtensions
 title scView
 cd /d "%~dp0"
+rem set /p drops a prompt's leading spaces: start it with "." and a backspace (BS).
+for /f %%a in ('"prompt $H & for %%b in (1) do rem"') do set "BS=%%a"
 
 echo.
 echo   scView - starting up
@@ -120,7 +122,7 @@ echo   Optional: paste a DeepInfra API key to turn on the AI features.
 echo   Press Enter to skip. scView works without one, and you can add it
 echo   later by editing the .env file in this folder.
 set "KEY="
-set /p "KEY=  DeepInfra API key: "
+set /p "KEY=.%BS%  DeepInfra API key: "
 findstr /v /b /c:"DEEPINFRA_API_KEY=" .env.example > .env
 >>.env echo DEEPINFRA_API_KEY=%KEY%
 echo   [ok] Settings saved to .env
@@ -163,7 +165,7 @@ echo   file, or delete that line to be asked again.
 echo   How much memory may scView use? A dataset that needs more stops
 echo   scView, not the computer. Press Enter for the suggestion.
 set "ANSWER="
-set /p "ANSWER=  Memory for scView in GB [%SUGGEST%]: "
+set /p "ANSWER=.%BS%  Memory for scView in GB [%SUGGEST%]: "
 set "MEMGB=%SUGGEST%"
 if defined ANSWER (
     echo %ANSWER%| findstr /r "^[0-9][0-9]*$" >nul && set "MEMGB=%ANSWER%"

@@ -26,7 +26,7 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel
 
-from scview.core.llm import chat_extra
+from scview.core.llm import chat_extra, reply_room
 
 logger = logging.getLogger(__name__)
 
@@ -324,7 +324,7 @@ async def _classify(query: str, view_context: dict | None, api_key: str, model: 
                 {"role": "user", "content": f"{where}\n{query}"},
             ],
             temperature=0.0,
-            max_tokens=_CLASSIFY_MAX_TOKENS,
+            max_tokens=_CLASSIFY_MAX_TOKENS + reply_room(model),
         )
         raw = (resp.choices[0].message.content or "").strip()
         data = parse_intent_reply(raw)

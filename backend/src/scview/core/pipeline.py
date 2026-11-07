@@ -45,7 +45,7 @@ from scview.core import (
 from scview.core.run_watchdog import RunCancelled, RunControl, cancelled_reason
 from scview.core.anndata_adaptor import per_cell_qc
 from scview.core.cell_cycle import near_zero_phase_calls
-from scview.core.llm import chat_extra
+from scview.core.llm import chat_extra, reply_room
 from scview.core.geneset_sources import (
     ResolvedGeneSets,
     match_query_case,
@@ -1690,19 +1690,43 @@ def _annotate_llm(adata: ad.AnnData, params: PipelineParams, groupby: str, targe
     listing = "\n".join(f"{g}: {', '.join(genes)}" for g, genes in marker_map.items())
     prompt = _annotation_prompt(listing, hint, targeted_panel.prompt_line(adata))
     client = OpenAI(api_key=api_key, base_url="https://api.deepinfra.com/v1/openai")
-    resp = client.chat.completions.create(
-        model=model,
-        **chat_extra(model),
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.0,
-        max_tokens=_annotation_max_tokens(len(marker_map)),
-    )
-    raw = resp.choices[0].message.content or ""
-    if getattr(resp.choices[0], "finish_reason", None) == "length":
-        logger.warning("LLM annotation reply cut at max_tokens (%d clusters): later clusters may be Unknown",
-                       len(marker_map))
+    clusters = list(marker_map.keys())
+
+    def ask(max_tokens: int) -> tuple[str, bool]:
+        resp = client.chat.completions.create(
+            model=model,
+            **chat_extra(model),
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+            max_tokens=max_tokens,
+        )
+        cut = getattr(resp.choices[0], "finish_reason", None) == "length"
+        return _complete_lines(resp.choices[0].message.content or "", cut), cut
+
+    budget = _annotation_max_tokens(len(clusters), reply_room(model))
+    raw, cut = ask(budget)
+    labels = _parse_cluster_labels(raw, clusters)
+    notes: dict[str, str] = {}
+    if cut and budget < _ANNOTATION_TOKEN_CAP:
+        # A reasoning model, or long labels: the later clusters would be Unknown. Once
+        # more with room to spare; the reply naming more clusters is kept.
+        retry = min(_ANNOTATION_TOKEN_CAP, 2 * budget + 1000)
+        logger.warning("LLM annotation reply cut at %d tokens (%d of %d clusters named); retrying at %d",
+                       budget, len(labels), len(clusters), retry)
+        raw2, cut2 = ask(retry)
+        labels2 = _parse_cluster_labels(raw2, clusters)
+        notes["llm_retry"] = f"reply cut at {budget:,} tokens; asked again with {retry:,}"
+        if len(labels2) >= len(labels):
+            raw, cut, labels, budget = raw2, cut2, labels2, retry
+    if cut:
+        missing = [str(g) for g in clusters if str(g) not in labels]
+        logger.warning("LLM annotation reply cut at %d tokens: %d of %d clusters Unknown",
+                       budget, len(missing), len(clusters))
+        if missing:
+            notes["llm_reply_cut"] = (
+                f"reply cut at {budget:,} tokens: {len(missing)} of {len(clusters)} clusters left Unknown "
+                f"({', '.join(missing[:10])}{', ...' if len(missing) > 10 else ''})")
     tissue = _parse_tissue_line(raw) or hint
-    labels = _parse_cluster_labels(raw, list(marker_map.keys()))
 
     mapping, model_ids = {}, {}
     for g in marker_map:
@@ -1721,13 +1745,25 @@ def _annotate_llm(adata: ad.AnnData, params: PipelineParams, groupby: str, targe
         "LLM annotation: %d clusters -> obs['%s'] (model=%s, groupby=%s, tissue=%s, CL ids %s)",
         len(mapping), target, model, groupby, tissue or "?", cl.get("cl_ids", "not checked"),
     )
-    return cl
+    return {**cl, **notes}  # recorded with the step: History shows a cut reply
 
 
-def _annotation_max_tokens(n_clusters: int) -> int:
+_ANNOTATION_TOKEN_CAP = 8192
+
+
+def _annotation_max_tokens(n_clusters: int, room: int = 0) -> int:
     """Room for the tissue line plus one 'id: label | CL:0000000' line per cluster (about
-    25 tokens; 40 allowed). A fixed 800 cut the reply at about 30 clusters."""
-    return min(8192, 200 + 40 * max(1, n_clusters))
+    25 tokens; 40 allowed), plus ``room`` for a model that reasons first (``llm.reply_room``).
+    A fixed 800 cut the reply at about 30 clusters."""
+    return min(_ANNOTATION_TOKEN_CAP, 200 + 40 * max(1, n_clusters) + room)
+
+
+def _complete_lines(raw: str, cut: bool) -> str:
+    """A reply cut at max_tokens without its unfinished last line ("8: endoth"): a
+    cluster whose label was cut off is Unknown, not a fragment."""
+    if not cut or raw.endswith("\n"):
+        return raw
+    return raw[: raw.rfind("\n") + 1]
 
 
 _CL_SUFFIX = re.compile(r"\s*[|(\[,;]?\s*(?:CL[:_ ]?(\d{7,})|CL[:_ ]?none)\s*[)\]]?\s*$", re.I)

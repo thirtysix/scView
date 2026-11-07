@@ -51,7 +51,7 @@ from scview.core import layout_stability
 from scview.core import seq_metrics
 from scview.core import feature_guide, methods_guard, screen_facts
 from scview.core.claims import Claim, check_answer, vocab_for
-from scview.core.llm import chat_extra
+from scview.core.llm import chat_extra, reply_room
 from scview.core.marker_selection import MAX_PADJ, MIN_PTS, group_markers
 from scview.core.species import detect_species
 from scview.core.uns_keys import enrichment_column
@@ -1493,7 +1493,7 @@ async def polish_insight(insight: DatasetInsight, api_key: str, model: str = DEF
                 {"role": "user", "content": insight.insight},
             ],
             temperature=0.4,
-            max_tokens=80,
+            max_tokens=80 + reply_room(model),
         )
         text = (resp.choices[0].message.content or "").strip().strip('"')
         if text:
@@ -1651,7 +1651,7 @@ async def write_methods(
                 {"role": "user", "content": f"Analysis recipe:\n{skeleton}{focus}\n\nWrite the Methods paragraph."},
             ],
             temperature=0.2,
-            max_tokens=700,
+            max_tokens=700 + reply_room(model),
         )
         text = (resp.choices[0].message.content or "").strip()
         # Never a step the recipe lacks (it once said batch correction was run).
@@ -2209,7 +2209,7 @@ async def extract_actions(
             **chat_extra(model),
             messages=[{"role": "user", "content": prompt}],
             temperature=0.0,
-            max_tokens=400,
+            max_tokens=400 + reply_room(model),
         )
         actions = _coerce_actions(
             resp.choices[0].message.content or "",
@@ -2348,7 +2348,7 @@ async def answer_query(
             **chat_extra(model),
             messages=messages,
             temperature=0.2,
-            max_tokens=1024,
+            max_tokens=1024 + reply_room(model),
         )
         answer = (response.choices[0].message.content or "").strip()
         if not answer:
@@ -2386,7 +2386,7 @@ async def suggest_followups(query: str, answer: str, api_key: str, model: str) -
                 {"role": "user", "content": f"Q: {query}\nA: {answer}"},
             ],
             temperature=0.5,
-            max_tokens=120,
+            max_tokens=120 + reply_room(model),
         )
         raw = (resp.choices[0].message.content or "").strip()
         if "[" in raw:
@@ -2457,7 +2457,7 @@ async def stream_answer(
             **chat_extra(model),
             messages=_build_messages(query, context, history),
             temperature=0.2,
-            max_tokens=1024,
+            max_tokens=1024 + reply_room(model),
             stream=True,
         )
         async for chunk in stream:

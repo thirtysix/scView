@@ -75,9 +75,11 @@ async def compare_info(
     except bc.CompareError as e:
         return {"available": False, "reason": str(e), **base}
     compile_s = bc.compile_seconds()  # included in the estimate
+    n_batches = int(adata.obs[batch_key].astype(str).nunique())
     return {"available": True, "reason": None, **base, "label_column": label,
-            "label_kind": kind or None,
-            "estimate_seconds": round(bc.estimate_seconds(int(adata.n_obs)), 1),
+            "label_kind": kind or None, "n_batches": n_batches,
+            "estimate_seconds": round(bc.estimate_seconds(int(adata.n_obs),
+                                                          n_batches=n_batches), 1),
             "compile_seconds": round(compile_s, 1), "first_run": compile_s > 0}
 
 

@@ -206,6 +206,33 @@ def test_estimate_grows_with_cells_settings_and_harmony():
     assert one < hs.estimate_seconds(10_000, 3, _rec(), 1) < hs.estimate_seconds(10_000, 3, _rec())
 
 
+def test_estimate_follows_the_measured_warm_runs():
+    # 2 CPUs with 2 BLAS threads, warm (2026-11-07): Kang one setting 8.6 s, three 26.5 s,
+    # the 9 defaults (6 with their own PCs) 67 s; 8,000 of its cells 30 s; paul15 (2,730
+    # cells, dense) 15.5 s; Kang by stimulation (Harmony) 82 s. The old model said 122 s.
+    for n, settings, pcs, measured, kw in [(13_836, 1, 1, 8.6, {}), (13_836, 3, 3, 26.5, {}),
+                                           (13_836, 9, 6, 67.1, {}), (8_000, 9, 6, 30.4, {}),
+                                           (4_000, 9, 6, 19.0, {}), (2_730, 9, 6, 15.5, {}),
+                                           (13_836, 9, 6, 81.6, {"batch_key": "stim"})]:
+        est = hs.estimate_seconds(n, settings, _rec(**kw), pcs)
+        assert abs(est - measured) <= 0.2 * measured, (n, settings, est, measured)
+
+
+def test_estimate_follows_the_clustering_method_and_passes():
+    full = hs.estimate_seconds(13_836, 1, _rec())
+    assert hs.estimate_seconds(13_836, 1, _rec(leiden_iterations=2)) < full
+    assert hs.estimate_seconds(13_836, 1, _rec(method="louvain")) < hs.estimate_seconds(
+        13_836, 1, _rec(leiden_iterations=2))
+    assert hs.estimate_seconds(13_836, 1, _rec(resolution=2.0)) > full
+    # Kang's clustering alone (2026-11-07): Leiden 3.4-11 s at 0.25-2, two passes 2.8 s,
+    # Louvain 0.2-0.6 s
+    assert 3 < hs.cluster_seconds(13_836, "leiden", 0.5) < 8
+    assert abs(hs.cluster_seconds(13_836, "leiden", 2.0, 2) - 2.8) < 0.5
+    assert hs.cluster_seconds(13_836, "louvain", 1.0) < 1
+    # the neighbour search: pynndescent from SEARCH_MIN_CELLS, exact (and quick) below
+    assert hs.graph_seconds(8_000) < 0.5 < hs.graph_seconds(13_836) < 2.5
+
+
 def test_check_caps_the_cells(monkeypatch):
     a = _processed()
     monkeypatch.setattr(hs, "MAX_CELLS", 100)

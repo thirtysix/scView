@@ -303,20 +303,28 @@ def recommend(rows: list[dict[str, Any]], label_column: str | None, kind: str) -
 
 
 def estimate_seconds(n_cells: int, methods: list[str] | None = None, *,
-                     warm: bool | None = None) -> float:
+                     warm: bool | None = None, n_batches: int = 2) -> float:
     """Rough total seconds for the comparison, scoring included: per method
-    ``SECONDS_AT_SCALE`` x (cells / ``SCALE_CELLS``) ^ ``POWER``, plus what BBKNN still has
-    to compile when it is among the methods (``compile_seconds``). Batches add time the
-    model does not see (Scanorama matches every pair of them): Kang by donor (8 batches)
-    took 19 s against 6.4 s by stimulation (2), and a 40,000-cell subsample of a 23-sample
-    atlas 97 s against 58 s estimated then, so with many batches read it as a lower bound."""
+    ``SECONDS_AT_SCALE`` x (cells / ``SCALE_CELLS``) ^ ``POWER``, Scanorama's times
+    ``batch_factor(n_batches)``, plus what BBKNN still has to compile when it is among the
+    methods (``compile_seconds``)."""
     methods = [m for m in (methods or METHODS) if m in METHODS]
     n = max(1, int(n_cells))
     total = max(OVERHEAD_SECONDS,
-                sum(SECONDS_AT_SCALE[m] * (n / SCALE_CELLS) ** POWER[m] for m in methods))
+                sum(SECONDS_AT_SCALE[m] * (n / SCALE_CELLS) ** POWER[m]
+                    * (batch_factor(n_batches) if m == bm.SCANORAMA else 1.0) for m in methods))
     if bm.BBKNN in methods:
         total += compile_seconds(warm)
     return float(total)
+
+
+def batch_factor(n_batches: int) -> float:
+    """Scanorama's time against two batches': it matches every pair of batches and merges
+    them one by one. Kang (2026-11-07, 2 CPUs, 13,836 / 8,000 / 4,000 cells) by 4 batches
+    took 3.0-3.6x the time by 2, by 8 3.5-4.3x, by 16 2.4-2.7x: rising to
+    ``SCANORAMA_MANY_BATCHES`` at 4 batches, flat after."""
+    b = max(2, int(n_batches))
+    return 1.0 + (SCANORAMA_MANY_BATCHES - 1.0) * min(1.0, (b - 2) / 2)
 
 
 def compile_seconds(warm: bool | None = None) -> float:
@@ -340,10 +348,14 @@ def bbknn_warm() -> bool:
 # 3.8, BBKNN 1.8 (6.4 s; 7.1 s in a server after its pipeline, 5.6 s at 4 CPUs live). A
 # 2,700-cell subsample took 0.45 s (estimate 0.51); the powers are the first fit's
 # (2026-10-31, 2,700 cells 0.02 / 0.09 / 0.25 / 0.52). BBKNN's first run in a fresh
-# process took 13.4 s against 1.8 warm, 9.9 s after a container restart.
+# process took 13.4 s against 1.8 warm, 9.9 s after a container restart. More batches
+# (2026-11-07): Kang by donor (8) 18.9 s (estimate 16.3), Scanorama 16.5 of it, by 4
+# donor groups 16.2 s, by donor and stimulation (16) 12.6 s (estimate 16.3); Harmony and
+# BBKNN took the same by 2 or 16 batches.
 SCALE_CELLS = 13_836
 SECONDS_AT_SCALE = {NONE: 0.26, bm.HARMONY: 0.54, bm.SCANORAMA: 3.8, bm.BBKNN: 1.8}
 POWER = {NONE: 1.0, bm.HARMONY: 1.2, bm.SCANORAMA: 1.9, bm.BBKNN: 1.3}
+SCANORAMA_MANY_BATCHES = 3.6  # Scanorama's time from 4 batches on against 2's (batch_factor)
 COMPILE_SECONDS = numba_warm.IMPORT_COLD_SECONDS + numba_warm.GRAPH_SECONDS
 OVERHEAD_SECONDS = 0.5  # the least a comparison takes (streaming, scoring set-up)
 _bbknn_warm = False  # set once BBKNN has run in this process

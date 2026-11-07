@@ -510,7 +510,8 @@ async def merge_check_info(
             return {"available": False, "reason": str(exc), **base}
         return {"available": True, "reason": None, **base, "reference": p.reference,
                 "reference_exists": p.exists, "n_clusters": len(p.names), "recorded": p.rec.to_dict(),
-                "estimate_seconds": mc.estimate_seconds(adata.n_obs, p.rec, len(p.names))}
+                "estimate_seconds": mc.estimate_seconds(adata.n_obs, p.rec, len(p.names),
+                                                        p.match_count)}
 
     # A sweep resolution is clustered to plan it: off the loop.
     return await asyncio.to_thread(_info)

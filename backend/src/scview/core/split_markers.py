@@ -80,12 +80,11 @@ KEEPS_ENOUGH = 10  # a group "keeps its markers" with at least this many kept
 # over-split pieces of one type (tests) match their training pieces at 0.11-0.28.
 MIN_JACCARD = 0.1
 
-# Time (2 cores, server warm, measured 2026-10-25): Kang copy (13,836 cells,
-# resolution 0.5, 13 groups) 38-46 s, of which the fit and split 4 s, the
-# ordinary test 2.5 s, the training run 13 s, matching the cluster count 20 s,
-# the held-out test 0.7 s; paul15 (2,730 cells, dense) 7 s. Beyond one
-# variable-gene setting's estimate (hs.estimate_seconds):
-EXTRA_SECONDS_PER_1K_CELLS = 2.0
+# Time, warm (2 CPUs with 2 BLAS threads, measured 2026-11-07): the merge check's split
+# and training run (``mc.train_seconds``) plus the tests, 0.3-0.5 s: Kang copy (13,836
+# cells, resolution 0.5, 13 groups) 35 s, 8,000 of its cells 7.5 s, 4,000 4.9 s, paul15
+# (2,730 cells, dense) 5.2 s.
+EXTRA_SECONDS_PER_1K_CELLS = 0.03
 
 
 class SplitMarkersError(ValueError):
@@ -115,7 +114,7 @@ def plan(adata, column: str | None = None) -> mc.Plan:
 
 
 def estimate_seconds(n_cells: int, rec: hs.Recorded) -> float:
-    return round(hs.estimate_seconds(n_cells, 1, rec) + EXTRA_SECONDS_PER_1K_CELLS * n_cells / 1000, 1)
+    return round(mc.train_seconds(n_cells, rec) + EXTRA_SECONDS_PER_1K_CELLS * n_cells / 1000, 1)
 
 
 # ---------------------------------------------------------------------------
