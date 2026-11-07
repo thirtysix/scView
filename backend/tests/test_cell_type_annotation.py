@@ -241,3 +241,134 @@ def test_annotation_max_tokens_grows_with_clusters():
     assert _annotation_max_tokens(14) >= 14 * 25 + 100
     assert _annotation_max_tokens(74) >= 74 * 25 + 100  # GTEx v9: 74 groups
     assert _annotation_max_tokens(10_000) == 8192
+    assert _annotation_max_tokens(14, 2000) == _annotation_max_tokens(14) + 2000
+    assert _annotation_max_tokens(10_000, 2000) == 8192
+
+
+def _numbered_with_markers(n_groups: int = 6) -> ad.AnnData:
+    """Numeric cluster ids "0".."n-1", each with stored markers (no wilcoxon run)."""
+    from scview.core.uns_keys import markers_key
+
+    a = ad.AnnData(X=np.random.RandomState(0).poisson(1, (n_groups * 4, 5)).astype("float32"))
+    a.obs["cluster"] = pd.Categorical([str(i % n_groups) for i in range(n_groups * 4)],
+                                      categories=[str(i) for i in range(n_groups)])
+    groups = list(a.obs["cluster"].cat.categories)
+    genes = ["CD3D", "IL7R", "MS4A1"]
+    a.uns[markers_key("cluster")] = {
+        "params": {"groupby": "cluster"},
+        "names": np.rec.fromarrays([np.array(genes, dtype=object)] * n_groups, names=groups),
+        "logfoldchanges": np.rec.fromarrays([np.array([2.0, 1.5, 1.0])] * n_groups, names=groups),
+        "pts": pd.DataFrame({g: [0.7, 0.6, 0.5] for g in groups}, index=genes),
+    }
+    return a
+
+
+LABELS = {"0": "B cells", "1": "NK cells", "2": "Monocytes", "3": "pDC", "4": "Platelets", "5": "T cells"}
+
+
+def _reply(order: list[str], cut_after: int | None = None) -> str:
+    """'tissue' + one line per cluster in ``order`` (not input order); with ``cut_after``,
+    that many cluster lines and then the first 5 characters of the next."""
+    lines = ["tissue: blood"] + [f"{g}: {LABELS[g]} | CL:none" for g in order]
+    if cut_after is None:
+        return "\n".join(lines)
+    return "\n".join(lines[: cut_after + 1]) + "\n" + lines[cut_after + 1][:5]
+
+
+def _scripted_openai(monkeypatch, replies: list[tuple[str, str]]) -> list[int]:
+    """openai.OpenAI answering with ``replies`` [(content, finish_reason)] in turn;
+    returns the max_tokens of each call."""
+    import sys
+    import types
+
+    asked: list[int] = []
+
+    class _Client:
+        def __init__(self, **_):
+            self.chat = types.SimpleNamespace(completions=self)
+
+        def create(self, max_tokens, **_):
+            content, finish = replies[len(asked)]
+            asked.append(max_tokens)
+            msg = types.SimpleNamespace(content=content)
+            return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg, finish_reason=finish)])
+
+    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_Client))
+    monkeypatch.setattr("scview.config.get_settings", lambda: types.SimpleNamespace(
+        DEEPINFRA_API_KEY="k", RAG_CHAT_MODEL="deepseek-ai/DeepSeek-V4.1-Flash"))
+    return asked
+
+
+def test_annotator_retries_a_cut_reply_with_more_room(monkeypatch):
+    """A reply cut at max_tokens left the later clusters Unknown with only a log line.
+    Replies name clusters out of input order, so a positional fallback cannot hide."""
+    from scview.core import pipeline as P
+
+    a = _numbered_with_markers()
+    asked = _scripted_openai(monkeypatch, [
+        (_reply(["4", "2", "0", "5", "1", "3"], cut_after=2), "length"),  # 4, 2 named; "0: B " cut
+        (_reply(["5", "3", "1", "0", "4", "2"]), "stop"),
+    ])
+    fit = P._annotate_llm(a, P.PipelineParams(), "cluster", "cell_type")
+
+    assert len(asked) == 2 and asked[1] > asked[0] == P._annotation_max_tokens(6)
+    assert a.uns["cell_type_llm_mapping"] == LABELS
+    assert "llm_retry" in fit and "llm_reply_cut" not in fit
+
+
+def test_annotator_says_when_the_reply_is_still_cut(monkeypatch):
+    from scview.core import pipeline as P
+
+    a = _numbered_with_markers()
+    _scripted_openai(monkeypatch, [
+        (_reply(["4", "2", "0", "5", "1", "3"], cut_after=1), "length"),  # 4 named; "2: Mo" cut
+        (_reply(["5", "3", "1", "0", "4", "2"], cut_after=3), "length"),  # 5, 3, 1 named; "0: B " cut
+    ])
+    fit = P._annotate_llm(a, P.PipelineParams(), "cluster", "cell_type")
+
+    mapping = a.uns["cell_type_llm_mapping"]
+    # The reply naming more clusters is kept; the cut-off line is not a label ("B").
+    assert {g: mapping[g] for g in ("5", "3", "1")} == {g: LABELS[g] for g in ("5", "3", "1")}
+    assert {mapping[g] for g in ("0", "2", "4")} == {"Unknown"}
+    assert fit["llm_reply_cut"].startswith("reply cut at")
+    assert "3 of 6 clusters left Unknown (0, 2, 4)" in fit["llm_reply_cut"]
+    # Recorded with the step, so History shows it
+    from scview.core.pipeline import _run_cell_type_annotation
+
+    _scripted_openai(monkeypatch, [(_reply(["5"]), "length"), (_reply(["5", "3"]), "length")])
+    assert "llm_reply_cut" in _run_cell_type_annotation(
+        a, PipelineParams(annotation_method="llm", annotation_groupby="cluster"))
+
+
+def test_annotator_retry_keeps_the_first_reply_when_the_second_names_fewer(monkeypatch):
+    from scview.core import pipeline as P
+
+    a = _numbered_with_markers()
+    _scripted_openai(monkeypatch, [
+        (_reply(["4", "2", "0", "5", "1", "3"], cut_after=4), "length"),  # 4, 2, 0, 5 named
+        ("", "length"),  # all reasoning, no content
+    ])
+    fit = P._annotate_llm(a, P.PipelineParams(), "cluster", "cell_type")
+    mapping = a.uns["cell_type_llm_mapping"]
+    assert {g: mapping[g] for g in ("4", "2", "0", "5")} == {g: LABELS[g] for g in ("4", "2", "0", "5")}
+    assert "2 of 6 clusters left Unknown (1, 3)" in fit["llm_reply_cut"]
+
+
+def test_no_retry_for_a_whole_reply_and_a_reasoning_model_gets_room(monkeypatch):
+    from scview.core import pipeline as P
+    from scview.core.llm import reply_room
+
+    a = _numbered_with_markers()
+    asked = _scripted_openai(monkeypatch, [(_reply(["5", "3", "1", "0", "4", "2"]), "stop")])
+    fit = P._annotate_llm(a, P.PipelineParams(annotation_llm_model="openai/gpt-oss-120b"), "cluster", "cell_type")
+    assert asked == [P._annotation_max_tokens(6) + reply_room("openai/gpt-oss-120b")]
+    assert not {"llm_retry", "llm_reply_cut"} & set(fit)
+
+
+def test_complete_lines_drops_only_a_cut_last_line():
+    from scview.core.pipeline import _complete_lines
+
+    assert _complete_lines("tissue: x\n0: B cells\n1: NK c", True) == "tissue: x\n0: B cells\n"
+    assert _complete_lines("tissue: x\n0: B cells\n", True) == "tissue: x\n0: B cells\n"
+    assert _complete_lines("0: B ce", True) == ""
+    assert _complete_lines("tissue: x\n0: B cells", False) == "tissue: x\n0: B cells"

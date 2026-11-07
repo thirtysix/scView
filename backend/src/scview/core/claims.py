@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 
 from pydantic import BaseModel, Field
 
-from scview.core.llm import chat_extra
+from scview.core.llm import chat_extra, reply_room
 
 logger = logging.getLogger(__name__)
 
@@ -973,7 +973,7 @@ async def judge_claims(
             {"role": "user", "content": "\n\n".join(blocks)},
         ],
         temperature=0,
-        max_tokens=60 + 50 * len(claims),
+        max_tokens=60 + 50 * len(claims) + reply_room(model),
     )
     raw = (resp.choices[0].message.content or "").strip()
     items = []

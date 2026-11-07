@@ -147,6 +147,77 @@ def test_resolve_keeps_the_models_id_only_when_it_agrees(index):
     assert co.resolve(index, "CD16+ monocyte", "CL:0002397")["cl_id"] is None  # misread synonym
 
 
+# CL's DC stanzas, cut from cl-basic.obo 2026-06-08: "DC1" is an exact synonym of
+# conventional DC and "DC2" of plasmacytoid DC (legacy); cDC1 / cDC2 are, by CL's own
+# term descriptions, the CD141+ and CD1c+ myeloid DCs.
+DC_STANZAS = """
+[Term]
+id: CL:0000782
+name: myeloid dendritic cell
+synonym: "mDC" EXACT []
+is_a: CL:0000990 {is_inferred="true"} ! conventional dendritic cell
+
+[Term]
+id: CL:0000990
+name: conventional dendritic cell
+synonym: "cDC" EXACT []
+synonym: "DC1" EXACT []
+synonym: "type 1 DC" EXACT []
+is_a: CL:0000451 {is_inferred="true"} ! dendritic cell
+
+[Term]
+id: CL:0002394
+name: CD141-positive myeloid dendritic cell
+is_a: CL:0000782 {is_inferred="true"} ! myeloid dendritic cell
+is_a: CL:0000784 ! plasmacytoid dendritic cell
+
+[Term]
+id: CL:0002399
+name: CD1c-positive myeloid dendritic cell
+is_a: CL:0000782 {is_inferred="true"} ! myeloid dendritic cell
+"""
+
+
+@pytest.fixture(scope="module")
+def dc_index() -> co.Index:
+    return co.Index(co.parse(FIX.read_text() + DC_STANZAS), "cl/releases/2026-06-08/cl-basic.owl")
+
+
+@pytest.mark.parametrize("label, cid", [
+    ("DC2", "CL:0002399"), ("DC2 cells", "CL:0002399"), ("cDC2", "CL:0002399"), ("cDC2s", "CL:0002399"),
+    ("DC1", "CL:0002394"), ("cDC1", "CL:0002394"),
+])
+def test_dc1_dc2_mean_cdc1_cdc2_not_the_cl_synonym(dc_index, label, cid):
+    """CellTypist "DC2" was strictly matched to pDC (CL's legacy exact synonym)."""
+    assert co.match_label(label, dc_index)[0::2] == (cid, "single_cell")
+    # Other names keep their usual match
+    assert co.match_label("pDC", dc_index)[0::2] == ("CL:0000784", "exact_synonym")
+    assert co.match_label("type 1 DC", dc_index)[0::2] == ("CL:0000990", "exact_synonym")
+
+
+def test_dc2_is_never_pdc_even_without_the_meant_term(index):
+    assert "CL:0002399" not in index.terms  # the PBMC fixture has pDC but no cDC2 term
+    assert co.match_label("DC2", index)[0::2] == (None, "none")
+    assert co.agrees(index, "DC2", "CL:0000784") is None
+
+
+def test_the_annotators_dc2_id_is_kept_only_when_it_is_cdc2(dc_index):
+    r = co.resolve(dc_index, "DC2", "CL:0000784")  # the model followed CL's synonym
+    assert (r["cl_id"], r["how"], r["source"], r["model_cl_id"]) == ("CL:0002399", "single_cell", "label", "CL:0000784")
+    r = co.resolve(dc_index, "DC2", "CL:0002399")
+    assert (r["cl_id"], r["how"], r["source"]) == ("CL:0002399", "single_cell", "model")
+    assert r["how_text"] == co.HOW_STRICT_TEXT["single_cell"]
+    assert co.agrees(dc_index, "DC1", "CL:0000990") is None  # CL's DC1 synonym: not this sense
+    assert co.agrees(dc_index, "cDC1", "CL:0002394") == "single_cell"
+
+
+def test_dc2_suggestions_lead_with_cdc2_and_leave_out_pdc(dc_index):
+    got = dc_index.suggest("DC2")
+    assert [s["id"] for s in got][:1] == ["CL:0002399"] and got[0]["how"] == "atlas"
+    assert "CL:0000784" not in [s["id"] for s in got]
+    assert [s["id"] for s in dc_index.suggest("pDC")][:1] == ["CL:0000784"]
+
+
 def test_cl_distance(index):
     assert co.cl_distance("CL:0000236", "CL:0000236", index) == 0
     assert co.cl_distance("CL:0000784", "CL:0000451", index) == 1  # pDC is_a DC

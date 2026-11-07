@@ -396,6 +396,18 @@ def test_judge_parses_verdicts_and_keeps_unknown_ids_uncertain(monkeypatch):
     assert client.sent["temperature"] == 0
     assert "enable_thinking" in json.dumps(client.sent.get("extra_body"))
     assert "Claim 0" in client.sent["messages"][1]["content"]
+    assert client.sent["max_tokens"] == 60 + 50 * 2  # V4.1-Flash: no reply room
+
+
+def test_judge_gives_a_reasoning_model_room_and_its_own_switch(monkeypatch):
+    from scview.core.llm import reply_room
+
+    client = _FakeClient('[{"id": 0, "verdict": "supported"}]')
+    _patch_openai(monkeypatch, client)
+    asyncio.run(claims.judge_claims([{"id": 0, "text": "x", "evidence": "y"}], "key",
+                                    "openai/gpt-oss-120b", "http://x"))
+    assert client.sent["max_tokens"] == 60 + 50 + reply_room("openai/gpt-oss-120b") > 1000
+    assert client.sent["extra_body"] == {"reasoning_effort": "low"}
 
 
 KANG_TYPES = ["CD4 Naive T", "CD14 Mono", "CD14 Mono", "B", "CD8 T", "NK", "FCGR3A Mono",

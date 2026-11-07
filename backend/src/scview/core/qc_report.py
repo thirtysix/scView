@@ -32,7 +32,7 @@ from scview.core import cluster_qc, doublet_source, doublets, seq_metrics, sex_c
 from scview.core.anndata_adaptor import per_cell_qc
 from scview.core.assessor import _check_normalization, assess_preprocessing
 from scview.core.assistant import DEEPINFRA_BASE_URL, DEFAULT_MODEL, ChatSource
-from scview.core.llm import chat_extra
+from scview.core.llm import chat_extra, reply_room
 from scview.core.confounding import BATCH_RE, CONDITION_RE, in_design
 from scview.core.pseudobulk import MIN_CELLS_PER_SAMPLE, MIN_REPLICATES
 
@@ -571,7 +571,7 @@ async def report_events(
             **chat_extra(model),
             messages=_messages(facts),
             temperature=0.2,
-            max_tokens=900,
+            max_tokens=900 + reply_room(model),
             stream=True,
         )
         async for chunk in stream:

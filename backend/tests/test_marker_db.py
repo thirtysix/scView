@@ -188,6 +188,24 @@ def test_obo_keeps_live_cl_terms_with_exact_synonyms_and_parents():
     assert terms["CL:0000236"] == ("B cell", ["B lymphocyte"], ["CL:0000542"])  # BROAD synonym left out
 
 
+def test_dc2_label_is_cdc2_not_the_legacy_pdc_synonym():
+    """CL lists "DC2" as an exact synonym of pDC; a CellTypist DC2 cluster is cDC2."""
+    onto = mn.Ontology({
+        "CL:0000784": ("plasmacytoid dendritic cell", ["DC2", "pDC"], []),
+        "CL:0000990": ("conventional dendritic cell", ["DC1", "cDC"], []),
+        "CL:0002394": ("CD141-positive myeloid dendritic cell", [], ["CL:0000990"]),
+        "CL:0002399": ("CD1c-positive myeloid dendritic cell", [], ["CL:0000990"]),
+    })
+    assert onto.label_ids("DC2") == onto.label_ids("cDC2s") == {"CL:0002399"}
+    assert onto.label_ids("DC1", abbr=True) == {"CL:0002394"}
+    assert onto.label_ids("pDC") == {"CL:0000784"}
+    m = mn.Matcher({"Plasmacytoid dendritic cell": "CL:0000784", "Myeloid DC (CD1c+)": "CL:0002399"}, onto)
+    assert m.match("DC2") == (["Myeloid DC (CD1c+)"], "cl")
+    # Without the meant term, nothing (never pDC)
+    bare = mn.Ontology({"CL:0000784": ("plasmacytoid dendritic cell", ["DC2"], [])})
+    assert bare.label_ids("DC2") == set()
+
+
 # --- fetch and store -------------------------------------------------------------
 
 
