@@ -103,14 +103,30 @@ MAX_GROUPS = 100
 RESOLUTION_TRIES = 6  # quick counts of the training graph's clusters to match the cluster count
 PROBE_ITERATIONS = 2  # Leiden passes for a quick count
 
-# Time (Kang copy, 13,836 cells, 2 cores, measured 2026-10-21, server warm): the
-# fit and the split 7-8 s, the training run 18-45 s (Leiden is slower at high
-# resolution), matching the cluster count 20-45 s, the pairs 0.15 s each: 83 s at
-# resolution 1.0, 100 s at 2.5. The first run in a process also compiles the
-# neighbour search (``first_run_seconds``): 2026-11-06, Kang at resolution 0.5,
-# 63 s in a restarted server against 33 s after its pipeline had run.
-EXTRA_SECONDS_PER_1K_CELLS = 4.5  # on top of one variable-gene setting's estimate
-SECONDS_PER_PAIR = 0.15
+# Time, warm (2 CPUs with 2 BLAS threads, measured 2026-11-07 on Kang, 13,836 cells, its
+# 4,000- and 8,000-cell subsamples and paul15, 2,730 cells; resolutions 0.5, 1 and 2):
+# the overdispersion fit 2-2.3 s whatever the size, the split 0.08 s per 1,000 cells, the
+# training half's PCs and graph as a variable-gene setting's, then Leiden on the training
+# graph, slower than on the dataset's own and more so the larger it is (Kang at 0.5:
+# 6.9 s against 5.1); matching the cluster count 2-4 quick counts (two Leiden passes,
+# Kang 3.2 s each) and Leiden again at the resolution found (Kang 0.5 -> 1.19: 10 s);
+# then about 1.5 pairs per cluster at 0.02 s each. Kang at 0.5: 34 s (estimate 31; the
+# 2026-10-21 model said 84). Whether the count needs matching is known only once the
+# training half is clustered, so the estimate always includes it: a run that skips it
+# takes about half (Kang by stimulation at 0.5: 16 s; 8,000 cells at 0.5: 7 s). Leiden on
+# a half-depth graph varies most at a high resolution: Kang at 2.0 took 76 s (estimate
+# 51). The first run in a process also compiles the neighbour search
+# (``first_run_seconds``): 2026-11-06, Kang at resolution 0.5, 63 s in a restarted server
+# against 33 s after its pipeline had run.
+THETA_SECONDS = 2.2
+SPLIT_SECONDS_PER_1K_CELLS = 0.08
+TRAIN_LEIDEN_SECONDS = 0.04  # x (cells / 1,000) ^ TRAIN_LEIDEN_POWER x (1 + 2 x resolution)
+TRAIN_LEIDEN_POWER = 1.6
+PROBES = 3  # quick counts while matching the cluster count (2-4 measured)
+PROBE_FACTOR = 1.15  # a quick count on the training graph against hs.cluster_seconds' two passes
+MATCH_RESOLUTION_FACTOR = 1.4  # the resolution found against the checked one (1.1-2.4 measured)
+PAIRS_PER_GROUP = 1.5
+SECONDS_PER_PAIR = 0.022
 first_run_seconds = hs.first_run_seconds  # numba's compile still to come (core/numba_warm.py)
 
 
@@ -176,10 +192,34 @@ def _plan(adata, reference: str | None, resolution: float | None, method: str | 
     return Plan(rec.reference, True, codes, names, rec, list(rec.notes))
 
 
-def estimate_seconds(n_cells: int, rec: hs.Recorded, n_groups: int) -> float:
-    pairs = min(MAX_PAIRS, n_groups * MAX_NEIGHBOURS)
-    return round(hs.estimate_seconds(n_cells, 1, rec) + EXTRA_SECONDS_PER_1K_CELLS * n_cells / 1000
-                 + SECONDS_PER_PAIR * pairs, 1)
+def _train_cluster_seconds(n_cells: int, rec: hs.Recorded, resolution: float) -> float:
+    """One clustering of the training half's graph at ``resolution``."""
+    if rec.method == "leiden" and rec.leiden_iterations == leiden.N_ITERATIONS:
+        k = n_cells / 1000
+        return (hs.LEIDEN_START_SECONDS
+                + TRAIN_LEIDEN_SECONDS * k ** TRAIN_LEIDEN_POWER * (1 + 2 * resolution))
+    return hs.cluster_seconds(n_cells, rec.method, resolution, rec.leiden_iterations)
+
+
+def train_seconds(n_cells: int, rec: hs.Recorded, match_count: bool = True) -> float:
+    """The split and the training half's run (also count-split markers'): the
+    overdispersion fit, the split, its PCs, graph and clustering, and matching the
+    cluster count (counted always: whether it is needed shows only once it ran)."""
+    k = n_cells / 1000
+    out = (THETA_SECONDS + SPLIT_SECONDS_PER_1K_CELLS * k + hs.embed_seconds(n_cells)
+           + (hs.HARMONY_SECONDS_PER_1K_CELLS * k if rec.batch_key else 0.0)
+           + hs.graph_seconds(n_cells) + _train_cluster_seconds(n_cells, rec, rec.resolution))
+    if match_count:
+        probe = hs.cluster_seconds(n_cells, rec.method, rec.resolution, PROBE_ITERATIONS)
+        out += (PROBES * PROBE_FACTOR * probe
+                + _train_cluster_seconds(n_cells, rec, MATCH_RESOLUTION_FACTOR * rec.resolution))
+    return out
+
+
+def estimate_seconds(n_cells: int, rec: hs.Recorded, n_groups: int,
+                     match_count: bool = True) -> float:
+    pairs = min(MAX_PAIRS, PAIRS_PER_GROUP * n_groups)
+    return round(train_seconds(n_cells, rec, match_count) + SECONDS_PER_PAIR * pairs, 1)
 
 
 # ---------------------------------------------------------------------------
@@ -605,7 +645,8 @@ def iter_merge_check(adata, p: Plan, stop: Callable[[], bool] | None = None,
         "reference": p.reference,
         "reference_exists": p.exists,
         "recorded": rec.to_dict(),
-        "estimate_seconds": 0.0 if cached else estimate_seconds(adata.n_obs, rec, len(p.names)),
+        "estimate_seconds": 0.0 if cached else estimate_seconds(adata.n_obs, rec, len(p.names),
+                                                                p.match_count),
         "cached": cached is not None,
     }
     if cached is not None:

@@ -175,6 +175,16 @@ def test_grounding_names_groups_that_keep_few_markers():
     assert sm.grounding_lines(ad_, pd.DataFrame({"other": [1]})) == ([], None)
 
 
+def test_estimate_is_the_merge_checks_training_run_and_the_tests():
+    from tests.test_hvg_sensitivity import _rec
+
+    # 2 CPUs with 2 BLAS threads, warm (2026-11-07): Kang at 0.5 (13 groups) 35 s, which
+    # matched the cluster count on the training half (the old model said 43.5).
+    est = sm.estimate_seconds(13_836, _rec())
+    assert abs(est - 34.8) <= 0.2 * 34.8
+    assert est == pytest.approx(mc.train_seconds(13_836, _rec()) + 0.03 * 13.836, abs=0.1)
+
+
 # --- endpoints ------------------------------------------------------------------------------
 
 
