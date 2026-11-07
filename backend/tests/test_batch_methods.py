@@ -352,6 +352,26 @@ def test_estimate_follows_the_kang_timings_and_counts_compilation_once(monkeypat
     assert bc.bbknn_warm() and bc.estimate_seconds(2_700) == pytest.approx(bc.estimate_seconds(2_700, warm=True))
 
 
+def test_estimate_counts_the_batches():
+    # 2 CPUs, warm (2026-11-07): Kang by stimulation (2 batches) 6.4 s, by 4 donor groups
+    # 16.2 s, by donor (8) 18.9 s, all of the difference Scanorama's; 8,000 of its cells
+    # 2.6 / 5.9 / 7.1 s. By donor and stimulation (16): 12.6 s, estimated 16.3.
+    for n, b, measured in [(13_836, 2, 6.4), (13_836, 4, 16.2), (13_836, 8, 18.9),
+                           (8_000, 2, 2.6), (8_000, 4, 5.9), (8_000, 8, 7.1)]:
+        est = bc.estimate_seconds(n, warm=True, n_batches=b)
+        assert abs(est - measured) <= 0.2 * measured, (n, b, est, measured)
+    two = bc.estimate_seconds(13_836, warm=True)
+    assert bc.estimate_seconds(13_836, warm=True, n_batches=2) == two
+    ratio = bc.estimate_seconds(13_836, warm=True, n_batches=8) / two
+    assert ratio == pytest.approx(18.9 / 6.4, rel=0.2)
+    assert two < bc.estimate_seconds(13_836, warm=True, n_batches=3) < bc.estimate_seconds(
+        13_836, warm=True, n_batches=4)
+    # only Scanorama's time depends on the batches
+    for m in ("none", "harmony", "bbknn"):
+        assert bc.estimate_seconds(13_836, [m], warm=True, n_batches=8) == bc.estimate_seconds(
+            13_836, [m], warm=True)
+
+
 def test_recommend_without_labels_or_without_mixing():
     rows = [_row("none", 0.1, None, 0.1), _row("harmony", 0.7, None, 0.5),
             _row("scanorama", 0.8, None, 4)]
@@ -392,6 +412,11 @@ async def test_compare_endpoints(client, dataset_manager):
     assert info["estimate_seconds"] > 0 and "Luecken" in info["background"]
     assert info["first_run"] == (info["compile_seconds"] > 0)
     assert info["compile_seconds"] <= info["estimate_seconds"]
+    # the estimate is the dataset's own batch count's
+    a = _adata()
+    assert info["n_batches"] == a.obs["batch"].nunique()
+    expected = bc.estimate_seconds(a.n_obs, n_batches=info["n_batches"])
+    assert info["estimate_seconds"] == round(expected, 1)
     r = await client.get(f"{API}/datasets/{did}/batch/compare", params={"batch_key": "nope"})
     assert r.json()["available"] is False and "not found" in r.json()["reason"]
 
