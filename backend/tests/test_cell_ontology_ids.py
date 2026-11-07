@@ -239,6 +239,19 @@ def test_split_cl_id():
     assert _split_cl_id("NK cells | CL:none") == ("NK cells", None)
     assert _split_cl_id("CD8+ T cells") == ("CD8+ T cells", None)
     assert _split_cl_id("Cluster CL:12") == ("Cluster CL:12", None)
+    # malformed replies seen in the annotation benchmark: nothing of the id stays in the label
+    assert _split_cl_id("Microglia | CL:00002077") == ("Microglia", None)
+    assert _split_cl_id("CL:none | CL:none") == ("", None)
+    assert _split_cl_id("Endothelial cells | CL") == ("Endothelial cells", None)
+    assert _split_cl_id("PCL") == ("PCL", None)
+
+
+def test_malformed_cl_ids_leave_no_text_in_the_labels():
+    from scview.core.pipeline import _parse_cluster_labels, _split_cl_id
+
+    raw = "0: Microglia | CL:00002077\n1: CL:none | CL:none\n2: Endothelial cells | CL\n"
+    labels = {c: _split_cl_id(lab)[0] for c, lab in _parse_cluster_labels(raw, ["0", "1", "2"]).items()}
+    assert labels == {"0": "Microglia", "1": "", "2": "Endothelial cells"}
 
 
 def test_parse_keeps_the_id_on_the_label_and_the_fallback_is_not_fooled_by_its_colon():

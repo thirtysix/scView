@@ -1730,15 +1730,21 @@ def _annotation_max_tokens(n_clusters: int) -> int:
     return min(8192, 200 + 40 * max(1, n_clusters))
 
 
-_CL_SUFFIX = re.compile(r"\s*[|(\[,;]?\s*(?:CL[:_ ]?(\d{7})|CL[:_ ]?none)\s*[)\]]?\s*$", re.I)
+_CL_SUFFIX = re.compile(r"\s*[|(\[,;]?\s*(?:CL[:_ ]?(\d{7,})|CL[:_ ]?none)\s*[)\]]?\s*$", re.I)
+# What a malformed reply leaves after the suffix is gone: "CL:none | CL:none" (no label at
+# all) or "Endothelial cells | CL" (the id cut off). Never kept in the label text.
+_CL_LEFTOVER = re.compile(r"\s*\|\s*CL\s*$|^\s*CL[:_ ]?(?:none|\d{7,})\s*$", re.I)
 
 
 def _split_cl_id(text: str) -> tuple[str, str | None]:
-    """'B cells | CL:0000236' -> ('B cells', 'CL:0000236'); 'NK | CL:none' -> ('NK', None)."""
-    m = _CL_SUFFIX.search(text or "")
-    if not m:
-        return (text or "").strip(), None
-    return text[: m.start()].strip(), (f"CL:{m.group(1)}" if m.group(1) else None)
+    """'B cells | CL:0000236' -> ('B cells', 'CL:0000236'); 'NK | CL:none' -> ('NK', None).
+
+    An id of the wrong length ('CL:00002077', seen from gemma-4) is dropped, not guessed."""
+    text = (text or "").strip()
+    m = _CL_SUFFIX.search(text)
+    label, digits = (text[: m.start()], m.group(1)) if m else (text, None)
+    cl = f"CL:{digits}" if digits and len(digits) == 7 else None
+    return _CL_LEFTOVER.sub("", label).strip(), cl
 
 
 def _record_llm_cl_ids(adata: ad.AnnData, target: str, model_ids: dict[str, str | None]) -> dict[str, Any]:

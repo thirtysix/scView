@@ -45,6 +45,9 @@ Cell-type labels carry Cell Ontology ids, the AI annotator reads numbered cluste
   extra line in the reply shifted every label by one. Each line's id is now read, "Cluster 13" no longer matches
   cluster 3, and a cluster the reply leaves out stays Unknown. The reply's length limit grows with the number of
   clusters (it was 800 tokens, about 30 clusters).
+- **A malformed Cell Ontology id in the AI annotator's reply stayed in the label** ("Microglia | CL:00002077",
+  "Endothelial cells | CL", or "CL:none" as the whole label). An id of the wrong length is dropped and nothing of it
+  is kept in the label text; a reply line with no name leaves the cluster Unknown.
 - **Start scripts no longer suggest more memory than Docker or Podman has.** The 4 GB minimum was applied after the
   cap, so a fresh Windows install with a 3.8 GB Podman machine was offered 4 GB, above what the machine has. The
   suggestion is now at most the engine's memory minus 0.5 GB; when Docker or Podman is the limit, the script says
