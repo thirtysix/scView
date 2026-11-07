@@ -6,6 +6,30 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+- **Thinking is turned off the way each chat model accepts it.** The AI annotator, co-pilot, claims judge and QC
+  report used to switch thinking off for DeepSeek only, so a `RAG_CHAT_MODEL` or annotator model from another
+  family could spend its whole reply budget thinking and answer with nothing. Probed on DeepInfra 2026-11-07:
+  GLM-5.2, Kimi, Qwen3.5/3.6/3.8, MiniMax, MiMo, Nemotron 3, Seed 2.0 and Hy4 now get `enable_thinking: false`
+  like DeepSeek. GLM-5.3 and GLM-5.3-Flash use low reasoning effort (switching thinking off made them reason
+  until the budget ran out), and gpt-oss uses low effort and gets 2,000 more reply tokens. Models that do not think
+  (DeepSeek-V3.2, Qwen3-235B Instruct, gemma, unknown models) are sent nothing extra.
+- **AI annotator: a reply cut at the token limit is asked again once** with more room, and the reply that names
+  more clusters is kept. An unfinished last line no longer becomes a label. If the reply is still cut, History
+  names the clusters left Unknown.
+- **"DC1" and "DC2" labels get the conventional DC ids.** CellTypist's DC2 is a cDC2, but the Cell Ontology lists
+  "DC2" as an exact synonym of plasmacytoid DC, so a DC2 cluster got the pDC id and the marker database check
+  compared it with pDC markers. DC1/cDC1 now map to CL:0002394 and DC2/cDC2 to CL:0002399, shown as
+  "single-cell name".
+- **Windows start script:** the API key and memory prompts keep their indent.
+
+### Changed
+- **Time estimates refit** (warm, 2 CPUs, Kang): the variable-gene check 63 s estimated against 67 s measured (was
+  122 s), the merge check and count-split markers 31 s against 34 s (was 84 s); each setting is now timed as its
+  PCs, graph and clustering. Compare batch-correction methods counts the batches: Kang by donor (8 batches) 16 s
+  against 19 s measured (was 6.4 s). `GET /batch/compare` returns `n_batches`. A merge check that turns out not to
+  need cluster-count matching still finishes sooner than estimated.
+
 ## [0.64.0] - 2026-11-07
 
 Cell-type labels carry Cell Ontology ids, the AI annotator reads numbered clusters by id, and the start scripts never offer more memory than Docker or Podman has.
