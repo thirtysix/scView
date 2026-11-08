@@ -6,6 +6,21 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- **A cut annotator reply now shows a warning under the Annotate button.** When the AI annotator's reply runs out
+  of tokens even after its retry, the card says how many clusters were left Unknown and what to do (run again,
+  fewer clusters, or a model that reasons less). Before, this showed only as a chip in History.
+- **The co-pilot's feature guide has the Cell-type annotation card**, including the `<column>_qualified` column,
+  so app questions about qualified labels get a real UI path.
+
+### Changed
+- **The AI annotator waits and asks again when the model is busy.** DeepInfra answers 429 "Model busy" for a model
+  under load; the annotation step failed on it. It now asks again after 5, 15 and 30 s, and History records
+  `llm_busy_retries` when it had to.
+- **The annotator's per-cluster QC notes no longer mention low MALAT1.** That flag fired on 6 real mouse
+  Smart-seq2 clusters (a full-length protocol with little MALAT1 in every cell) and never changed a label in the
+  negative controls. Cluster QC still shows it.
+
 ## [0.66.1] - 2026-11-08
 
 The AI annotator names both cell types of a two-lineage cluster again, as it did before 0.66.0.

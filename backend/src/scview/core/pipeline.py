@@ -45,7 +45,7 @@ from scview.core import (
 from scview.core.run_watchdog import RunCancelled, RunControl, cancelled_reason
 from scview.core.anndata_adaptor import per_cell_qc
 from scview.core.cell_cycle import near_zero_phase_calls
-from scview.core.llm import chat_extra, reply_room
+from scview.core.llm import busy_retry, chat_extra, reply_room
 from scview.core.geneset_sources import (
     ResolvedGeneSets,
     match_query_case,
@@ -1694,14 +1694,18 @@ def _annotate_llm(adata: ad.AnnData, params: PipelineParams, groupby: str, targe
     client = OpenAI(api_key=api_key, base_url="https://api.deepinfra.com/v1/openai")
     clusters = list(marker_map.keys())
 
+    busy = 0
+
     def ask(max_tokens: int) -> tuple[str, bool]:
-        resp = client.chat.completions.create(
+        nonlocal busy
+        resp, waited = busy_retry(lambda: client.chat.completions.create(
             model=model,
             **chat_extra(model),
             messages=[{"role": "user", "content": prompt}],
             temperature=0.0,
             max_tokens=max_tokens,
-        )
+        ))
+        busy += waited
         cut = getattr(resp.choices[0], "finish_reason", None) == "length"
         return _complete_lines(resp.choices[0].message.content or "", cut), cut
 
@@ -1731,6 +1735,8 @@ def _annotate_llm(adata: ad.AnnData, params: PipelineParams, groupby: str, targe
     tissue = _parse_tissue_line(raw) or hint
     if qc:
         notes["llm_qc_notes"] = len(qc)
+    if busy:  # the model answered 429 "busy" and was asked again after a wait
+        notes["llm_busy_retries"] = busy
 
     mapping, model_ids = {}, {}
     for g in marker_map:
@@ -1812,7 +1818,9 @@ def _record_llm_cl_ids(adata: ad.AnnData, target: str, model_ids: dict[str, str 
 LOW_QUALITY_LABEL = "Low-quality cells"
 _LOW_QUALITY = re.compile(r"^\s*(?:likely\s+|probable\s+)?low[-\s]?quality(?:\s+cells?)?\s*$", re.I)
 # Cluster QC flags worth a note beside a cluster's markers (core/cluster_qc.py).
-_QC_NOTE_FLAGS = ("low_quality", "high_mito", "low_genes", "low_malat1", "doublet_rich", "doublet_like")
+# Not low_malat1: it fired on 6 real mouse Smart-seq2 clusters (full-length protocol,
+# little MALAT1 everywhere) and never changed a label in the T4 controls.
+_QC_NOTE_FLAGS = ("low_quality", "high_mito", "low_genes", "doublet_rich", "doublet_like")
 
 
 def _annotation_qc_notes(adata: ad.AnnData, groupby: str) -> dict[str, str]:
@@ -1838,8 +1846,6 @@ def _annotation_qc_notes(adata: ad.AnnData, groupby: str) -> dict[str, str]:
             parts.append(f"median {row.median_genes:,.0f} genes/cell vs {t['median_genes']:,.0f} typical")
         if row.median_pct_mt is not None and t.get("median_pct_mt") is not None:
             parts.append(f"{row.median_pct_mt:.1f}% mitochondrial vs {t['median_pct_mt']:.1f}%")
-        if "low_malat1" in flags and row.median_pct_malat1 is not None:
-            parts.append(f"low MALAT1 ({row.median_pct_malat1:.2f}% of reads)")
         if "doublet_rich" in flags and row.doublet_fraction is not None:
             parts.append(f"{row.doublet_fraction:.0%} predicted doublets")
         if "doublet_like" in flags and row.doublet_like_of:
