@@ -6,6 +6,12 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+- **A paper's cluster id is no longer offered as a cell type.** CellMarker 2.0 and 3.0 list 68 "cell names" that
+  are one paper's cluster ids, such as "Rheaume et al.Nat Commun.18" and "Lake et al.Science.Ex1", each with a CL
+  id. They reached the marker-database annotator and its suggestions (found by the annotation benchmark's shuffled
+  marker control). Names containing "et al" are now left out when the database loads; no re-download is needed.
+
 ## [0.65.0] - 2026-11-07
 
 Every supported chat model answers without spending its reply budget thinking, a cut annotator reply is asked again, DC2 labels get the cDC2 id, and the variable-gene, merge and compare-methods time estimates are refit.

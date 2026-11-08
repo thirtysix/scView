@@ -323,6 +323,19 @@ def test_sources_merge_by_name_and_greek_letters_keep_types_apart(installed):
     assert "γδ T cell" in sdb.types and "TRDC" not in sdb.types["T cells"]["genes"]
 
 
+def test_a_papers_cluster_id_is_not_a_cell_type(tmp_path):
+    # CellMarker's "Rheaume et al.Nat Commun.18" (CL id and all) reached annotator suggestions.
+    p = tmp_path / "cellmarker3.tsv.gz"
+    with gzip.open(p, "wt", encoding="utf-8") as f:
+        f.write("species\tcell_type\tcl_id\tgene\tweight\tcurated_weight\n"
+                "human\tRheaume et al.Nat Commun.18\tCL:0000740\tPOU4F1\t1\t1\n"
+                "human\tLake et al.Science.Ex1\tCL:0000540\tSLC17A7\t1\t1\n"
+                "human\tRetinal ganglion cell\tCL:0000740\tRBPMS\t2\t2\n")
+    for curated in (False, True):
+        types = mdb._read_types(p, curated=curated)["human"]
+        assert set(types) == {"Retinal ganglion cell"} and types["Retinal ganglion cell"]["genes"] == ["RBPMS"]
+
+
 def test_name_matching_modes(installed):
     m = mdb.load(installed).species("human").matcher
     assert m.match("T-cells") == (["T cells"], "exact")  # not the γδ T cells
