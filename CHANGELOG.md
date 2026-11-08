@@ -6,6 +6,10 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.66.0] - 2026-11-08
+
+Clusters that share a cell-type label, or carry a mixture or no-type label, get the genes that set them apart, the AI annotator can call a cluster "Low-quality cells" with per-cluster QC numbers to go on, and paper cluster ids from CellMarker are no longer offered as cell types.
+
 ### Added
 - **Marker qualifiers for labels that do not tell clusters apart.** When several clusters get the same cell-type
   label, or a cluster's label is a mixture, doublets, "Unknown" or "Low-quality cells", the annotation step also
