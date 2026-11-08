@@ -201,3 +201,12 @@ def test_replay_writes_the_qualified_column_from_the_record():
     del a.uns["cell_type_qualifiers"]
     assert "cell_type_qualified" not in "\n".join(R._cell_type_annotation(
         {"annotation_method": "llm", "annotation_groupby": "cluster"}, R._Ctx(a)).code)
+
+
+def test_the_mixture_rule_is_the_last_naming_rule():
+    """Placed before the low-quality text (v0.66.0), the default model named one parent of a
+    two-lineage cluster more often (annotation benchmark T4 after-arm)."""
+    p = P._annotation_prompt("0: CD3D")
+    mixture, low, out = p.index("name the mixture"), p.index("'Low-quality cells | CL:none'"), p.index("Output one line")
+    assert low < mixture < out
+    assert "name the cell type it is in" not in p
