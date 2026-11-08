@@ -17,9 +17,6 @@ All notable changes to scView are documented here. The format is based on
 - **The AI annotator waits and asks again when the model is busy.** DeepInfra answers 429 "Model busy" for a model
   under load; the annotation step failed on it. It now asks again after 5, 15 and 30 s, and History records
   `llm_busy_retries` when it had to.
-- **The annotator's per-cluster QC notes no longer mention low MALAT1.** That flag fired on 6 real mouse
-  Smart-seq2 clusters (a full-length protocol with little MALAT1 in every cell) and never changed a label in the
-  negative controls. Cluster QC still shows it.
 
 ## [0.66.1] - 2026-11-08
 

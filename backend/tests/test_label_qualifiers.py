@@ -212,24 +212,6 @@ def test_the_mixture_rule_is_the_last_naming_rule():
     assert "name the cell type it is in" not in p
 
 
-def test_low_malat1_alone_gets_no_qc_note(monkeypatch):
-    """low_malat1 fired on real mouse Smart-seq2 clusters: never sent to the annotator."""
-    from scview.core import cluster_qc
-
-    real = cluster_qc.cluster_qc
-
-    def flagged(adata, groupby):
-        report = real(adata, groupby)
-        for row in report.clusters:
-            if str(row.group) == "1":
-                row.flags = ["low_malat1"]
-        return report
-
-    monkeypatch.setattr(cluster_qc, "cluster_qc", flagged)
-    notes = P._annotation_qc_notes(_qc_data(), "cluster")
-    assert set(notes) == {"4"} and "MALAT1" not in notes["4"]
-
-
 def test_annotator_asks_again_when_the_model_is_busy(monkeypatch):
     """DeepInfra's 429 "Model busy" failed the step; now it waits and asks again."""
     from scview.core import llm

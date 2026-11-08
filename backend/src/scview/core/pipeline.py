@@ -1818,9 +1818,9 @@ def _record_llm_cl_ids(adata: ad.AnnData, target: str, model_ids: dict[str, str 
 LOW_QUALITY_LABEL = "Low-quality cells"
 _LOW_QUALITY = re.compile(r"^\s*(?:likely\s+|probable\s+)?low[-\s]?quality(?:\s+cells?)?\s*$", re.I)
 # Cluster QC flags worth a note beside a cluster's markers (core/cluster_qc.py).
-# Not low_malat1: it fired on 6 real mouse Smart-seq2 clusters (full-length protocol,
-# little MALAT1 everywhere) and never changed a label in the T4 controls.
-_QC_NOTE_FLAGS = ("low_quality", "high_mito", "low_genes", "doublet_rich", "doublet_like")
+# low_malat1 stays although it fires on real mouse Smart-seq2 clusters: leaving it out
+# (2026-11-09) cut visible-doublet naming in the T4 lung set from 52/54 to 46/54.
+_QC_NOTE_FLAGS = ("low_quality", "high_mito", "low_genes", "low_malat1", "doublet_rich", "doublet_like")
 
 
 def _annotation_qc_notes(adata: ad.AnnData, groupby: str) -> dict[str, str]:
@@ -1846,6 +1846,8 @@ def _annotation_qc_notes(adata: ad.AnnData, groupby: str) -> dict[str, str]:
             parts.append(f"median {row.median_genes:,.0f} genes/cell vs {t['median_genes']:,.0f} typical")
         if row.median_pct_mt is not None and t.get("median_pct_mt") is not None:
             parts.append(f"{row.median_pct_mt:.1f}% mitochondrial vs {t['median_pct_mt']:.1f}%")
+        if "low_malat1" in flags and row.median_pct_malat1 is not None:
+            parts.append(f"low MALAT1 ({row.median_pct_malat1:.2f}% of reads)")
         if "doublet_rich" in flags and row.doublet_fraction is not None:
             parts.append(f"{row.doublet_fraction:.0%} predicted doublets")
         if "doublet_like" in flags and row.doublet_like_of:
