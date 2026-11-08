@@ -6,6 +6,42 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.66.0] - 2026-11-08
+
+Clusters that share a cell-type label, or carry a mixture or no-type label, get the genes that set them apart, the AI annotator can call a cluster "Low-quality cells" with per-cluster QC numbers to go on, and paper cluster ids from CellMarker are no longer offered as cell types.
+
+### Added
+- **Marker qualifiers for labels that do not tell clusters apart.** When several clusters get the same cell-type
+  label, or a cluster's label is a mixture, doublets, "Unknown" or "Low-quality cells", the annotation step also
+  writes `<column>_qualified` with the genes that set each such cluster apart: "Monocytes (CCL8+ RSAD2+)" for
+  Kang's stimulated monocytes beside "Monocytes (IL8+ CLEC5A+)" for the controls, and "T cells (DNAJB6+ HSPH1+)"
+  for the heat-shock T cells beside "T cells (SH3BGRL3+ CD3D+)". A cluster sharing its label is compared with
+  the others of that label, pooled; a lone mixture or no-type label with all other clusters. A gene stands out
+  only when it is detected in at least half the cluster, in 30 points more of it than of the clusters compared
+  with, and its mean log expression is at least 1 higher; at most two genes, and a gene the compared clusters
+  express and this one does not (`CD4-`) only in a slot left free. Ribosomal, mitochondrial and unnamed genes
+  (Ensembl ids, LINC, antisense, Gm/Rik) are never used. Nothing standing out leaves the plain label. The labels
+  themselves, and their Cell Ontology ids, are unchanged. The record (`uns["<column>_qualifiers"]`) keeps each
+  cluster's genes and what it was compared with; renaming a label works them out again, and replay scripts
+  write the column from the record.
+- **The AI annotator can answer "Low-quality cells".** Clusters that cluster QC flags as damaged cells or
+  doublets (low quality, high % mito, few genes, low MALAT1, doublet-rich, doublet-like) are sent with a short QC
+  note beside their markers, e.g. "median 31 genes/cell vs 2,046 typical; 97.1% mitochondrial vs 10.0%": the
+  marker list leaves mitochondrial genes out, so the model could not see high mito before. The prompt now allows
+  "Low-quality cells" for a cluster with no lineage genes whose markers are mostly mitochondrial-encoded or
+  nuclear-retained transcripts, or whose QC note says few genes and high mito, and says that a QC note alone is
+  not enough (cardiomyocytes, hepatocytes and kidney tubule cells have high mito by nature) and that a
+  heat-shock or stress program is a state of living cells, not low quality. The label gets no Cell Ontology id.
+  In the annotation benchmark's negative controls (T4) every model had called a mito-high cluster "Activated
+  CD14+ monocytes". Live: pbmc 1k without filtering names its 97 %-mito cluster "Low-quality cells"; Kang's
+  heat-shock T cells, which an earlier draft of this prompt called low quality, stay T cells.
+
+### Fixed
+- **A paper's cluster id is no longer offered as a cell type.** CellMarker 2.0 and 3.0 list 68 "cell names" that
+  are one paper's cluster ids, such as "Rheaume et al.Nat Commun.18" and "Lake et al.Science.Ex1", each with a CL
+  id. They reached the marker-database annotator and its suggestions (found by the annotation benchmark's shuffled
+  marker control). Names containing "et al" are now left out when the database loads; no re-download is needed.
+
 ## [0.65.0] - 2026-11-07
 
 Every supported chat model answers without spending its reply budget thinking, a cut annotator reply is asked again, DC2 labels get the cDC2 id, and the variable-gene, merge and compare-methods time estimates are refit.

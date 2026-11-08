@@ -7,7 +7,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from scview.dependencies import get_dataset_manager
-from scview.core import category_order, cell_ontology, large_layout
+from scview.core import category_order, cell_ontology, label_qualifiers, large_layout
 from scview.core.dataset_manager import DatasetManager
 from scview.core.arrow_serializer import series_to_arrow_ipc
 from scview.core.obs_writes import dataset_edit, edit_room, editable, save_edit, uns_snapshot
@@ -268,6 +268,7 @@ async def rename_obs_category(
             _follow_rename(adata, column, body.old, new, merge)
             category_order.follow_rename(adata, column, body.old, new, merge)
             cell_ontology.follow_rename(adata, column, body.old, new, merge)
+            label_qualifiers.follow_rename(adata, column, large=large_layout.is_large(adata))
             # A full write (markers are edited in place), beside the file then swapped in.
             save_edit(adaptor, adata, output_path)
 

@@ -897,14 +897,22 @@ def status(dest: Path, *, auto_download: bool | None = None) -> dict:
 # ---------------------------------------------------------------------------
 
 
+# CellMarker 2.0 and 3.0 carry 68 cell names that are one paper's cluster ids ("Lake et
+# al.Science.Ex1", "Rheaume et al.Nat Commun.18"), each with a CL id. They are not cell
+# types, and one reached the annotator as a suggestion, so they are left out at load.
+# Not renamed to their CL term: 40 retinal clusters would pour their subtype genes
+# into the real retinal ganglion cell type.
+CITATION_NAME = re.compile(r"\bet al\b", re.IGNORECASE)
+
+
 def _read_types(path: Path, curated: bool = False) -> dict[str, dict[str, dict]]:
     """species -> cell type -> {"cl", "w": {gene: weight}, "genes": best first}; with
-    ``curated``, from the curated rows' weights only."""
+    ``curated``, from the curated rows' weights only. Citation-shaped names are skipped."""
     out: dict[str, dict[str, dict]] = defaultdict(dict)
     with gzip.open(path, "rt", newline="", encoding="utf-8") as f:
         for r in csv.DictReader(f, delimiter="\t"):
             wt = float(r.get("curated_weight") or r["weight"]) if curated else float(r["weight"])
-            if wt <= 0:
+            if wt <= 0 or CITATION_NAME.search(r["cell_type"]):
                 continue
             t = out[r["species"]].setdefault(r["cell_type"], {"cl": r["cl_id"], "w": {}})
             g = r["gene"]

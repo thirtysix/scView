@@ -358,6 +358,14 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
           </span>
         )}
       </div>
+      {lastWritten && !busy && hasColumn(`${lastWritten}_qualified`) && (
+        <p className="text-[11px] text-slate-500">
+          Also wrote{" "}
+          <code className="rounded bg-slate-100 px-1 font-mono">{lastWritten}_qualified</code>: where clusters
+          share a label, or a label is a mixture or no cell type, it adds the genes that set each cluster apart,
+          e.g. &quot;Monocytes (CCL8+ RSAD2+)&quot; (+ higher, - lower than the clusters it is compared with).
+        </p>
+      )}
       {datasetId && summaryColumn && (
         <CellTypistSummary datasetId={datasetId} column={summaryColumn} refreshKey={ctRuns} />
       )}

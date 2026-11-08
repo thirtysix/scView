@@ -2714,8 +2714,31 @@ adata.obs.drop(columns=list(score_cols.values()), inplace=True)
     else:
         return Snippet(UNKNOWN, [f"# Unknown annotation method {comment_text(method, 40)}. Recorded:",
                                  *_param_comment(p)], "unknown annotation method")
+    qualified = _qualified_mapping(ctx, target)
+    if qualified:
+        code += [
+            "# Marker qualifiers scView gave shared or mixture labels (core/label_qualifiers.py),",
+            "# written in from the record.",
+            f"qualified = {_lit(qualified)}",
+            f"adata.obs[{_lit(target + '_qualified')}] = adata.obs[groupby].astype(str).map(",
+            "    qualified).astype(\"category\")",
+        ]
     code.append(f"markers_for(adata, {_lit(target)})")
     return Snippet(status, code, note)
+
+
+def _qualified_mapping(ctx: _Ctx, target: str) -> dict[str, str]:
+    """{cluster: qualified label} from the dataset's qualifier record, or {}."""
+    from scview.core import label_qualifiers
+
+    if ctx.adata is None:
+        return {}
+    rec = label_qualifiers.read(ctx.adata, target)
+    if not rec:
+        return {}
+    clusters = rec.get("clusters") or {}
+    labels = label_qualifiers.cluster_labels(ctx.adata, str(rec.get("groupby") or ""), target) or {}
+    return {g: label_qualifiers.qualified_label(lab, clusters.get(g)) for g, lab in labels.items()}
 
 
 def _marker_db_mapping(p: dict, ctx: _Ctx, target: str) -> dict[str, str] | None:
