@@ -6,6 +6,10 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.67.0] - 2026-11-09
+
+The AI annotator waits out a busy model instead of failing, and says on the card when its reply was cut short.
+
 ### Added
 - **A cut annotator reply now shows a warning under the Annotate button.** When the AI annotator's reply runs out
   of tokens even after its retry, the card says how many clusters were left Unknown and what to do (run again,
