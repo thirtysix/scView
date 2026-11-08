@@ -6,6 +6,20 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.66.1] - 2026-11-08
+
+The AI annotator names both cell types of a two-lineage cluster again, as it did before 0.66.0.
+
+### Fixed
+- **0.66.0's low-quality text made the default annotator name one parent of a doublet cluster.** The mixture rule
+  sat before the new low-quality text, which ended with "name the cell type it is in". The mixture rule is now the
+  last naming rule ("even when one lineage is stronger or the tissue suggests one of them"), and the stress
+  sentence says "name the cell type under the stress genes". On synthetic doublets of pairs and datasets the
+  problem was not found on (Zheng sorted PBMC and Tabula Sapiens liver; 6 visible doublet groups, 2 tissue-hint
+  settings, 3 repeats), DeepSeek-V4.1-Flash named both parents in 14 of 36 runs with 0.66.0, 25 with 0.65.0 and 29
+  with this fix. The low-quality answer is unchanged: the mito-high control cluster is still "Low-quality cells"
+  in 6 of 6 runs for each DeepSeek model, and clean clusters score as before.
+
 ## [0.66.0] - 2026-11-08
 
 Clusters that share a cell-type label, or carry a mixture or no-type label, get the genes that set them apart, the AI annotator can call a cluster "Low-quality cells" with per-cluster QC numbers to go on, and paper cluster ids from CellMarker are no longer offered as cell types.
