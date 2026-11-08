@@ -1687,7 +1687,9 @@ def _annotate_llm(adata: ad.AnnData, params: PipelineParams, groupby: str, targe
     from openai import OpenAI
 
     hint = params.annotation_tissue.strip()
-    listing = "\n".join(f"{g}: {', '.join(genes)}" for g, genes in marker_map.items())
+    qc = _annotation_qc_notes(adata, groupby)
+    listing = "\n".join(f"{g}: {', '.join(genes)}" + (f" [QC: {qc[str(g)]}]" if str(g) in qc else "")
+                        for g, genes in marker_map.items())
     prompt = _annotation_prompt(listing, hint, targeted_panel.prompt_line(adata))
     client = OpenAI(api_key=api_key, base_url="https://api.deepinfra.com/v1/openai")
     clusters = list(marker_map.keys())
@@ -1727,10 +1729,14 @@ def _annotate_llm(adata: ad.AnnData, params: PipelineParams, groupby: str, targe
                 f"reply cut at {budget:,} tokens: {len(missing)} of {len(clusters)} clusters left Unknown "
                 f"({', '.join(missing[:10])}{', ...' if len(missing) > 10 else ''})")
     tissue = _parse_tissue_line(raw) or hint
+    if qc:
+        notes["llm_qc_notes"] = len(qc)
 
     mapping, model_ids = {}, {}
     for g in marker_map:
         label, cid = _split_cl_id(labels.get(str(g), "Unknown"))
+        if _LOW_QUALITY.match(label):
+            label, cid = LOW_QUALITY_LABEL, None
         mapping[str(g)] = _label_case(label or "Unknown")
         if cid and not model_ids.get(mapping[str(g)]):
             model_ids[mapping[str(g)]] = cid
@@ -1803,6 +1809,45 @@ def _record_llm_cl_ids(adata: ad.AnnData, target: str, model_ids: dict[str, str 
             "cl_version": rec["version"]}
 
 
+LOW_QUALITY_LABEL = "Low-quality cells"
+_LOW_QUALITY = re.compile(r"^\s*(?:likely\s+|probable\s+)?low[-\s]?quality(?:\s+cells?)?\s*$", re.I)
+# Cluster QC flags worth a note beside a cluster's markers (core/cluster_qc.py).
+_QC_NOTE_FLAGS = ("low_quality", "high_mito", "low_genes", "low_malat1", "doublet_rich", "doublet_like")
+
+
+def _annotation_qc_notes(adata: ad.AnnData, groupby: str) -> dict[str, str]:
+    """{cluster: short QC note} for the clusters cluster QC flags as damaged cells or
+    doublets, with the numbers against the typical cluster. The marker list leaves
+    mitochondrial genes out, so without it the annotator cannot see high mito.
+    Best effort: {} when cluster QC cannot run."""
+    from scview.core import cluster_qc
+
+    try:
+        report = cluster_qc.cluster_qc(adata, groupby)
+    except Exception as exc:
+        logger.info("Annotation QC notes skipped: %s", exc)
+        return {}
+    t = report.typical
+    out: dict[str, str] = {}
+    for row in report.clusters:
+        flags = [f for f in row.flags if f in _QC_NOTE_FLAGS]
+        if not flags:
+            continue
+        parts = []
+        if row.median_genes is not None and t.get("median_genes"):
+            parts.append(f"median {row.median_genes:,.0f} genes/cell vs {t['median_genes']:,.0f} typical")
+        if row.median_pct_mt is not None and t.get("median_pct_mt") is not None:
+            parts.append(f"{row.median_pct_mt:.1f}% mitochondrial vs {t['median_pct_mt']:.1f}%")
+        if "low_malat1" in flags and row.median_pct_malat1 is not None:
+            parts.append(f"low MALAT1 ({row.median_pct_malat1:.2f}% of reads)")
+        if "doublet_rich" in flags and row.doublet_fraction is not None:
+            parts.append(f"{row.doublet_fraction:.0%} predicted doublets")
+        if "doublet_like" in flags and row.doublet_like_of:
+            parts.append("markers look like a mix of clusters " + " and ".join(row.doublet_like_of))
+        out[str(row.group)] = "; ".join(parts + ["flagged " + ", ".join(f.replace("_", " ") for f in flags)])
+    return out
+
+
 def _annotation_prompt(listing: str, tissue_hint: str = "", panel_line: str = "") -> str:
     """The marker-based annotation prompt.
 
@@ -1825,7 +1870,17 @@ def _annotation_prompt(listing: str, tissue_hint: str = "", panel_line: str = ""
         "even with NKG7/GZMB; plasmacytoid dendritic cells (LILRA4, IL3RA, CLEC4C, TCF4, IRF7) "
         "are not plasma cells (MZB1, XBP1, SDC1 with high immunoglobulin genes), though both "
         "express JCHAIN. If a cluster shows two lineages, name the mixture (e.g. "
-        "'NK cells / CD8+ T cells'). Output one line per cluster as "
+        "'NK cells / CD8+ T cells'). "
+        "Some clusters carry a '[QC: ...]' note after their markers, comparing them with the "
+        "typical cluster. A cluster of damaged or dying cells is not a cell type: when its markers hold no "
+        "lineage-defining genes and are mostly mitochondrial-encoded or nuclear-retained transcripts "
+        "(MTRNR2L genes, NEAT1, MALAT1), or when its QC note says few genes and high mitochondrial "
+        "RNA and its markers do not name a type, answer 'Low-quality cells | CL:none'. A QC note "
+        "alone is not enough: some cell types have high mitochondrial RNA by nature "
+        "(cardiomyocytes, hepatocytes, kidney tubule cells), so name the type when its lineage "
+        "genes are clear. A heat-shock, stress or activation program (HSPA1A, DNAJB1, FOS, JUN, "
+        "NR4A1) is a state of living cells, not low quality: name the cell type it is in. "
+        "Output one line per cluster as "
         "'cluster_id: cell type | CL id', with concise standard cell-type names and the "
         "Cell Ontology id of that cell type (e.g. 'B cells | CL:0000236'; 'CL:none' when "
         "no term fits or you are unsure), and nothing else.\n\n"
@@ -2021,8 +2076,15 @@ def _run_cell_type_annotation(
     # Marker genes for the new column, so enrichment and the marker plots can use it
     # straight away. The default rank_genes_groups stays on the clustering.
     _markers_for_column(adata, target)
+    # A shared or mixture label gets the genes that set its cluster apart, in
+    # <target>_qualified beside it (core/label_qualifiers.py).
+    from scview.core import label_qualifiers
+
+    qual = label_qualifiers.apply(adata, groupby, target) if groupby else {}
+    if not groupby:
+        label_qualifiers.drop(adata, target)
     # Recorded with the step: the model's species and gene overlap (CellTypist only).
-    return {k: v for k, v in (fit or {}).items() if k != "model"} or None
+    return {**{k: v for k, v in (fit or {}).items() if k != "model"}, **qual} or None
 
 
 def drop_enrichment_cache(adata: ad.AnnData, col: str) -> None:

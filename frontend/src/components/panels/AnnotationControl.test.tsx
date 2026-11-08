@@ -86,6 +86,20 @@ describe("AnnotationControl (CellTypist)", () => {
     for (const h of ["Label", "CL id", "Match"]) expect(screen.getByText(h)).toHaveAttribute("title");
   });
 
+  it("points to the qualified column when the run wrote one, and not otherwise", async () => {
+    const onAnnotate = vi.fn().mockResolvedValue(undefined);
+    render(<AnnotationControl onAnnotate={onAnnotate} running={false} species="human" />);
+    fireEvent.click(screen.getByText("Annotate cell types"));
+    await screen.findByTestId("ontology-ids");
+    expect(screen.queryByText(/Also wrote/)).toBeNull();
+    useDatasetStore.setState({
+      currentDataset: { ...DATASET, obs_columns: [...DATASET.obs_columns,
+        { name: "paul15_clusters_celltypeAnno_qualified", dtype: "category", n_unique: 6 }] } as DatasetInfo,
+    });
+    expect(await screen.findByText(/Also wrote/)).toHaveTextContent(
+      "paul15_clusters_celltypeAnno_qualified: where clusters share a label");
+  });
+
   it("shows the pipeline's cell_type column when the output column does not exist yet", async () => {
     useDatasetStore.setState({
       currentDataset: { ...DATASET, obs_columns: [...DATASET.obs_columns, { name: "cell_type", dtype: "category", n_unique: 9 }] } as DatasetInfo,
