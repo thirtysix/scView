@@ -210,3 +210,35 @@ def test_the_mixture_rule_is_the_last_naming_rule():
     mixture, low, out = p.index("name the mixture"), p.index("'Low-quality cells | CL:none'"), p.index("Output one line")
     assert low < mixture < out
     assert "name the cell type it is in" not in p
+
+
+def test_annotator_asks_again_when_the_model_is_busy(monkeypatch):
+    """DeepInfra's 429 "Model busy" failed the step; now it waits and asks again."""
+    from scview.core import llm
+
+    calls = {"n": 0}
+
+    class _Busy(Exception):
+        status_code = 429
+
+    class _Client:
+        def __init__(self, **_):
+            self.chat = types.SimpleNamespace(completions=self)
+
+        def create(self, messages, **_):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise _Busy("Model busy, retry later")
+            reply = "tissue: blood\n0: Monocytes\n1: Monocytes\n2: T cells\n3: B cells\n4: NK cells"
+            msg = types.SimpleNamespace(content=reply)
+            return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg, finish_reason="stop")])
+
+    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_Client))
+    monkeypatch.setattr("scview.config.get_settings", lambda: types.SimpleNamespace(
+        DEEPINFRA_API_KEY="k", RAG_CHAT_MODEL="m"))
+    monkeypatch.setattr(P, "_record_llm_cl_ids", lambda adata, target, ids: {})
+    monkeypatch.setattr(llm, "BUSY_WAITS", (0.0,))
+    a = _qc_data()
+    fit = P._annotate_llm(a, P.PipelineParams(), "cluster", "cell_type")
+    assert calls["n"] == 2 and fit["llm_busy_retries"] == 1
+    assert a.obs["cell_type"].astype(str).iloc[0] == "Monocytes"

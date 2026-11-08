@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useState } from "react";
 import { AlertTriangle, Tags, Loader2, Check } from "lucide-react";
 import { getCellTypistModels, getCellTypistSummary, type CellTypistModel } from "@/api/annotation";
 import { getLlmStatus } from "@/api/assistant";
+import { getProvenance } from "@/api/provenance";
 import { CellTypistSummary } from "@/components/panels/CellTypistSummary";
 import { AnnotationOntologyIds } from "@/components/annotation/AnnotationOntologyIds";
 import { defaultModel, orderModels, speciesMismatch, type DatasetSpecies } from "@/lib/celltypistModels";
@@ -70,6 +71,9 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
   const [targetEdited, setTargetEdited] = useState(false);
   const [annotating, setAnnotating] = useState(false);
   const [lastWritten, setLastWritten] = useState<string | null>(null);
+  // The LLM reply ran out of tokens even after the retry: some clusters are Unknown.
+  // From the step's record (`llm_reply_cut`), which History also shows.
+  const [replyCut, setReplyCut] = useState<string | null>(null);
 
   // Default the grouping once the dataset's columns are known.
   useEffect(() => {
@@ -164,9 +168,11 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
     else params.annotation_marker_sets = markerSets;
     setAnnotating(true);
     setLastWritten(null);
+    setReplyCut(null);
     try {
       await onAnnotate(params);
       setLastWritten(tgt);
+      if (method === "llm" && datasetId) setReplyCut(await lastReplyCut(datasetId, tgt));
     } finally {
       setAnnotating(false);
       setCtRuns((n) => n + 1); // another method's run forgets the column's CellTypist run
@@ -358,6 +364,18 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
           </span>
         )}
       </div>
+      {lastWritten && !busy && replyCut && (
+        <p
+          role="alert"
+          className="mt-2 flex items-start gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-800"
+        >
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>
+            The model&apos;s reply was cut short: {replyCut}. Run it again, annotate fewer clusters, or pick a
+            model that reasons less.
+          </span>
+        </p>
+      )}
       {lastWritten && !busy && hasColumn(`${lastWritten}_qualified`) && (
         <p className="text-[11px] text-slate-500">
           Also wrote{" "}
@@ -374,4 +392,20 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
       )}
     </div>
   );
+}
+
+/** The `llm_reply_cut` note of the latest annotation step that wrote `target`, or null.
+ * Best effort: a failed history read shows no banner (History still has the chip). */
+async function lastReplyCut(datasetId: string, target: string): Promise<string | null> {
+  try {
+    const prov = await getProvenance(datasetId);
+    const step = [...(prov.recorded?.history ?? [])]
+      .reverse()
+      .find((h) => h.step === "cell_type_annotation");
+    if (!step || (step.params?.annotation_target ?? "cell_type") !== target) return null;
+    const cut = step.params?.llm_reply_cut;
+    return typeof cut === "string" && cut ? cut : null;
+  } catch {
+    return null;
+  }
 }

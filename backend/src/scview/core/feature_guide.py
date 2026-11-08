@@ -57,6 +57,10 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
      "per-cell QC plots, per-sample QC, doublet calls, pseudobulk sample QC, sex check"),
     ("Data Assessment > QC states: RP share vs mito", "", "damaged or stressed cells per type"),
     ("Data Assessment > PCA", "", "elbow, variance explained, loadings"),
+    ("Data Assessment > Cell-type annotation", "",
+     "name clusters by an LLM from their markers, a CellTypist model or marker-database scores, into an obs "
+     "column; with Cell Ontology ids; <column>_qualified adds the genes that set a cluster apart where clusters "
+     "share a label or a label is a mixture or no cell type, e.g. 'Monocytes (CCL8+ RSAD2+)'"),
     ("Data Assessment > Label from a reference dataset", "reference mapping",
      "label cells from another annotated library dataset; flags cells not in the reference"),
     ("Data Assessment > Annotation confidence", "", "label-fit flags per cell"),
@@ -179,7 +183,8 @@ CLOSING = "These are all of scView's tabs and tools; name a feature only by its 
 
 # In the full guide only: the compact block is at its cap (tests/test_feature_guide.py). The tab stays in it.
 FULL_ONLY = ("Unified View > Accessibility >", "Unified View > Embedding > Tissue > Draw", "Unified View > Transcripts",
-             "Unified View > Domains > Co-occurrence", "Unified View > Spot composition > Reference labels")
+             "Unified View > Domains > Co-occurrence", "Unified View > Spot composition > Reference labels",
+             "Data Assessment > Cell-type annotation")
 
 
 def compact_guide() -> str:

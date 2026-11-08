@@ -34,6 +34,11 @@ the request is the same with any openai SDK version.
 from __future__ import annotations
 
 import copy
+import time
+from collections.abc import Callable
+from typing import TypeVar
+
+_T = TypeVar("_T")
 
 _OFF = {"chat_template_kwargs": {"enable_thinking": False}}
 _LOW = {"reasoning_effort": "low"}
@@ -79,3 +84,32 @@ def reply_room(model: str) -> int:
     (gpt-oss, GLM-5.3): add it to a call's budget, or the reasoning can use up the
     budget before the answer. 0 for every other model."""
     return _rule(model)[1]
+
+
+# Waits (seconds) before each retry of a 429 in a step that runs in the background
+# (the annotator). DeepInfra answers 429 "Model busy" for a model under load
+# (DeepSeek-V4.1-Flash, 2026-11-08); the openai client's own 2 retries are over within
+# about 2 s, and the step then failed.
+BUSY_WAITS: tuple[float, ...] = (5.0, 15.0, 30.0)
+
+
+def is_busy(exc: BaseException) -> bool:
+    """A 429 from the provider ("Model busy" or a rate limit): worth asking again later."""
+    return getattr(exc, "status_code", None) == 429
+
+
+def busy_retry(call: Callable[[], _T], waits: tuple[float, ...] | None = None,
+               sleep: Callable[[float], None] | None = None) -> tuple[_T, int]:
+    """``call()``, asked again after each wait in ``waits`` (default ``BUSY_WAITS``)
+    while it raises a 429. Returns (result, retries used); the last 429 is raised.
+    Only for calls off the event loop that nobody waits on interactively (it can
+    sleep ~50 s)."""
+    sleep = sleep or time.sleep
+    for i, wait in enumerate((*(BUSY_WAITS if waits is None else waits), None)):
+        try:
+            return call(), i
+        except Exception as exc:
+            if wait is None or not is_busy(exc):
+                raise
+            sleep(wait)
+    raise AssertionError("unreachable")

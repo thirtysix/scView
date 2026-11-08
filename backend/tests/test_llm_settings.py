@@ -54,3 +54,43 @@ def test_settings_are_copies():
     a = chat_extra("openai/gpt-oss-120b")
     a["extra_body"]["reasoning_effort"] = "high"
     assert chat_extra("openai/gpt-oss-120b") == LOW
+
+
+class _Busy(Exception):
+    status_code = 429
+
+
+def test_busy_retry_waits_and_asks_again_on_429_only():
+    from scview.core.llm import busy_retry
+
+    slept: list[float] = []
+    answers = iter([_Busy(), _Busy(), "ok"])
+
+    def call():
+        a = next(answers)
+        if isinstance(a, Exception):
+            raise a
+        return a
+
+    assert busy_retry(call, waits=(5, 15, 30), sleep=slept.append) == ("ok", 2)
+    assert slept == [5, 15]
+
+    def other():
+        raise ValueError("bad request")
+
+    with pytest.raises(ValueError):
+        busy_retry(other, waits=(5,), sleep=slept.append)
+    assert slept == [5, 15]  # no wait for an error that is not a 429
+
+
+def test_busy_retry_raises_the_last_429_once_the_waits_are_used():
+    from scview.core.llm import busy_retry
+
+    slept: list[float] = []
+
+    def call():
+        raise _Busy()
+
+    with pytest.raises(_Busy):
+        busy_retry(call, waits=(1, 2), sleep=slept.append)
+    assert slept == [1, 2]

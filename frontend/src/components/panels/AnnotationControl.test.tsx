@@ -12,6 +12,8 @@ const { getLlmStatus } = vi.hoisted(() => ({ getLlmStatus: vi.fn() }));
 vi.mock("@/api/assistant", () => ({ getLlmStatus }));
 const { getLabelMatches } = vi.hoisted(() => ({ getLabelMatches: vi.fn() }));
 vi.mock("@/api/ontology", () => ({ getLabelMatches }));
+const { getProvenance } = vi.hoisted(() => ({ getProvenance: vi.fn() }));
+vi.mock("@/api/provenance", () => ({ getProvenance }));
 
 import { AnnotationControl } from "./AnnotationControl";
 import { useDatasetStore } from "@/stores/datasetStore";
@@ -54,6 +56,7 @@ describe("AnnotationControl (CellTypist)", () => {
     useViewStore.getState().setPanel("assessment");
     getCellTypistModels.mockReset().mockResolvedValue(MODELS);
     getLlmStatus.mockReset().mockResolvedValue({ available: true });
+    getProvenance.mockReset().mockResolvedValue({ recorded: { history: [] } });
     getCellTypistSummary.mockReset().mockImplementation((_id: string, column?: string) =>
       Promise.resolve({ columns: ["ct"], dataset_species: "mouse", result: column ? summary() : null }));
     getLabelMatches.mockReset().mockImplementation((_id: string, column: string) =>
@@ -200,5 +203,26 @@ describe("AnnotationControl (CellTypist)", () => {
     expect(onAnnotate.mock.calls[0]![0]).toMatchObject({ annotation_method: "marker_score" });
     fireEvent.click(screen.getByText("AI (needs an API key)"));
     expect(screen.getByText(/runs CellTypist instead/)).toBeTruthy();
+  });
+
+  it("warns when the LLM reply was cut short, from the annotation step's record", async () => {
+    const step = (target: string, cut?: string) => ({
+      step: "cell_type_annotation", tool: "t", timestamp: "",
+      params: { annotation_method: "llm", annotation_target: target, ...(cut ? { llm_reply_cut: cut } : {}) },
+    });
+    const cut = "reply cut at 8,192 tokens: 3 of 40 clusters left Unknown (37, 38, 39)";
+    getProvenance.mockResolvedValue({ recorded: { history: [step("cell_type", cut), step("paul15_clusters_celltypeAnno", cut)] } });
+    const onAnnotate = vi.fn().mockResolvedValue(undefined);
+    render(<AnnotationControl onAnnotate={onAnnotate} running={false} species="human" />);
+    fireEvent.click(screen.getByText("Annotate cell types"));
+    expect((await screen.findByRole("alert")).textContent).toContain("3 of 40 clusters left Unknown");
+
+    // A clean reply (or a cut one for another column) shows nothing.
+    getProvenance.mockResolvedValue({ recorded: { history: [step("paul15_clusters_celltypeAnno", cut), step("other")] } });
+    fireEvent.click(screen.getByText("Annotate cell types"));
+    await waitFor(() => expect(onAnnotate).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(getProvenance).toHaveBeenCalledTimes(2));
+    await screen.findByText(/group by it in Unified View/);
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });
