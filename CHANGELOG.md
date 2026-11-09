@@ -6,6 +6,10 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.68.0] - 2026-11-09
+
+Cluster QC flags more clusters that look like doublets of two others, and the AI annotator names more of them as a mixture.
+
 ### Changed
 - Cluster QC's "looks like doublets of two clusters" check now needs a fifth of the cluster's top markers from each
   parent (was 30%) and the cluster to be smaller than the larger parent (was both). The old rules missed 7 of 12
