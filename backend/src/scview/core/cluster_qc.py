@@ -83,12 +83,16 @@ MALAT1_MIN_MEDIAN_PCT = 0.5
 # two cells' in practice, where a state between the two holds one cell's, about their mean;
 # on hgmm_10k_v3 the cross-species doublet cluster holds 0.95 of the sum, two subtypes of
 # the larger cluster 0.86-0.90 and are not flagged) and no fewer genes, and it must
-# be smaller than both (doublets of two populations are rarer than either). A cluster or a
-# parent with under DOUBLET_LIKE_MIN_MARKERS markers is not judged: too few to tell.
+# be smaller than the larger of the two (a cluster bigger than both is a real population).
+# A cluster or a parent with under DOUBLET_LIKE_MIN_MARKERS markers is not judged: too few
+# to tell. EACH was 0.3 and the size rule "smaller than both" until 2026-11-09: they missed
+# 7 of 12 visible doublets in the annotation benchmark's T4 sets (one parent's genes lead
+# the fold-change ranking; a doublet group bigger than a rare parent), and 0.2 with the
+# larger parent flagged no clean group in ~210 (bench author + Leiden columns, paul15, Kang).
 DOUBLET_LIKE_MARKERS = 25
 DOUBLET_LIKE_MIN_MARKERS = 10
 DOUBLET_LIKE_SHARE = 0.5
-DOUBLET_LIKE_EACH = 0.3
+DOUBLET_LIKE_EACH = 0.2
 DOUBLET_LIKE_RNA = 0.5
 _NOT_A_PARENT = {"low_quality", "low_genes"}  # damaged cells or ambient RNA, not a cell type
 
@@ -493,7 +497,7 @@ def doublet_like_pair(markers: dict[str, set[str]], rows: dict[str, "ClusterQC"]
     if len(mine) < DOUBLET_LIKE_MIN_MARKERS or not me.median_counts or me.median_genes is None:
         return None
     others = [g for g in rows if g != group and len(markers.get(g, ())) >= DOUBLET_LIKE_MIN_MARKERS
-              and rows[g].n_cells > me.n_cells and rows[g].median_counts and rows[g].median_genes is not None
+              and rows[g].median_counts and rows[g].median_genes is not None
               and not set(rows[g].flags) & _NOT_A_PARENT]
     best, key = None, None
     for i, a in enumerate(others):
@@ -506,6 +510,8 @@ def doublet_like_pair(markers: dict[str, set[str]], rows: dict[str, "ClusterQC"]
             if len(in_b) < DOUBLET_LIKE_EACH * len(mine) or either < DOUBLET_LIKE_SHARE * len(mine):
                 continue
             ra, rb = rows[a], rows[b]
+            if max(ra.n_cells, rb.n_cells) <= me.n_cells:
+                continue
             big, small = sorted((ra.median_counts, rb.median_counts), reverse=True)
             if me.median_counts < big + DOUBLET_LIKE_RNA * small \
                     or me.median_genes < max(ra.median_genes, rb.median_genes):

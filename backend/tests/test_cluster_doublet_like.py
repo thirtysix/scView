@@ -113,11 +113,18 @@ def test_the_floors_each_say_no():
     assert cq.doublet_like_pair(m, low, "X") is None
     # fewer genes than a parent
     assert cq.doublet_like_pair(m, {**rows, "X": _row("X", 40, 3500, 950)}, "X") is None
-    # larger than a parent: a real population
+    # larger than both parents: a real population
     assert cq.doublet_like_pair(m, {**rows, "X": _row("X", 400, 3500, 1300)}, "X") is None
-    # mostly one parent's markers
+    # larger than a rare parent only: still judged (T4 doublet groups of 200 beside a 113-cell parent)
+    rare = {**rows, "P": _row("P", 120, 2000, 900)}
+    assert cq.doublet_like_pair(m, {**rare, "X": _row("X", 200, 3500, 1300)}, "X")[:2] == ("P", "Q")
+    # mostly one parent's markers (1 of 10 from Q)
     one = {**m, "X": set("abcdefghik")}
     assert cq.doublet_like_pair(one, rows, "X") is None
+    # one parent leads but the other still holds a fifth (2 of 10): a doublet whose
+    # dominant parent takes the top of the fold-change ranking
+    lead = {**m, "X": set("abcdefghkl")}
+    assert cq.doublet_like_pair(lead, rows, "X") == ("P", "Q", 8, 2, 10)
     # too few markers to judge
     few = {**m, "X": set("abckl")}
     assert cq.doublet_like_pair(few, rows, "X") is None
