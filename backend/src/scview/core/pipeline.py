@@ -1782,13 +1782,20 @@ _CL_SUFFIX = re.compile(r"\s*[|(\[,;]?\s*(?:CL[:_ ]?(\d{7,})|CL[:_ ]?none)\s*[)\
 # What a malformed reply leaves after the suffix is gone: "CL:none | CL:none" (no label at
 # all) or "Endothelial cells | CL" (the id cut off). Never kept in the label text.
 _CL_LEFTOVER = re.compile(r"\s*\|\s*CL\s*$|^\s*CL[:_ ]?(?:none|\d{7,})\s*$", re.I)
+# A mixture answered with one id per part: "NK cells / monocytes | CL:0000623 / CL:0000576"
+# (V4-Pro, 137 replies in the benchmark cache). The suffix alone kept "| CL:0000623 /" in the label.
+_CL_MULTI = re.compile(r"\s*\|\s*CL[:_ ]?(?:\d+|none)(?:\s*[/;,&+]\s*CL[:_ ]?(?:\d+|none))+\s*$", re.I)
 
 
 def _split_cl_id(text: str) -> tuple[str, str | None]:
     """'B cells | CL:0000236' -> ('B cells', 'CL:0000236'); 'NK | CL:none' -> ('NK', None).
 
-    An id of the wrong length ('CL:00002077', seen from gemma-4) is dropped, not guessed."""
+    An id of the wrong length ('CL:00002077', seen from gemma-4) is dropped, not guessed.
+    One id per part of a mixture ('X / Y | CL:a / CL:b') gives no id: no one term is the mixture."""
     text = (text or "").strip()
+    multi = _CL_MULTI.search(text)
+    if multi:
+        return _CL_LEFTOVER.sub("", text[: multi.start()]).strip(), None
     m = _CL_SUFFIX.search(text)
     label, digits = (text[: m.start()], m.group(1)) if m else (text, None)
     cl = f"CL:{digits}" if digits and len(digits) == 7 else None
