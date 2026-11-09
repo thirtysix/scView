@@ -314,6 +314,11 @@ def test_split_cl_id():
     assert _split_cl_id("Microglia | CL:00002077") == ("Microglia", None)
     assert _split_cl_id("CL:none | CL:none") == ("", None)
     assert _split_cl_id("Endothelial cells | CL") == ("Endothelial cells", None)
+    # one id per part of a mixture: the label stays clean and no single id is kept
+    assert _split_cl_id("NK cells / monocytes | CL:0000623 / CL:0000576") == ("NK cells / monocytes", None)
+    assert _split_cl_id("NK cells / monocytes | CL:0000623; CL:0000576") == ("NK cells / monocytes", None)
+    assert _split_cl_id("B cells / HSCs | CL:0000236 / CL:none") == ("B cells / HSCs", None)
+    assert _split_cl_id("NK cells / monocytes | CL:none") == ("NK cells / monocytes", None)
     assert _split_cl_id("PCL") == ("PCL", None)
 
 

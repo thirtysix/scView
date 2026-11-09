@@ -6,6 +6,15 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.68.1] - 2026-11-09
+
+A bug fix for mixture labels from the AI annotator.
+
+### Fixed
+- AI annotator: a mixture answered with one Cell Ontology id per part ("NK cells / monocytes | CL:0000623 /
+  CL:0000576") kept "| CL:0000623 /" in the label and took the second part's id as the label's. The label is now
+  clean and a mixture gets no single id. Present since 0.64.0.
+
 ## [0.68.0] - 2026-11-09
 
 Cluster QC flags more clusters that look like doublets of two others, and the AI annotator names more of them as a mixture.
