@@ -6,6 +6,14 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+- Cluster QC's "looks like doublets of two clusters" check now needs a fifth of the cluster's top markers from each
+  parent (was 30%) and the cluster to be smaller than the larger parent (was both). The old rules missed 7 of 12
+  visible doublet clusters in the annotation benchmark, where one parent's genes lead the marker ranking; the new
+  ones flagged none of about 210 clean clusters (author labels and Leiden clusters on 8 datasets, paul15 and Kang
+  included). The AI annotator sees these flags as QC notes: on the benchmark every model named more visible
+  doublets as a mixture (default model 99 -> 101 of 108, Seed-2.0-pro 84 -> 98).
+
 ## [0.67.0] - 2026-11-09
 
 The AI annotator waits out a busy model instead of failing, and says on the card when its reply was cut short.
