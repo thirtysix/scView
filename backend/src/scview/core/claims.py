@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 
 from pydantic import BaseModel, Field
 
-from scview.core.llm import chat_extra, reply_room
+from scview.core.llm import async_client, chat_extra, reply_room
 
 logger = logging.getLogger(__name__)
 
@@ -957,14 +957,12 @@ async def judge_claims(
 ) -> list[dict]:
     """One LLM call over ``claims`` (each ``{id, text, evidence}``). Returns
     ``{id, verdict, reason}`` per claim; a claim the model skips stays uncertain."""
-    from openai import AsyncOpenAI
-
     blocks = [
         f"### Claim {c['id']}\n{c['text'][:MAX_CLAIM_CHARS]}\nEvidence:\n"
         f"{(c.get('evidence') or '(none cited)')[:MAX_EVIDENCE_CHARS]}"
         for c in claims
     ]
-    client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+    client = async_client(api_key, base_url)
     resp = await client.chat.completions.create(
         model=model,
         **chat_extra(model),

@@ -26,7 +26,7 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel
 
-from scview.core.llm import chat_extra, reply_room
+from scview.core.llm import async_client, chat_extra, reply_room
 
 logger = logging.getLogger(__name__)
 
@@ -313,9 +313,7 @@ async def _classify(query: str, view_context: dict | None, api_key: str, model: 
     where = f'(current tab: "{panel}"' + (f', subtab: "{subtab}"' if subtab else "") + ")"
     raw = ""
     try:
-        from openai import AsyncOpenAI
-
-        client = AsyncOpenAI(api_key=api_key, base_url="https://api.deepinfra.com/v1/openai")
+        client = async_client(api_key)
         resp = await client.chat.completions.create(
             model=model,
             **chat_extra(model),

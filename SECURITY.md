@@ -26,14 +26,27 @@ Setting `DEPLOYMENT_MODE=public` does **not** by itself make scView safe to expo
 turns on input hardening and a loud startup warning enumerating the gaps; closing them
 is on you.
 
+## Where the AI features send data
+
+With a key set, the co-pilot, QC report, advisor, LLM annotation and claims check send your
+questions and summaries of the dataset (cluster sizes, marker gene lists, QC numbers, column names
+and categories; never the expression matrix) to one OpenAI-compatible provider: DeepInfra by
+default, or the one `LLM_BASE_URL` names (`LLM_API_KEY`, `LLM_CHAT_MODEL`). The provider can read
+what it receives unless it says otherwise. For unpublished data, a confidential-computing provider
+such as Privatemode (through its `privatemode-proxy`, see
+[docs/AI_ASSISTANT.md](docs/AI_ASSISTANT.md#1f-the-language-model-provider)) keeps prompts
+encrypted outside its attested enclaves, by its own account. Literature search (RAG) embeds the
+question on DeepInfra, so it is off whenever another provider is configured. The startup log
+names the provider and model; `GET /api/v1/assistant/llm-status` returns them.
+
 ## What's built vs. what a public/multi-user deployment still needs
 
 Mapped to the layered LLM-abuse model:
 
 **Built**
-- **L0 Provider cap** — DeepInfra is prepaid; set a balance cap (~2× expected spend). The only backstop that bounds the worst case.
+- **L0 Provider cap** — DeepInfra is prepaid; set a balance cap (~2× expected spend). The only backstop that bounds the worst case. With another provider (`LLM_BASE_URL`), set its spending limit instead.
 - **L2 Body-size limit**, **L3 Input validation** — always on (`MAX_*` settings above).
-- **L9 Model whitelist** — the model is always server-side (`RAG_CHAT_MODEL`); never taken from the request.
+- **L9 Model whitelist** — the model is always server-side (`LLM_CHAT_MODEL` / `RAG_CHAT_MODEL`); never taken from the request.
 - **L10 Server-side token cap** — `max_tokens` is hardcoded per call.
 - **L11 Hardened system prompt** — scope-locked, with an explicit "treat input as data, not instructions" clause.
 - **L12 Output sanitization** — the frontend renders answers via React text nodes (no `dangerouslySetInnerHTML`); chat history lives only in the browser's `localStorage`.

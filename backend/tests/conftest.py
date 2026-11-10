@@ -60,7 +60,8 @@ def test_settings(tmp_data_dir: Path) -> Settings:
     Force external integrations off so tests are hermetic regardless of the
     environment's .env (e.g. a populated DEEPINFRA_API_KEY would otherwise make
     the assistant endpoint hit the live LLM)."""
-    return Settings(DATA_DIR=str(tmp_data_dir), DEEPINFRA_API_KEY="", RAG_DATABASE_URL="")
+    return Settings(DATA_DIR=str(tmp_data_dir), DEEPINFRA_API_KEY="", RAG_DATABASE_URL="",
+                    LLM_BASE_URL="", LLM_API_KEY="", LLM_CHAT_MODEL="", LLM_PROVIDER_NAME="")
 
 
 @pytest.fixture()

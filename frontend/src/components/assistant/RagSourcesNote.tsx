@@ -26,19 +26,25 @@ function day(iso: string | null | undefined): string {
 
 /** The one-line summary and its tooltip, from a status response. */
 export function describeSources(s: RagStatus): { line: string; detail: string } {
+  const sent = s.llm_provider
+    ? ` Questions, with the facts about your data they need, are sent to ${s.llm_provider}.`
+    : "";
   if (!s.enabled) {
+    const why =
+      s.reason === "no_api_key"
+        ? "A literature database is configured but DEEPINFRA_API_KEY is not, so retrieval is off."
+        : s.reason === "provider"
+          ? "Literature search embeds questions on DeepInfra, so it is off while another language model provider is configured."
+          : "No RAG database is configured (RAG_DATABASE_URL), so answers draw on your dataset and scView itself.";
     return {
       line: "Your dataset and the app only; literature and methods search is not set up.",
-      detail:
-        s.reason === "no_api_key"
-          ? "A literature database is configured but DEEPINFRA_API_KEY is not, so retrieval is off."
-          : "No RAG database is configured (RAG_DATABASE_URL), so answers draw on your dataset and scView itself.",
+      detail: why + sent,
     };
   }
   if (s.error) {
     return {
       line: "Literature index unreachable; answers use your dataset and the app.",
-      detail: "The RAG database could not be reached just now.",
+      detail: "The RAG database could not be reached just now." + sent,
     };
   }
   const lit = s.corpora.literature;
@@ -53,7 +59,7 @@ export function describeSources(s: RagStatus): { line: string; detail: string } 
         (c.last_added ? `, newest added ${day(c.last_added)}` : "") : `${name}: empty`;
   return {
     line: `Your dataset + ${parts.join(" + ")} indexed` + (latest ? ` · updated ${day(latest)}` : ""),
-    detail: `Methods and biology questions retrieve from these. ${per("Literature", lit)}. ${per("Tutorials", tut)}.`,
+    detail: `Methods and biology questions retrieve from these. ${per("Literature", lit)}. ${per("Tutorials", tut)}.${sent}`,
   };
 }
 

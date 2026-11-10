@@ -205,6 +205,13 @@ describe("AnnotationControl (CellTypist)", () => {
     expect(screen.getByText(/runs CellTypist instead/)).toBeTruthy();
   });
 
+  it("names the provider the AI tab sends the marker lists to", async () => {
+    getLlmStatus.mockResolvedValue({ available: true, provider: "Privatemode", model: "glm-5.3-flash" });
+    render(<AnnotationControl onAnnotate={vi.fn()} running={false} species="human" />);
+    fireEvent.click(await screen.findByText("AI (any tissue)"));
+    expect(await screen.findByText(/The marker lists are sent to Privatemode\./)).toBeTruthy();
+  });
+
   it("warns when the LLM reply was cut short, from the annotation step's record", async () => {
     const step = (target: string, cut?: string) => ({
       step: "cell_type_annotation", tool: "t", timestamp: "",

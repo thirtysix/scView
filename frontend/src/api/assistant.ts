@@ -125,17 +125,28 @@ export interface RagCorpus {
 export interface RagStatus {
   enabled: boolean;
   corpora: Record<string, RagCorpus>;
-  reason?: "no_database" | "no_api_key";
+  /** "provider": the chat model is not on DeepInfra, where retrieval's embeddings run. */
+  reason?: "no_database" | "no_api_key" | "provider";
   error?: string;
+  /** Where co-pilot questions are sent (LLM_PROVIDER_NAME or the URL's host); null without a key. */
+  llm_provider?: string | null;
 }
 
 export async function getRagStatus(): Promise<RagStatus> {
   return apiFetch<RagStatus>(`/assistant/rag-status`);
 }
 
-/** Whether a language model can be called (a DeepInfra API key is set). */
-export async function getLlmStatus(): Promise<{ available: boolean }> {
-  return apiFetch<{ available: boolean }>(`/assistant/llm-status`);
+export interface LlmStatus {
+  /** A key for the configured provider is set (LLM_API_KEY, or DEEPINFRA_API_KEY for DeepInfra). */
+  available: boolean;
+  /** Where the requests go: "DeepInfra", LLM_PROVIDER_NAME, or the LLM_BASE_URL host. */
+  provider?: string;
+  model?: string;
+}
+
+/** Whether a language model can be called, and which provider gets the requests. */
+export async function getLlmStatus(): Promise<LlmStatus> {
+  return apiFetch<LlmStatus>(`/assistant/llm-status`);
 }
 
 /** A deterministic one-line "I notice…" nudge surfaced when a dataset opens. */

@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from scview.config import Settings
 from scview.core import label_qualifiers as LQ
 from scview.core import pipeline as P
 from scview.core.uns_keys import markers_key
@@ -109,7 +110,7 @@ def test_annotation_step_writes_the_qualified_column(monkeypatch):
         return {"cl_ids": 0}
 
     monkeypatch.setattr(P, "_annotate_llm", fake_llm)
-    monkeypatch.setattr("scview.config.get_settings", lambda: types.SimpleNamespace(
+    monkeypatch.setattr("scview.config.get_settings", lambda: Settings(
         DEEPINFRA_API_KEY="k", RAG_CHAT_MODEL="m"))
     rec = P._run_cell_type_annotation(a, P.PipelineParams(annotation_groupby="cluster"))
     assert rec["qualifiers"] == 3 and rec["cl_ids"] == 0
@@ -165,7 +166,7 @@ def test_annotator_sees_qc_notes_and_a_low_quality_answer_is_kept_without_an_id(
             return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg, finish_reason="stop")])
 
     monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_Client))
-    monkeypatch.setattr("scview.config.get_settings", lambda: types.SimpleNamespace(
+    monkeypatch.setattr("scview.config.get_settings", lambda: Settings(
         DEEPINFRA_API_KEY="k", RAG_CHAT_MODEL="m"))
     monkeypatch.setattr(P, "_record_llm_cl_ids", lambda adata, target, ids: {"ids": ids})
     fit = P._annotate_llm(a, P.PipelineParams(), "cluster", "cell_type")
@@ -234,7 +235,7 @@ def test_annotator_asks_again_when_the_model_is_busy(monkeypatch):
             return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg, finish_reason="stop")])
 
     monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_Client))
-    monkeypatch.setattr("scview.config.get_settings", lambda: types.SimpleNamespace(
+    monkeypatch.setattr("scview.config.get_settings", lambda: Settings(
         DEEPINFRA_API_KEY="k", RAG_CHAT_MODEL="m"))
     monkeypatch.setattr(P, "_record_llm_cl_ids", lambda adata, target, ids: {})
     monkeypatch.setattr(llm, "BUSY_WAITS", (0.0,))

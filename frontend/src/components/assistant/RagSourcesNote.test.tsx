@@ -30,12 +30,24 @@ describe("describeSources", () => {
     expect(describeSources({ enabled: false, corpora: {}, reason: "no_api_key" }).detail).toMatch(
       /DEEPINFRA_API_KEY/,
     );
+    expect(describeSources({ enabled: false, corpora: {}, reason: "provider" }).detail).toMatch(
+      /another language model provider/,
+    );
     expect(describeSources({ enabled: true, corpora: {}, error: "database unreachable" }).line).toMatch(
       /unreachable/,
     );
     expect(describeSources({ enabled: true, corpora: {} }).line).toBe(
       "Your dataset + no papers + no tutorial docs indexed",
     );
+  });
+});
+
+describe("describeSources: where questions go", () => {
+  it("names the provider when a key is set, and nothing without one", () => {
+    const off: RagStatus = { enabled: false, corpora: {}, reason: "provider", llm_provider: "Privatemode" };
+    expect(describeSources(off).detail).toMatch(/are sent to Privatemode\.$/);
+    expect(describeSources({ ...INDEXED, llm_provider: "DeepInfra" }).detail).toMatch(/sent to DeepInfra\.$/);
+    expect(describeSources({ ...off, llm_provider: null }).detail).not.toMatch(/sent to/);
   });
 });
 

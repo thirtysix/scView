@@ -56,6 +56,7 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
   const [methodPicked, setMethodPicked] = useState(false);
   // null until known; without a key the server runs CellTypist for "llm".
   const [llmAvailable, setLlmAvailable] = useState<boolean | null>(null);
+  const [llmProvider, setLlmProvider] = useState<string | null>(null);
   const [tissue, setTissue] = useState("");
   const [markerSets, setMarkerSets] = useState<"databases" | "builtin">("databases");
   const [model, setModel] = useState("Immune_All_Low.pkl");
@@ -90,7 +91,11 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
   useEffect(() => {
     let live = true;
     getLlmStatus()
-      .then((s) => live && setLlmAvailable(s.available))
+      .then((s) => {
+        if (!live) return;
+        setLlmAvailable(s.available);
+        setLlmProvider(s.available && s.provider ? s.provider : null);
+      })
       .catch(() => {
         /* unknown: keep the AI default */
       });
@@ -285,12 +290,14 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
           />
           <p className="mt-1 text-[11px] text-slate-400">
             No reference model needed: names cell types from each cluster's top marker genes.
+            {llmProvider && ` The marker lists are sent to ${llmProvider}.`}
           </p>
           {llmAvailable === false && (
             <p className="mt-1 flex items-start gap-1 text-[11px] text-amber-700">
               <AlertTriangle className="mt-px h-3 w-3 shrink-0" />
-              No DeepInfra API key is set, so this runs CellTypist instead. Add DEEPINFRA_API_KEY to
-              the .env file in the scView folder and restart scView to use the AI.
+              No language model key is set, so this runs CellTypist instead. Add DEEPINFRA_API_KEY
+              (or LLM_API_KEY for another provider) to the .env file in the scView folder and restart
+              scView to use the AI.
             </p>
           )}
         </div>

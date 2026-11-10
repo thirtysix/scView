@@ -51,15 +51,14 @@ from scview.core import layout_stability
 from scview.core import seq_metrics
 from scview.core import feature_guide, methods_guard, screen_facts
 from scview.core.claims import Claim, check_answer, vocab_for
-from scview.core.llm import chat_extra, reply_room
+from scview.core.llm import async_client, chat_extra, reply_room
 from scview.core.marker_selection import MAX_PADJ, MIN_PTS, group_markers
 from scview.core.species import detect_species
 from scview.core.uns_keys import enrichment_column
 
 logger = logging.getLogger(__name__)
 
-# Reuse the same provider/model as the preprocessing advisor for consistency.
-DEEPINFRA_BASE_URL = "https://api.deepinfra.com/v1/openai"
+# Callers pass Settings.chat_model; this is the fallback default.
 DEFAULT_MODEL = "deepseek-ai/DeepSeek-V4.1-Flash"
 
 # How much result detail to put in the prompt (keep the context bounded).
@@ -1477,9 +1476,7 @@ async def polish_insight(insight: DatasetInsight, api_key: str, model: str = DEF
     if not api_key or not insight.insight or insight.severity != "suggestion":
         return insight
     try:
-        from openai import AsyncOpenAI
-
-        client = AsyncOpenAI(api_key=api_key, base_url=DEEPINFRA_BASE_URL)
+        client = async_client(api_key)
         resp = await client.chat.completions.create(
             model=model,
             **chat_extra(model),
@@ -1596,7 +1593,7 @@ def _deterministic_methods(skeleton: str) -> str:
     return (
         "**Methods (auto-generated from the recorded analysis provenance)**\n\n"
         "The following steps were recorded for this dataset. This is a factual "
-        "digest of the provenance recipe; set `DEEPINFRA_API_KEY` for polished "
+        "digest of the provenance recipe; set `DEEPINFRA_API_KEY` (or `LLM_API_KEY`) for polished "
         "methods-section prose.\n\n"
         f"{skeleton}\n\n"
         "_Verify tool versions and parameters against your run before publication._"
@@ -1640,9 +1637,7 @@ async def write_methods(
             )
 
     try:
-        from openai import AsyncOpenAI
-
-        client = AsyncOpenAI(api_key=api_key, base_url=DEEPINFRA_BASE_URL)
+        client = async_client(api_key)
         resp = await client.chat.completions.create(
             model=model,
             **chat_extra(model),
@@ -2201,9 +2196,7 @@ async def extract_actions(
         "or cannot be mapped to the above, output []." + vc + f"\n\nCommand: {query}"
     )
     try:
-        from openai import AsyncOpenAI
-
-        client = AsyncOpenAI(api_key=api_key, base_url=DEEPINFRA_BASE_URL)
+        client = async_client(api_key)
         resp = await client.chat.completions.create(
             model=model,
             **chat_extra(model),
@@ -2338,9 +2331,7 @@ async def answer_query(
         return _fallback_answer(query, context, sources, route)
 
     try:
-        from openai import AsyncOpenAI
-
-        client = AsyncOpenAI(api_key=api_key, base_url=DEEPINFRA_BASE_URL)
+        client = async_client(api_key)
         messages = _build_messages(query, context, history)
 
         response = await client.chat.completions.create(
@@ -2369,9 +2360,7 @@ async def suggest_followups(query: str, answer: str, api_key: str, model: str) -
     if not api_key:
         return []
     try:
-        from openai import AsyncOpenAI
-
-        client = AsyncOpenAI(api_key=api_key, base_url=DEEPINFRA_BASE_URL)
+        client = async_client(api_key)
         resp = await client.chat.completions.create(
             model=model,
             **chat_extra(model),
@@ -2449,9 +2438,7 @@ async def stream_answer(
 
     parts: list[str] = []
     try:
-        from openai import AsyncOpenAI
-
-        client = AsyncOpenAI(api_key=api_key, base_url=DEEPINFRA_BASE_URL)
+        client = async_client(api_key)
         stream = await client.chat.completions.create(
             model=model,
             **chat_extra(model),
@@ -2486,7 +2473,7 @@ def _fallback_answer(
     """Deterministic, no-LLM answer: surface the grounded facts honestly."""
     answer = (
         "The AI co-pilot's language model is not configured, so here is a direct "
-        "summary of the grounded facts about your dataset. Set `DEEPINFRA_API_KEY` "
+        "summary of the grounded facts about your dataset. Set `DEEPINFRA_API_KEY` (or `LLM_API_KEY`) "
         "to enable conversational, cited answers.\n\n"
         f"{context}"
     )

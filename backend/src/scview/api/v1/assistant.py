@@ -17,7 +17,6 @@ from scview.dependencies import get_dataset_manager, get_settings_dep
 from scview.core.dataset_manager import DatasetManager
 from scview.core import claims as claims_mod
 from scview.core.assistant import (
-    DEEPINFRA_BASE_URL,
     ChatMessage,
     ChatResponse,
     DatasetInsight,
@@ -93,17 +92,17 @@ async def check_claims(
             status_code=413,
             detail=f"Too many claims (max {claims_mod.MAX_JUDGE_CLAIMS} per check).",
         )
-    if not settings.DEEPINFRA_API_KEY:
+    if not settings.llm_api_key:
         raise HTTPException(status_code=503, detail="The language model is not configured.")
     try:
         judged = await claims_mod.judge_claims(
-            [c.model_dump() for c in body.claims], settings.DEEPINFRA_API_KEY,
-            settings.RAG_CHAT_MODEL, DEEPINFRA_BASE_URL,
+            [c.model_dump() for c in body.claims], settings.llm_api_key,
+            settings.chat_model, settings.llm_base_url,
         )
     except Exception as exc:
         logger.warning("claims judge failed: %s", exc)
         raise HTTPException(status_code=502, detail="The claims check failed; try again.")
-    return CheckClaimsResponse(claims=judged, model=settings.RAG_CHAT_MODEL)
+    return CheckClaimsResponse(claims=judged, model=settings.chat_model)
 
 
 @router.post("/assistant/feedback")
@@ -128,19 +127,24 @@ _rag_status_cache: dict = {}
 
 @router.get("/assistant/llm-status")
 async def llm_status(settings: Settings = Depends(get_settings_dep)) -> dict:
-    """Whether the AI features can call a language model: a DeepInfra key is set.
-    Without one they fall back (rules, CellTypist, the facts laid out)."""
-    return {"available": bool(settings.DEEPINFRA_API_KEY)}
+    """Whether the AI features can call a language model (a key for the configured
+    provider is set), and which provider and model get the requests. Without a key
+    they fall back (rules, CellTypist, the facts laid out)."""
+    return {"available": bool(settings.llm_api_key), "provider": settings.llm_provider,
+            "model": settings.chat_model}
 
 
 @router.get("/assistant/rag-status")
 async def rag_status(settings: Settings = Depends(get_settings_dep)) -> dict:
     """Whether the literature/tutorials RAG is configured, and what each corpus
     holds: ``corpora[name] = {documents, chunks, last_added}`` (``counts`` keeps
-    the chunk counts for older callers). Read-only: one SELECT, nothing written."""
+    the chunk counts for older callers). ``llm_provider``: where co-pilot questions
+    go (None without a key). Read-only: one SELECT, nothing written."""
+    llm = {"llm_provider": settings.llm_provider if settings.llm_api_key else None}
     if not settings.rag_enabled:
-        reason = "no_database" if not settings.RAG_DATABASE_URL else "no_api_key"
-        return {"enabled": False, "counts": {}, "corpora": {}, "reason": reason}
+        # "provider": the chat model is not on DeepInfra, where the embeddings run.
+        return {"enabled": False, "counts": {}, "corpora": {}, "reason": settings.rag_disabled_reason,
+                **llm}
     hit = _rag_status_cache.get(settings.RAG_DATABASE_URL)
     if hit and time.monotonic() - hit[0] < _RAG_STATUS_TTL:
         return hit[1]
@@ -151,11 +155,12 @@ async def rag_status(settings: Settings = Depends(get_settings_dep)) -> dict:
     except Exception as exc:
         # Details go to the log only: a driver error can echo the connection string.
         logger.warning("rag-status failed: %s", exc)
-        return {"enabled": True, "counts": {}, "corpora": {}, "error": "database unreachable"}
+        return {"enabled": True, "counts": {}, "corpora": {}, "error": "database unreachable", **llm}
     out = {
         "enabled": True,
         "counts": {c: s["chunks"] for c, s in corpora.items()},
         "corpora": corpora,
+        **llm,
     }
     _rag_status_cache[settings.RAG_DATABASE_URL] = (time.monotonic(), out)
     return out
@@ -182,7 +187,7 @@ async def assistant_insight(
         # The per-cluster QC check may read the counts matrix: keep it off the loop.
         insight = await asyncio.to_thread(build_insight, adaptor)
         if polish:
-            insight = await polish_insight(insight, settings.DEEPINFRA_API_KEY, settings.RAG_CHAT_MODEL)
+            insight = await polish_insight(insight, settings.llm_api_key, settings.chat_model)
         return insight
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("insight failed for %s: %s", dataset_id, exc)
@@ -207,7 +212,7 @@ async def assistant_methods(
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
     try:
         return await write_methods(
-            adaptor, body.history, settings.DEEPINFRA_API_KEY, settings.RAG_CHAT_MODEL
+            adaptor, body.history, settings.llm_api_key, settings.chat_model
         )
     except Exception as exc:
         logger.error("methods generation failed for %s: %s", dataset_id, exc, exc_info=True)
@@ -238,7 +243,7 @@ async def _prepare(
         has_selection=adaptor is not None and selection_facts.present(body.view_context),
     )
     intent = await classify_intent(
-        query, body.view_context, settings.DEEPINFRA_API_KEY, settings.RAG_CHAT_MODEL, state=state,
+        query, body.view_context, settings.llm_api_key, settings.chat_model, state=state,
     )
     chosen = set(intent.sources)
     if force_app or mentions_app_ui(query):
@@ -276,7 +281,7 @@ async def _prepare(
         include_data_grounding=("data" in chosen),
         data_facets=sorted(getattr(intent, "data_facets", []) or []),
         route=sorted(route),
-        model=settings.RAG_CHAT_MODEL,
+        model=settings.chat_model,
     )
 
 
@@ -287,7 +292,7 @@ METHODS_ROUTE = ("provenance",)
 async def _methods_events(adaptor, body: ChatRequest, settings: Settings):
     """The chat stream's events for a methods request: the methods writer's text
     (core/assistant.write_methods, grounded in the recipe only) in one delta."""
-    res = await write_methods(adaptor, body.history, settings.DEEPINFRA_API_KEY, settings.RAG_CHAT_MODEL)
+    res = await write_methods(adaptor, body.history, settings.llm_api_key, settings.chat_model)
     yield {"type": "sources", "sources": [], "route": list(METHODS_ROUTE), "grounded": res.grounded}
     yield {"type": "delta", "text": res.methods}
     yield {"type": "done", "followups": [], "model": res.model, "claims": []}
@@ -345,12 +350,12 @@ async def assistant_chat(
     try:
         query = body.query.strip()
         if wants_methods(query):  # the recipe, as the drawer's "Write methods" button
-            res = await write_methods(adaptor, body.history, settings.DEEPINFRA_API_KEY, settings.RAG_CHAT_MODEL)
+            res = await write_methods(adaptor, body.history, settings.llm_api_key, settings.chat_model)
             return ChatResponse(answer=res.methods, sources=[], grounded=res.grounded,
                                 raw_response=res.methods, route=list(METHODS_ROUTE), model=res.model)
         kwargs = await _prepare(query, body, dm, settings, adaptor=adaptor)
         await _warm_cluster_qc(adaptor, kwargs)
-        return await answer_query(query, adaptor, settings.DEEPINFRA_API_KEY, **kwargs)
+        return await answer_query(query, adaptor, settings.llm_api_key, **kwargs)
     except Exception as exc:
         logger.error("assistant chat failed for %s: %s", dataset_id, exc, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Assistant failed: {exc}")
@@ -387,7 +392,7 @@ async def assistant_chat_stream(
             kwargs = await _prepare(query, body, dm, settings, adaptor=adaptor)
             await _warm_cluster_qc(adaptor, kwargs)
             async for event in stream_answer(
-                query, adaptor, settings.DEEPINFRA_API_KEY, **kwargs
+                query, adaptor, settings.llm_api_key, **kwargs
             ):
                 yield f"data: {json.dumps(event)}\n\n"
         except Exception as exc:
@@ -419,7 +424,7 @@ async def assistant_chat_app(
     try:
         query = body.query.strip()
         kwargs = await _prepare(query, body, dm, settings, force_app=True)
-        return await answer_query(query, None, settings.DEEPINFRA_API_KEY, **kwargs)
+        return await answer_query(query, None, settings.llm_api_key, **kwargs)
     except Exception as exc:
         logger.error("assistant app chat failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Assistant failed: {exc}")
@@ -440,7 +445,7 @@ async def assistant_chat_app_stream(
     async def event_generator():
         try:
             kwargs = await _prepare(query, body, dm, settings, force_app=True)
-            async for event in stream_answer(query, None, settings.DEEPINFRA_API_KEY, **kwargs):
+            async for event in stream_answer(query, None, settings.llm_api_key, **kwargs):
                 yield f"data: {json.dumps(event)}\n\n"
         except Exception as exc:
             logger.error("assistant app stream failed: %s", exc, exc_info=True)

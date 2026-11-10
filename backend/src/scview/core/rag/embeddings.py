@@ -3,15 +3,18 @@
 Matches the WntHub corpus pipeline: ``BAAI/bge-base-en-v1.5`` (768-d). Used for
 both ingestion (embedding chunks) and query-time embedding, so the same model
 must be used for both or cosine distances are meaningless.
+
+Always DeepInfra, whatever ``LLM_BASE_URL`` says: with another chat provider RAG is
+off (``Settings.rag_disabled_reason``), so a question never goes to DeepInfra there.
 """
 
 from __future__ import annotations
 
 import logging
 
-logger = logging.getLogger(__name__)
+from scview.config import DEEPINFRA_BASE_URL
 
-DEEPINFRA_BASE_URL = "https://api.deepinfra.com/v1/openai"
+logger = logging.getLogger(__name__)
 
 
 async def embed_texts(

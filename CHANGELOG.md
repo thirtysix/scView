@@ -6,6 +6,25 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.69.0] - 2026-11-11
+
+The AI features can use another language model provider than DeepInfra, such as Privatemode for unpublished data.
+
+### Added
+- The language model provider is a setting: `LLM_BASE_URL` (any OpenAI-compatible endpoint), `LLM_API_KEY` and
+  `LLM_CHAT_MODEL` (plus `LLM_PROVIDER_NAME` for display). DeepInfra stays the default and existing `.env` files
+  work unchanged. For unpublished data this allows [Privatemode](https://www.privatemode.ai), whose models run in
+  confidential-computing enclaves, through Edgeless's `privatemode-proxy` beside scView (compose example in
+  docs/AI_ASSISTANT.md). Checked against a live proxy with `glm-5.3-flash`: co-pilot chat, advisor, LLM annotation
+  and the claims check all work.
+- The co-pilot's Sources tooltip and the AI annotation tab name the provider the questions and marker lists go to;
+  the startup log names the provider and model, and `/assistant/llm-status` returns them.
+
+### Changed
+- `LLM_API_KEY` falls back to `DEEPINFRA_API_KEY` only while the URL is DeepInfra's, so a DeepInfra key is never
+  sent to another provider. Literature search (RAG) embeds and reranks on DeepInfra, so it is off when another
+  provider is configured (`/assistant/rag-status` reason `provider`).
+
 ## [0.68.1] - 2026-11-09
 
 A bug fix for mixture labels from the AI annotator.

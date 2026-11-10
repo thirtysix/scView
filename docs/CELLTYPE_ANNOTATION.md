@@ -23,7 +23,7 @@ were measured in the running backend container on the Kang IFN-β PBMC hero data
   authors' labels and *beat* CellTypist on the non-immune clusters (**Erythroblast**, **Megakaryocyte**)
   that the immune model mislabeled. Optional `annotation_tissue` hint; writes `obs[target]` + the
   per-cluster mapping to `uns[<target>_llm_mapping]`. Reuses precomputed markers when present, else
-  computes them. Requires `DEEPINFRA_API_KEY`; non-deterministic, so present as a reviewable pass.
+  computes them. Requires a language model key (`DEEPINFRA_API_KEY`, or `LLM_API_KEY` with `LLM_BASE_URL`); non-deterministic, so present as a reviewable pass.
   *(The earlier "8B is noisier" caveat was mitigated here by a tissue hint + a single structured
   per-cluster prompt.)*
 - **Frontend control shipped**: the "Cell-type annotation" card on Data Assessment — method picker

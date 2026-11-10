@@ -43,5 +43,6 @@ each other on their compose network.
 
 - The full-page expand toggle uses a body portal without remount, deliberately, so
   deck.gl/Plotly contexts survive; do not "simplify" it to a conditional render.
-- The AI assessment panel calls an external LLM (DeepInfra); it must fail soft when
-  the key is absent, so the app still runs without it.
+- The AI assessment panel calls an external LLM (DeepInfra, or the provider `LLM_BASE_URL`
+  names; clients come from `core/llm.py` only); it must fail soft when the key is absent, so
+  the app still runs without it.
