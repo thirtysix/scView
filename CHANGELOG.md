@@ -6,6 +6,10 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.69.0] - 2026-11-11
+
+The AI features can use another language model provider than DeepInfra, such as Privatemode for unpublished data.
+
 ### Added
 - The language model provider is a setting: `LLM_BASE_URL` (any OpenAI-compatible endpoint), `LLM_API_KEY` and
   `LLM_CHAT_MODEL` (plus `LLM_PROVIDER_NAME` for display). DeepInfra stays the default and existing `.env` files
