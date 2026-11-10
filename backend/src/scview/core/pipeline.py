@@ -1686,6 +1686,7 @@ def _annotate_llm(adata: ad.AnnData, params: PipelineParams, groupby: str, targe
 
     hint = params.annotation_tissue.strip()
     qc = _annotation_qc_notes(adata, groupby)
+    random_like = _annotation_random_notes(adata, marker_map, qc)
     listing = "\n".join(f"{g}: {', '.join(genes)}" + (f" [QC: {qc[str(g)]}]" if str(g) in qc else "")
                         for g, genes in marker_map.items())
     prompt = _annotation_prompt(listing, hint, targeted_panel.prompt_line(adata))
@@ -1733,6 +1734,8 @@ def _annotate_llm(adata: ad.AnnData, params: PipelineParams, groupby: str, targe
     tissue = _parse_tissue_line(raw) or hint
     if qc:
         notes["llm_qc_notes"] = len(qc)
+    if random_like:
+        notes["llm_random_markers"] = random_like
     if busy:  # the model answered 429 "busy" and was asked again after a wait
         notes["llm_busy_retries"] = busy
 
@@ -1859,6 +1862,23 @@ def _annotation_qc_notes(adata: ad.AnnData, groupby: str) -> dict[str, str]:
             parts.append("markers look like a mix of clusters " + " and ".join(row.doublet_like_of))
         out[str(row.group)] = "; ".join(parts + ["flagged " + ", ".join(f.replace("_", " ") for f in flags)])
     return out
+
+
+def _annotation_random_notes(adata: ad.AnnData, marker_map: dict[str, list[str]], qc: dict[str, str]) -> list[str]:
+    """Add a QC note to each cluster whose markers match no database cell type better than
+    random genes do (``core/marker_randomness.py``); the clusters noted. The default model named
+    a type for every random list in the annotation benchmark. Best effort: [] when the marker
+    databases are not on disk."""
+    from scview.core import marker_randomness
+
+    try:
+        check = marker_randomness.check(adata, marker_map)
+    except Exception as exc:
+        logger.info("Random-marker check skipped: %s", exc)
+        return []
+    for g in check.flagged:
+        qc[str(g)] = f"{qc[str(g)]}; {marker_randomness.NOTE}" if str(g) in qc else marker_randomness.NOTE
+    return sorted(check.flagged, key=str)
 
 
 def _annotation_prompt(listing: str, tissue_hint: str = "", panel_line: str = "") -> str:
