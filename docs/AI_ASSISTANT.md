@@ -43,7 +43,7 @@ beats inference.** This is what ties the assistant to the provenance feature: th
 what scView *did*, and only infers what it *didn't observe*.
 
 ### 1b. The advisor (LLM) — `backend/src/scview/core/llm_advisor.py`
-- **Model:** `RAG_CHAT_MODEL` (default `deepseek-ai/DeepSeek-V4.1-Flash`, thinking off) via **DeepInfra** (`https://api.deepinfra.com/v1/openai`,
+- **Model:** `LLM_CHAT_MODEL` / `RAG_CHAT_MODEL` (default `deepseek-ai/DeepSeek-V4.1-Flash`, thinking off) via **DeepInfra** (`https://api.deepinfra.com/v1/openai`, or `LLM_BASE_URL`, see 1f;
   OpenAI-compatible `AsyncOpenAI` client), `temperature=0.3`, `max_tokens=2048`.
 - **Input:** a system prompt (role = "expert single-cell bioinformatician"; the 12 nameable steps +
   their params; **dataset-size parameter guidance** — <5k / 5k–50k / >50k cells) and a user message
@@ -72,7 +72,7 @@ what scView *did*, and only infers what it *didn't observe*.
 
 ### 1c. The endpoints — `backend/src/scview/api/v1/assessment.py`
 - `GET  /datasets/{id}/assessment` → assessor state.
-- `POST /datasets/{id}/assessment/suggest` → advisor (LLM if `settings.DEEPINFRA_API_KEY`, else rules).
+- `POST /datasets/{id}/assessment/suggest` → advisor (LLM if `settings.llm_api_key`, else rules).
 - `POST /datasets/{id}/assessment/run` and `…/run-stream` (SSE progress) → execute selected steps.
 
 ### 1d. The UI loop — `frontend/src/components/panels/DataAssessmentPanel.tsx`
@@ -83,6 +83,59 @@ what scView *did*, and only infers what it *didn't observe*.
 
 ### 1e. The one-line summary
 > **assess (deterministic, reproducible) → advise (LLM, natural language) → user approves → run → record (provenance).**
+
+### 1f. The language model provider
+Every chat call (co-pilot, router, follow-ups, actions, QC report, advisor, insight polish,
+methods writer, claims check, LLM annotation) goes to one OpenAI-compatible endpoint. The clients
+are built in one place, `core/llm.py` (`async_client` / `sync_client`), from these settings:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `LLM_BASE_URL` | DeepInfra (`https://api.deepinfra.com/v1/openai`) | The provider's OpenAI-compatible base URL. |
+| `LLM_API_KEY` | `DEEPINFRA_API_KEY`, while the URL is DeepInfra's | Key sent to `LLM_BASE_URL`. With another URL there is no fallback, so a DeepInfra key never goes elsewhere; empty = AI features fall back. |
+| `LLM_CHAT_MODEL` | `RAG_CHAT_MODEL` (`deepseek-ai/DeepSeek-V4.1-Flash`) | The chat model, in the provider's own naming; also the annotator's default. |
+| `LLM_PROVIDER_NAME` | `DeepInfra`, else the URL's host | Shown in the co-pilot's Sources tooltip, the annotation tab and the startup log. |
+
+What is sent: the question, the chat history, and summaries built from the dataset (cluster sizes,
+marker gene lists, QC numbers, column names and categories, stored results), never the expression
+matrix. Per-model request settings (thinking switch, extra `max_tokens`) come from `llm._RULES` by
+model name, whatever the provider.
+
+**Literature RAG stays on DeepInfra.** Its embeddings (`BAAI/bge-base-en-v1.5`) and reranker
+(`/v1/inference`, not in the OpenAI API) run on DeepInfra with `DEEPINFRA_API_KEY`. With another
+chat provider, RAG is off (`GET /assistant/rag-status` returns `reason: "provider"`), so a
+question is never sent to DeepInfra behind the configured provider's back. The co-pilot still
+answers from the dataset and the app.
+
+**Example: Privatemode.** [Privatemode](https://www.privatemode.ai) (Edgeless Systems) runs models
+in confidential-computing enclaves; its `privatemode-proxy` verifies the enclave's attestation and
+encrypts each request before it leaves the host. Run the proxy beside scView on the compose
+network, not published, in a `docker-compose.override.yml` next to `docker-compose.yml`:
+```yaml
+services:
+  privatemode-proxy:
+    image: ghcr.io/edgelesssys/privatemode/privatemode-proxy:latest  # pin a version you have tested
+    # Each request brings its own key (scView sends LLM_API_KEY); the proxy holds none.
+    command: ["--api-key-fallback", "never", "--log-level", "warn"]
+    restart: unless-stopped
+    # No `ports:`: only the backend reaches it, as http://privatemode-proxy:8080.
+  backend:
+    depends_on:
+      privatemode-proxy:
+        condition: service_started
+```
+and in `.env`:
+```bash
+LLM_BASE_URL=http://privatemode-proxy:8080/v1
+LLM_API_KEY=<your Privatemode API key>
+LLM_CHAT_MODEL=glm-5.3-flash        # or glm-5.3, glm-5.2, gpt-oss-120b (GET /v1/models lists them)
+LLM_PROVIDER_NAME=Privatemode
+```
+The startup log then reads `language model: Privatemode (glm-5.3-flash)`. Checked 2026-11-11
+against a live proxy with `glm-5.3-flash`: streamed co-pilot chat with the router and follow-ups,
+the advisor's JSON, LLM annotation (5/5 PBMC clusters with CL ids) and the claims check's JSON all
+worked with the existing `_RULES` (`reasoning_effort: low` for GLM-5.3); `glm-5.2` and
+`gpt-oss-120b` returned clean claims JSON too.
 
 ---
 

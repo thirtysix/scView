@@ -376,7 +376,7 @@ POST /datasets/{dataset_id}/assessment/suggest
 }
 ```
 
-If no DeepInfra API key is configured, returns rule-based suggestions with the same format.
+If no language model key is configured (`DEEPINFRA_API_KEY`, or `LLM_API_KEY` for another provider), returns rule-based suggestions with the same format.
 
 ---
 

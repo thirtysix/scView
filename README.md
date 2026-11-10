@@ -471,6 +471,14 @@ Without a key the assistant degrades gracefully to deterministic, rule-based gui
 co-pilot's literature/tutorial corpora additionally require a Postgres/pgvector connection string
 (`RAG_DATABASE_URL`); see [`docs/AI_ASSISTANT.md`](docs/AI_ASSISTANT.md).
 
+The AI features send the language model your questions and summaries of your dataset (cluster
+sizes, marker gene lists, QC numbers, column names), never the expression matrix. To use another
+OpenAI-compatible provider instead of DeepInfra, for example
+[Privatemode](https://www.privatemode.ai) (models run in confidential-computing enclaves, reached
+through Edgeless's `privatemode-proxy`), set `LLM_BASE_URL`, `LLM_API_KEY` and `LLM_CHAT_MODEL`;
+literature search then turns off, because its embeddings run on DeepInfra. A compose example for
+the proxy is in [`docs/AI_ASSISTANT.md`](docs/AI_ASSISTANT.md#1f-the-language-model-provider).
+
 ### Use scView from your AI agent (MCP)
 scView's backend serves an [MCP](https://modelcontextprotocol.io) server at `/mcp`, so an agent
 such as Claude Code can open datasets, run the processing and do the statistics with the same
