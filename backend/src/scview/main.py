@@ -61,7 +61,9 @@ async def lifespan(app: FastAPI):
         ).start()
 
     # Deployment-posture self-check — make an insecure public exposure loud.
-    logger.info("scView deployment mode: %s", settings.DEPLOYMENT_MODE)
+    logger.info("scView deployment mode: %s; language model: %s", settings.DEPLOYMENT_MODE,
+                f"{settings.llm_provider} ({settings.chat_model})" if settings.llm_api_key
+                else "none (no key: AI features fall back)")
     for warn in settings.deployment_warnings():
         logger.warning("DEPLOYMENT (public): %s", warn)
 

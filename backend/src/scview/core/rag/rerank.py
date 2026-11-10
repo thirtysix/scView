@@ -8,7 +8,8 @@ hybrid order, so retrieval never breaks because reranking was unavailable.
 
 DeepInfra inference API: POST /v1/inference/{model} with
 ``{"queries": [query], "documents": [...]}`` → ``{"scores": [...]}`` aligned to
-documents (verified against ``Qwen/Qwen3-Reranker-4B``).
+documents (verified against ``Qwen/Qwen3-Reranker-4B``). DeepInfra only: RAG is off
+when ``LLM_BASE_URL`` names another provider (``Settings.rag_disabled_reason``).
 """
 
 from __future__ import annotations

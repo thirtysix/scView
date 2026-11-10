@@ -31,8 +31,8 @@ from scview.core.replicates import donor_candidates, pick_donor
 from scview.core import cluster_qc, doublet_source, doublets, seq_metrics, sex_check, spatial, targeted_panel
 from scview.core.anndata_adaptor import per_cell_qc
 from scview.core.assessor import _check_normalization, assess_preprocessing
-from scview.core.assistant import DEEPINFRA_BASE_URL, DEFAULT_MODEL, ChatSource
-from scview.core.llm import chat_extra, reply_room
+from scview.core.assistant import DEFAULT_MODEL, ChatSource
+from scview.core.llm import async_client, chat_extra, reply_room
 from scview.core.confounding import BATCH_RE, CONDITION_RE, in_design
 from scview.core.pseudobulk import MIN_CELLS_PER_SAMPLE, MIN_REPLICATES
 
@@ -465,7 +465,8 @@ def deterministic_report(facts: QCFacts, reason: str = "") -> str:
         return "\n".join(f"- {s.detail} [{s.ref}]" for s in items) or f"- {empty}"
 
     note = reason or ("The language model is not configured, so this is the deterministic "
-                      "facts summary. Set `DEEPINFRA_API_KEY` for a written report.")
+                      "facts summary. Set `DEEPINFRA_API_KEY` "
+                      "(or `LLM_API_KEY` for another provider) for a written report.")
     return (
         f"{note}\n\n"
         f"## Overview\n{bullets(facts.overview, 'No overview facts.')}\n\n"
@@ -563,9 +564,7 @@ async def report_events(
 
     parts: list[str] = []
     try:
-        from openai import AsyncOpenAI
-
-        client = AsyncOpenAI(api_key=api_key, base_url=DEEPINFRA_BASE_URL)
+        client = async_client(api_key)
         stream = await client.chat.completions.create(
             model=model,
             **chat_extra(model),

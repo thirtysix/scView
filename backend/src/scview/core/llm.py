@@ -1,7 +1,12 @@
-"""Per-model request settings for the DeepInfra chat calls.
+"""The language-model client and per-model request settings for the chat calls.
+
+``async_client`` / ``sync_client`` build every chat client against the configured
+provider (``Settings.llm_base_url``: DeepInfra by default, or e.g. a Privatemode
+proxy); nothing else names a provider URL. The RAG embeddings and reranker are the
+exception: they stay on DeepInfra (core/rag/).
 
 scView's calls are short, grounded and latency-sensitive, so thinking is turned off
-wherever the model allows it. Many models a user may set as ``RAG_CHAT_MODEL`` or
+wherever the model allows it. Many models a user may set as ``LLM_CHAT_MODEL`` or
 ``annotation_llm_model`` think by default: 10-100x the output tokens, and a tight
 ``max_tokens`` can be spent before the answer starts (Qwen3.5-397B returned empty
 content). How each model turns it off differs, and the wrong switch can make it worse,
@@ -26,6 +31,12 @@ annotation prompt at the annotator's 1,200-token budget, $0.004 in all):
 - gpt-oss-120b: thinking cannot be turned off (enable_thinking -> 429); reasoning_effort
   low still reasons (~2,500-2,700 chars): 22/25 lines at 1,200 tokens (cut), 25/25 with
   2,000 more (1,314 tokens used). Hence ``reply_room``.
+
+Privatemode (through privatemode-proxy) serves glm-5.3-flash, glm-5.3, glm-5.2 and
+gpt-oss-120b under bare names, and the same prefixes match them. Smoke test 2026-11-11
+with these settings: glm-5.3-flash streamed chat + router + follow-ups, advisor JSON
+(14 suggestions), annotation (5/5 clusters with CL ids) and claims JSON all clean;
+glm-5.2 (enable_thinking false) and gpt-oss-120b (low) gave clean claims JSON.
 
 Unknown models get nothing extra, as before. Every setting goes in ``extra_body``, so
 the request is the same with any openai SDK version.
@@ -61,6 +72,26 @@ _RULES: tuple[tuple[str, dict, int], ...] = (
     ("seed-2", _OFF, 0),
     ("hy4", _OFF, 0),
 )
+
+
+def async_client(api_key: str, base_url: str | None = None):
+    """An ``openai.AsyncOpenAI`` for the configured provider (``base_url`` overrides it)."""
+    from openai import AsyncOpenAI
+
+    return AsyncOpenAI(api_key=api_key, base_url=base_url or _base_url())
+
+
+def sync_client(api_key: str, base_url: str | None = None):
+    """An ``openai.OpenAI`` for the configured provider (``base_url`` overrides it)."""
+    from openai import OpenAI
+
+    return OpenAI(api_key=api_key, base_url=base_url or _base_url())
+
+
+def _base_url() -> str:
+    from scview.config import get_settings
+
+    return get_settings().llm_base_url
 
 
 def _rule(model: str | None) -> tuple[dict, int]:

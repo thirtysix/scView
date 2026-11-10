@@ -1,6 +1,6 @@
 """LLM-powered and rule-based preprocessing advisor.
 
-Uses a DeepInfra chat model to suggest next preprocessing steps based on
+Uses the configured chat model (DeepInfra by default) to suggest next preprocessing steps based on
 the current state of an AnnData object, with a deterministic rule-based fallback.
 """
 
@@ -12,7 +12,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from scview.core.llm import chat_extra, reply_room
+from scview.core.llm import async_client, chat_extra, reply_room
 
 logger = logging.getLogger(__name__)
 
@@ -199,7 +199,7 @@ async def get_llm_suggestions(
     api_key: str,
     model: str = "deepseek-ai/DeepSeek-V4.1-Flash",
 ) -> AdvisorResponse:
-    """Get preprocessing suggestions from a DeepInfra chat model.
+    """Get preprocessing suggestions from the configured chat model.
 
     Parameters
     ----------
@@ -208,7 +208,7 @@ async def get_llm_suggestions(
     dataset_summary
         Dictionary with at least 'n_cells' and 'n_genes' keys.
     api_key
-        DeepInfra API key.
+        Key for the configured provider (``Settings.llm_api_key``).
 
     Returns
     -------
@@ -221,12 +221,7 @@ async def get_llm_suggestions(
         return get_rule_based_suggestions(preprocessing_state, dataset_summary)
 
     try:
-        from openai import AsyncOpenAI
-
-        client = AsyncOpenAI(
-            api_key=api_key,
-            base_url="https://api.deepinfra.com/v1/openai",
-        )
+        client = async_client(api_key)
 
         user_message = _build_user_message(preprocessing_state, dataset_summary)
 

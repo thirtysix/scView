@@ -1,10 +1,14 @@
 """Application configuration via Pydantic BaseSettings."""
 
 from functools import lru_cache
+from urllib.parse import urlsplit
 
 from pydantic_settings import BaseSettings
 
 NO_UPLOAD_CAP = 1 << 62  # bytes: no upload is refused for its size
+# The default language-model provider (OpenAI-compatible endpoint). Literature RAG's
+# embeddings and reranker always use DeepInfra (core/rag/).
+DEEPINFRA_BASE_URL = "https://api.deepinfra.com/v1/openai"
 
 
 class Settings(BaseSettings):
@@ -16,6 +20,22 @@ class Settings(BaseSettings):
     CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
     CONVERTER_URL: str = "http://converter:8001"
     DEEPINFRA_API_KEY: str = ""
+
+    # --- Language model provider ----------------------------------------------
+    # Every AI feature (co-pilot, QC report, advisor, LLM annotation, claims check)
+    # calls one OpenAI-compatible chat endpoint. Empty: DeepInfra. For Privatemode
+    # (confidential computing), run Edgeless's privatemode-proxy beside scView and
+    # set e.g. http://privatemode-proxy:8080/v1 (docs/AI_ASSISTANT.md).
+    LLM_BASE_URL: str = ""
+    # Key sent to LLM_BASE_URL. Empty: DEEPINFRA_API_KEY, but only while the URL is
+    # DeepInfra's, so a DeepInfra key is never sent to another provider.
+    LLM_API_KEY: str = ""
+    # Chat model for every AI feature (the annotator's default too). Empty:
+    # RAG_CHAT_MODEL. Set it when the provider names its models differently.
+    LLM_CHAT_MODEL: str = ""
+    # Provider name shown in the UI and the startup log. Empty: "DeepInfra" for
+    # DeepInfra's URL, else the URL's host.
+    LLM_PROVIDER_NAME: str = ""
     MSIGDB_DIR: str = ""
     # Fetch missing MSigDB collections from the Broad Institute on startup.
     MSIGDB_AUTO_DOWNLOAD: bool = True
@@ -89,7 +109,7 @@ class Settings(BaseSettings):
     RAG_RERANK_MODEL: str = "Qwen/Qwen3-Reranker-4B"
     # When reranking, fetch this many hybrid candidates, then rerank down to TOP_K.
     RAG_RERANK_CANDIDATES: int = 24
-    # Chat/generation + router model on DeepInfra.
+    # Chat/generation + router model on DeepInfra (LLM_CHAT_MODEL overrides it).
     RAG_CHAT_MODEL: str = "deepseek-ai/DeepSeek-V4.1-Flash"
     # Retrieval tuning.
     RAG_TOP_K: int = 6
@@ -97,8 +117,51 @@ class Settings(BaseSettings):
     RAG_TEXT_WEIGHT: float = 0.3
 
     @property
+    def llm_base_url(self) -> str:
+        return self.LLM_BASE_URL.strip().rstrip("/") or DEEPINFRA_BASE_URL
+
+    @property
+    def llm_is_deepinfra(self) -> bool:
+        host = urlsplit(self.llm_base_url).hostname or ""
+        return host == "deepinfra.com" or host.endswith(".deepinfra.com")
+
+    @property
+    def llm_api_key(self) -> str:
+        """The key for ``llm_base_url``: LLM_API_KEY, else DEEPINFRA_API_KEY for DeepInfra
+        only. Empty: no language model (the AI features fall back)."""
+        key = self.LLM_API_KEY.strip()
+        if key:
+            return key
+        return self.DEEPINFRA_API_KEY if self.llm_is_deepinfra else ""
+
+    @property
+    def chat_model(self) -> str:
+        return self.LLM_CHAT_MODEL.strip() or self.RAG_CHAT_MODEL
+
+    @property
+    def llm_provider(self) -> str:
+        if self.LLM_PROVIDER_NAME.strip():
+            return self.LLM_PROVIDER_NAME.strip()
+        if self.llm_is_deepinfra:
+            return "DeepInfra"
+        return urlsplit(self.llm_base_url).hostname or self.llm_base_url
+
+    @property
+    def rag_disabled_reason(self) -> str | None:
+        """Why literature RAG is off, or None when it is on. Its embeddings and reranker
+        run on DeepInfra, so with another chat provider it is off: the questions would
+        otherwise still go to DeepInfra."""
+        if not self.RAG_DATABASE_URL:
+            return "no_database"
+        if not self.llm_is_deepinfra:
+            return "provider"
+        if not self.DEEPINFRA_API_KEY:
+            return "no_api_key"
+        return None
+
+    @property
     def rag_enabled(self) -> bool:
-        return bool(self.RAG_DATABASE_URL and self.DEEPINFRA_API_KEY)
+        return self.rag_disabled_reason is None
 
     @property
     def public_import_enabled(self) -> bool:

@@ -45,7 +45,7 @@ from scview.core import (
 from scview.core.run_watchdog import RunCancelled, RunControl, cancelled_reason
 from scview.core.anndata_adaptor import per_cell_qc
 from scview.core.cell_cycle import near_zero_phase_calls
-from scview.core.llm import busy_retry, chat_extra, reply_room
+from scview.core.llm import busy_retry, chat_extra, reply_room, sync_client
 from scview.core.geneset_sources import (
     ResolvedGeneSets,
     match_query_case,
@@ -188,7 +188,7 @@ class PipelineParams:
     celltypist_model: str = "Immune_All_Low.pkl"  # CellTypist model (immune default)
     annotation_groupby: str = ""                 # cluster column for consensus (empty = active clustering / "cluster")
     annotation_target: str = "cell_type"         # obs column to write
-    annotation_llm_model: str = ""               # DeepInfra model id for method="llm"
+    annotation_llm_model: str = ""               # chat model id for method="llm" (provider's name)
     annotation_tissue: str = ""                  # optional tissue hint for method="llm"
     annotation_marker_sets: str = "databases"    # marker_score: databases (core/marker_db.py) | builtin (14 immune sets)
 
@@ -1679,19 +1679,17 @@ def _annotate_llm(adata: ad.AnnData, params: PipelineParams, groupby: str, targe
     from scview.config import get_settings
 
     settings = get_settings()
-    api_key = settings.DEEPINFRA_API_KEY
+    api_key = settings.llm_api_key
     if not api_key:
-        raise ValueError("LLM annotation requires DEEPINFRA_API_KEY to be set.")
-    model = params.annotation_llm_model or settings.RAG_CHAT_MODEL
-
-    from openai import OpenAI
+        raise ValueError("LLM annotation requires a language model key (LLM_API_KEY or DEEPINFRA_API_KEY).")
+    model = params.annotation_llm_model or settings.chat_model
 
     hint = params.annotation_tissue.strip()
     qc = _annotation_qc_notes(adata, groupby)
     listing = "\n".join(f"{g}: {', '.join(genes)}" + (f" [QC: {qc[str(g)]}]" if str(g) in qc else "")
                         for g, genes in marker_map.items())
     prompt = _annotation_prompt(listing, hint, targeted_panel.prompt_line(adata))
-    client = OpenAI(api_key=api_key, base_url="https://api.deepinfra.com/v1/openai")
+    client = sync_client(api_key, settings.llm_base_url)
     clusters = list(marker_map.keys())
 
     busy = 0
@@ -2062,9 +2060,9 @@ def _run_cell_type_annotation(
     if method == "llm":
         from scview.config import get_settings
 
-        if not get_settings().DEEPINFRA_API_KEY:
+        if not get_settings().llm_api_key:
             logger.warning(
-                "LLM annotation requested but DEEPINFRA_API_KEY is unset; "
+                "LLM annotation requested but no language model key is set; "
                 "falling back to CellTypist (%s).", params.celltypist_model,
             )
             method = "celltypist"

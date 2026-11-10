@@ -7,6 +7,7 @@ Two routed corpora answer different question types:
 A query router picks the corpus(es); hybrid retrieval (vector + full-text) returns
 chunks; the chunks are folded into the co-pilot's grounding context via the
 ``extra_context`` hook in ``core/assistant.py``. All of this degrades gracefully:
-if ``RAG_DATABASE_URL`` / ``DEEPINFRA_API_KEY`` are unset the co-pilot simply
+if ``RAG_DATABASE_URL`` / ``DEEPINFRA_API_KEY`` are unset, or ``LLM_BASE_URL`` names
+another provider (the embeddings and reranker run on DeepInfra), the co-pilot simply
 grounds in in-app facts only.
 """

@@ -23,7 +23,8 @@ def _fresh_cache():
 
 async def test_disabled_says_why(client, test_settings):
     body = (await client.get(URL)).json()
-    assert body == {"enabled": False, "counts": {}, "corpora": {}, "reason": "no_database"}
+    assert body == {"enabled": False, "counts": {}, "corpora": {}, "reason": "no_database",
+                    "llm_provider": None}
     test_settings.RAG_DATABASE_URL = "postgresql://example/db"
     assert (await client.get(URL)).json()["reason"] == "no_api_key"
 
@@ -57,7 +58,8 @@ async def test_database_errors_stay_in_the_log(client, test_settings, monkeypatc
     test_settings.RAG_DATABASE_URL = "postgresql://user:hunter2@host/db"
     test_settings.DEEPINFRA_API_KEY = "k"
     r = await client.get(URL)
-    assert r.json() == {"enabled": True, "counts": {}, "corpora": {}, "error": "database unreachable"}
+    assert r.json() == {"enabled": True, "counts": {}, "corpora": {}, "error": "database unreachable",
+                        "llm_provider": "DeepInfra"}
     assert "hunter2" not in r.text
     assert api._rag_status_cache == {}  # a failure isn't cached
 
@@ -93,6 +95,28 @@ async def test_corpus_stats_is_one_read_only_select(monkeypatch):
 async def test_llm_status_follows_the_api_key(client, test_settings):
     url = "/api/v1/assistant/llm-status"
     test_settings.DEEPINFRA_API_KEY = ""
-    assert (await client.get(url)).json() == {"available": False}
+    assert (await client.get(url)).json()["available"] is False
     test_settings.DEEPINFRA_API_KEY = "k"
-    assert (await client.get(url)).json() == {"available": True}
+    assert (await client.get(url)).json() == {
+        "available": True, "provider": "DeepInfra", "model": test_settings.RAG_CHAT_MODEL}
+
+
+async def test_llm_status_names_another_provider(client, test_settings):
+    test_settings.DEEPINFRA_API_KEY = "k"
+    test_settings.LLM_BASE_URL = "http://privatemode-proxy:8080/v1"
+    # A DeepInfra key is never sent to another provider: no LLM_API_KEY, no model.
+    assert (await client.get("/api/v1/assistant/llm-status")).json()["available"] is False
+    test_settings.LLM_API_KEY = "pm"
+    test_settings.LLM_CHAT_MODEL = "glm-5.3-flash"
+    test_settings.LLM_PROVIDER_NAME = "Privatemode"
+    assert (await client.get("/api/v1/assistant/llm-status")).json() == {
+        "available": True, "provider": "Privatemode", "model": "glm-5.3-flash"}
+
+
+async def test_rag_off_with_another_provider(client, test_settings):
+    test_settings.RAG_DATABASE_URL = "postgresql://example/db"
+    test_settings.DEEPINFRA_API_KEY = "k"
+    test_settings.LLM_BASE_URL = "http://privatemode-proxy:8080/v1"
+    test_settings.LLM_API_KEY = "pm"
+    body = (await client.get(URL)).json()
+    assert body["reason"] == "provider" and body["llm_provider"] == "privatemode-proxy"

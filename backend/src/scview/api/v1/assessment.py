@@ -571,13 +571,13 @@ async def suggest_improvements(
 
     try:
         # Try LLM suggestions if API key is configured
-        if settings.DEEPINFRA_API_KEY:
+        if settings.llm_api_key:
             try:
                 result = await get_llm_suggestions(
                     preprocessing_state=body.preprocessing_state,
                     dataset_summary=dataset_summary,
-                    api_key=settings.DEEPINFRA_API_KEY,
-                    model=settings.RAG_CHAT_MODEL,
+                    api_key=settings.llm_api_key,
+                    model=settings.chat_model,
                 )
                 return result.model_dump()
             except Exception as e:
@@ -682,8 +682,8 @@ async def _qc_facts(dataset_id: str, dm: DatasetManager) -> qc_report.QCFacts:
 
 def _report_kwargs(dataset_id: str, dm: DatasetManager, settings: Settings) -> dict:
     return dict(
-        api_key=settings.DEEPINFRA_API_KEY,
-        model=settings.RAG_CHAT_MODEL,
+        api_key=settings.llm_api_key,
+        model=settings.chat_model,
         cache_file=qc_report.cache_path(dm.data_dir, dataset_id),
     )
 

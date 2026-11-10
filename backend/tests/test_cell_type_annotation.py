@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from scview.config import Settings
 from scview.core.pipeline import (
     PipelineParams,
     _resolve_annotation_groupby,
@@ -210,7 +211,7 @@ def test_annotator_sends_informative_markers_and_records_the_tissue(monkeypatch)
             return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg)])
 
     monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_Client))
-    monkeypatch.setattr("scview.config.get_settings", lambda: types.SimpleNamespace(
+    monkeypatch.setattr("scview.config.get_settings", lambda: Settings(
         DEEPINFRA_API_KEY="k", RAG_CHAT_MODEL="m"))
     P._annotate_llm(a, P.PipelineParams(), "cluster", "cell_type")
 
@@ -294,7 +295,7 @@ def _scripted_openai(monkeypatch, replies: list[tuple[str, str]]) -> list[int]:
             return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg, finish_reason=finish)])
 
     monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_Client))
-    monkeypatch.setattr("scview.config.get_settings", lambda: types.SimpleNamespace(
+    monkeypatch.setattr("scview.config.get_settings", lambda: Settings(
         DEEPINFRA_API_KEY="k", RAG_CHAT_MODEL="deepseek-ai/DeepSeek-V4.1-Flash"))
     return asked
 

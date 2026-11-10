@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from scview.config import Settings
 from scview.core import cell_ontology as co
 from scview.core import marker_db as mdb
 
@@ -358,7 +359,7 @@ def _llm_run(monkeypatch, reply: str):
 
     monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_Client))
     monkeypatch.setattr(P, "_top_markers_per_group", lambda adata, g: {k: ["G1", "G2"] for k in "abcd"})
-    monkeypatch.setattr("scview.config.get_settings", lambda: types.SimpleNamespace(
+    monkeypatch.setattr("scview.config.get_settings", lambda: Settings(
         DEEPINFRA_API_KEY="k", RAG_CHAT_MODEL="m", MARKER_DB_AUTO_DOWNLOAD=False))
     fit = P._annotate_llm(a, P.PipelineParams(), "cluster", "cell_type")
     return a, fit, sent
