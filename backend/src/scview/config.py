@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     MSIGDB_DIR: str = ""
     # Fetch missing MSigDB collections from the Broad Institute on startup.
     MSIGDB_AUTO_DOWNLOAD: bool = True
+    # Ask GitHub for the latest scView release once a day, for the sidebar's "newer version"
+    # notice (core/version_check.py). Off: nothing is sent; the sidebar shows the version only.
+    UPDATE_CHECK: bool = True
     # Fetch the PanglaoDB + CellMarker 2.0 marker databases (and the Cell Ontology)
     # into DATA_DIR/marker_db on first use (core/marker_db.py).
     MARKER_DB_AUTO_DOWNLOAD: bool = True
