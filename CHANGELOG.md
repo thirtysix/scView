@@ -6,6 +6,10 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.69.1] - 2026-11-11
+
+Two fixes for the violin under the Unified View plot.
+
 ### Fixed
 - Unified View: changing "Group by (violin)" kept the old groups' violins and only recoloured them. The violin on
   screen (a gene, protein, gene-set score, program, gene activity or chromVAR score) is now split by the new column.
