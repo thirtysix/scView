@@ -78,6 +78,14 @@ async def test_de_between_groups_reports_the_confounding():
         async def get_or_load_dataset(self, _id):
             return type("A", (), {"adata": a})()
 
+        # A capped container (cgroup memory limit) makes DE reserve and name its read.
+        def dataset_name(self, dataset_id):
+            return dataset_id
+        async def reserve(self, *_a, **_k):
+            return None
+        def hold_read(self, *_a, **_k):
+            return lambda: None
+
     r = await differential_expression_compare(
         "x", DECompareRequest(split_by="stim", group_a="STIM", group_b="CTRL"), _DM())
     assert r.confounding is not None and r.confounding["batch"] == "dataset"
@@ -105,6 +113,14 @@ async def test_a_batch_key_that_is_the_compared_column_is_not_a_batch_for_de():
     class _DM:
         async def get_or_load_dataset(self, _id):
             return type("A", (), {"adata": a})()
+
+        # A capped container (cgroup memory limit) makes DE reserve and name its read.
+        def dataset_name(self, dataset_id):
+            return dataset_id
+        async def reserve(self, *_a, **_k):
+            return None
+        def hold_read(self, *_a, **_k):
+            return lambda: None
 
     r = await differential_expression_compare(
         "x", DECompareRequest(split_by="stim", group_a="STIM", group_b="CTRL"), _DM())

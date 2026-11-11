@@ -3,9 +3,10 @@
 A DE result lives in the browser, but sending it back for GSEA does not fit:
 every tested gene with its fold change, p and statistic is ~1.3 MB of JSON for
 Kang's 14k genes, past the 512 KB request cap (``MAX_JSON_BODY_KB``). So each DE
-response carries an id, and GSEA asks for the result by it. Process memory,
-like the dataset cache (the production backend is one worker); a result that
-has dropped out (after KEEP newer ones, or a restart) is run again.
+response carries an id, and GSEA asks for the result by it. The last KEEP are in
+process memory, like the dataset cache (the production backend is one worker);
+every result is also saved in the results store on disk (``core/results_store.py``,
+in the background), which ``recall`` falls back to after KEEP newer ones or a restart.
 
 Each result also keeps a readable label ("CD14 Mono: STIM vs CTRL (Wilcoxon)"),
 when it was run and what it compared, so the overlap of several results

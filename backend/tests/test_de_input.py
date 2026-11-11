@@ -39,6 +39,14 @@ class _DM:
     async def get_or_load_dataset(self, _id):
         return type("A", (), {"adata": self.adata})()
 
+    # A capped container (cgroup memory limit) makes DE reserve and name its read.
+    def dataset_name(self, dataset_id):
+        return dataset_id
+    async def reserve(self, *_a, **_k):
+        return None
+    def hold_read(self, *_a, **_k):
+        return lambda: None
+
 
 async def _lfc(adata) -> dict[str, float]:
     res = await differential_expression("x", DERequest(indices=list(range(40))), _DM(adata))
