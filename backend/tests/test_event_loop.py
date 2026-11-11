@@ -163,14 +163,17 @@ async def test_an_abandoned_run_stops_after_its_step_and_only_then_releases(tmp_
     _dataset(tmp_path)
     dm = DatasetManager(str(tmp_path))
     await dm.load_dataset("ds")
+    in_second = threading.Event()
     closed = threading.Event()
     second_done = threading.Event()
     third_started = threading.Event()
 
     def steps(adaptor):
         yield "first"
-        # The second step ends only once the client has gone (a fixed sleep raced a loaded CI runner:
-        # the close landed after the second step and the third one started).
+        # The client goes away only once the thread is inside the second step, and that step ends only
+        # after it has gone. Without both, a loaded CI runner closed before the thread had looked at the
+        # stop flag after "first" (the run then rightly stops after the first step).
+        in_second.set()
         assert closed.wait(10)
         second_done.set()
         yield "second"
@@ -179,6 +182,7 @@ async def test_an_abandoned_run_stops_after_its_step_and_only_then_releases(tmp_
 
     events = iterate_exclusive(dm, "ds", steps)
     assert await events.__anext__() == "first"
+    assert await asyncio.to_thread(in_second.wait, 10)
     await events.aclose()  # the client went away during the second step
     closed.set()
 
