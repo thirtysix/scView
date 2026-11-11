@@ -9,7 +9,9 @@ import types
 import anndata as ad
 import numpy as np
 import pandas as pd
+import pytest
 
+from scview.config import Settings
 from scview.core import marker_randomness as MR
 from scview.core import pipeline as P
 
@@ -96,8 +98,7 @@ def test_annotator_notes_a_random_list_and_records_it(monkeypatch):
             return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg, finish_reason="stop")])
 
     monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_Client))
-    monkeypatch.setattr("scview.config.get_settings", lambda: types.SimpleNamespace(
-        DEEPINFRA_API_KEY="k", RAG_CHAT_MODEL="m"))
+    monkeypatch.setattr("scview.config.get_settings", lambda: Settings(DEEPINFRA_API_KEY="k", RAG_CHAT_MODEL="m"))
     monkeypatch.setattr(P, "_record_llm_cl_ids", lambda adata, target, ids: {})
     fit = P._annotate_llm(a, P.PipelineParams(), "cluster", "cell_type")
 
@@ -113,3 +114,46 @@ def test_a_failing_check_leaves_the_annotation_alone(monkeypatch):
     qc = {"1": "x"}
     assert P._annotation_random_notes(_adata(), {"1": ["G1"]}, qc) == []
     assert qc == {"1": "x"}
+
+
+def test_the_prompt_names_the_note_and_its_own_answer_before_the_mixture_rule():
+    """A noted cluster gets 'Unidentified', so 'Low-quality cells' stays for damaged cells
+    (annotation benchmark arm rm, 2026-11-10); the mixture rule stays the last naming rule."""
+    p = P._annotation_prompt("0: CD3D")
+    assert MR.NOTE in p
+    unid, mixture = p.index("'Unidentified | CL:none'"), p.index("name the mixture")
+    assert p.index("'Low-quality cells | CL:none'") < unid < mixture
+
+
+@pytest.mark.parametrize("label", ["Unidentified", "unidentified cells", " Unidentified cell "])
+def test_unidentified_spellings_become_one_label_without_an_id(label):
+    assert P._UNIDENTIFIED.match(label)
+
+
+def test_an_unidentified_answer_keeps_no_cl_id(monkeypatch):
+    rng = np.random.default_rng(0)
+    a = ad.AnnData(X=rng.random((20, 2)).astype(np.float32))
+    a.var_names = ["CD3D", "MS4A1"]
+    a.obs["cluster"] = pd.Categorical(["0"] * 10 + ["1"] * 10)
+    monkeypatch.setattr(P, "_top_markers_per_group", lambda adata, g: {"0": ["CD3D"], "1": ["MS4A1"]})
+    monkeypatch.setattr(P, "_annotation_qc_notes", lambda adata, g: {})
+    monkeypatch.setattr(MR, "check", lambda adata, mk: MR.RandomCheck(flagged={"1": {}}, checked=2))
+
+    class _Client:
+        def __init__(self, **_):
+            self.chat = types.SimpleNamespace(completions=self)
+
+        def create(self, messages, **_):
+            msg = types.SimpleNamespace(content="tissue: blood\n0: T cells | CL:0000084\n1: unidentified cells | CL:0000000")
+            return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg, finish_reason="stop")])
+
+    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_Client))
+    monkeypatch.setattr("scview.config.get_settings", lambda: Settings(DEEPINFRA_API_KEY="k", RAG_CHAT_MODEL="m"))
+    monkeypatch.setattr(P, "_record_llm_cl_ids", lambda adata, target, ids: {"ids": ids})
+    fit = P._annotate_llm(a, P.PipelineParams(), "cluster", "cell_type")
+    assert a.uns["cell_type_llm_mapping"]["1"] == "Unidentified"
+    assert fit["ids"].get("Unidentified") is None
+    from scview.core import cell_ontology, label_qualifiers
+
+    assert cell_ontology._no_type("Unidentified")
+    assert "unidentified" in label_qualifiers._NO_TYPE

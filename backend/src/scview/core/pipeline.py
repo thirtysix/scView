@@ -1744,6 +1744,8 @@ def _annotate_llm(adata: ad.AnnData, params: PipelineParams, groupby: str, targe
         label, cid = _split_cl_id(labels.get(str(g), "Unknown"))
         if _LOW_QUALITY.match(label):
             label, cid = LOW_QUALITY_LABEL, None
+        elif _UNIDENTIFIED.match(label):
+            label, cid = UNIDENTIFIED_LABEL, None
         mapping[str(g)] = _label_case(label or "Unknown")
         if cid and not model_ids.get(mapping[str(g)]):
             model_ids[mapping[str(g)]] = cid
@@ -1825,6 +1827,13 @@ def _record_llm_cl_ids(adata: ad.AnnData, target: str, model_ids: dict[str, str 
 
 LOW_QUALITY_LABEL = "Low-quality cells"
 _LOW_QUALITY = re.compile(r"^\s*(?:likely\s+|probable\s+)?low[-\s]?quality(?:\s+cells?)?\s*$", re.I)
+# The answer for a cluster whose markers match no database type better than random genes
+# (core/marker_randomness.py): its own label, so "Low-quality cells" stays for damaged cells.
+# With one shared answer the random lists took it and the real low-quality group became
+# "Monocytes" (annotation benchmark arm rm, 2026-11-10). Not "Unknown": that is the label of
+# clusters a cut reply never reached.
+UNIDENTIFIED_LABEL = "Unidentified"
+_UNIDENTIFIED = re.compile(r"^\s*unidentified(?:\s+cells?)?\s*$", re.I)
 # Cluster QC flags worth a note beside a cluster's markers (core/cluster_qc.py).
 # low_malat1 stays although it fires on real mouse Smart-seq2 clusters: leaving it out
 # (2026-11-09) cut visible-doublet naming in the T4 lung set from 52/54 to 46/54.
@@ -1912,6 +1921,9 @@ def _annotation_prompt(listing: str, tissue_hint: str = "", panel_line: str = ""
         "(cardiomyocytes, hepatocytes, kidney tubule cells), so name the type when its lineage "
         "genes are clear. A heat-shock, stress or activation program (HSPA1A, DNAJB1, FOS, JUN, "
         "NR4A1) is a state of living cells, not low quality: name the cell type under the stress genes. "
+        "A cluster whose QC note says its markers match no cell type in the marker databases better "
+        "than random genes do has no recognisable type: answer 'Unidentified | CL:none', or "
+        "'Low-quality cells | CL:none' when its note also says few genes and high mitochondrial RNA. "
         # The mixture rule comes last of the naming rules: placed before the low-quality text (v0.66.0), the
         # default model named one parent of a two-lineage cluster more often (annotation benchmark T4).
         "If a cluster shows two lineages, name the mixture (e.g. 'NK cells / CD8+ T cells'), "

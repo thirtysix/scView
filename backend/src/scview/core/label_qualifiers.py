@@ -67,7 +67,7 @@ _UNINFORMATIVE = re.compile(
     r"^(?:ENS[A-Z]*G\d|LINC\d|LOC\d|A[CLP]\d{6}|RP\d+-|CT[ABCD]-|Gm\d+$)|-AS\d+$|Rik$|\.\d+$", re.I)
 # One-cluster labels that call for a qualifier: a mixture, doublets, or no cell type.
 _MIXTURE = re.compile(r"/|\bdoublets?\b|\bmultiplets?\b", re.I)
-_NO_TYPE = {"unknown", "unassigned", "low-quality cells", "low quality cells", "none", "other"}
+_NO_TYPE = {"unknown", "unassigned", "unidentified", "low-quality cells", "low quality cells", "none", "other"}
 
 
 def column_name(target: str) -> str:
