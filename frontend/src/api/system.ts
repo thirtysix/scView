@@ -16,3 +16,18 @@ export interface SystemMemory {
 export function getSystemMemory(): Promise<SystemMemory> {
   return apiFetch<SystemMemory>("/system/memory");
 }
+
+/** This scView's version and the latest release (GET /system/version). */
+export interface SystemVersion {
+  version: string;
+  /** "off": UPDATE_CHECK=false, GitHub is never asked */
+  check: "on" | "off";
+  /** The latest release on GitHub; null when off or it could not be read */
+  latest: string | null;
+  update_available: boolean;
+  release_url: string | null;
+}
+
+export function getSystemVersion(): Promise<SystemVersion> {
+  return apiFetch<SystemVersion>("/system/version");
+}

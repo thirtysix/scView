@@ -2,6 +2,7 @@ import { useViewStore } from "@/stores/viewStore";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { PANEL_IDS, PANEL_LABELS, type PanelId } from "@/lib/constants";
 import { MemoryIndicator } from "./MemoryIndicator";
+import { VersionInfo } from "./VersionInfo";
 import { ThemeToggle } from "./ThemeToggle";
 import { AccessibilityToggle } from "./AccessibilityToggle";
 import {
@@ -93,6 +94,7 @@ export function Sidebar() {
       <ThemeToggle collapsed={sidebarCollapsed} />
       <AccessibilityToggle collapsed={sidebarCollapsed} />
       <MemoryIndicator collapsed={sidebarCollapsed} />
+      <VersionInfo collapsed={sidebarCollapsed} />
 
       {/* Collapse toggle */}
       <button

@@ -6,6 +6,15 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- The sidebar shows scView's version, and a link to the release notes when a newer release is out. The backend asks
+  GitHub's release list at most once a day (no user, dataset or machine details); `UPDATE_CHECK=false` turns it off.
+  `GET /api/v1/system/version`.
+
+### Fixed
+- A backend test compared two stored results including their creation second, and failed when the two runs
+  straddled a second (`test_mixscape_stream`).
+
 ## [0.69.1] - 2026-11-11
 
 Two fixes for the violin under the Unified View plot.
