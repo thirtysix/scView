@@ -37,7 +37,7 @@ const renderPanel = (props: Partial<Parameters<typeof UnifiedBottomPanel>[0]> = 
   );
 
 beforeEach(() => {
-  useUnifiedViewStore.setState({ bottomPanelOpen: false, bottomView: "distribution" });
+  useUnifiedViewStore.setState({ bottomPanelOpen: false, bottomView: "distribution", violinGene: null });
 });
 
 describe("UnifiedBottomPanel", () => {
@@ -100,6 +100,22 @@ describe("UnifiedBottomPanel", () => {
     expect(screen.getByTestId("per-donor")).toHaveTextContent("a program's usage is per cell");
     fireEvent.click(screen.getByRole("button", { name: "Cells" }));
     expect(screen.getByTestId("violin")).toBeInTheDocument();
+  });
+
+  it("keeps the violin's gene per donor after the plot is coloured by a column", () => {
+    // Choosing a Color clears the gene overlay; the violin (and its gene) stay.
+    useUnifiedViewStore.setState({
+      bottomPanelOpen: true,
+      bottomView: "distribution",
+      scatterOverlay: null,
+      violinGene: { gene: "FOXO3" },
+    });
+    renderPanel({ violinGroupColumn: "cell_line" });
+    fireEvent.click(screen.getByRole("button", { name: "Per donor" }));
+    expect(screen.getByTestId("per-donor")).toHaveTextContent("FOXO3 by cell_line");
+    // A score's violin is not a gene's.
+    act(() => useUnifiedViewStore.getState().setViolinData({ a: [1] }));
+    expect(screen.getByTestId("per-donor")).toHaveTextContent("none by cell_line");
   });
 });
 

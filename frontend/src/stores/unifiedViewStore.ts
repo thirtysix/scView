@@ -92,7 +92,12 @@ interface UnifiedViewState {
 
   // Violin payload (set alongside the overlay) — persisted for the same reason
   violinData: Record<string, number[]>;
+  // Any other violin (a score, a program...) is not one gene's: setting the data clears violinGene
   setViolinData: (data: Record<string, number[]>) => void;
+  // The gene (or protein, with its layer) the violin shows, which can outlive the scatter
+  // overlay (another colouring clears that): "Per donor" and a new group-by follow it.
+  violinGene: { gene: string; layer?: string } | null;
+  setViolinGene: (g: { gene: string; layer?: string } | null) => void;
   violinTitle: string;
   setViolinTitle: (title: string) => void;
 
@@ -167,7 +172,9 @@ export const useUnifiedViewStore = create<UnifiedViewState>((set) => ({
   setColorClip: (clip) => set({ colorClip: clip }),
 
   violinData: {},
-  setViolinData: (data) => set({ violinData: data }),
+  setViolinData: (data) => set({ violinData: data, violinGene: null }),
+  violinGene: null,
+  setViolinGene: (g) => set({ violinGene: g }),
   violinTitle: "",
   setViolinTitle: (title) => set({ violinTitle: title }),
 
@@ -179,6 +186,7 @@ export const useUnifiedViewStore = create<UnifiedViewState>((set) => ({
       overlayDatasetId: null,
       colorClip: null,
       violinData: {},
+      violinGene: null,
       violinTitle: "",
     }),
 

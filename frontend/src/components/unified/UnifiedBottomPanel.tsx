@@ -56,7 +56,13 @@ export function UnifiedBottomPanel({
   // overlaid histograms of a selection or group against the rest (N18).
   const [mode, setMode] = useState<DistributionMode>("cells");
   const perDonor = mode === "donor";
-  const gene = overlay?.type === "expression" && !overlay.layer ? overlay.gene : null;
+  // The gene on the plot, else the gene the violin shows: colouring the plot by a column
+  // clears the overlay but leaves the violin (and the gene in the search box).
+  const violinGene = useUnifiedViewStore((s) => s.violinGene);
+  const gene =
+    overlay?.type === "expression" && !overlay.layer ? overlay.gene
+    : violinGene && !violinGene.layer ? violinGene.gene
+    : null;
   const noGeneReason =
     overlay?.type === "score"
       ? "Per-donor values are for one gene; a score is per cell. Pick a gene."
