@@ -77,7 +77,7 @@ def _no_timing(d):
     """A response without its timings and ids (they differ run to run)."""
     if isinstance(d, dict):
         return {k: _no_timing(v) for k, v in d.items()
-                if k not in ("elapsed_seconds", "seconds", "result_id", "id", "created_at", "reused")}
+                if k not in ("elapsed_seconds", "seconds", "result_id", "id", "created_at", "created", "reused")}
     if isinstance(d, (list, tuple)):
         return [_no_timing(v) for v in d]
     if isinstance(d, np.ndarray):
