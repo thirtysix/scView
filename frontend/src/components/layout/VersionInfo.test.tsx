@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 
 const { getSystemVersion } = vi.hoisted(() => ({ getSystemVersion: vi.fn() }));
 vi.mock("@/api/system", () => ({ getSystemVersion }));
 
-import { VersionInfo } from "./VersionInfo";
+import { VersionInfo, zipUrl } from "./VersionInfo";
 
 const BASE = { version: "0.69.1", check: "on" as const, latest: "0.69.1", update_available: false, release_url: null };
 
@@ -28,20 +28,33 @@ describe("VersionInfo", () => {
     expect(screen.queryByRole("link")).toBeNull();
   });
 
-  it("links a newer release, also in the collapsed sidebar", async () => {
+  it("opens update steps with the release's ZIP, also from the collapsed sidebar", async () => {
     const v = { ...BASE, latest: "0.70.0", update_available: true,
       release_url: "https://github.com/thirtysix/scView/releases/tag/v0.70.0" };
     getSystemVersion.mockResolvedValue(v);
     const { unmount } = render(<VersionInfo collapsed={false} />);
-    const link = await screen.findByRole("link", { name: "scView 0.70.0 is available" });
-    expect(link).toHaveAttribute("href", v.release_url);
-    expect(link).toHaveAttribute("rel", "noopener noreferrer");
-    expect(link).toHaveTextContent("0.70.0 available");
-    expect(link.getAttribute("title")).toContain("git pull");
+    const button = await screen.findByRole("button", { name: /scView 0.70.0 is available/ });
+    expect(button).toHaveTextContent("0.70.0 available");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.click(button);
+    const dialog = screen.getByRole("dialog", { name: "Update to scView 0.70.0" });
+    expect(screen.getByTestId("update-zip")).toHaveAttribute(
+      "href", "https://github.com/thirtysix/scView/archive/refs/tags/v0.70.0.zip");
+    expect(screen.getByRole("link", { name: "What's new" })).toHaveAttribute("href", v.release_url);
+    expect(dialog).toHaveTextContent("git pull");
+    expect(dialog).toHaveTextContent("start-windows.bat");
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
     unmount();
     render(<VersionInfo collapsed />);
-    expect(await screen.findByRole("link", { name: "scView 0.70.0 is available" })).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: /scView 0.70.0 is available/ }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
     expect(screen.queryByText("scView 0.69.1")).toBeNull();
+  });
+
+  it("builds the ZIP link only from a GitHub release URL", () => {
+    expect(zipUrl("https://github.com/a/b/releases/tag/v1.2.3")).toBe("https://github.com/a/b/archive/refs/tags/v1.2.3.zip");
+    expect(zipUrl("https://example.com/releases/tag/v1.2.3")).toBeNull();
   });
 
 });

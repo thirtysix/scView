@@ -520,8 +520,9 @@ requests addressed to `localhost` / `127.0.0.1` and refuses web pages from other
 `MCP_ALLOWED_ORIGINS` names another address (e.g. `http://192.168.1.5:8080`).
 
 ### Updating
-The bottom of the sidebar shows the version you run, and a link when a newer release is out (the
-backend asks GitHub once a day; set `UPDATE_CHECK=false` in `.env` to turn that off).
+The bottom of the sidebar shows the version you run. When a newer release is out, click
+**x.y.z available** there for these steps with a direct download of the new ZIP (the backend
+asks GitHub once a day; set `UPDATE_CHECK=false` in `.env` to turn that off).
 
 - **Downloaded ZIP:** download and extract the new ZIP, copy your `.env` file across from the old
   folder if you set an API key, and start scView from the new folder as before. The version
