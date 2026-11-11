@@ -1,8 +1,9 @@
 """Marker lists that name no known cell type better than random genes do (no LLM).
 
 The annotation benchmark's T4 controls (2026-11-08) gave the annotator 25 random genes as a
-"cluster": the default model named a cell type every time (0 of 54). This check finds such lists
-so the prompt can say so in the cluster's QC note.
+"cluster": the default model named a cell type every time (0 of 54). This check finds such lists, and
+the annotator labels them "Unidentified" itself instead of asking the AI (``pipeline._annotation_decided``).
+A note in the prompt instead moved other clusters' calls (arms rm, ua).
 
 Each list (the annotator's own markers, ``core/marker_selection.py``) is scored by its best
 hypergeometric match in the marker databases (``core/marker_db.py``, the annotate view), counting
@@ -10,7 +11,8 @@ only genes some database type lists. lncRNAs, pseudogenes and bare Ensembl ids a
 counted, they made real lists look random (Tabula Sapiens liver hepatocytes: 4 of 25 named). The
 null is the best match of ``N_NULL`` random lists with the same number of named genes, drawn from the
 named genes detected in >= 10% of cells. A list that does not beat ``NULL_QUANTILE`` of them is
-flagged; a list with fewer than ``MIN_NAMED`` named genes is not judged.
+flagged; a list with fewer than ``MIN_NAMED`` named genes is not judged. Every list with a named
+gene also gets its best database type (``best``), judged or not.
 
 Sweep (research/batch42/random-markers/, 2026-11-10): T4 shuffled lists 15/15 flagged; 0 of ~270
 clean groups (T4 backgrounds, author and Leiden clusters of 6 datasets, doublets, low quality).
@@ -41,6 +43,7 @@ class RandomCheck:
     checked: int = 0
     too_few_named: list[str] = field(default_factory=list)
     skipped: str | None = None  # why nothing was checked
+    best: dict[str, str] = field(default_factory=dict)  # group -> best database type (any named gene)
 
     def record(self) -> dict:
         return {"flagged": sorted(self.flagged), "checked": self.checked,
@@ -129,6 +132,10 @@ def check(adata, marker_map: dict[str, list[str]], db=None) -> RandomCheck:
     queries = {g: idx.query(genes) for g, genes in marker_map.items()}
     judged = {g: q for g, q in queries.items() if len(q) >= MIN_NAMED}
     out.too_few_named = sorted(g for g in queries if g not in judged)
+    named = [g for g, q in queries.items() if q]
+    if named:
+        _, b_all = idx.best(_rows([queries[g] for g in named], idx.U))
+        out.best = {g: idx.types[b] for g, b in zip(named, b_all)}
     if not judged:
         return out
     groups = list(judged)

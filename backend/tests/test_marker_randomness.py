@@ -1,5 +1,5 @@
 """Marker lists that name no database type better than random genes (core/marker_randomness.py),
-and the QC note the annotator sends for them (pipeline._annotate_llm)."""
+and the clusters the annotator decides without the AI (pipeline._annotation_decided)."""
 
 from __future__ import annotations
 
@@ -60,6 +60,8 @@ def test_a_type_list_passes_a_random_list_is_flagged_and_unnamed_genes_do_not_co
     assert out.too_few_named == ["few", "unnamed"]
     assert out.checked == 2
     assert out.skipped is None
+    assert out.best["type"] == "type0"  # every list with a named gene, judged or not
+    assert "few" in out.best and "unnamed" not in out.best
 
 
 def test_null_pool_is_the_detected_named_genes():
@@ -77,15 +79,21 @@ def test_no_databases_on_disk_skips_without_fetching(monkeypatch, tmp_path):
     assert out.skipped == "marker databases not downloaded" and not out.flagged
 
 
-def test_annotator_notes_a_random_list_and_records_it(monkeypatch):
+def _annotate(monkeypatch, markers, flags, check, reply):
+    """Run _annotate_llm with stand-ins; (fit, prompts sent, adata)."""
     rng = np.random.default_rng(0)
-    a = ad.AnnData(X=rng.random((20, 4)).astype(np.float32))
-    a.var_names = ["CD3D", "CD3E", "MS4A1", "CD79A"]
-    a.obs["cluster"] = pd.Categorical(["0"] * 10 + ["1"] * 10)
-    monkeypatch.setattr(P, "_top_markers_per_group", lambda adata, g: {"0": ["CD3D", "CD3E"], "1": ["MS4A1"]})
-    monkeypatch.setattr(P, "_annotation_qc_notes", lambda adata, g: {"1": "flagged high mito"})
-    monkeypatch.setattr(MR, "check", lambda adata, mk: MR.RandomCheck(
-        flagged={"0": {}, "1": {}}, checked=2))
+    groups = list(markers)
+    a = ad.AnnData(X=rng.random((10 * len(groups), 2)).astype(np.float32))
+    a.var_names = ["CD3D", "MS4A1"]
+    a.obs["cluster"] = pd.Categorical([g for g in groups for _ in range(10)])
+    monkeypatch.setattr(P, "_top_markers_per_group", lambda adata, g: markers)
+    monkeypatch.setattr(P, "_annotation_qc_notes",
+                        lambda adata, g: {k: "flagged " + ", ".join(v) for k, v in flags.items()})
+    from scview.core import cluster_qc
+
+    monkeypatch.setattr(cluster_qc, "cluster_qc", lambda adata, g: types.SimpleNamespace(clusters=[
+        types.SimpleNamespace(group=k, flags=flags.get(k, [])) for k in groups]))
+    monkeypatch.setattr(MR, "check", check)
     sent: list[str] = []
 
     class _Client:
@@ -94,65 +102,66 @@ def test_annotator_notes_a_random_list_and_records_it(monkeypatch):
 
         def create(self, messages, **_):
             sent.append(messages[0]["content"])
-            msg = types.SimpleNamespace(content="tissue: blood\n0: Unknown | CL:none\n1: Low-quality cells | CL:none")
-            return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg, finish_reason="stop")])
-
-    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_Client))
-    monkeypatch.setattr("scview.config.get_settings", lambda: Settings(DEEPINFRA_API_KEY="k", RAG_CHAT_MODEL="m"))
-    monkeypatch.setattr(P, "_record_llm_cl_ids", lambda adata, target, ids: {})
-    fit = P._annotate_llm(a, P.PipelineParams(), "cluster", "cell_type")
-
-    listing = sent[0].split("Clusters and marker genes:")[1].strip().splitlines()
-    assert listing[0] == f"0: CD3D, CD3E [QC: {MR.NOTE}]"
-    assert listing[1] == f"1: MS4A1 [QC: flagged high mito; {MR.NOTE}]"
-    assert fit["llm_random_markers"] == ["0", "1"]
-    assert fit["llm_qc_notes"] == 2
-
-
-def test_a_failing_check_leaves_the_annotation_alone(monkeypatch):
-    monkeypatch.setattr(MR, "check", lambda adata, mk: (_ for _ in ()).throw(RuntimeError("boom")))
-    qc = {"1": "x"}
-    assert P._annotation_random_notes(_adata(), {"1": ["G1"]}, qc) == []
-    assert qc == {"1": "x"}
-
-
-def test_the_prompt_names_the_note_and_its_own_answer_before_the_mixture_rule():
-    """A noted cluster gets 'Unidentified', so 'Low-quality cells' stays for damaged cells
-    (annotation benchmark arm rm, 2026-11-10); the mixture rule stays the last naming rule."""
-    p = P._annotation_prompt("0: CD3D")
-    assert MR.NOTE in p
-    unid, mixture = p.index("'Unidentified | CL:none'"), p.index("name the mixture")
-    assert p.index("'Low-quality cells | CL:none'") < unid < mixture
-
-
-@pytest.mark.parametrize("label", ["Unidentified", "unidentified cells", " Unidentified cell "])
-def test_unidentified_spellings_become_one_label_without_an_id(label):
-    assert P._UNIDENTIFIED.match(label)
-
-
-def test_an_unidentified_answer_keeps_no_cl_id(monkeypatch):
-    rng = np.random.default_rng(0)
-    a = ad.AnnData(X=rng.random((20, 2)).astype(np.float32))
-    a.var_names = ["CD3D", "MS4A1"]
-    a.obs["cluster"] = pd.Categorical(["0"] * 10 + ["1"] * 10)
-    monkeypatch.setattr(P, "_top_markers_per_group", lambda adata, g: {"0": ["CD3D"], "1": ["MS4A1"]})
-    monkeypatch.setattr(P, "_annotation_qc_notes", lambda adata, g: {})
-    monkeypatch.setattr(MR, "check", lambda adata, mk: MR.RandomCheck(flagged={"1": {}}, checked=2))
-
-    class _Client:
-        def __init__(self, **_):
-            self.chat = types.SimpleNamespace(completions=self)
-
-        def create(self, messages, **_):
-            msg = types.SimpleNamespace(content="tissue: blood\n0: T cells | CL:0000084\n1: unidentified cells | CL:0000000")
+            msg = types.SimpleNamespace(content=reply)
             return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg, finish_reason="stop")])
 
     monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_Client))
     monkeypatch.setattr("scview.config.get_settings", lambda: Settings(DEEPINFRA_API_KEY="k", RAG_CHAT_MODEL="m"))
     monkeypatch.setattr(P, "_record_llm_cl_ids", lambda adata, target, ids: {"ids": ids})
     fit = P._annotate_llm(a, P.PipelineParams(), "cluster", "cell_type")
-    assert a.uns["cell_type_llm_mapping"]["1"] == "Unidentified"
-    assert fit["ids"].get("Unidentified") is None
+    return fit, sent, a
+
+
+def test_scview_decides_damaged_and_random_clusters_and_sends_only_the_rest(monkeypatch):
+    markers = {"0": ["CD3D"], "1": ["MS4A1"], "2": ["G1"], "3": ["G2"], "4": ["MYH6"]}
+    flags = {"2": ["high_mito"], "3": ["low_quality"], "4": ["high_mito"]}
+    check = lambda adata, mk: MR.RandomCheck(  # noqa: E731
+        flagged={"1": {}, "3": {}}, checked=5, best={"0": "T cells", "1": "B cells", "4": "Cardiomyocytes"})
+    fit, sent, a = _annotate(monkeypatch, markers, flags, check,
+                             "tissue: heart\n0: T cells | CL:0000084\n4: Cardiomyocytes | CL:0000746")
+    listing = sent[0].split("Clusters and marker genes:")[1].strip().splitlines()
+    # 1 random, 2 and 3 damaged (3 is also random: damaged wins); 4 is high mito but best matches
+    # cardiomyocytes, so it goes to the AI with its QC note.
+    assert listing == ["0: CD3D", "4: MYH6 [QC: flagged high_mito]"]
+    m = a.uns["cell_type_llm_mapping"]
+    assert m == {"0": "T cells", "1": "Unidentified", "2": "Low-quality cells", "3": "Low-quality cells",
+                 "4": "Cardiomyocytes"}
+    assert fit["llm_decided_low_quality"] == ["2", "3"]
+    assert fit["llm_random_markers"] == ["1"]
+    assert fit["llm_high_mito_type_to_ai"] == ["4"]
+    assert fit["ids"].get("Unidentified") is None and fit["ids"].get("Low-quality cells") is None
+    assert "Unidentified" not in sent[0]  # the prompt is v0.68's: the AI is never told about it
+
+
+def test_every_cluster_decided_asks_no_model(monkeypatch):
+    check = lambda adata, mk: MR.RandomCheck(flagged={"0": {}}, checked=2)  # noqa: E731
+    fit, sent, a = _annotate(monkeypatch, {"0": ["G1"], "1": ["G2"]}, {"1": ["high_mito"]}, check, "")
+    assert sent == []
+    assert a.uns["cell_type_llm_mapping"] == {"0": "Unidentified", "1": "Low-quality cells"}
+
+
+def test_failing_checks_decide_nothing(monkeypatch):
+    from scview.core import cluster_qc
+
+    monkeypatch.setattr(MR, "check", lambda adata, mk: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(cluster_qc, "cluster_qc", lambda adata, g: (_ for _ in ()).throw(RuntimeError("boom")))
+    assert P._annotation_decided(_adata(), "cluster", {"1": ["G1"]}) == ({}, {})
+
+
+@pytest.mark.parametrize("name,natural", [
+    ("Cardiomyocytes", True), ("Ventricular cardiomyocyte", True), ("Hepatocytes", True),
+    ("Proximal tubule cells", True), ("Distal convoluted tubular cell", True), ("Loop of Henle cells", True),
+    ("Intercalated cells", True), ("Skeletal muscle cell", True), ("Brown adipocyte", True),
+    ("Parietal cells", True), ("Oxyphil cells", True), ("Tubular cell", True),
+    ("Peritubular myoid cells", False), ("Pretubular aggregate cell", False), ("Tubulointerstitial cell", False),
+    ("Hepatic stellate cells", False), ("Smooth muscle cells", False), ("Parietal epithelial cell", False),
+    ("Monocytes", False), ("", False),
+])
+def test_high_mito_types(name, natural):
+    assert bool(P._HIGH_MITO_TYPE.search(name)) is natural
+
+
+def test_unidentified_is_a_no_type_label():
     from scview.core import cell_ontology, label_qualifiers
 
     assert cell_ontology._no_type("Unidentified")

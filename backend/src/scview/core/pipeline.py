@@ -1686,12 +1686,15 @@ def _annotate_llm(adata: ad.AnnData, params: PipelineParams, groupby: str, targe
 
     hint = params.annotation_tissue.strip()
     qc = _annotation_qc_notes(adata, groupby)
-    random_like = _annotation_random_notes(adata, marker_map, qc)
+    # Damaged cells and marker lists that name no type are decided here, not by the AI; the
+    # rest are sent (annotation benchmark arms ox + dq, 2026-11-11).
+    decided, decided_record = _annotation_decided(adata, groupby, marker_map)
+    sent = {g: genes for g, genes in marker_map.items() if str(g) not in decided}
     listing = "\n".join(f"{g}: {', '.join(genes)}" + (f" [QC: {qc[str(g)]}]" if str(g) in qc else "")
-                        for g, genes in marker_map.items())
+                        for g, genes in sent.items())
     prompt = _annotation_prompt(listing, hint, targeted_panel.prompt_line(adata))
     client = sync_client(api_key, settings.llm_base_url)
-    clusters = list(marker_map.keys())
+    clusters = list(sent.keys())
 
     busy = 0
 
@@ -1709,9 +1712,9 @@ def _annotate_llm(adata: ad.AnnData, params: PipelineParams, groupby: str, targe
         return _complete_lines(resp.choices[0].message.content or "", cut), cut
 
     budget = _annotation_max_tokens(len(clusters), reply_room(model))
-    raw, cut = ask(budget)
+    raw, cut = ask(budget) if clusters else ("", False)  # every cluster decided: nothing to ask
     labels = _parse_cluster_labels(raw, clusters)
-    notes: dict[str, str] = {}
+    notes: dict[str, Any] = dict(decided_record)
     if cut and budget < _ANNOTATION_TOKEN_CAP:
         # A reasoning model, or long labels: the later clusters would be Unknown. Once
         # more with room to spare; the reply naming more clusters is kept.
@@ -1734,18 +1737,17 @@ def _annotate_llm(adata: ad.AnnData, params: PipelineParams, groupby: str, targe
     tissue = _parse_tissue_line(raw) or hint
     if qc:
         notes["llm_qc_notes"] = len(qc)
-    if random_like:
-        notes["llm_random_markers"] = random_like
     if busy:  # the model answered 429 "busy" and was asked again after a wait
         notes["llm_busy_retries"] = busy
 
     mapping, model_ids = {}, {}
     for g in marker_map:
+        if str(g) in decided:
+            mapping[str(g)] = decided[str(g)]
+            continue
         label, cid = _split_cl_id(labels.get(str(g), "Unknown"))
         if _LOW_QUALITY.match(label):
             label, cid = LOW_QUALITY_LABEL, None
-        elif _UNIDENTIFIED.match(label):
-            label, cid = UNIDENTIFIED_LABEL, None
         mapping[str(g)] = _label_case(label or "Unknown")
         if cid and not model_ids.get(mapping[str(g)]):
             model_ids[mapping[str(g)]] = cid
@@ -1827,13 +1829,20 @@ def _record_llm_cl_ids(adata: ad.AnnData, target: str, model_ids: dict[str, str 
 
 LOW_QUALITY_LABEL = "Low-quality cells"
 _LOW_QUALITY = re.compile(r"^\s*(?:likely\s+|probable\s+)?low[-\s]?quality(?:\s+cells?)?\s*$", re.I)
-# The answer for a cluster whose markers match no database type better than random genes
-# (core/marker_randomness.py): its own label, so "Low-quality cells" stays for damaged cells.
-# With one shared answer the random lists took it and the real low-quality group became
-# "Monocytes" (annotation benchmark arm rm, 2026-11-10). Not "Unknown": that is the label of
-# clusters a cut reply never reached.
+# The label scView gives a cluster whose markers match no database type better than random genes
+# (core/marker_randomness.py), without asking the AI. Not "Unknown": that is the label of clusters
+# a cut reply never reached.
 UNIDENTIFIED_LABEL = "Unidentified"
-_UNIDENTIFIED = re.compile(r"^\s*unidentified(?:\s+cells?)?\s*$", re.I)
+# Cluster QC flags that mean damaged cells: scView labels these clusters "Low-quality cells" itself.
+# low_genes is not one: erythrocytes and platelets have few genes by nature.
+_DAMAGE_FLAGS = ("low_quality", "high_mito")
+# Cell types with much mitochondrial RNA by nature. A flagged cluster whose markers best match one of
+# them goes to the AI with its QC note instead, which may name the type when its lineage genes are clear.
+_HIGH_MITO_TYPE = re.compile(
+    r"cardiomyocyte|cardiac muscle|cardiac myocyte|heart muscle|myocardial|hepatocyte|hepatoblast|"
+    r"hepatic cell|hepatocellular|(?<!peri)(?<!pre)(?<!pre-)tubul(?!o)|loop of henle|collecting duct|"
+    r"intercalated|skeletal muscle (?:cell|fiber)|myofiber|^myocytes$|striated muscle|brown adipocyte|"
+    r"beige adipocyte|^parietal cells$|oxyphil", re.I)
 # Cluster QC flags worth a note beside a cluster's markers (core/cluster_qc.py).
 # low_malat1 stays although it fires on real mouse Smart-seq2 clusters: leaving it out
 # (2026-11-09) cut visible-doublet naming in the T4 lung set from 52/54 to 46/54.
@@ -1873,21 +1882,42 @@ def _annotation_qc_notes(adata: ad.AnnData, groupby: str) -> dict[str, str]:
     return out
 
 
-def _annotation_random_notes(adata: ad.AnnData, marker_map: dict[str, list[str]], qc: dict[str, str]) -> list[str]:
-    """Add a QC note to each cluster whose markers match no database cell type better than
-    random genes do (``core/marker_randomness.py``); the clusters noted. The default model named
-    a type for every random list in the annotation benchmark. Best effort: [] when the marker
-    databases are not on disk."""
-    from scview.core import marker_randomness
+def _annotation_decided(adata: ad.AnnData, groupby: str,
+                        marker_map: dict[str, list[str]]) -> tuple[dict[str, str], dict[str, list[str]]]:
+    """({cluster: label} that scView gives without the AI, {step-record key: clusters}).
+
+    - "Low-quality cells": cluster QC flags it ``low_quality`` (few genes and high mito) or
+      ``high_mito``, unless its markers best match a type with much mito RNA by nature
+      (``_HIGH_MITO_TYPE``): that cluster goes to the AI with its QC note.
+    - "Unidentified": its markers match no database cell type better than random genes do
+      (``core/marker_randomness.py``). Damaged wins when both hold.
+
+    In the annotation benchmark the AI's low-quality call moved with the wording and with the other
+    clusters in the prompt (arms pp, ox), and a random-marker note in the prompt moved other clusters'
+    calls (arms rm, ua); deciding both here kept them (arm dq). Best effort: a check that cannot run
+    decides nothing."""
+    from scview.core import cluster_qc, marker_randomness
 
     try:
         check = marker_randomness.check(adata, marker_map)
     except Exception as exc:
         logger.info("Random-marker check skipped: %s", exc)
-        return []
-    for g in check.flagged:
-        qc[str(g)] = f"{qc[str(g)]}; {marker_randomness.NOTE}" if str(g) in qc else marker_randomness.NOTE
-    return sorted(check.flagged, key=str)
+        check = marker_randomness.RandomCheck(skipped="check failed")
+    try:
+        report = cluster_qc.cluster_qc(adata, groupby)
+        damaged = [str(r.group) for r in report.clusters if any(f in _DAMAGE_FLAGS for f in r.flags)]
+    except Exception as exc:
+        logger.info("Damaged-cluster check skipped: %s", exc)
+        damaged = []
+    in_map = {str(g) for g in marker_map}
+    best = {str(g): t for g, t in check.best.items()}
+    to_ai = sorted((g for g in damaged if g in in_map and _HIGH_MITO_TYPE.search(best.get(g, ""))), key=str)
+    low = sorted((g for g in damaged if g in in_map and g not in to_ai), key=str)
+    unid = sorted((str(g) for g in check.flagged if str(g) in in_map and str(g) not in low), key=str)
+    decided = {g: LOW_QUALITY_LABEL for g in low} | {g: UNIDENTIFIED_LABEL for g in unid}
+    record = {k: v for k, v in (("llm_decided_low_quality", low), ("llm_random_markers", unid),
+                                ("llm_high_mito_type_to_ai", to_ai)) if v}
+    return decided, record
 
 
 def _annotation_prompt(listing: str, tissue_hint: str = "", panel_line: str = "") -> str:
@@ -1921,9 +1951,6 @@ def _annotation_prompt(listing: str, tissue_hint: str = "", panel_line: str = ""
         "(cardiomyocytes, hepatocytes, kidney tubule cells), so name the type when its lineage "
         "genes are clear. A heat-shock, stress or activation program (HSPA1A, DNAJB1, FOS, JUN, "
         "NR4A1) is a state of living cells, not low quality: name the cell type under the stress genes. "
-        "A cluster whose QC note says its markers match no cell type in the marker databases better "
-        "than random genes do has no recognisable type: answer 'Unidentified | CL:none', or "
-        "'Low-quality cells | CL:none' when its note also says few genes and high mitochondrial RNA. "
         # The mixture rule comes last of the naming rules: placed before the low-quality text (v0.66.0), the
         # default model named one parent of a two-lineage cluster more often (annotation benchmark T4).
         "If a cluster shows two lineages, name the mixture (e.g. 'NK cells / CD8+ T cells'), "
