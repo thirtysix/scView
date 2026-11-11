@@ -163,12 +163,15 @@ async def test_an_abandoned_run_stops_after_its_step_and_only_then_releases(tmp_
     _dataset(tmp_path)
     dm = DatasetManager(str(tmp_path))
     await dm.load_dataset("ds")
+    closed = threading.Event()
     second_done = threading.Event()
     third_started = threading.Event()
 
     def steps(adaptor):
         yield "first"
-        time.sleep(0.3)
+        # The second step ends only once the client has gone (a fixed sleep raced a loaded CI runner:
+        # the close landed after the second step and the third one started).
+        assert closed.wait(10)
         second_done.set()
         yield "second"
         third_started.set()
@@ -177,6 +180,7 @@ async def test_an_abandoned_run_stops_after_its_step_and_only_then_releases(tmp_
     events = iterate_exclusive(dm, "ds", steps)
     assert await events.__anext__() == "first"
     await events.aclose()  # the client went away during the second step
+    closed.set()
 
     assert dm.get_dataset("ds") is None  # nothing serves the half-run copy
     assert dm.is_busy("ds") and dataset_lock("ds").locked()  # the thread is mid-step
