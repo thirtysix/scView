@@ -77,8 +77,8 @@ def test_parse_keeps_symbol_pairs_and_counts_the_supporting_resources(table):
 
 @pytest.mark.parametrize("bad, why", [
     (b"not gzip", "not a gzipped"),
-    (gzip.compress(b"human_symbol\tmouse_symbol\nA\tB\n"), "lacks columns"),
-    (gzip.compress(gzip.decompress(RAW).replace(b"TP53\t", b"TP99\t")), "no TP53 -> Trp53"),
+    (gzip.compress(b"human_symbol\tmouse_symbol\nA\tB\n", mtime=0), "lacks columns"),
+    (gzip.compress(gzip.decompress(RAW).replace(b"TP53\t", b"TP99\t"), mtime=0), "no TP53 -> Trp53"),
 ])
 def test_a_wrong_file_is_refused(bad, why):
     with pytest.raises(ValueError, match=why):

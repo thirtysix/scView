@@ -442,6 +442,9 @@ async def iterate_exclusive(
             if kind == "item":
                 yield value
             elif kind == "error":
+                # The thread posted its last item: let it return and release (reservation, edit
+                # lock) before the caller hears of the error, or a retry sent at once finds it held.
+                await asyncio.shield(task)
                 raise value
             else:
                 finished = True
