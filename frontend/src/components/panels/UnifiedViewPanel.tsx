@@ -174,6 +174,8 @@ export function UnifiedViewPanel() {
   const setViolinData = useUnifiedViewStore((s) => s.setViolinData);
   const violinTitle = useUnifiedViewStore((s) => s.violinTitle);
   const setViolinTitle = useUnifiedViewStore((s) => s.setViolinTitle);
+  const violinGene = useUnifiedViewStore((s) => s.violinGene);
+  const setViolinGene = useUnifiedViewStore((s) => s.setViolinGene);
   const clearOverlayState = useUnifiedViewStore((s) => s.clearOverlayState);
 
   // --- Embedding data (obs-colored) ---
@@ -551,9 +553,13 @@ export function UnifiedViewPanel() {
   );
 
   // --- Fetch violin ---
+  // Every violin request takes a number; only the latest one may set the plot, so a
+  // slow reply for an earlier grouping cannot overwrite the current one.
+  const violinSeqRef = useRef(0);
   const fetchViolin = useCallback(
     async (gene: string, group: string, layer?: string) => {
       if (!datasetId || !group) return;
+      const seq = ++violinSeqRef.current;
       setIsLoadingViolin(true);
       try {
         const useLayer = layer ?? expressionLayer;
@@ -561,16 +567,18 @@ export function UnifiedViewPanel() {
         const data = await apiFetch<ViolinResponse>(
           `/datasets/${datasetId}/expression/violin?gene=${encodeURIComponent(gene)}&groupby=${encodeURIComponent(group)}${layerQuery}`,
         );
+        if (seq !== violinSeqRef.current) return;
         setViolinData(data.groups ?? {});
+        setViolinGene(layer ? { gene, layer } : { gene });
         setViolinTitle(layer ? `${gene} protein (${normLabel(layer)})` : `${gene} expression`);
         openBottomPanel();
       } catch {
-        setViolinData({});
+        if (seq === violinSeqRef.current) setViolinData({});
       } finally {
-        setIsLoadingViolin(false);
+        if (seq === violinSeqRef.current) setIsLoadingViolin(false);
       }
     },
-    [datasetId, expressionLayer, openBottomPanel, setViolinData, setViolinTitle],
+    [datasetId, expressionLayer, openBottomPanel, setViolinData, setViolinGene, setViolinTitle],
   );
 
   // --- Gene click handler (shared across Markers + Expression subtabs) ---
@@ -634,6 +642,28 @@ export function UnifiedViewPanel() {
     }
   }, [expressionLayer]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // --- Per-cell values split by one obs column, for the violin ---
+  // Resolves null when this request was overtaken by a later one (see violinSeqRef).
+  const scoresByGroup = useCallback(
+    async (scores: Float32Array, column: string): Promise<Record<string, number[]> | null> => {
+      if (!dataset || !datasetId) return null;
+      const seq = ++violinSeqRef.current;
+      const buffer = await fetchEmbeddingBinary(datasetId, useSettingsStore.getState().embedding, column);
+      if (seq !== violinSeqRef.current) return null;
+      const groupValues = decodeArrowBuffer(buffer)[column];
+      if (!groupValues) return null;
+      const names = dataset.obs_columns.find((c) => c.name === column)?.values;
+      const groups: Record<string, number[]> = {};
+      for (let i = 0; i < scores.length && i < groupValues.length; i++) {
+        const groupIdx = groupValues[i]!;
+        const groupName = names?.[groupIdx] ?? String(groupIdx);
+        (groups[groupName] ??= []).push(scores[i]!);
+      }
+      return groups;
+    },
+    [dataset, datasetId],
+  );
+
   // --- Gene set score handler ---
   // `genes`: the set scored, so a saved session can score it again; `method`: how
   // (score_genes when absent), named in the label.
@@ -646,31 +676,19 @@ export function UnifiedViewPanel() {
       if (datasetId) setOverlayDatasetId(datasetId);
 
       // Build violin from scores grouped by the active groupBy column
-      if (groupByColumn && dataset && datasetId) {
-        // We need to fetch the groupBy column values to build the violin
-        fetchEmbeddingBinary(datasetId, useSettingsStore.getState().embedding, groupByColumn)
-          .then((buffer) => {
-            const decoded = decodeArrowBuffer(buffer);
-            const groupValues = decoded[groupByColumn];
-            if (groupValues) {
-              const groups: Record<string, number[]> = {};
-              for (let i = 0; i < scores.length && i < groupValues.length; i++) {
-                const groupIdx = groupValues[i]!;
-                const obsCol = dataset.obs_columns.find((c) => c.name === groupByColumn);
-                const groupName = obsCol?.values?.[groupIdx] ?? String(groupIdx);
-                if (!groups[groupName]) groups[groupName] = [];
-                groups[groupName].push(scores[i]!);
-              }
-              setViolinData(groups);
-              setViolinTitle(`${label} score`);
-              openBottomPanel();
-            }
+      if (groupByColumn) {
+        scoresByGroup(scores, groupByColumn)
+          .then((groups) => {
+            if (!groups) return;
+            setViolinData(groups);
+            setViolinTitle(`${label} score`);
+            openBottomPanel();
           })
           .catch(() => { /* ignore */ });
       }
     },
     [setScatterOverlay, setOverlayValues, setOverlayLabel, setOverlayDatasetId,
-     setViolinData, setViolinTitle, groupByColumn, dataset, datasetId, openBottomPanel],
+     setViolinData, setViolinTitle, groupByColumn, datasetId, openBottomPanel, scoresByGroup],
   );
 
   // --- A gene program's usage share (Programs subtab); its violin comes split by group ---
@@ -725,6 +743,53 @@ export function UnifiedViewPanel() {
     [datasetId, setScatterOverlay, setOverlayValues, setOverlayLabel, setOverlayDatasetId,
      setViolinData, setViolinTitle, openBottomPanel],
   );
+
+  // --- "Group by (violin)" changed: split the violin on screen by the new column ---
+  // The plot keeps its values and title; only the grouping is redone. Without this the
+  // old groups stayed and only their colours changed (ViolinPlot colours by column).
+  const prevGroupByRef = useRef(groupByColumn);
+  useEffect(() => {
+    if (prevGroupByRef.current === groupByColumn) return;
+    prevGroupByRef.current = groupByColumn;
+    if (Object.keys(violinData).length === 0) return;
+    // One gene's violin: asked again by gene, whatever the plot is coloured by now.
+    if (violinGene && groupByColumn) {
+      fetchViolin(violinGene.gene, groupByColumn, violinGene.layer);
+      return;
+    }
+    const o = scatterOverlay;
+    if (!groupByColumn || !datasetId || !o || o.type === "obs" || overlayDatasetId !== datasetId) {
+      ++violinSeqRef.current;
+      setViolinData({});
+      return;
+    }
+    const fail = (err: unknown) => console.error("Failed to regroup the violin:", err);
+    if (o.type === "expression") {
+      fetchViolin(o.gene, groupByColumn, o.layer);
+      return;
+    }
+    if (o.type === "program" || o.type === "atac_activity" || o.type === "atac_motif") {
+      const seq = ++violinSeqRef.current;
+      setIsLoadingViolin(true);
+      const request: Promise<{ violin?: Record<string, number[]> | null }> =
+        o.type === "program" ? getProgramUsage(datasetId, o.index, groupByColumn)
+        : o.type === "atac_activity" ? getAtacActivity(datasetId, o.gene, groupByColumn)
+        : getChromVarMotif(datasetId, o.motif_id, groupByColumn);
+      request
+        .then((r) => { if (seq === violinSeqRef.current) setViolinData(r.violin ?? {}); })
+        .catch(fail)
+        .finally(() => { if (seq === violinSeqRef.current) setIsLoadingViolin(false); });
+      return;
+    }
+    // A score or density overlay: its per-cell values are on hand.
+    if (!overlayValues) {
+      setViolinData({});
+      return;
+    }
+    scoresByGroup(overlayValues, groupByColumn)
+      .then((groups) => { if (groups) setViolinData(groups); })
+      .catch(fail);
+  }, [groupByColumn]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // --- An overlay from "Open session", drawn once this dataset is on screen ---
   const pendingOverlay = useUnifiedViewStore((s) => s.pendingOverlay);
