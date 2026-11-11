@@ -98,6 +98,14 @@ class _DM:
     def cached_ids(self):
         return []
 
+    # A capped container (cgroup memory limit) makes DE reserve and name its read.
+    def dataset_name(self, dataset_id):
+        return dataset_id
+    async def reserve(self, *_a, **_k):
+        return None
+    def hold_read(self, *_a, **_k):
+        return lambda: None
+
 
 def test_the_mode_is_light_whatever_the_memory_unless_large_mode_is_chosen(tmp_path, monkeypatch):
     src = _write(_processed(), tmp_path / "d.h5ad")

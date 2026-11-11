@@ -550,6 +550,14 @@ class _DM:
     def cached_ids(self):
         return []
 
+    # A capped container (cgroup memory limit) makes DE reserve and name its read.
+    def dataset_name(self, dataset_id):
+        return dataset_id
+    async def reserve(self, *_a, **_k):
+        return None
+    def hold_read(self, *_a, **_k):
+        return lambda: None
+
 
 def _budget(monkeypatch, limit, used):
     monkeypatch.setattr(memory_budget, "read_budget", lambda *a, **k: memory_budget.MemoryBudget(

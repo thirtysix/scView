@@ -32,7 +32,14 @@ jobs:
       - name: Ruff
         run: ruff check src/
       - name: Tests
-        run: python -m pytest -q
+        # One pytest worker per core (pytest-xdist); BLAS and numba kept to one thread each, or
+        # the workers oversubscribe the runner (4.8k tests: ~20 min serial, ~6 min on 4 workers).
+        env:
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
+          NUMBA_NUM_THREADS: "1"
+        run: python -m pytest -q -n auto
 
   frontend:
     runs-on: ubuntu-24.04

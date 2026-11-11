@@ -27,6 +27,14 @@ class _DM:
     async def get_or_load_dataset(self, _id):
         return self.adaptor
 
+    # A capped container (cgroup memory limit) makes DE reserve and name its read.
+    def dataset_name(self, dataset_id):
+        return dataset_id
+    async def reserve(self, *_a, **_k):
+        return None
+    def hold_read(self, *_a, **_k):
+        return lambda: None
+
 
 def _counts(donors_a, donors_b, *, sd_a=0.3, sd_b=0.3, tech=None, cells=30, g=150, seed=0):
     """NB counts per donor x condition; G0 4x up in A, G1 4x up in B. ``sd_*``:

@@ -288,6 +288,14 @@ async def test_wilcoxon_de_carries_the_statistic():
         async def get_or_load_dataset(self, _id):
             return type("A", (), {"adata": a})()
 
+        # A capped container (cgroup memory limit) makes DE reserve and name its read.
+        def dataset_name(self, dataset_id):
+            return dataset_id
+        async def reserve(self, *_a, **_k):
+            return None
+        def hold_read(self, *_a, **_k):
+            return lambda: None
+
     res = await differential_expression("x", DERequest(indices=list(range(20))), _DM())
     by = {g.gene: g for g in res.genes}
     assert all(g.stat is not None for g in res.genes)
