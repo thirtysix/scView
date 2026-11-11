@@ -232,4 +232,19 @@ describe("AnnotationControl (CellTypist)", () => {
     await screen.findByText(/group by it in Unified View/);
     expect(screen.queryByRole("alert")).toBeNull();
   });
+
+  it("says which clusters scView labelled itself, from the annotation step's record", async () => {
+    getProvenance.mockResolvedValue({ recorded: { history: [{
+      step: "cell_type_annotation", tool: "t", timestamp: "",
+      params: { annotation_method: "llm", annotation_target: "paul15_clusters_celltypeAnno",
+        llm_decided_low_quality: ["2", "3"], llm_random_markers: ["7"], llm_high_mito_type_to_ai: ["4"] },
+    }] } });
+    render(<AnnotationControl onAnnotate={vi.fn().mockResolvedValue(undefined)} running={false} species="human" />);
+    fireEvent.click(screen.getByText("Annotate cell types"));
+    const note = await screen.findByTestId("annotation-decided");
+    expect(note.textContent).toContain("clusters 2, 3 Low-quality cells itself");
+    expect(note.textContent).toContain("cluster 7 Unidentified itself");
+    expect(note.textContent).toContain("Cluster 4 also has high mitochondrial RNA");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
 });

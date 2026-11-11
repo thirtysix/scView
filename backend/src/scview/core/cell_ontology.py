@@ -64,8 +64,8 @@ _ATLAS = {
     "fcgr3a mono": "CL:0002396",
     "fcgr3a+ mono": "CL:0002396",
 }
-_NO_TYPE = {"unassigned", "unknown", "nan", "none", "na", "n/a", "other", "doublet", "doublets",
-            "low quality", "low quality cell", "low quality cells"}
+_NO_TYPE = {"unassigned", "unidentified", "unidentified cells", "unknown", "nan", "none", "na", "n/a", "other",
+            "doublet", "doublets", "low quality", "low quality cell", "low quality cells"}
 
 
 class OntologyUnavailable(RuntimeError):

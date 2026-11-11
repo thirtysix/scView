@@ -75,6 +75,9 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
   // The LLM reply ran out of tokens even after the retry: some clusters are Unknown.
   // From the step's record (`llm_reply_cut`), which History also shows.
   const [replyCut, setReplyCut] = useState<string | null>(null);
+  // Clusters scView labelled itself, without the AI (`llm_decided_low_quality`, `llm_random_markers`,
+  // `llm_high_mito_type_to_ai` in the step's record).
+  const [decided, setDecided] = useState<Decided | null>(null);
 
   // Default the grouping once the dataset's columns are known.
   useEffect(() => {
@@ -174,10 +177,15 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
     setAnnotating(true);
     setLastWritten(null);
     setReplyCut(null);
+    setDecided(null);
     try {
       await onAnnotate(params);
       setLastWritten(tgt);
-      if (method === "llm" && datasetId) setReplyCut(await lastReplyCut(datasetId, tgt));
+      if (method === "llm" && datasetId) {
+        const notes = await lastLlmNotes(datasetId, tgt);
+        setReplyCut(notes.cut);
+        setDecided(notes.decided);
+      }
     } finally {
       setAnnotating(false);
       setCtRuns((n) => n + 1); // another method's run forgets the column's CellTypist run
@@ -383,6 +391,7 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
           </span>
         </p>
       )}
+      {lastWritten && !busy && decided && <DecidedNote decided={decided} />}
       {lastWritten && !busy && hasColumn(`${lastWritten}_qualified`) && (
         <p className="text-[11px] text-slate-500">
           Also wrote{" "}
@@ -401,18 +410,60 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
   );
 }
 
-/** The `llm_reply_cut` note of the latest annotation step that wrote `target`, or null.
- * Best effort: a failed history read shows no banner (History still has the chip). */
-async function lastReplyCut(datasetId: string, target: string): Promise<string | null> {
+interface Decided {
+  lowQuality: string[];
+  unidentified: string[];
+  toAi: string[];
+}
+
+const ids = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : []);
+const clusterList = (g: string[]) => `${g.length === 1 ? "cluster" : "clusters"} ${g.join(", ")}`;
+
+/** The LLM notes of the latest annotation step that wrote `target`: a cut reply, and the clusters
+ * scView decided itself. Best effort: a failed history read shows nothing (History still has the chips). */
+async function lastLlmNotes(datasetId: string, target: string): Promise<{ cut: string | null; decided: Decided | null }> {
   try {
     const prov = await getProvenance(datasetId);
     const step = [...(prov.recorded?.history ?? [])]
       .reverse()
       .find((h) => h.step === "cell_type_annotation");
-    if (!step || (step.params?.annotation_target ?? "cell_type") !== target) return null;
-    const cut = step.params?.llm_reply_cut;
-    return typeof cut === "string" && cut ? cut : null;
+    if (!step || (step.params?.annotation_target ?? "cell_type") !== target) return { cut: null, decided: null };
+    const p = step.params ?? {};
+    const cut = typeof p.llm_reply_cut === "string" && p.llm_reply_cut ? p.llm_reply_cut : null;
+    const d = { lowQuality: ids(p.llm_decided_low_quality), unidentified: ids(p.llm_random_markers),
+      toAi: ids(p.llm_high_mito_type_to_ai) };
+    const any = d.lowQuality.length || d.unidentified.length || d.toAi.length;
+    return { cut, decided: any ? d : null };
   } catch {
-    return null;
+    return { cut: null, decided: null };
   }
+}
+
+/** Which clusters scView labelled without the AI, and why. */
+function DecidedNote({ decided }: { decided: Decided }) {
+  return (
+    <div className="mt-2 space-y-0.5 rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs text-slate-600" data-testid="annotation-decided">
+      {decided.lowQuality.length > 0 && (
+        <p>
+          scView labelled {clusterList(decided.lowQuality)} <b>Low-quality cells</b> itself: cluster QC flags
+          them as damaged (high mitochondrial RNA, or few genes with it).
+        </p>
+      )}
+      {decided.unidentified.length > 0 && (
+        <p>
+          scView labelled {clusterList(decided.unidentified)} <b>Unidentified</b> itself: their markers match no
+          cell type in the marker databases better than random genes do.
+        </p>
+      )}
+      {decided.toAi.length > 0 && (
+        <p>
+          {clusterList(decided.toAi).replace(/^c/, "C")} also{" "}
+          {decided.toAi.length === 1 ? "has" : "have"} high mitochondrial RNA, but{" "}
+          {decided.toAi.length === 1 ? "its" : "their"} markers match a cell type with much of it by nature
+          (such as cardiomyocytes or hepatocytes), so the AI named {decided.toAi.length === 1 ? "it" : "them"}.
+        </p>
+      )}
+      <p>The AI named the other clusters.</p>
+    </div>
+  );
 }

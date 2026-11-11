@@ -6,6 +6,23 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.71.0] - 2026-11-11
+
+AI annotation: scView decides which clusters are damaged cells or name no cell type; the AI names the cell types.
+
+### Changed
+- AI annotation (Data Assessment > Cell-type annotation): a cluster that cluster QC flags as damaged (high
+  mitochondrial RNA, or few genes with it) is labelled "Low-quality cells" by scView itself, and a cluster whose
+  markers match no cell type in the marker databases better than random genes do is labelled "Unidentified". Neither
+  is sent to the AI; the panel says which clusters scView labelled and why. In the annotation benchmark the AI named
+  a cell type for every random marker list (53 of 162 handled correctly before, 162 of 162 now), and its
+  low-quality call moved with the prompt's wording and with the other clusters listed. With these decisions made
+  outside the AI, background labels, doublet naming and the low-quality control held or improved for the default
+  model (pbmc10k background hF1 0.969 -> 0.951, the largest change, inside its 0.02 gate).
+- A flagged cluster whose markers best match a cell type with much mitochondrial RNA by nature (cardiomyocytes,
+  hepatocytes, kidney tubule and collecting-duct cells, skeletal muscle, brown adipocytes, gastric parietal cells)
+  still goes to the AI with its QC note, which may name the type.
+
 ## [0.70.0] - 2026-11-11
 
 The sidebar shows which scView you run and says when a newer release is out.

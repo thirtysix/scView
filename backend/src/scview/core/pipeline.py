@@ -1686,11 +1686,15 @@ def _annotate_llm(adata: ad.AnnData, params: PipelineParams, groupby: str, targe
 
     hint = params.annotation_tissue.strip()
     qc = _annotation_qc_notes(adata, groupby)
+    # Damaged cells and marker lists that name no type are decided here, not by the AI; the
+    # rest are sent (annotation benchmark arms ox + dq, 2026-11-11).
+    decided, decided_record = _annotation_decided(adata, groupby, marker_map)
+    sent = {g: genes for g, genes in marker_map.items() if str(g) not in decided}
     listing = "\n".join(f"{g}: {', '.join(genes)}" + (f" [QC: {qc[str(g)]}]" if str(g) in qc else "")
-                        for g, genes in marker_map.items())
+                        for g, genes in sent.items())
     prompt = _annotation_prompt(listing, hint, targeted_panel.prompt_line(adata))
     client = sync_client(api_key, settings.llm_base_url)
-    clusters = list(marker_map.keys())
+    clusters = list(sent.keys())
 
     busy = 0
 
@@ -1708,9 +1712,9 @@ def _annotate_llm(adata: ad.AnnData, params: PipelineParams, groupby: str, targe
         return _complete_lines(resp.choices[0].message.content or "", cut), cut
 
     budget = _annotation_max_tokens(len(clusters), reply_room(model))
-    raw, cut = ask(budget)
+    raw, cut = ask(budget) if clusters else ("", False)  # every cluster decided: nothing to ask
     labels = _parse_cluster_labels(raw, clusters)
-    notes: dict[str, str] = {}
+    notes: dict[str, Any] = dict(decided_record)
     if cut and budget < _ANNOTATION_TOKEN_CAP:
         # A reasoning model, or long labels: the later clusters would be Unknown. Once
         # more with room to spare; the reply naming more clusters is kept.
@@ -1738,6 +1742,9 @@ def _annotate_llm(adata: ad.AnnData, params: PipelineParams, groupby: str, targe
 
     mapping, model_ids = {}, {}
     for g in marker_map:
+        if str(g) in decided:
+            mapping[str(g)] = decided[str(g)]
+            continue
         label, cid = _split_cl_id(labels.get(str(g), "Unknown"))
         if _LOW_QUALITY.match(label):
             label, cid = LOW_QUALITY_LABEL, None
@@ -1822,6 +1829,20 @@ def _record_llm_cl_ids(adata: ad.AnnData, target: str, model_ids: dict[str, str 
 
 LOW_QUALITY_LABEL = "Low-quality cells"
 _LOW_QUALITY = re.compile(r"^\s*(?:likely\s+|probable\s+)?low[-\s]?quality(?:\s+cells?)?\s*$", re.I)
+# The label scView gives a cluster whose markers match no database type better than random genes
+# (core/marker_randomness.py), without asking the AI. Not "Unknown": that is the label of clusters
+# a cut reply never reached.
+UNIDENTIFIED_LABEL = "Unidentified"
+# Cluster QC flags that mean damaged cells: scView labels these clusters "Low-quality cells" itself.
+# low_genes is not one: erythrocytes and platelets have few genes by nature.
+_DAMAGE_FLAGS = ("low_quality", "high_mito")
+# Cell types with much mitochondrial RNA by nature. A flagged cluster whose markers best match one of
+# them goes to the AI with its QC note instead, which may name the type when its lineage genes are clear.
+_HIGH_MITO_TYPE = re.compile(
+    r"cardiomyocyte|cardiac muscle|cardiac myocyte|heart muscle|myocardial|hepatocyte|hepatoblast|"
+    r"hepatic cell|hepatocellular|(?<!peri)(?<!pre)(?<!pre-)tubul(?!o)|loop of henle|collecting duct|"
+    r"intercalated|skeletal muscle (?:cell|fiber)|myofiber|^myocytes$|striated muscle|brown adipocyte|"
+    r"beige adipocyte|^parietal cells$|oxyphil", re.I)
 # Cluster QC flags worth a note beside a cluster's markers (core/cluster_qc.py).
 # low_malat1 stays although it fires on real mouse Smart-seq2 clusters: leaving it out
 # (2026-11-09) cut visible-doublet naming in the T4 lung set from 52/54 to 46/54.
@@ -1859,6 +1880,44 @@ def _annotation_qc_notes(adata: ad.AnnData, groupby: str) -> dict[str, str]:
             parts.append("markers look like a mix of clusters " + " and ".join(row.doublet_like_of))
         out[str(row.group)] = "; ".join(parts + ["flagged " + ", ".join(f.replace("_", " ") for f in flags)])
     return out
+
+
+def _annotation_decided(adata: ad.AnnData, groupby: str,
+                        marker_map: dict[str, list[str]]) -> tuple[dict[str, str], dict[str, list[str]]]:
+    """({cluster: label} that scView gives without the AI, {step-record key: clusters}).
+
+    - "Low-quality cells": cluster QC flags it ``low_quality`` (few genes and high mito) or
+      ``high_mito``, unless its markers best match a type with much mito RNA by nature
+      (``_HIGH_MITO_TYPE``): that cluster goes to the AI with its QC note.
+    - "Unidentified": its markers match no database cell type better than random genes do
+      (``core/marker_randomness.py``). Damaged wins when both hold.
+
+    In the annotation benchmark the AI's low-quality call moved with the wording and with the other
+    clusters in the prompt (arms pp, ox), and a random-marker note in the prompt moved other clusters'
+    calls (arms rm, ua); deciding both here kept them (arm dq). Best effort: a check that cannot run
+    decides nothing."""
+    from scview.core import cluster_qc, marker_randomness
+
+    try:
+        check = marker_randomness.check(adata, marker_map)
+    except Exception as exc:
+        logger.info("Random-marker check skipped: %s", exc)
+        check = marker_randomness.RandomCheck(skipped="check failed")
+    try:
+        report = cluster_qc.cluster_qc(adata, groupby)
+        damaged = [str(r.group) for r in report.clusters if any(f in _DAMAGE_FLAGS for f in r.flags)]
+    except Exception as exc:
+        logger.info("Damaged-cluster check skipped: %s", exc)
+        damaged = []
+    in_map = {str(g) for g in marker_map}
+    best = {str(g): t for g, t in check.best.items()}
+    to_ai = sorted((g for g in damaged if g in in_map and _HIGH_MITO_TYPE.search(best.get(g, ""))), key=str)
+    low = sorted((g for g in damaged if g in in_map and g not in to_ai), key=str)
+    unid = sorted((str(g) for g in check.flagged if str(g) in in_map and str(g) not in low), key=str)
+    decided = {g: LOW_QUALITY_LABEL for g in low} | {g: UNIDENTIFIED_LABEL for g in unid}
+    record = {k: v for k, v in (("llm_decided_low_quality", low), ("llm_random_markers", unid),
+                                ("llm_high_mito_type_to_ai", to_ai)) if v}
+    return decided, record
 
 
 def _annotation_prompt(listing: str, tissue_hint: str = "", panel_line: str = "") -> str:
