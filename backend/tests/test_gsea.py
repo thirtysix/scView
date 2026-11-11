@@ -20,7 +20,7 @@ import scipy.sparse as sp
 
 from scview.api.v1.de import DERequest, differential_expression
 from scview.config import Settings
-from scview.core import de_results, gsea
+from scview.core import de_results, gsea, results_store
 from scview.core.uns_keys import markers_key
 
 API = "/api/v1"
@@ -420,7 +420,11 @@ def test_the_store_keeps_the_last_results(monkeypatch):
             self.gene, self.logfoldchange, self.pval, self.stat = gene, 1.0, 0.01, stat
 
     ids = [de_results.remember("d", [G("A", 2.0), G("B")]) for _ in range(3)]
-    assert de_results.recall("d", ids[0]) is None  # dropped for newer ones
+    # Memory keeps the last KEEP; an older one comes back from the results store on disk (saved
+    # in the background: wait for the writer, or this races it).
+    assert ids[0] not in de_results._results
+    results_store.flush()
+    assert de_results.recall("d", ids[0]) is not None
     rows = de_results.recall("d", ids[2]).rows()
     assert rows == [{"gene": "A", "logfoldchange": 1.0, "pval": 0.01, "score": 2.0},
                     {"gene": "B", "logfoldchange": 1.0, "pval": 0.01, "score": None}]
