@@ -52,6 +52,10 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
      "detection (Scrublet or scDblFinder-style), regress-out"),
     ("Data Assessment > Sequencing QC (Cell Ranger)", "", "Cell Ranger metrics, barcode ranks"),
     ("Data Assessment > Ambient RNA", "", "soup from empty droplets, contamination estimate"),
+    ("Data Assessment > Cluster QC", "",
+     "each cluster's genes, counts and % mito against the typical cluster, with flags for damaged, doublet-like, "
+     "stressed or cycling clusters and cautions: mito RNA in nuclei (share of cells with mito reads), a cluster "
+     "with another's markers but far less RNA, markers led by non-coding RNAs or by sex genes (XIST, Y genes)"),
     ("Data Assessment > Cell hashing", "", "HTODemux / hashedDrops: singlets, doublets, negatives"),
     ("Data Assessment > QC Distributions", "doublets, sample QC, sex check",
      "per-cell QC plots, per-sample QC, doublet calls, pseudobulk sample QC, sex check"),

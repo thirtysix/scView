@@ -156,7 +156,10 @@ _RESULT_FACET_HINTS = {
            "nucleus boundaries", "segmentation",
            # each cluster's evidence (core/cluster_evidence.py): why scView labelled or flagged it
            "low quality", "low-quality", "unidentified", "random genes", "random-like", "doublet-like",
-           "mix of two", "why is cluster", "why was cluster", "why did scview", "evidence"),
+           "mix of two", "why is cluster", "why was cluster", "why did scview", "evidence",
+           # cluster QC cautions (core/cluster_qc.py): nuclei_mito, low_content, noncoding/sex markers
+           "mito in nuclei", "mitochondrial in nuclei", "cytoplasm", "low rna", "less rna", "rna content",
+           "non-coding", "noncoding", "pseudogene", "snorna", "mirna", "sex genes", "xist", "split by sex"),
 }
 
 
