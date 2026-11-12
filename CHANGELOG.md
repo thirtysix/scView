@@ -6,6 +6,17 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+- Error messages in the older panels (Gene Expression, Gene Sets, Trajectory, Observations, the co-pilot and
+  others) show the server's reason instead of the raw `{"detail": ...}` text; validation errors give their
+  messages. A test keeps new code from showing raw error bodies.
+- The Ambient RNA card on a dataset without raw counts shows a plain note, not a red error.
+- Keyboard focus moves into and stays inside the Share link dialog and the gate delete confirm, and the Plot
+  reliability panel takes focus too. Escape closes each one and focus returns to its button. The delete confirm
+  starts on Cancel.
+- Evidence per cluster says what it is doing when the first call is slow (comparing markers with random genes,
+  about 10 to 15 seconds the first time).
+
 ## [0.74.0] - 2026-11-12
 
 Each cluster's evidence in words; the co-pilot's claims check reaches Write methods and marks sentences in place;
