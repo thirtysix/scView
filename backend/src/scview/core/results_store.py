@@ -134,7 +134,7 @@ ADDITIVE_STEPS = frozenset({
 # a result is stale after one only when it named that column (its labels' hash is in the
 # fingerprint's ``columns``), so naming cells no longer marks every DE, Milo and
 # composition result stale.
-LABEL_STEPS = frozenset({"label_cells", "undo_label_cells"})
+LABEL_STEPS = frozenset({"label_cells", "undo_label_cells", "combine_columns"})
 
 
 def fingerprint(adaptor: Any) -> dict[str, Any] | None:

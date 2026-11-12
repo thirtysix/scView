@@ -817,6 +817,25 @@ async def set_labels(
 
 
 @tool(WRITE)
+async def combine_columns(
+    dataset_id: DatasetId,
+    columns: Annotated[list[str], Field(min_length=2, max_length=4, description=(
+        "Two to four obs columns, in the order their values are joined (e.g. ['donor_id', 'depot']).")
+    )],
+    name: Annotated[str, Field(min_length=1, description="Name of the new user annotation column.")],
+    separator: Annotated[str, Field(min_length=1, max_length=5, description=(
+        "Text between the values."))] = " | ",
+) -> str:
+    """Make a new annotation column whose value is each cell's values of 2-4 columns joined
+    ("HFD01 | ING"): a sample id from donor AND depot (or day, library) in one call, instead
+    of one set_labels call per pair. A cell missing a value in any column gets none. Saved with
+    the dataset; set_labels can edit it afterwards."""
+    r = await _post(f"{_ds(dataset_id)}/labels/combine",
+                    {"columns": columns, "name": name, "separator": separator})
+    return dumps({"dataset_id": dataset_id, **r})
+
+
+@tool(WRITE)
 async def subcluster(
     dataset_id: DatasetId,
     column: Annotated[str, Field(description="Obs column of the groups.")],

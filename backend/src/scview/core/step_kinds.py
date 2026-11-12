@@ -48,6 +48,7 @@ RECORDED_STEPS: tuple[str, ...] = (
     "keep_layout",
     "label_cells",
     "undo_label_cells",
+    "combine_columns",
     "doublet_threshold",
     "mito_refilter",
     "qc_state_label",

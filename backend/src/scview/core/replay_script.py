@@ -2992,6 +2992,20 @@ def _label_cells(p: dict, ctx: _Ctx) -> Snippet:
     ], "manual labels: cells not recorded")
 
 
+def _combine_columns(p: dict, ctx: _Ctx) -> Snippet:
+    column = str(p.get("column") or "")
+    cols = [str(c) for c in p.get("columns") or []]
+    sep = str(p.get("separator") or " | ")
+    if not column or len(cols) < 2:
+        return Snippet(RECORDED, ["# Columns combined; recorded:", *_param_comment(p)])
+    parts = f" + {_lit(sep)} + ".join(f"adata.obs[{_lit(c)}].astype(str)" for c in cols)
+    gone = " | ".join(f"adata.obs[{_lit(c)}].isna()" for c in cols)
+    return Snippet(EXACT, [
+        "# A column of each cell's values of these columns joined (a cell missing one: none).",
+        f"adata.obs[{_lit(column)}] = ({parts}).where(~({gone})).astype('category')",
+    ])
+
+
 def _annotation_crosscheck(p: dict, ctx: _Ctx) -> Snippet:
     outs = [str(c) for c in (p.get("outputs") or []) if c]
     join = [f"#   adata.obs[{comment_text(repr(c), 80)}] = meta.loc[adata.obs_names, {comment_text(repr(c), 80)}]"
@@ -4044,6 +4058,7 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "annotation_confidence_unknown": _annotation_confidence,
     "label_cells": _label_cells,
     "undo_label_cells": _label_cells,
+    "combine_columns": _combine_columns,
     "doublet_threshold": _doublet_threshold,
     "annotation_crosscheck": _annotation_crosscheck,
     "merge_clusters": _merge_clusters,
