@@ -1,8 +1,9 @@
 /**
  * SVG (and, through lib/pdfExport.ts, PDF) export of the deck.gl embedding
  * scatter and of the split / compare grids: the points as vector circles in
- * the order, colours, size and opacity drawn on screen, the group labels, axis
- * names, a title and the same legend the PNG gets (lib/scatterExport.ts).
+ * the order, colours, size and opacity drawn on screen, the tissue plot's cell
+ * outlines over them (lib/outlineSvg.ts), the group labels, axis names, a
+ * title and the same legend the PNG gets (lib/scatterExport.ts).
  *
  * Above HYBRID_THRESHOLD points a vector file gets large and slow to open, so
  * the points can instead be one embedded high-resolution PNG with every piece
@@ -23,6 +24,7 @@ import {
 } from "@/lib/scatterExport";
 import { prettyEmbeddingLabel } from "@/lib/formatting";
 import { LABEL_SIZE } from "@/lib/centroidLabels";
+import { outlinesSvg, type SvgOutlines } from "@/lib/outlineSvg";
 
 /** Above this many drawn points the export defaults to points as an image. */
 export const HYBRID_THRESHOLD = 50_000;
@@ -71,6 +73,8 @@ export interface SvgPanel {
   title?: { box: SvgRect; label: string; subtitle?: string };
   /** Thin frame around the view (grids) */
   frame?: boolean;
+  /** Segmented cell outlines over the points, as on the tissue plot (lib/outlineSvg.ts) */
+  outlines?: SvgOutlines | null;
 }
 
 /** Draws a panel's point sets into an image of its view, returning a data URL. */
@@ -346,6 +350,7 @@ export function buildScatterSvg(o: ScatterSvgOptions): ScatterSvg {
       for (const set of p.sets) circles += circlesSvg(set, p.view, out);
     }
     out.push("</g>");
+    if (p.outlines) outlinesSvg(p.outlines, `panel-clip-${i}`, out);
     if (p.labels?.length) labelsSvg(p.labels, out);
     if (p.frame) {
       out.push(
