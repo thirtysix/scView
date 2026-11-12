@@ -22,6 +22,16 @@ export const MAX_OUTLINED_CELLS = 30_000;
 export const MAX_OUTLINE_VERTICES = 400_000;
 /** Below this many pixels across a cell its edge would only darken its colour. */
 export const MIN_EDGE_PIXELS = 4;
+/** The edge line drawn round each outline (1 px), on a light and on a dark background. */
+export const EDGE_RGBA = {
+  light: [30, 41, 59, 130],
+  dark: [255, 255, 255, 110],
+} as const satisfies Record<string, readonly [number, number, number, number]>;
+
+/** Whether the outlines get an edge at `scale` screen pixels a world unit (cells wide enough). */
+export function drawsEdges(mesh: { meanSize: number }, scale: number): boolean {
+  return mesh.meanSize * scale >= MIN_EDGE_PIXELS;
+}
 
 /** `GET /datasets/{id}/spatial/outlines`, little-endian (no copy of the vertices). */
 export function parseOutlines(buffer: ArrayBuffer): CellOutlines {
