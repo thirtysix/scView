@@ -146,9 +146,18 @@ def _register(dm, a: ad.AnnData) -> str:
 def _events(text: str) -> list[tuple[str, dict]]:
     out = []
     for block in text.strip().split("\n\n"):
-        lines = dict(line.split(": ", 1) for line in block.splitlines())
-        out.append((lines["event"], json.loads(lines["data"])))
+        # ": keepalive" comments (core/sse.py) come every 15 s: a slow or capped run has some.
+        lines = dict(line.split(": ", 1) for line in block.splitlines() if not line.startswith(":"))
+        if lines:
+            out.append((lines["event"], json.loads(lines["data"])))
     return out
+
+
+def test_events_skip_keepalive_comments():
+    from scview.core import sse
+
+    text = f'event: start\ndata: {{}}\n\n{sse.COMMENT}event: complete\ndata: {{"n": 1}}\n\n'
+    assert _events(text) == [("start", {}), ("complete", {"n": 1})]
 
 
 async def test_sweep_endpoint_streams_one_result_per_resolution(client, dataset_manager):
