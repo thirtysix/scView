@@ -532,23 +532,28 @@ export function EmbeddingScatter({
     }
   }, [initialViewState]);
 
-  // When initial view state changes (new data), reset (to a restored camera if
-  // there is one; the fit's zoom limits still apply). When only the legend
-  // changed, the fit follows it only while the camera is still the fit.
-  const lastBaseRef = useRef(baseViewState);
-  useEffect(() => {
-    if (!initialViewState) return;
-    const newData = lastBaseRef.current !== baseViewState;
-    lastBaseRef.current = baseViewState;
-    if (!newData && !fittedRef.current) return;
-    fittedRef.current = !restoredRef.current;
-    setViewState({ ...initialViewState, ...restoredRef.current });
-  }, [initialViewState, baseViewState]);
-
-  // Another dataset or embedding: the restored camera meant the old one.
+  // Another dataset or embedding: the restored camera meant the old one. (Before
+  // the fit below, which runs on the same change.)
   useEffect(() => {
     restoredRef.current = null;
   }, [cameraKey]);
+
+  // New data (positions, dimensions, dataset or embedding): reset to the fit (to a
+  // restored camera if there is one; the fit's zoom limits still apply). When only
+  // the plot's size or the legend changed (the toolbar wrapped, a pane resized),
+  // the fit follows only while the camera is still the fit: a camera the user
+  // moved stays where it is.
+  const lastDataRef = useRef<{ positions: Float32Array | null; dimensions: number; cameraKey: string } | null>(null);
+  useEffect(() => {
+    if (!initialViewState) return;
+    const last = lastDataRef.current;
+    const newData =
+      !last || last.positions !== positions || last.dimensions !== dimensions || last.cameraKey !== cameraKey;
+    lastDataRef.current = { positions, dimensions, cameraKey };
+    if (!newData && !fittedRef.current) return;
+    fittedRef.current = !restoredRef.current;
+    setViewState({ ...initialViewState, ...restoredRef.current });
+  }, [initialViewState, positions, dimensions, cameraKey]);
 
   const onRestoreRef = useRef(onRestoreViewState);
   onRestoreRef.current = onRestoreViewState;

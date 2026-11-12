@@ -61,4 +61,15 @@ describe("ViolinPlot log scale", () => {
     expect(traces()).toHaveLength(2);
     expect(traces()[0]!.y).toEqual(DATA.B);
   });
+
+  it("spaces the log ticks for the plot's height: no pile-up at 0 on a short violin", () => {
+    const expression = { B: [0, 0.3, 2.1, 5.8], NK: [0, 1.2, 4] }; // log-normalised
+    const { unmount } = render(<ViolinPlot data={expression} yLabel="Expression" height={400} />);
+    fireEvent.click(screen.getByLabelText("log scale"));
+    expect(yaxis().ticktext).toEqual(["0", "0.5", "1", "2", "5"]);
+    unmount();
+    render(<ViolinPlot data={expression} yLabel="Expression" height={170} />);
+    fireEvent.click(screen.getByLabelText("log scale"));
+    expect(yaxis().ticktext).toEqual(["0", "0.5", "2", "5"]); // 120 px of axis: at least 22 px apart
+  });
 });

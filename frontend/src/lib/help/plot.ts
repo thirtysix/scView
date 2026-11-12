@@ -19,8 +19,12 @@ export const PLOT_HELP: Record<string, string> = {
     "Cells beyond these percentiles take the end colours, so a few extreme cells do not wash out the rest of the scale. The legend can change it for one view.",
   "plot.max-cells":
     "The most cells drawn at once. A larger dataset shows a fixed random sample of its cells so the plot stays quick; the analyses still use all cells. Raise it on a fast computer.",
-  "plot.select":
-    "Draw around cells (Lasso), tick groups (By group), set conditions (Filter) or click a saved gate to select cells. The selection is what DE selection vs rest, Label selection, gates and the histogram work on.",
+  "plot.lasso":
+    "Draw around cells to select them. Press L to turn the lasso on or off. On a 3D embedding it takes every cell under the outline, at any depth; turn the lasso off to rotate. The selection is what DE selection vs rest, Label selection, gates and the histogram work on.",
+  "plot.lasso-grid":
+    "Draw around cells in any panel to select them; every panel shows the selection. Press L to turn the lasso on or off. The selection is what DE selection vs rest, Label selection, gates and the histogram work on.",
+  "plot.lasso-tissue":
+    "Draw around part of the tissue to select the spots, bins or cells inside the outline, in this section only. Press L to turn the lasso on or off. The selection is what DE selection vs rest, Label selection, gates and the histogram work on.",
 
   // Shell: summary, cluster map, distribution
   "plot.summary":
