@@ -1,5 +1,5 @@
 import { SCORE_METHODS, type ScoreMethod } from "@/api/genesetScore";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { useScoringMethodStore } from "@/stores/scoringMethodStore";
 
 /** What the methods compute: the tooltip of every scoring control. */
@@ -51,7 +51,11 @@ export function ScoringMethodChoice({ label = "Score with", className = "" }: { 
   const method = useScoringMethodStore((s) => s.method);
   const setMethod = useScoringMethodStore((s) => s.setMethod);
   return (
-    <span className={`inline-flex items-center gap-1 text-[11px] text-slate-500 ${className}`}>
+    <HoverTip
+      className={`inline-flex items-center gap-1 text-[11px] text-slate-500 ${className}`}
+      width={300}
+      tip={<ScoringMethodHelp />}
+    >
       {label && <span>{label}</span>}
       <select
         value={method}
@@ -63,9 +67,6 @@ export function ScoringMethodChoice({ label = "Score with", className = "" }: { 
           <option key={m.id} value={m.id}>{m.label}</option>
         ))}
       </select>
-      <InfoTip width={300} label="How gene sets are scored">
-        <ScoringMethodHelp />
-      </InfoTip>
-    </span>
+    </HoverTip>
   );
 }

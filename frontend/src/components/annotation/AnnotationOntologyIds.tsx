@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ExternalLink } from "lucide-react";
 import { getLabelMatches, type LabelMatch, type LabelMatches } from "@/api/ontology";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { errorMessage } from "@/lib/errorMessage";
 
 const ROWS = 8; // more behind "show all"
@@ -69,16 +69,17 @@ export function AnnotationOntologyIds({
 
   return (
     <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50/60 p-3" data-testid="ontology-ids">
-      <div className="mb-1 flex items-center gap-1">
-        <p className="text-xs font-semibold text-slate-700">Cell Ontology ids</p>
-        <InfoTip label="About the Cell Ontology ids" width={300}>
+      <p className="mb-1 text-xs font-semibold text-slate-700">
+        <HoverTip width={300} tip={<>
           Each label is matched to a Cell Ontology (CL) term by name only: the same name or exact synonym, or the
           same once case, plurals, &quot;+&quot; (positive), hyphens and a trailing &quot;cells&quot; are set aside.
           Abbreviations (&quot;CD14 Mono&quot;) and labels CL does not name get no id rather than a guess. The AI
           annotator also gives an id; it is used only when the label agrees with that term. To keep terms with the
           dataset (and for the CELLxGENE export), use &quot;Cell Ontology…&quot; under the legend.
-        </InfoTip>
-      </div>
+        </>}>
+          Cell Ontology ids
+        </HoverTip>
+      </p>
       <p className="mb-2 text-[11px] text-slate-500">
         {data.n_matched} of {data.n_labels} labels in <code className="font-mono">{column}</code> matched{data.version ? ` · ${data.version.replace(/^cl\/releases\//, "CL ").replace(/\/cl-basic\.owl$/, "")}` : ""}.
       </p>

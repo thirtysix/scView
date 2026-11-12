@@ -11,6 +11,7 @@ const exp = vi.hoisted(() => ({ downloadUrl: vi.fn() }));
 vi.mock("@/api/export", () => exp);
 
 import { ExportFormatDialog } from "./ExportFormatDialog";
+import { hoverTip, unhover } from "@/test/hoverTip";
 
 const base = {
   filename: "scview_pbmc_cellxgene.h5ad",
@@ -90,7 +91,12 @@ describe("ExportFormatDialog", () => {
     const onClose = vi.fn();
     render(<ExportFormatDialog datasetId="abc" format="cellxgene" onClose={onClose} />);
     expect(await screen.findByTestId("export-size")).toHaveTextContent("About 27.0 MB");
-    expect(screen.getByText(/0 of 1 checks pass/)).toBeInTheDocument();
+    const ready = screen.getByText(/0 of 1 checks pass/);
+    expect(await hoverTip(ready)).toContain("published Discover schema 7.1.0");
+    unhover(ready);
+    const raw = screen.getByText("Include raw counts (as .raw)");
+    expect(await hoverTip(raw)).toContain("requires the raw counts as raw.X");
+    unhover(raw);
     expect(screen.getByText("missing")).toBeInTheDocument();
     expect(screen.getByText(/50 columns, first 2 exported/)).toBeInTheDocument();
 

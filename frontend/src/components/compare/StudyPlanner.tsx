@@ -14,7 +14,7 @@ import {
 } from "@/api/planner";
 import type { DatasetInfo } from "@/api/types";
 import { Caption } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { PowerCurves } from "@/components/compare/StudyPlannerPlot";
 import { conditionColumns, suggestConditionColumn } from "@/lib/composition";
 import { replicateColumns } from "@/lib/de";
@@ -270,31 +270,30 @@ export function StudyPlanner({ datasetId, info, defaultCondition, defaultGroup, 
   return (
     <div className="space-y-4">
       <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex w-fit rounded-md border border-slate-200 p-0.5 text-xs">
-            {(
-              [
-                ["composition", "Cell-type proportions"],
-                ["de", "Pseudobulk DE"],
-              ] as const
-            ).map(([m, label]) => (
-              <button
-                key={m}
-                onClick={() => setMode(m)}
-                className={`rounded px-3 py-1 font-medium transition ${
-                  mode === m ? "bg-primary text-white" : "text-slate-500 hover:text-slate-700"
-                }`}
-              >
+        <div className="flex w-fit rounded-md border border-slate-200 p-0.5 text-xs">
+          {(
+            [
+              ["composition", "Cell-type proportions"],
+              ["de", "Pseudobulk DE"],
+            ] as const
+          ).map(([m, label]) => (
+            <button
+              key={m}
+              onClick={() => setMode(m)}
+              className={`rounded px-3 py-1 font-medium transition ${
+                mode === m ? "bg-primary text-white" : "text-slate-500 hover:text-slate-700"
+              }`}
+            >
+              <HoverTip width={320} tip={<>
+                Each point simulates many studies of that size from this dataset&apos;s own donor-to-donor
+                variability and runs on each the test the app itself would run (the composition test, or
+                pseudobulk limma-voom, or DESeq2 if chosen). Power is the share of those studies that find
+                the effect.
+              </>}>
                 {label}
-              </button>
-            ))}
-          </div>
-          <InfoTip width={320}>
-            Each point simulates many studies of that size from this dataset&apos;s own donor-to-donor
-            variability and runs on each the test the app itself would run (the composition test, or
-            pseudobulk limma-voom, or DESeq2 if chosen). Power is the share of those studies that find
-            the effect.
-          </InfoTip>
+              </HoverTip>
+            </button>
+          ))}
         </div>
 
         <div className="flex flex-wrap items-end gap-3">

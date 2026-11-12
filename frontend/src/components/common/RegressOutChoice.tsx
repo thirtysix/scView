@@ -1,4 +1,4 @@
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { REGRESS_HELP } from "@/lib/regressOut";
 
 /** The scaling step's regress-out covariates: a checkbox each (none = off). */
@@ -36,13 +36,14 @@ export function RegressOutChoice({
           );
         })}
       </div>
-      <p className="flex items-center gap-1 text-[10px] text-slate-500">
-        {pearson
-          ? "Off with Pearson residuals: they already model sequencing depth (Normalization step)."
-          : value.length
-            ? `Regressed out of the variable genes before PCA: ${value.length} covariate${value.length === 1 ? "" : "s"}.`
-            : "None: off (the default)."}
-        <InfoTip width={300} label="When regress-out helps">{REGRESS_HELP}</InfoTip>
+      <p className="text-[10px] text-slate-500">
+        <HoverTip width={300} tip={REGRESS_HELP}>
+          {pearson
+            ? "Off with Pearson residuals: they already model sequencing depth (Normalization step)."
+            : value.length
+              ? `Regressed out of the variable genes before PCA: ${value.length} covariate${value.length === 1 ? "" : "s"}.`
+              : "None: off (the default)."}
+        </HoverTip>
       </p>
     </div>
   );

@@ -11,7 +11,7 @@ import {
   type CompareStart,
 } from "@/api/batchCompare";
 import { Caption } from "./Caption";
-import { InfoTip } from "./InfoTip";
+import { HoverTip } from "./InfoTip";
 import { errorMessage } from "@/lib/errorMessage";
 
 function pct(x: number | null | undefined): string {
@@ -109,14 +109,17 @@ export function BatchMethodCompare({
   return (
     <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50/60 p-3" data-testid="batch-compare">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs font-semibold text-slate-700">Compare methods</span>
-        <InfoTip width={320} label="About the comparison">
-          Each method runs on the current PCA, without reprocessing or saving. Mixing: how many
-          batches a cell&apos;s {start?.k ?? 15} nearest neighbours come from (iLISI), as a share of
-          perfect mixing. Kept apart: how often those neighbours share the cell&apos;s label. BBKNN
-          makes a neighbour graph, not an embedding, so its neighbours are each cell&apos;s strongest
-          graph links.
-        </InfoTip>
+        <span className="text-xs font-semibold text-slate-700">
+          <HoverTip width={320} tip={<>
+            Each method runs on the current PCA, without reprocessing or saving. Mixing: how many
+            batches a cell&apos;s {start?.k ?? 15} nearest neighbours come from (iLISI), as a share of
+            perfect mixing. Kept apart: how often those neighbours share the cell&apos;s label. BBKNN
+            makes a neighbour graph, not an embedding, so its neighbours are each cell&apos;s strongest
+            graph links.
+          </>}>
+            Compare methods
+          </HoverTip>
+        </span>
         {info?.available && !running && (
           <button
             type="button"
@@ -150,10 +153,9 @@ export function BatchMethodCompare({
       {info && !info.available && <p className="text-xs text-slate-500">{info.reason}</p>}
       {info?.available && (
         <p className="text-[11px] leading-snug text-slate-500">
-          {info.background}{" "}
-          <InfoTip width={320} label="About the benchmark">
-            {info.background_tip}
-          </InfoTip>
+          <HoverTip width={320} tip={<>{info.background_tip}</>}>
+            {info.background}
+          </HoverTip>
         </p>
       )}
       {info?.available && !labelCol && (
