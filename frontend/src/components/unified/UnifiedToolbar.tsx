@@ -383,34 +383,36 @@ export function UnifiedToolbar({ onResetView, numCells, groupSelect = null }: Un
       <CellFilterControl />
       <GatesControl />
 
-      {/* Selection info; a filter's selection says which filter */}
-      {selectedIndices && selectedIndices.size > 0 && (
-        <span className="flex min-w-0 items-center gap-1 text-xs text-orange-600">
-          {formatNumber(selectedIndices.size)} selected
-          {selectionFilter && (
-            <span
-              className="max-w-[260px] truncate text-slate-500"
-              title={describeFilter(selectionFilter)}
-              aria-label="Selection filter"
-            >
-              by {describeFilter(selectionFilter)}
-            </span>
-          )}
-          <AskSelectionButton />
-          <button onClick={clearSelection} aria-label="Clear selection" className="rounded p-0.5 hover:bg-orange-100">
-            <X className="h-3 w-3" />
-          </button>
-        </span>
-      )}
-      <LabelSelectionControls />
       <ResolutionSweepControl />
       <HvgSensitivityControl />
       {/* UMAP checks: not for the tissue, whose positions are measured */}
       {!tissue && <EmbeddingReliabilityControl />}
       {!tissue && <LayoutStabilityControl />}
 
-      {/* Spacer */}
-      <div className="flex-1" />
+      {/* The selection, in the spacer: a slot of fixed basis, so a lasso (or any
+          selection) appearing or clearing never re-wraps the toolbar, which would
+          resize the plot under it. A filter's selection says which filter. */}
+      <div data-testid="selection-slot" className="flex min-w-[20rem] flex-1 items-center gap-2">
+        {selectedIndices && selectedIndices.size > 0 && (
+          <span className="flex min-w-0 items-center gap-1 text-xs text-orange-600">
+            <span className="whitespace-nowrap">{formatNumber(selectedIndices.size)} selected</span>
+            {selectionFilter && (
+              <span
+                className="min-w-0 max-w-[260px] truncate text-slate-500"
+                title={describeFilter(selectionFilter)}
+                aria-label="Selection filter"
+              >
+                by {describeFilter(selectionFilter)}
+              </span>
+            )}
+            <AskSelectionButton />
+            <button onClick={clearSelection} aria-label="Clear selection" className="rounded p-0.5 hover:bg-orange-100">
+              <X className="h-3 w-3" />
+            </button>
+          </span>
+        )}
+        <LabelSelectionControls />
+      </div>
 
       {/* Cell count */}
       {numCells > 0 && (
