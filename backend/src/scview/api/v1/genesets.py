@@ -19,6 +19,7 @@ import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from scview.api.v1 import saved_scores as saved_scores_api
 from scview.config import Settings
 from scview.core import aucell, gsva, msigdb_species, ssgsea, targeted_panel, working_copy
 from scview.core import large_mode
@@ -55,6 +56,9 @@ class GeneSetScoreRequest(BaseModel):
     score_name: str = "gene_set_score"
     method: ScoreMethod = "score_genes"
     max_rank: int | None = Field(default=None, ge=2)
+    # Also keep the score as an obs column named after ``score_name`` (core/saved_scores.py);
+    # the same set scored again replaces it.
+    save: bool = False
 
 
 class GeneSetScoreResponse(BaseModel):
@@ -80,6 +84,9 @@ class GeneSetScoreResponse(BaseModel):
     # ssGSEA / GSVA: how the score was computed, in one line (genes ranked, the CDF).
     # GSVA's genes_undetected: the set's genes it leaves out (the same in every cell).
     note: str | None = None
+    # With ``save``: the obs column the score went into, or why it was not saved.
+    saved_column: str | None = None
+    save_note: str | None = None
 
 
 class ScoreCompareRequest(BaseModel):
@@ -326,7 +333,8 @@ async def score_genesets(
     ``method``: ``score_genes`` (the default: ``scanpy.tl.score_genes``, on .raw when
     present), ``aucell`` (``core/aucell.py``; ``max_rank`` top genes per cell),
     ``ssgsea`` (``core/ssgsea.py``) or ``gsva`` (``core/gsva.py``); the last two refuse
-    (422) a dataset above ``ssgsea.MAX_VALUES`` non-zero values.
+    (422) a dataset above ``ssgsea.MAX_VALUES`` non-zero values. With ``save`` the
+    score is also kept as an obs column (``saved_column``; ``save_note`` says why not).
     """
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
@@ -338,6 +346,19 @@ async def score_genesets(
             detail="gene_set must contain at least one gene name.",
         )
 
+    cells = adaptor.cells_fingerprint() if body.save else None
+    res = await _score_response(dm, dataset_id, adaptor, body)
+    if body.save:
+        res.saved_column, res.save_note = await saved_scores_api.persist(
+            dm, dataset_id, cells, kind="geneset", name=body.score_name, values=res.scores,
+            method=res.method, genes=res.genes_found, genes_missing=res.genes_missing,
+            source=res.source, extra={"max_rank": res.max_rank})
+    return res
+
+
+async def _score_response(dm: DatasetManager, dataset_id: str, adaptor, body: GeneSetScoreRequest
+                          ) -> GeneSetScoreResponse:
+    """The scores by the method asked for (``score_genesets``)."""
     adata = adaptor.adata
 
     if body.method == "aucell":

@@ -1295,10 +1295,14 @@ async def enrichment(
     return dumps(out, _max_chars(limit))
 
 
-@tool(READ)
+@tool(WRITE)
 async def score_gene_set(
     dataset_id: DatasetId,
     genes: Annotated[list[str], Field(min_length=1, max_length=2000, description="The set's gene symbols.")],
+    name: Annotated[str, Field(max_length=200, description=(
+        "The set's name, e.g. HALLMARK_TNFA_SIGNALING_VIA_NFKB. With a name the score is also saved "
+        "as an obs column score_<name> (saved_column), offered in Compare colourings and Colour by; "
+        "scoring the same name again replaces it. Empty: not saved."))] = "",
     groupby: Annotated[str, Field(description="Summarise the per-cell scores by this obs column "
                                               "(default: the active clustering).")] = "",
     method: Annotated[Literal["score_genes", "aucell", "ssgsea", "gsva"], Field(description=(
@@ -1321,16 +1325,22 @@ async def score_gene_set(
     """Score every cell for a gene set (scanpy score_genes by default, or AUCell / ssGSEA /
     GSVA, on log-normalised values) and summarise the scores per group (mean, median, share
     above 0). With sample (and condition): each sample's mean score within each group, and
-    per group the donor-level test between two conditions, in one call."""
+    per group the donor-level test between two conditions, in one call. With name the score
+    is also saved as an obs column (saved_column; remove_saved_score drops it)."""
     if (condition or conditions) and not sample:
         raise ToolError("A donor-level test needs the sample (donor) column: give sample.")
     if conditions and not condition:
         raise ToolError("conditions needs the condition column it is values of.")
-    d = await _post(f"{_ds(dataset_id)}/genesets/score", {"gene_set": genes, "method": method})
+    body: dict[str, Any] = {"gene_set": genes, "method": method}
+    if name.strip():
+        body.update(score_name=name.strip(), save=True)
+    d = await _post(f"{_ds(dataset_id)}/genesets/score", body)
     scores = np.asarray(d.pop("scores"), dtype=np.float64)
     if not groupby:
         groupby = (await _get(_ds(dataset_id))).get("active_clustering") or ""
-    out: dict[str, Any] = {"dataset_id": dataset_id, **{k: v for k, v in d.items() if k != "score_name"}}
+    out: dict[str, Any] = {"dataset_id": dataset_id,
+                           **{k: v for k, v in d.items() if k != "score_name"
+                              and not (k in ("saved_column", "save_note") and v is None)}}
     out["genes_found"] = out.get("genes_found", [])[:50]
     if sample:
         if not groupby:
@@ -1354,6 +1364,22 @@ async def score_gene_set(
     else:
         out["summary"] = {"mean": float(scores.mean()), "median": float(np.median(scores))}
     return dumps(out, _max_chars(limit))
+
+
+@tool(WRITE)
+async def remove_saved_score(
+    dataset_id: DatasetId,
+    column: Annotated[str, Field(min_length=1, max_length=200, description=(
+        "The saved score's obs column (score_<set> or activity_<source>, the saved_column a scoring "
+        "returned). Only a column scView saved as a score can be removed."))],
+) -> str:
+    """Remove a saved per-cell score: its obs column and its record. The dataset's own columns
+    and hand labels are never removed; scoring the set again brings the column back."""
+    try:
+        _, data = await api.request("DELETE", f"{_ds(dataset_id)}/scores/{column}")
+    except api.RouteError as e:
+        raise _fail(e) from None
+    return dumps({"dataset_id": dataset_id, **json.loads(data)}, compact.MAX_CHARS)
 
 
 SAMPLE_MIN_CELLS = 10  # per sample x group, as per_donor_expression (core/donor_expression.py)

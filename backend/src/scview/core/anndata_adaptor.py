@@ -471,7 +471,11 @@ class AnnDataAdaptor:
     # ------------------------------------------------------------------
 
     def obs_columns_info(self) -> list[dict]:
-        """Return info about each obs column: name, dtype, n_unique, values (if categorical)."""
+        """Return info about each obs column: name, dtype, n_unique, values (if categorical),
+        and for a saved per-cell score what it holds (``saved_score``, core/saved_scores.py)."""
+        from scview.core import saved_scores
+
+        saved = saved_scores.record(self.adata)
         results = []
         for col in self.adata.obs.columns:
             series = self.adata.obs[col]
@@ -501,6 +505,8 @@ class AnnDataAdaptor:
                     info["values"] = [str(v) for v in unique]
             else:
                 info["n_unique"] = int(series.nunique())
+            if col in saved:
+                info["saved_score"] = saved_scores.obs_flag(saved[col])
             results.append(info)
         return results
 

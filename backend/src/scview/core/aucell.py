@@ -417,3 +417,10 @@ def sentence(check: dict, labels: dict[str, str], metric: str, where: str) -> st
                 if i == 0 else f" (rho {_rho_text(rho)})")
         parts.append(f"{label} {verdict(rho)}{tail}")
     return "; ".join(parts) + "."
+
+
+# The ranking and scoring above, copied into replay scripts (core/replay_script.py
+# ``aucell_scores``): numpy, scipy and pandas only.
+REPLAY_CONSTANTS = ("TOP_FRACTION", "_SCORE_ROWS", "_MEASURE_ROWS")
+REPLAY_CODE = (_block, detected_genes, default_max_rank, check_max_rank, tie_order, Rankings, _row_entries,
+               build, max_auc, score)

@@ -99,6 +99,11 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
      "nearest gene, distance to TSS, class; CSV"),
     ("Unified View > Gene Sets", "AUCell, ssGSEA, GSVA",
      "browse MSigDB sets; score them with AUCell, ssGSEA or GSVA"),
+    ("Unified View > Compare", "saved scores",
+     "the plot coloured by 2-12 columns side by side: groupings, and under Scores every gene-set score and "
+     "TF / pathway activity the user has drawn (each is saved as a column, score_<set> or activity_<source>; "
+     "scoring the same set again replaces it) plus cell-cycle and stress scores; saved scores also show in "
+     "Colour by and the histogram, and Remove beside one drops it"),
     ("Unified View > Enrichment", "ORA, GSEA", "pathway enrichment (ORA, preranked GSEA)"),
     ("Unified View > Enrichment > Diagram", "Reactome",
      "a Reactome row's pathway diagram coloured by a DE result's fold changes (also on the DE tab's "
@@ -193,7 +198,7 @@ CLOSING = "These are all of scView's tabs and tools; name a feature only by its 
 # In the full guide only: the compact block is at its cap (tests/test_feature_guide.py). The tab stays in it.
 FULL_ONLY = ("Unified View > Accessibility >", "Unified View > Embedding > Tissue > Draw", "Unified View > Transcripts",
              "Unified View > Domains > Co-occurrence", "Unified View > Spot composition > Reference labels",
-             "Data Assessment > Cell-type annotation", "Data Assessment > Cluster QC")
+             "Data Assessment > Cell-type annotation", "Data Assessment > Cluster QC", "Unified View > Compare")
 
 
 def compact_guide() -> str:

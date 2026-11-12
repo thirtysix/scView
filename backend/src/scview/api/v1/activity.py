@@ -21,6 +21,7 @@ import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from scview.api.v1 import saved_scores as saved_scores_api
 from scview.config import Settings
 from scview.core import (
     activity,
@@ -276,17 +277,21 @@ async def activity_cells(
     dataset_id: str,
     network: str,
     source: str,
+    save: bool = False,
     dm: DatasetManager = Depends(get_dataset_manager),
     settings: Settings = Depends(get_settings_dep),
 ):
-    """Every cell's activity for one source, in cell order (to colour the embedding)."""
+    """Every cell's activity for one source, in cell order (to colour the embedding).
+    With ``save`` it is also kept as an obs column (``saved_column``, core/saved_scores.py;
+    ``save_note`` says why not)."""
     s = _spec(network)
     adaptor = await _adaptor(dm, dataset_id)
     adata = adaptor.adata
     species = _species(adata)
+    cells = adaptor.cells_fingerprint() if save else None
 
     def _run(room: int) -> dict:
-        model, _ = _model(adata, network, _net_dir(settings), species, room=room)
+        model, matrix = _model(adata, network, _net_dir(settings), species, room=room)
         if source not in model.net.sources:
             raise HTTPException(
                 status_code=404,
@@ -295,9 +300,15 @@ async def activity_cells(
             )
         j = model.net.sources.index(source)
         return {"network": s.name, "source": source, "n_targets": int(model.net.n_targets[j]),
-                "scores": _round(model.source(source))}
+                "scores": _round(model.source(source)), "matrix_source": matrix}
 
-    return await _in_thread(_run, reading=(dm, dataset_id, adaptor, adata, network, _net_dir(settings)))
+    out = await _in_thread(_run, reading=(dm, dataset_id, adaptor, adata, network, _net_dir(settings)))
+    if save:
+        out["saved_column"], out["save_note"] = await saved_scores_api.persist(
+            dm, dataset_id, cells, kind="activity", name=source, values=out["scores"], method="ulm",
+            source=out["matrix_source"], network=s.name, resource=f"{s.label}: {s.url}",
+            extra={"n_targets": out["n_targets"], "species": species})
+    return out
 
 
 @router.post("/datasets/{dataset_id}/activity/{network}/de")
