@@ -158,3 +158,22 @@ describe("AmbientRna on a targeted panel", () => {
     expect(screen.queryByTestId("ambient-step-toggle")).toBeNull();
   });
 });
+
+describe("AmbientRna without counts", () => {
+  beforeEach(() => getAmbient.mockReset());
+
+  it("shows the missing counts as a plain note, not a red error, and offers no step", async () => {
+    const why = "Ambient RNA needs raw counts (layers['counts'], .raw or X), and this dataset has none.";
+    getAmbient.mockResolvedValue(
+      response({ available: false, samples: [], not_applicable: true, reason: "no_counts", notes: [why] }),
+    );
+    const { container } = render(
+      <AmbientRna datasetId="d" step={{ selected: false, onSelectedChange: () => {}, rho: null }} />,
+    );
+    const note = await screen.findByText(why);
+    expect(note.className).toContain("text-slate-500");
+    expect(container.querySelector(".text-red-600")).toBeNull();
+    expect(screen.queryByTestId("ambient-no-raw")).toBeNull();
+    expect(screen.queryByTestId("ambient-step-toggle")).toBeNull();
+  });
+});

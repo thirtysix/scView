@@ -796,22 +796,32 @@ def correction_record(adata) -> dict | None:
     return {}
 
 
+def _not_applicable(note: str, reason: str) -> dict:
+    """The card's answer when the estimate cannot apply (``reason``: targeted_panel |
+    no_counts): a note, not an error."""
+    return {"available": False, "approximate": False, "column": None, "counts_from": None, "samples": [],
+            "markers": {"column": None, "approximate": False, "groups": {}, "n_flagged": 0},
+            "hb_note": None, "notes": [note], "not_applicable": True, "reason": reason,
+            "correction": None, "help": HELP, "method": "", "url": SOUPX_URL}
+
+
 def diagnose(adata, column: str | None = None) -> dict:
     """The Ambient RNA card's answer: per sample its soup (top genes), rho and notes; the
     ambient-looking markers per group of ``column`` (default: the active clustering);
-    whether the counts were corrected."""
+    whether the counts were corrected. Without counts (or on a targeted panel) a
+    ``not_applicable`` answer with the reason as a note."""
     from scview.core import cluster_qc, spatial, targeted_panel
     from scview.core.species import detect_species
 
     if spatial.targeted_panel(adata):
-        return {"available": False, "approximate": False, "column": None, "counts_from": None, "samples": [],
-                "markers": {"column": None, "approximate": False, "groups": {}, "n_flagged": 0},
-                "hb_note": None, "notes": [f"{targeted_panel.AMBIENT_SKIP}."], "not_applicable": True,
-                "correction": None, "help": HELP, "method": "", "url": SOUPX_URL}
+        return _not_applicable(f"{targeted_panel.AMBIENT_SKIP}.", "targeted_panel")
     if column and column not in adata.obs.columns:
         raise AmbientError(f"Column '{column}' not found.")
     column = column or cluster_qc.default_grouping(adata)
-    counts, where = counts_matrix(adata)
+    try:
+        counts, where = counts_matrix(adata)
+    except AmbientError as e:
+        return _not_applicable(str(e), "no_counts")
     found, fits, notes = fit_samples(adata, column, counts)
     names = adata.var_names.astype(str)
     rows = []
