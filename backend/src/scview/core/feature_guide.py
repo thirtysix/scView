@@ -178,7 +178,9 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("History > Stored results", "", "every stored result, newest first; download or delete"),
     ("Download", "CELLxGENE, Vitessce, .rds",
      "h5ad, for CELLxGENE, for Vitessce, Seurat or SingleCellExperiment .rds, metadata, replay script"),
-    ("AI Co-pilot", "", "this assistant; checks each claim against the fact it cites"),
+    ("AI Co-pilot", "", "this assistant; checks each claim against the fact it cites (underlined in the "
+     "answer, hover for the verdict); Write methods drafts a methods paragraph and checks its numbers, "
+     "tools and versions against the recorded recipe"),
 )
 
 CLOSING = "These are all of scView's tabs and tools; name a feature only by its path here."

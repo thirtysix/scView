@@ -48,6 +48,7 @@ class Claim(BaseModel):
     reason: str = ""
     evidence: str = ""                              # the fact lines it was checked against
     checked_by: str = "rules"                       # rules | model
+    span: str = ""                                  # the sentence as the answer wrote it (inline marks)
 
 
 # ---------------------------------------------------------------------------
@@ -781,7 +782,13 @@ def split_claims(answer: str) -> list[tuple[str, list[str], bool]]:
     without its own citation inherits the citations of the lead-in line above it
     ("Top markers [result:markers:B]:"); the lead-in itself is a claim only when it
     holds numbers or genes."""
-    out: list[tuple[str, list[str], bool]] = []
+    return [(md, cites, lead) for md, cites, lead, _raw in _split_sentences(answer)]
+
+
+def _split_sentences(answer: str) -> list[tuple[str, list[str], bool, str]]:
+    """``split_claims`` plus each sentence as written (citations included): a piece
+    of one line of the answer, which the UI finds again to mark it inline."""
+    out: list[tuple[str, list[str], bool, str]] = []
     lead: list[str] = []
     in_code = False
     for line in (answer or "").splitlines():
@@ -796,13 +803,13 @@ def split_claims(answer: str) -> list[tuple[str, list[str], bool]]:
         plain = body.replace("**", "").strip()
         if plain.endswith(":"):
             lead = (cites or lead) if is_item else cites
-            out.append((body, cites, True))
+            out.append((body, cites, True, _LIST_RX.sub("", s)))
             continue
         if not is_item:
             lead = []
         protected = _ABBREV_RX.sub(lambda m: m.group(0).replace(".", "\x01"), _LIST_RX.sub("", s))
         parts = [p.replace("\x01", ".") for p in _SENT_SPLIT_RX.split(protected)]
-        sents: list[tuple[str, list[str]]] = []
+        sents: list[tuple[str, list[str], str]] = []
         for p in parts:
             head = re.match(r"^\s*((?:\[[^\[\]\n]{2,120}\]\s*)+)", p)
             if head and sents:
@@ -814,11 +821,11 @@ def split_claims(answer: str) -> list[tuple[str, list[str], bool]]:
                 if sents:
                     sents[-1][1].extend(cs)
                 continue
-            sents.append((b, cs))
-        for b, cs in sents:
+            sents.append((b, cs, p.strip()))
+        for b, cs, raw in sents:
             if is_item and not cs and not cites:
                 cs = list(lead)
-            out.append((b, cs, False))
+            out.append((b, cs, False, raw))
     return out
 
 
@@ -857,7 +864,7 @@ def check_answer(answer: str, sources: list, context: str, vocab: Vocab) -> list
         return ev_cache[keys]
 
     claims: list[Claim] = []
-    for md, cites, is_lead in split_claims(answer):
+    for md, cites, is_lead, raw in _split_sentences(answer):
         resolved: list[str] = []
         unknown: list[str] = []
         for c in cites:
@@ -922,6 +929,327 @@ def check_answer(answer: str, sources: list, context: str, vocab: Vocab) -> list
         claims.append(Claim(
             id=len(claims), text=text[:MAX_CLAIM_CHARS], cites=cites, refs=resolved,
             verdict=verdict, reason=" ".join([reason, *notes]), evidence=_snippet(lines, max_lines),
+            span=raw,
+        ))
+        if len(claims) >= _MAX_CLAIMS:
+            break
+    return claims
+
+
+# ---------------------------------------------------------------------------
+# Write methods: the model's paragraph against the recipe it was given
+# ---------------------------------------------------------------------------
+#
+# The methods writer (assistant.write_methods) rewrites the recorded recipe as prose.
+# What goes wrong is a changed number, parameter, tool or version. Each number in a
+# sentence is tied to the setting it is written next to ("50 principal components",
+# "resolution 1.0") and checked against that setting's recorded value: a different
+# value there refutes the sentence. A number with no setting to tie it to is checked
+# against every number in the recipe, and is only uncertain when absent. Steps the
+# recipe never ran are dropped before this (core/methods_guard.py).
+
+METHODS_REF = "provenance:recipe"
+
+# (setting, words that name it in prose or None, the recipe keys that record it)
+_METHOD_SLOTS: tuple[tuple[str, re.Pattern | None, re.Pattern], ...] = tuple(
+    (name, re.compile(prose, re.I) if prose else None, re.compile(key, re.I)) for name, prose, key in (
+        ("highly variable genes", r"(?:highly|most)[ -]variable|\bHVGs?\b|variable (?:genes|features)",
+         r"n_top_genes"),
+        ("principal components", r"principal components?|\bPCs?\b|\bPCA\b", r"n_comps|n_pcs"),
+        ("neighbours", r"neighbou?r|\bkNN\b", r"n_neighbors"),
+        ("resolution", r"\bresolution\b", r"resolution"),
+        ("UMAP min_dist", r"min(?:imum)?[ _.-]?dist", r"min_dist"),
+        ("target sum", r"target[ _]sum|scal(?:ed|ing) (?:factor|to)|normali[sz]ed to|size factor",
+         r"target_sum"),
+        ("MADs", r"\bMADs?\b|median absolute deviations?", r"mad_k|^k(?:_mt)?$"),
+        ("% mito", r"mitochondri|\bmito\b|\bMT\b|pct_mt", r"pct_mt|mito"),
+        ("doublet rate", r"doublet rate|expected (?:doublet )?rate", r"doublet_rate"),
+        ("ambient rho", r"\brho\b|ρ|contamination", r"\brho\b|_rho$"),
+        ("genes per cell", r"genes (?:per|/) ?cell|(?:detected|expressed) genes", r"^(?:min|max)_genes$"),
+        ("counts per cell", r"counts (?:per|/) ?cell|\bUMIs?\b|total counts", r"^(?:min|max)_counts$"),
+        ("cells per gene", None, r"^min_cells$"),
+    ))
+_SLOT_GAP = 40           # how far a setting's words may sit from its number
+_ADJACENT = 3            # a small whole number is tied only to words right next to it
+# A clause ends at ";", ")" or ", "; not at "(": "variable genes (n = 2,000)" is one setting.
+_BARRIER_RX = re.compile(r"[;)]|,\s")
+_RUN_GAP_RX = re.compile(r"\s*(?:to|and|or|-|–|/)?\s*")  # "200 to 2,500": one setting
+_RANGE_RX = re.compile(r"(?<![\d\-.])(\d[\d,]*(?:\.\d+)?)\s?[-–]\s?(\d[\d,]*(?:\.\d+)?)(?![\d\-])")
+_POW10_RX = re.compile(r"\b10\s*\^\s*(\d{1,2})\b|\b10([⁰¹²³⁴⁵⁶⁷⁸⁹]{1,2})")
+_SUPERSCRIPT = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹", "0123456789")
+# The dataset's size, said of the cells the analysis kept (not those removed or read in).
+_FINAL_RX = re.compile(r"\b(?:dataset|data set|comprised|compris\w+|consist\w*|contain\w*|total|retained|"
+                       r"remain\w*|leaving|left|passed|kept|final|analy[sz]ed|profiled)\b", re.I)
+_NOT_FINAL_RX = re.compile(r"\b(?:remov\w*|exclud\w*|discard\w*|flagged|doublets?|before|prior|initial\w*|"
+                           r"raw|originally|droplets?|barcodes?|out of|of the)\b", re.I)
+_VERSION_RX = re.compile(r"\bv\.?\s?(\d+(?:\.\d+)+)\b|\bversion\s+(\d+(?:\.\d+)+)\b|(?<![\w.])(\d+\.\d+\.\d+)\b",
+                         re.I)
+# Tools a methods text names, as (name, pattern); "a/b" in a tool label lists both.
+_METHOD_TOOLS: tuple[tuple[str, re.Pattern], ...] = tuple((n, re.compile(rx, re.I)) for n, rx in (
+    ("scanpy", r"\bscanpy\b"), ("Seurat", r"\bseurat\b"), ("Scrublet", r"\bscrublet\b"),
+    ("scDblFinder", r"\bscdblfinder\b"), ("CellTypist", r"\bcelltypist\b"), ("SoupX", r"\bsoupx\b"),
+    ("CellBender", r"\bcellbender\b"), ("Harmony", r"\bharmony(?:py)?\b"), ("Scanorama", r"\bscanorama\b"),
+    ("BBKNN", r"\bbbknn\b"), ("ComBat", r"\bcombat\b"), ("scVI", r"\bscvi\b"), ("UMAP", r"\bumap\b"),
+    ("t-SNE", r"\bt-?sne\b"), ("Leiden", r"\bleiden\b"), ("Louvain", r"\blouvain\b"), ("PAGA", r"\bpaga\b"),
+    ("DESeq2", r"\bdeseq2\b"), ("edgeR", r"\bedger\b"), ("limma", r"\blimma\b"), ("MAST", r"\bMAST\b"),
+    ("Wilcoxon", r"\bwilcoxon\b"), ("decoupler", r"\bdecoupler\b"), ("scVelo", r"\bscvelo\b"),
+    ("Squidpy", r"\bsquidpy\b"), ("Signac", r"\bsignac\b"), ("Cell Ranger", r"\bcell ?ranger\b"),
+))
+# Choices of which exactly one ran: naming another is a changed tool, not an extra one.
+# (name, alternatives, words a sentence needs for the choice to be about this)
+_METHOD_CHOICES: tuple[tuple[str, tuple[tuple[str, re.Pattern], ...], re.Pattern | None], ...] = tuple(
+    (name, tuple((a, re.compile(rx, re.I)) for a, rx in alts), re.compile(ctx, re.I) if ctx else None)
+    for name, alts, ctx in (
+        ("clustering", (("Leiden", r"\bleiden\b"), ("Louvain", r"\blouvain\b")), None),
+        ("HVG flavour", (("Seurat v3", r"\bseurat[ _-]?v3\b"), ("Seurat", r"\bseurat\b(?![ _-]?v3)"),
+                         ("Pearson residuals", r"\bpearson[ _]residuals\b")), r"variable|HVG|flavou?r"),
+        ("batch correction", (("Harmony", r"\bharmony(?:py)?\b"), ("Scanorama", r"\bscanorama\b"),
+                              ("BBKNN", r"\bbbknn\b"), ("ComBat", r"\bcombat\b")), None),
+        ("doublet detection", (("Scrublet", r"\bscrublet\b"), ("scDblFinder", r"\bscdblfinder\b|scDblFinder-style")),
+         None),
+    ))
+
+
+@dataclass
+class _Fact:
+    num: Num
+    slot: str | None
+    line: str
+
+
+@dataclass
+class _Recipe:
+    lines: list[str]
+    facts: list[_Fact]
+    plain: str                                   # lower case, "_" as " ", "a/b" choices removed
+    versions: dict[str, tuple[str, str]]         # tool (lower) -> (version, line)
+
+
+def _methods_text(text: str) -> str:
+    """Ranges and powers of ten as the number scanner reads them: "500-800" ->
+    "500 to 800" (else the 800 is lost), "10^4" -> "1e4"."""
+    text = _POW10_RX.sub(lambda m: f"1e{m.group(1) or m.group(2).translate(_SUPERSCRIPT)}", text or "")
+    text = text.replace("+/-", "± ")  # "+/- 5 MADs" is 5, not -5
+    return _RANGE_RX.sub(r"\1 to \2", text)
+
+
+def _version_spans(text: str) -> list[tuple[int, int, str]]:
+    return [(m.start(), m.end(), next(g for g in m.groups() if g)) for m in _VERSION_RX.finditer(text)]
+
+
+def _prose_slots(sc: Scan) -> dict[int, list[str]]:
+    """The setting each number of ``sc`` is written next to (by number position).
+    Numbers joined by "to"/"and"/"-" share one; the nearest setting words in the
+    same clause win, ties keep both. A number with no such words may still be tied
+    by its unit ("fewer than 200 genes": genes per cell) or, said of the analysed
+    cells, to the dataset's size."""
+    text = sc.text
+    nums = sorted(sc.nums, key=lambda n: n.pos)
+    runs: list[list[Num]] = []
+    for n in nums:
+        if runs:
+            prev = runs[-1][-1]
+            if _RUN_GAP_RX.fullmatch(text[prev.pos + len(prev.raw):n.pos]):
+                runs[-1].append(n)
+                continue
+        runs.append([n])
+    out: dict[int, list[str]] = {}
+    for i, run in enumerate(runs):
+        start, end = run[0].pos, run[-1].pos + len(run[-1].raw)
+        lo = runs[i - 1][-1].pos + len(runs[i - 1][-1].raw) if i else 0
+        hi = runs[i + 1][0].pos if i + 1 < len(runs) else len(text)
+        lo, hi = max(lo, start - _SLOT_GAP), min(hi, end + _SLOT_GAP)
+        before, after = text[lo:start], text[end:hi]
+        cut = list(_BARRIER_RX.finditer(before))
+        if cut:
+            before = before[cut[-1].end():]
+        cut_after = _BARRIER_RX.search(after)
+        if cut_after:
+            after = after[:cut_after.start()]
+        best: list[tuple[int, str]] = []
+        for name, prose, _key in _METHOD_SLOTS:
+            if prose is None:
+                continue
+            d = min([len(before) - m.end() for m in prose.finditer(before)]
+                    + [m.start() for m in prose.finditer(after)], default=None)
+            if d is not None:
+                best.append((d, name))
+        soft = all(n.soft for n in run)
+        slots: list[str] = []
+        if best:
+            dmin = min(d for d, _ in best)
+            if not soft or dmin <= _ADJACENT:
+                slots = [name for d, name in best if d <= dmin + 2]
+        if not slots:
+            kw = next((n.keyword for n in reversed(run) if n.keyword), None)
+            bound = run[0].hedge == "bound" or len(run) > 1
+            if kw == "genes/cell" or (kw == "genes" and bound):
+                slots = ["genes per cell"]
+            elif kw == "counts/cell":
+                slots = ["counts per cell"]
+            elif kw == "mito":
+                slots = ["% mito"]
+            elif kw == "count" and bound:
+                slots = ["cells per gene"]
+            elif kw == "count" and not run[0].hedge and _FINAL_RX.search(text) and not _NOT_FINAL_RX.search(text):
+                slots = ["cells"]
+            elif kw == "genes" and not run[0].hedge and any(m.keyword == "count" for m in nums) \
+                    and _FINAL_RX.search(text) and not _NOT_FINAL_RX.search(text):
+                slots = ["genes"]
+        for n in run:
+            out[n.pos] = slots
+    return out
+
+
+def _parse_recipe(recipe: str) -> _Recipe:
+    """The recipe digest (assistant._methods_skeleton) as facts: every number, with
+    the setting it records ("n_comps=50" -> principal components)."""
+    lines = [ln.strip() for ln in (recipe or "").splitlines() if ln.strip()]
+    facts: list[_Fact] = []
+    versions: dict[str, tuple[str, str]] = {}
+    empty = Vocab()
+    for ln in lines:
+        m = re.match(r"Dataset: ([\d,]+) cells x ([\d,]+) genes", ln)
+        if m:
+            for slot, raw in (("cells", m.group(1)), ("genes", m.group(2))):
+                facts.append(_Fact(Num(value=float(raw.replace(",", "")), step=1, pct=False, raw=raw, pos=-1),
+                                   slot, ln))
+            continue
+        head, sep, rest = ln.partition(" — ")
+        tool = re.search(r"\(tool: (.*)\)\s*$", head)
+        if tool:
+            for tm in re.finditer(r"([A-Za-z][\w.-]*)\s+(\d+\.\d+(?:\.\d+)*)", tool.group(1)):
+                versions[tm.group(1).lower()] = (tm.group(2), ln)
+        if not sep:
+            rest = ln if not ln.startswith("- ") else ""
+        # "k=v, k=v, free text": each value goes with its key; free text is read as prose.
+        keys = list(re.finditer(r"(?:^|,\s)([A-Za-z_]\w*)=", rest))
+        free = [rest[:keys[0].start()] if keys else rest]
+        for i, km in enumerate(keys):
+            seg = rest[km.end():keys[i + 1].start() if i + 1 < len(keys) else len(rest)]
+            value, tail = seg, ""
+            if not seg.startswith(("[", "{", "(")):
+                cut = seg.find(", ")
+                if cut >= 0:
+                    value, tail = seg[:cut], seg[cut + 2:]
+            free.append(tail)
+            slot = next((name for name, _p, key in _METHOD_SLOTS if key.search(km.group(1))), None)
+            facts.extend(_Fact(n, slot, ln) for n in scan(_methods_text(value), empty).nums)
+        for chunk in free:
+            if not chunk.strip():
+                continue
+            sc = scan(_methods_text(chunk), empty)
+            slots = _prose_slots(sc)
+            for n in sc.nums:
+                names = slots.get(n.pos) or [None]
+                facts.extend(_Fact(n, s, ln) for s in names)
+    plain = (recipe or "").replace("_", " ")
+    for _name, alts, _ctx in _METHOD_CHOICES:  # "scanpy.tl.leiden/louvain" names both, ran one
+        for a, rx in alts:
+            for b, rx2 in alts:
+                if a != b:
+                    plain = re.sub(rx.pattern + r"\s*/\s*" + rx2.pattern, " ", plain, flags=re.I)
+    return _Recipe(lines=lines, facts=facts, plain=plain.lower(), versions=versions)
+
+
+def _check_methods_sentence(md: str, rec: _Recipe) -> tuple[_Outcome, list[str]]:
+    """Match one sentence's numbers, tools and versions against the recipe."""
+    out = _Outcome()
+    used: list[str] = []
+
+    def use(line: str) -> None:
+        if line not in used:
+            used.append(line)
+
+    sc = scan(_methods_text(md), Vocab())
+    text = sc.text
+    negated = bool(_NEG_RX.search(text))
+    vspans = _version_spans(text)
+    sc.nums = [n for n in sc.nums if not any(a <= n.pos < b for a, b, _ in vspans)]
+    slots = _prose_slots(sc)
+    for n in sc.nums:
+        names = slots.get(n.pos) or []
+        own = [f for f in rec.facts if f.slot in names]
+        hit = next((f for f in own if _value_match(n, f.num)), None)
+        if hit is None and not own:
+            hit = next((f for f in rec.facts if _value_match(n, f.num)), None)
+        if hit:
+            out.found.append(n.raw)
+            out.found_at.add(n.pos)
+            out.hard_found += 1
+            use(hit.line)
+        elif own and n.hedge != "approx":
+            shown = ", ".join(dict.fromkeys(f.num.raw for f in own))
+            out.conflicts.append(f"says {n.raw} for {names[0]}; the recipe has {shown}")
+            for f in own:
+                use(f.line)
+        elif not n.soft:
+            out.missing.append(n.raw)
+            out.missing_at[n.pos] = n.raw
+    # Tools: one of a choice that did not run is a changed tool; any other unknown is missing.
+    changed: set[str] = set()
+    if not negated:
+        for _name, alts, ctx in _METHOD_CHOICES:
+            if ctx is not None and not ctx.search(text):
+                continue
+            ran = [a for a, rx in alts if rx.search(rec.plain)]
+            for a, rx in alts:
+                if ran and a not in ran and rx.search(text):
+                    out.conflicts.append(f"names {a}; the recipe has {', '.join(ran)}")
+                    changed.add(a.lower())
+                    use(next((ln for ln in rec.lines if any(
+                        r.search(ln.replace("_", " ")) for b, r in alts if b in ran)), rec.lines[0]))
+    for name, rx in _METHOD_TOOLS:
+        if not rx.search(text) or name.lower() in changed:
+            continue
+        if rx.search(rec.plain):
+            out.found.append(name)
+            out.hard_found += 1
+            use(next((ln for ln in rec.lines if rx.search(ln.replace("_", " "))), rec.lines[0]))
+        else:
+            out.missing.append(name)
+    # Versions: tied to the tool written right before them.
+    for start, _end, ver in vspans:
+        before = text[max(0, start - 40):start].lower()
+        tool = max(((before.rfind(t), t) for t in rec.versions if t in before), default=(-1, None))[1]
+        named = next((name for name, rx in _METHOD_TOOLS if rx.search(before)), None)
+        if tool:
+            have, line = rec.versions[tool]
+            if have == ver:
+                out.found.append(f"{tool} {ver}")
+                out.hard_found += 1
+            else:
+                out.conflicts.append(f"says {tool} {ver}; the recipe has {have}")
+            use(line)
+        else:
+            out.missing.append(f"{named + ' ' if named else 'version '}{ver}")
+    return out, used
+
+
+def check_methods(text: str, recipe: str) -> list[Claim]:
+    """Claims ledger for a methods paragraph: each sentence that states a number, a
+    tool or a version, checked against the recipe digest the writer was given."""
+    rec = _parse_recipe(recipe)
+    if not rec.lines:
+        return []
+    claims: list[Claim] = []
+    for md, _cites, _lead, raw in _split_sentences(text):
+        o, used = _check_methods_sentence(md, rec)
+        if not (o.found or o.missing or o.conflicts):
+            continue  # prose with nothing to check
+        sent = _clean(md)[0]
+        if o.conflicts:
+            verdict, reason = "refuted", "; ".join(o.conflicts[:2]) + "."
+        elif o.missing:
+            verdict, reason = "uncertain", f"Not in the recipe: {', '.join(o.missing[:4])}."
+        else:
+            verdict, reason = "supported", f"Matches the recipe: {', '.join(o.found[:6])}."
+        lines, max_lines = used, _EVIDENCE_LINES
+        if verdict == "uncertain":  # what the judge reads: the whole recipe it was written from
+            lines, max_lines = [*used, *(ln for ln in rec.lines if ln not in used)], _ENTITY_LINES
+        claims.append(Claim(
+            id=len(claims), text=sent[:MAX_CLAIM_CHARS], refs=[METHODS_REF], verdict=verdict,
+            reason=reason, evidence=_snippet(lines, max_lines), span=raw,
         ))
         if len(claims) >= _MAX_CLAIMS:
             break

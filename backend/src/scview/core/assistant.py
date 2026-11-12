@@ -50,7 +50,7 @@ from scview.core import study_planner
 from scview.core import layout_stability
 from scview.core import seq_metrics
 from scview.core import feature_guide, methods_guard, screen_facts
-from scview.core.claims import Claim, check_answer, vocab_for
+from scview.core.claims import Claim, check_answer, check_methods, vocab_for
 from scview.core.llm import async_client, chat_extra, reply_room
 from scview.core.marker_selection import MAX_PADJ, MIN_PTS, group_markers
 from scview.core.species import detect_species
@@ -1513,6 +1513,7 @@ class MethodsResponse(BaseModel):
     methods: str
     grounded: bool  # True if an LLM wrote the prose; False = deterministic template
     model: str | None = None
+    claims: list[Claim] = []  # the model's sentences checked against the recipe (claims.check_methods)
 
 
 def _param_text(key: str, value) -> str:
@@ -1654,10 +1655,20 @@ async def write_methods(
         if dropped:
             logger.info("write_methods: dropped sentences claiming unrecorded steps: %s", dropped)
         if text:
-            return MethodsResponse(methods=text, grounded=True, model=model)
+            return MethodsResponse(methods=text, grounded=True, model=model,
+                                   claims=_methods_ledger(text, skeleton))
     except Exception as exc:
         logger.warning("write_methods LLM call failed (%s); using deterministic digest", exc)
     return MethodsResponse(methods=_deterministic_methods(skeleton), grounded=False)
+
+
+def _methods_ledger(text: str, skeleton: str) -> list[Claim]:
+    """The methods text's claims ledger; never breaks the methods."""
+    try:
+        return check_methods(text, skeleton)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("write_methods: claims check failed: %s", exc)
+        return []
 
 
 def _build_user_message(query: str, context: str) -> str:
