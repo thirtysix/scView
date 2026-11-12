@@ -147,6 +147,7 @@ export function EmbeddingReliabilityControl() {
   };
 
   const toggle = () => {
+    if (busy) return;
     if (ref) {
       clearOverlay();
       return;
@@ -159,7 +160,9 @@ export function EmbeddingReliabilityControl() {
     <>
       <button
         onClick={toggle}
-        disabled={!ready || busy}
+        // Not disabled while busy: a disabled button drops its focus, and the panel gives focus back to it.
+        disabled={!ready}
+        aria-busy={busy}
         aria-pressed={!!ref}
         title={
           ready
