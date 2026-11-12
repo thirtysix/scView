@@ -41,7 +41,7 @@ export const GENES_HELP: Record<string, string> = {
     "Which matrix the colours and violins read. Log-normalised values suit most uses; a counts layer holds raw molecule numbers; scaled values are centred per gene, so they go below zero. The same setting as the toolbar's Layer menu.",
   "expression.group-by": "The column whose groups the violin under the plot compares, for example clusters or cell types.",
   "expression.several-genes":
-    "Pick 2 to 9 genes to see them together: a feature grid (one plot per gene), a stacked violin (genes by groups) or their joint density. With two genes, Blend and Gene vs gene show where they overlap.",
+    "Pick 2 to 24 genes to see them together: a feature grid (one plot per gene), a stacked violin (genes by groups) or their joint density. With two genes, Blend and Gene vs gene show where they overlap.",
   "expression.stacked-violin":
     "One row per gene, one column per group. Each violin is wide where many of the group's cells sit at that expression level. Every gene has its own scale, so compare groups within a row, not rows with each other.",
   "expression.two-genes":
