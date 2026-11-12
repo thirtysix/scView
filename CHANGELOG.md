@@ -6,6 +6,11 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.74.0] - 2026-11-12
+
+The co-pilot's claims check reaches Write methods and marks sentences in place; hg19 ATAC is recognised; marker
+lists drop nameless genes.
+
 ### Added
 - Write methods checks its own paragraph: each sentence with a number, tool or version is compared with the
   recorded analysis recipe. A changed setting is marked refuted ("30 principal components" when 50 were used,
