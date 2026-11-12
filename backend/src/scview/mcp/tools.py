@@ -777,6 +777,36 @@ async def cell_ontology_ids(
                   "labels": [[r.get(c) for c in cols] for r in d["labels"]]})
 
 
+@tool(WEB_READ)
+async def marker_db_check(
+    dataset_id: DatasetId,
+    column: Annotated[str, Field(description=(
+        "Label column to check, e.g. an author cell_type or an annotation scView wrote."))],
+    species: Annotated[Literal["human", "mouse"] | None, Field(description=(
+        "Database rows to use (default: the dataset's species, told from the gene names)."))] = None,
+    retry: Annotated[bool, Field(description=(
+        "Try a database whose download failed a moment ago again now."))] = False,
+    limit: Limit = DEFAULT_LIMIT,
+) -> str:
+    """The UI's marker database check (PanglaoDB, CellMarker, ACT): for each label of a column, its
+    database type matched by name, the verdict (supported / weak support / no database support /
+    too few database markers / not in database) with p and the overlapping genes, and the 3
+    database types the group's top 25 markers fit best. Changes nothing in the dataset. The
+    databases are downloaded on first use (about a minute); after that cluster_evidence also
+    compares markers with them."""
+    d = await _post(f"{_ds(dataset_id)}/annotation/marker-db/check",
+                    {"column": column, "species": species, "retry": retry})
+    n = clamp(limit)
+    labels = [{**r, "overlap": ", ".join(r.get("overlap") or []),
+               "suggestions": "; ".join(f"{s['cell_type']} (p {num(s['p'])})" for s in r.get("suggestions") or [])}
+              for r in d.get("labels") or []]
+    return dumps({"dataset_id": dataset_id,
+                  **pick(d, "column", "species", "species_note", "verdict_counts", "cellmarker",
+                         "verdict_sources", "suggestion_sources", "note"),
+                  "labels": table(labels, ["label", "verdict_text", "db_type", "p", "overlap", "n_db_genes",
+                                           "suggestions"], n)}, _max_chars(n))
+
+
 @tool(READ)
 async def cluster_evidence(
     dataset_id: DatasetId,
@@ -788,7 +818,8 @@ async def cluster_evidence(
     10 random lists reach), median genes and % mito against the typical cluster with the cluster
     QC flags that fired, a doublet-like cluster's two parents, database types as shares of the
     evidence (named groupings only), and the label scView gave ('Low-quality cells') or would give
-    itself in an AI annotation, or the note the AI got. Markers must be computed first."""
+    itself in an AI annotation, or the note the AI got. Markers must be computed first; the
+    marker lines need the marker databases (marker_db_check downloads them)."""
     d = await _get(f"{_ds(dataset_id)}/clusters/evidence", column=column or None)
     return dumps({"dataset_id": dataset_id, **pick(d, "column", "n_groups", "markers", "typing", "annotation", "notes"),
                   "clusters": [{"group": c["group"], "n_cells": c["n_cells"], "label": c["label"],

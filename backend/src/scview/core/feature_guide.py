@@ -72,6 +72,9 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
      "label cells from another annotated library dataset; flags cells not in the reference"),
     ("Data Assessment > Annotation confidence", "", "label-fit flags per cell"),
     ("Data Assessment > Annotation cross-check", "", "agreement between two annotations"),
+    ("Data Assessment > Annotation cross-check > Marker database check", "",
+     "each label against PanglaoDB, CellMarker and ACT: supported, weak, no database support or not in "
+     "database, and the 3 database types its markers fit best; downloads the databases on first use"),
     ("Unified View", "", "linked scatter (UMAP/tSNE/PCA) with analysis tabs beside it"),
     ("Unified View > Embedding > Tissue", "spatial",
      "spots, bins or cells on the tissue image (Visium, Visium HD); Section, Image on/off; colours, lasso as on UMAP"),
@@ -193,7 +196,8 @@ CLOSING = "These are all of scView's tabs and tools; name a feature only by its 
 # In the full guide only: the compact block is at its cap (tests/test_feature_guide.py). The tab stays in it.
 FULL_ONLY = ("Unified View > Accessibility >", "Unified View > Embedding > Tissue > Draw", "Unified View > Transcripts",
              "Unified View > Domains > Co-occurrence", "Unified View > Spot composition > Reference labels",
-             "Data Assessment > Cell-type annotation", "Data Assessment > Cluster QC")
+             "Data Assessment > Cell-type annotation", "Data Assessment > Cluster QC",
+             "Data Assessment > Annotation cross-check > Marker database check")
 
 
 def compact_guide() -> str:
