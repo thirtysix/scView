@@ -264,9 +264,8 @@ export function HvgSensitivityPanel({ datasetId, onClose }: { datasetId: string;
     >
       <div className="flex items-start justify-between gap-2">
         <div>
-          <div className="flex items-center gap-1 text-sm font-semibold text-slate-800">
-            Would the clusters survive other variable genes, neighbours or algorithm?
-            <Help id="hvg.about" label="About the variable-gene check" side="below" />
+          <div className="text-sm font-semibold text-slate-800">
+            <Help id="hvg.about" side="below">Would the clusters survive other variable genes, neighbours or algorithm?</Help>
           </div>
           <p className="mt-0.5 text-[11px] text-slate-500">
             Each setting picks its own variable genes, then re-runs PCA, the neighbour graph and the clustering; a
@@ -300,9 +299,8 @@ export function HvgSensitivityPanel({ datasetId, onClose }: { datasetId: string;
 
       {info?.available && (
         <fieldset disabled={running} className="space-y-1.5">
-          <legend className="flex items-center gap-1 text-[11px] font-medium text-slate-500">
-            Settings (up to {info.max_settings})
-            <Help id="hvg.settings" label="About the settings" />
+          <legend className="text-[11px] font-medium text-slate-500">
+            <Help id="hvg.settings">Settings (up to {info.max_settings})</Help>
           </legend>
           <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
             {choices.map((c) => (

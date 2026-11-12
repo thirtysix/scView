@@ -11,6 +11,7 @@ vi.mock("@/components/plots/Plot", () => ({
 }));
 
 import { DonorBoxPlot } from "./DonorBoxPlot";
+import { hoverTip, unhover } from "@/test/hoverTip";
 
 const pt = (group: string, condition: string, sample: string, value: number): DonorPoint => ({
   group, condition, sample, n_cells: 50, value,
@@ -67,9 +68,20 @@ describe("DonorBoxPlot", () => {
     expect(table).toContain("1.00e-4");
     expect(table).toContain("0.5000*");
     expect(screen.getByTestId("paired-caution").textContent).toContain("Under 5 pairs");
+    expect(document.querySelector("[data-infotip]")).toBeNull(); // the tests are explained on their headers
     // The group titles carry the Wilcoxon p (and n when few).
     const titles = ((plotProps.mock.lastCall![0] as { layout: { annotations: { text: string }[] } }).layout.annotations).map((a) => a.text);
     expect(titles).toEqual(["B · p = 0.06", "pDC · p = 0.50 (n = 2)"]);
+  });
+
+  it("explains each paired test on its column header", async () => {
+    render(
+      <DonorBoxPlot {...base} points={PAIRED_POINTS} design={{ paired: true, n_pairs: 5, conditions: ["CTRL", "STIM"] }} pairedTests={TESTS} />,
+    );
+    const wilcoxon = screen.getByText("Wilcoxon signed-rank p");
+    expect(await hoverTip(wilcoxon)).toContain("ranks each donor's change");
+    unhover(wilcoxon);
+    expect(await hoverTip(screen.getByText("Paired t p"))).toContain("mean of the per-donor changes is zero");
   });
 
   it("switches to boxes on the toggle and back", () => {

@@ -98,8 +98,9 @@ export function UnifiedToolbar({ onResetView, numCells, groupSelect = null }: Un
     <div className="flex flex-shrink-0 flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 shadow-sm">
       {/* Embedding selector */}
       <div className="flex items-center gap-1.5">
-        <label className="text-[11px] font-medium text-slate-500">Embedding</label>
-        <Help id="plot.embedding" label="About the embedding" side="below" />
+        <label className="text-[11px] font-medium text-slate-500">
+          <Help id="plot.embedding" side="below">Embedding</Help>
+        </label>
         <select
           value={embedding}
           onChange={(e) => setEmbedding(e.target.value)}
@@ -124,8 +125,9 @@ export function UnifiedToolbar({ onResetView, numCells, groupSelect = null }: Un
 
       {/* Color by */}
       <div className="flex items-center gap-1.5">
-        <label className="text-[11px] font-medium text-slate-500">Color</label>
-        <Help id="plot.colour-by" label="About colouring the plot" side="below" />
+        <label className="text-[11px] font-medium text-slate-500">
+          <Help id="plot.colour-by" side="below">Color</Help>
+        </label>
         <select
           value={colorBy}
           onChange={(e) => setColorBy(e.target.value)}
@@ -157,8 +159,9 @@ export function UnifiedToolbar({ onResetView, numCells, groupSelect = null }: Un
         <>
           <div className="h-4 w-px bg-slate-200" />
           <div className="flex items-center gap-1.5">
-            <label className="text-[11px] font-medium text-slate-500">Layer</label>
-            <Help id="plot.layer" label="About the expression layer" side="below" />
+            <label className="text-[11px] font-medium text-slate-500">
+              <Help id="plot.layer" side="below">Layer</Help>
+            </label>
             <select
               value={expressionLayer}
               onChange={(e) => setExpressionLayer(e.target.value)}
@@ -196,8 +199,9 @@ export function UnifiedToolbar({ onResetView, numCells, groupSelect = null }: Un
 
       {/* Opacity */}
       <div className="flex items-center gap-1.5">
-        <label className="text-[11px] font-medium text-slate-500">Opacity</label>
-        <Help id="plot.opacity" label="About opacity" side="below" />
+        <label className="text-[11px] font-medium text-slate-500">
+          <Help id="plot.opacity" side="below">Opacity</Help>
+        </label>
         <input
           type="range"
           min={0.1}
@@ -234,8 +238,9 @@ export function UnifiedToolbar({ onResetView, numCells, groupSelect = null }: Un
 
       {/* Colour schemes */}
       <div className="flex flex-wrap items-center gap-1.5">
-        <label className="text-[11px] font-medium text-slate-500">Colours</label>
-        <Help id="plot.colours" label="About the colour schemes" side="below" />
+        <label className="text-[11px] font-medium text-slate-500">
+          <Help id="plot.colours" side="below">Colours</Help>
+        </label>
         <label htmlFor="palette-categorical" className="text-[10px] text-slate-500">
           Categories
         </label>
@@ -305,11 +310,9 @@ export function UnifiedToolbar({ onResetView, numCells, groupSelect = null }: Un
         <label
           htmlFor="colour-clip-default"
           className="text-[10px] text-slate-500"
-          title="Default clipping of the colour range: cells beyond these percentiles take the end colours, so a few extreme cells do not wash out the rest. The legend can override it for one view."
         >
-          Clip
+          <Help id="plot.clip" side="below" align="right">Clip</Help>
         </label>
-        <Help id="plot.clip" label="About clipping the colour range" side="below" align="right" />
         <select
           id="colour-clip-default"
           aria-label="Default colour range clipping"
@@ -328,10 +331,9 @@ export function UnifiedToolbar({ onResetView, numCells, groupSelect = null }: Un
 
       {/* Max rendered cells */}
       <div className="flex items-center gap-1.5">
-        <label className="text-[11px] font-medium text-slate-500" title="Larger datasets are downsampled for rendering">
-          Max
+        <label className="text-[11px] font-medium text-slate-500">
+          <Help id="plot.max-cells" side="below" align="right">Max</Help>
         </label>
-        <Help id="plot.max-cells" label="About the most cells drawn" side="below" align="right" />
         <select
           value={maxRenderedCells}
           onChange={(e) => setMaxRenderedCells(parseInt(e.target.value))}
@@ -366,12 +368,11 @@ export function UnifiedToolbar({ onResetView, numCells, groupSelect = null }: Un
         }`}
       >
         <Lasso className="h-3.5 w-3.5" />
-        Lasso
+        <Help id="plot.select" side="below">Lasso</Help>
       </button>
       <SelectByGroupControl source={groupSelect} />
       <CellFilterControl />
       <GatesControl />
-      <Help id="plot.select" label="About selecting cells" side="below" />
 
       {/* Selection info; a filter's selection says which filter */}
       {selectedIndices && selectedIndices.size > 0 && (

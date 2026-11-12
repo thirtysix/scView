@@ -14,14 +14,11 @@ import { SelectionHistogram } from "@/components/unified/SelectionHistogram";
 
 type DistributionMode = "cells" | "donor" | "histogram";
 
-const MODES: { id: DistributionMode; label: string; title: string }[] = [
-  { id: "cells", label: "Cells", title: "Every cell (violin)" },
-  { id: "donor", label: "Per donor", title: "One pseudobulk value per donor in each group, split by condition" },
-  {
-    id: "histogram",
-    label: "Histogram",
-    title: "The selection (or a group) against the rest, as two overlaid normalised histograms",
-  },
+// What each mode shows is in the "plot.distribution" tip on the toggle.
+const MODES: { id: DistributionMode; label: string }[] = [
+  { id: "cells", label: "Cells" },
+  { id: "donor", label: "Per donor" },
+  { id: "histogram", label: "Histogram" },
 ];
 
 interface UnifiedBottomPanelProps {
@@ -149,21 +146,21 @@ export function UnifiedBottomPanel({
       {isOpen && shown === "distribution" && (
         <div className="border-t border-slate-100 px-2 py-1">
           {datasetId && (
-            <div className="mb-1 flex items-center justify-end gap-1">
-              <Help id="plot.distribution" label="About the distribution views" side="below" align="right" />
-              <div className="flex overflow-hidden rounded border border-slate-300 text-[11px]" role="group" aria-label="Distribution of">
-                {MODES.filter((m) => m.id !== "donor" || violinGroupColumn).map((m) => (
-                  <button
-                    key={m.id}
-                    aria-pressed={mode === m.id}
-                    onClick={() => setMode(m.id)}
-                    title={m.title}
-                    className={`px-1.5 py-0.5 ${mode === m.id ? "bg-primary/10 font-medium text-primary" : "bg-white text-slate-600 hover:bg-slate-50"}`}
-                  >
-                    {m.label}
-                  </button>
-                ))}
-              </div>
+            <div className="mb-1 flex justify-end">
+              <Help id="plot.distribution" side="below" align="right" className="flex">
+                <div className="flex overflow-hidden rounded border border-slate-300 text-[11px]" role="group" aria-label="Distribution of">
+                  {MODES.filter((m) => m.id !== "donor" || violinGroupColumn).map((m) => (
+                    <button
+                      key={m.id}
+                      aria-pressed={mode === m.id}
+                      onClick={() => setMode(m.id)}
+                      className={`px-1.5 py-0.5 ${mode === m.id ? "bg-primary/10 font-medium text-primary" : "bg-white text-slate-600 hover:bg-slate-50"}`}
+                    >
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
+              </Help>
             </div>
           )}
           {mode === "histogram" && datasetId ? (
@@ -194,8 +191,10 @@ export function UnifiedBottomPanel({
                   { value: Object.keys(violinData).length, unit: "groups" },
                 ]}
               >
-                <Help id="plot.violin" label="How to read the violins" />{" "}
-                {violinTitle ?? "Values"} per {violinGroupLabel ?? violinGroupColumn}: one violin per group
+                <Help id="plot.violin">
+                  {violinTitle ?? "Values"} per {violinGroupLabel ?? violinGroupColumn}
+                </Help>
+                : one violin per group
                 {selectionViolin ? `; the last (orange) is the ${selectionViolin.values.length.toLocaleString()} selected cells, from any group` : ""}.
               </Caption>
               {selected && <SelectionChip className="ml-1" />}

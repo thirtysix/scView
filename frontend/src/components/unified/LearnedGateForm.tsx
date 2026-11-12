@@ -82,9 +82,8 @@ export function LearnedGateForm({
 
   return (
     <div className="space-y-1.5 rounded border border-slate-200 bg-slate-50 p-2 text-[11px]" data-testid="learn-gate-form">
-      <p className="flex items-center gap-1 text-slate-600">
-        Learn a gate from the {nSel.toLocaleString()} selected cells
-        <Help id="gates.learned" label="About learned gates" width={320} />
+      <p className="text-slate-600">
+        <Help id="gates.learned" width={320}>Learn a gate from the {nSel.toLocaleString()} selected cells</Help>
       </p>
       <div className="flex flex-wrap items-center gap-2">
         <label className="flex items-center gap-1 text-slate-600">

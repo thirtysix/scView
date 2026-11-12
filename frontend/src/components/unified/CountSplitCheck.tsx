@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import Plot from "@/components/plots/Plot";
 import { Caption } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { Help } from "@/components/common/Help";
 import {
   getSplitMarkersInfo,
@@ -133,15 +133,23 @@ export function CountSplitCheck({
   return (
     <section aria-label="Count-split marker check" className="space-y-1.5 rounded-lg border border-slate-200 p-2">
       <div className="flex items-center gap-1">
-        <span className="text-[11px] font-medium text-slate-600">Are these markers real?</span>
-        <InfoTip label="About count splitting" width={300}>
-          Marker p-values test genes on the same counts that made the clusters, so every cluster looks
-          significant, even one cut out of a single population. Count splitting divides each cell&rsquo;s counts
-          into two independent halves: the clustering re-runs on one half and each cluster is tested on the other.
-          A marker that keeps adjusted p &lt; 0.05 there is supported by data the clustering never saw. The held-out
-          half has half the molecules, so weak markers can also be lost for lack of power. Neufeld et al. 2024,
-          Biostatistics (PMID 36511385); negative binomial splitting as in the merge check.
-        </InfoTip>
+        <span className="text-[11px] font-medium text-slate-600">
+          <HoverTip
+            width={300}
+            tip={
+              <>
+                Marker p-values test genes on the same counts that made the clusters, so every cluster looks
+                significant, even one cut out of a single population. Count splitting divides each cell&rsquo;s counts
+                into two independent halves: the clustering re-runs on one half and each cluster is tested on the other.
+                A marker that keeps adjusted p &lt; 0.05 there is supported by data the clustering never saw. The held-out
+                half has half the molecules, so weak markers can also be lost for lack of power. Neufeld et al. 2024,
+                Biostatistics (PMID 36511385); negative binomial splitting as in the merge check.
+              </>
+            }
+          >
+            Are these markers real?
+          </HoverTip>
+        </span>
         <span className="ml-auto" />
         {running ? (
           <button
@@ -261,9 +269,8 @@ export function CountSplitCheck({
                 checked={showSplitP}
                 onChange={(e) => onShowSplitPChange(e.target.checked)}
               />
-              Split p-values in the table
+              <Help id="countsplit.show-p">Split p-values in the table</Help>
             </label>
-            <Help id="countsplit.show-p" label="About split p-values" />
             {current?.tested && (
               <button
                 type="button"

@@ -160,9 +160,8 @@ export function MergeCheck({
   return (
     <section aria-label="Merge check" className="space-y-1.5 border-t border-slate-200 pt-2">
       <div>
-        <div className="flex items-center gap-1 text-[11px] font-medium text-slate-600">
-          Should any clusters merge?
-          <Help id="merge.about" label="About the merge check" />
+        <div className="text-[11px] font-medium text-slate-600">
+          <Help id="merge.about">Should any clusters merge?</Help>
         </div>
         <p className="text-[10px] leading-snug text-slate-500">
           Splits every cell&rsquo;s counts into two independent halves (negative binomial count splitting), re-runs the
@@ -186,7 +185,7 @@ export function MergeCheck({
           ))}
         </select>
         <label className="flex items-center gap-1 text-slate-500">
-          merge below
+          <Help id="merge.threshold">merge below</Help>
           <select
             aria-label="Genes below which a pair is a merge candidate"
             value={maxGenes}
@@ -202,7 +201,6 @@ export function MergeCheck({
           </select>
           genes
         </label>
-        <Help id="merge.threshold" label="About the merge threshold" />
         {running ? (
           <button
             type="button"

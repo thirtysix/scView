@@ -13,7 +13,7 @@ import {
 } from "@/api/learnedGates";
 import type { DatasetInfo } from "@/api/types";
 import { Caption } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
 import { errorMessage } from "@/lib/errorMessage";
 import { downloadText } from "@/lib/geneLists";
@@ -125,12 +125,18 @@ export function LearnedGatesLibrary({ dataset, onClose }: { dataset: DatasetInfo
   return (
     <div className="space-y-1.5 rounded border border-slate-200 bg-slate-50 p-2 text-[11px]" data-testid="learned-gates-library">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="flex items-center gap-1 font-semibold text-slate-700">
-          Learned gates
-          <InfoTip label="About learned gates" width={320}>
-            Gates learned from a selection (&ldquo;Learn gate&hellip;&rdquo;) or imported from a file. Applying one
-            scores every cell of the open dataset and writes two columns: in / out, and the gate score. {scoreNote}
-          </InfoTip>
+        <span className="font-semibold text-slate-700">
+          <HoverTip
+            width={320}
+            tip={
+              <>
+                Gates learned from a selection (&ldquo;Learn gate&hellip;&rdquo;) or imported from a file. Applying one
+                scores every cell of the open dataset and writes two columns: in / out, and the gate score. {scoreNote}
+              </>
+            }
+          >
+            Learned gates
+          </HoverTip>
         </span>
         <label className="flex cursor-pointer items-center gap-1 rounded px-2 py-0.5 text-slate-600 hover:bg-white">
           <Upload className="h-3 w-3" />
@@ -338,11 +344,10 @@ function ApplyResult({ result }: { result: GateApplyResult }) {
           Colour by {result.column}
         </button>
         <button className="rounded border border-slate-300 px-2 py-0.5 hover:bg-slate-50" onClick={() => colourBy(result.score_column)}>
-          Colour by gate score
+          <HoverTip tip={result.score_note} width={300}>
+            Colour by gate score
+          </HoverTip>
         </button>
-        <InfoTip label="About the gate score" width={300}>
-          {result.score_note}
-        </InfoTip>
       </div>
       {result.per_sample.length > 0 && (
         <>

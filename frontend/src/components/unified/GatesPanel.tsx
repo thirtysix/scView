@@ -104,9 +104,8 @@ export function GatesPanel({ dataset, onClose }: { dataset: DatasetInfo; onClose
   return (
     <div className="space-y-1.5 text-xs" aria-label="Gates">
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className="flex items-center gap-1 text-[11px] font-semibold text-slate-700">
-          Gates
-          <Help id="gates.about" label="About gates" width={300} side="below" />
+        <span className="text-[11px] font-semibold text-slate-700">
+          <Help id="gates.about" width={300} side="below">Gates</Help>
         </span>
         <button
           className={btn}

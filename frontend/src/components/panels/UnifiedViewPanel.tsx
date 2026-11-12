@@ -1583,9 +1583,8 @@ export function UnifiedViewPanel() {
                 />
               </div>
               <div className="flex w-1/2 min-w-0 flex-col gap-1.5 rounded-lg border border-slate-200 bg-slate-50/60 p-2.5 text-xs">
-                <div className="flex items-center gap-1 text-[11px] font-semibold text-slate-600">
-                  Summary
-                  <Help id="plot.summary" label="About the summary" side="below" align="right" />
+                <div className="text-[11px] font-semibold text-slate-600">
+                  <Help id="plot.summary" side="below" align="right">Summary</Help>
                 </div>
                 <InfoRow label={unitTitle(dataset?.spatial)} value={numCells.toLocaleString()} />
                 <InfoRow label="Grouping" value={prettyObsLabel(groupByColumn)} />

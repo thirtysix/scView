@@ -37,12 +37,11 @@ export function PcPairChooser() {
     </select>
   );
   return (
-    <span className="flex items-center gap-1" title="Which two principal components the scatter shows">
+    <Help id="plot.pc-pair" side="below" className="flex items-center gap-1">
       <label className="text-[11px] font-medium text-slate-500">x</label>
       {select(0)}
       <label className="text-[11px] font-medium text-slate-500">y</label>
       {select(1)}
-      <Help id="plot.pc-pair" label="About the principal components shown" side="below" />
-    </span>
+    </Help>
   );
 }

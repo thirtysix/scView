@@ -30,9 +30,8 @@ export function SplitByControl({ disabledReason = null }: { disabledReason?: str
   return (
     <div className="flex items-center gap-1.5">
       <label htmlFor="split-by" className="text-[11px] font-medium text-slate-500">
-        Split
+        <Help id="plot.split" side="below">Split</Help>
       </label>
-      <Help id="plot.split" label="About splitting the plot" side="below" />
       <select
         id="split-by"
         aria-label="Split the plot by"
@@ -44,7 +43,7 @@ export function SplitByControl({ disabledReason = null }: { disabledReason?: str
             ? disabledReason
             : allowed.length === 0
             ? `No column with 2–${SPLIT_MAX_VALUES} values to split by`
-            : `One plot per value (2–${SPLIT_MAX_VALUES} values), sharing the camera, colours and colour scale`
+            : undefined
         }
         className={`max-w-[140px] rounded border px-2 py-1 text-xs focus:border-blue-400 focus:outline-none disabled:opacity-50 ${
           splitBy

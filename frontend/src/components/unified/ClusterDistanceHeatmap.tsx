@@ -90,7 +90,7 @@ export function ClusterDistanceHeatmap({
     <div className="space-y-1 text-[11px] text-slate-500">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <label htmlFor="distance-column" className="font-medium text-slate-600">
-          Distances between
+          <Help id="plot.cluster-distances" side="below">Distances between</Help>
         </label>
         <select
           id="distance-column"
@@ -106,7 +106,6 @@ export function ClusterDistanceHeatmap({
           ))}
         </select>
         <span>groups, in PCA space</span>
-        <Help id="plot.cluster-distances" label="About the cluster distances" side="below" />
         {data?.correlation && (
           <span role="group" aria-label="Measure" className="ml-auto inline-flex overflow-hidden rounded border border-slate-200">
             {(["distance", "correlation"] as const).map((m) => (

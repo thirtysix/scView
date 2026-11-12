@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
+import { hoverTip, unhover } from "@/test/hoverTip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { DatasetInfo } from "@/api/types";
 import { CompareColoringsControl } from "@/components/unified/CompareColoringsControl";
@@ -27,44 +28,43 @@ const dataset: DatasetInfo = {
   created_at: "",
 };
 
-/** The tip behind an info icon, opened by a click. */
-function tipOf(name: string) {
-  fireEvent.click(screen.getByRole("button", { name }));
-  return screen.getByRole("tooltip");
-}
-
 describe("plot and toolbar help", () => {
   beforeEach(() => {
     useDatasetStore.setState({ currentDataset: dataset, currentDatasetId: "ds" });
     useSettingsStore.setState({ embedding: "X_umap", colorBy: "cell_type", expressionLayer: "raw" });
   });
 
-  it("puts a catalog tip beside each toolbar control, opening below the toolbar", () => {
+  it("puts a catalog tip on each toolbar label, opening below the toolbar", async () => {
     render(
       <QueryClientProvider client={new QueryClient()}>
         <UnifiedToolbar numCells={12} />
       </QueryClientProvider>,
     );
     const tips: [string, string][] = [
-      ["About the embedding", "plot.embedding"],
-      ["About colouring the plot", "plot.colour-by"],
-      ["About splitting the plot", "plot.split"],
-      ["About the expression layer", "plot.layer"],
-      ["About opacity", "plot.opacity"],
-      ["About the colour schemes", "plot.colours"],
-      ["About clipping the colour range", "plot.clip"],
-      ["About the most cells drawn", "plot.max-cells"],
-      ["About selecting cells", "plot.select"],
+      ["Embedding", "plot.embedding"],
+      ["Color", "plot.colour-by"],
+      ["Split", "plot.split"],
+      ["Layer", "plot.layer"],
+      ["Opacity", "plot.opacity"],
+      ["Colours", "plot.colours"],
+      ["Clip", "plot.clip"],
+      ["Max", "plot.max-cells"],
+      ["Lasso", "plot.select"],
     ];
-    for (const [name, id] of tips) {
-      const tip = tipOf(name);
-      expect(tip).toHaveTextContent(PLOT_HELP[id]!);
-      expect(tip).toHaveClass("top-full"); // the toolbar is the top of the page: a tip above it is cut off
-      fireEvent.click(screen.getByRole("button", { name })); // close it again
+    expect(document.querySelector("[data-infotip]")).toBeNull(); // no icons
+    for (const [text, id] of tips) {
+      const target = screen.getByText(text);
+      expect(await hoverTip(target)).toBe(PLOT_HELP[id]);
+      // the toolbar is the top of the page: the tip opens below it
+      expect(screen.getByRole("tooltip")).toHaveAttribute("data-side", "below");
+      unhover(target);
     }
+    // the labels still name their controls
+    expect(screen.getByLabelText("Clip")).toHaveAttribute("id", "colour-clip-default");
+    expect(screen.getByLabelText("Split")).toHaveAttribute("id", "split-by");
   });
 
-  it("keeps the dialogs' first focus on their first choice, the tip after it", () => {
+  it("keeps the dialogs' first focus on their first choice; the tip is on the heading", async () => {
     render(
       <SelectByGroupControl
         source={{ column: "cell_type", categories: ["B", "NK", "T"], onSelect: () => {} }}
@@ -73,14 +73,16 @@ describe("plot and toolbar help", () => {
     fireEvent.click(screen.getByRole("button", { name: "By group" }));
     const dialog = screen.getByRole("dialog", { name: "Select cells by group" });
     expect(within(dialog).getByRole("checkbox", { name: /^B/ })).toHaveFocus();
-    expect(tipOf("About selecting by group")).toHaveTextContent(PLOT_HELP["plot.select-by-group"]!);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    expect(await hoverTip(within(dialog).getByText(/^Select cells by/))).toBe(PLOT_HELP["plot.select-by-group"]);
   });
 
-  it("explains Compare inside its dialog without taking the first focus", () => {
+  it("explains Compare inside its dialog without taking the first focus", async () => {
     render(<CompareColoringsControl />);
     fireEvent.click(screen.getByRole("button", { name: /compare/i }));
     const dialog = screen.getByRole("dialog", { name: "Compare colourings" });
     expect(within(dialog).getAllByRole("checkbox")[0]).toHaveFocus();
-    expect(tipOf("About comparing colourings")).toHaveTextContent(PLOT_HELP["plot.compare"]!);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    expect(await hoverTip(within(dialog).getByText("Compare colourings side by side"))).toBe(PLOT_HELP["plot.compare"]);
   });
 });

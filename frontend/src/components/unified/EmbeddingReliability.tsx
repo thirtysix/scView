@@ -9,7 +9,7 @@ import {
   type ReliabilitySummary,
 } from "@/api/reliability";
 import { Caption } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { Help } from "@/components/common/Help";
 import { embeddingDims } from "@/hooks/useEmbedding";
 import { useEmbeddingReady } from "@/hooks/useEmbeddingReady";
@@ -293,8 +293,9 @@ export function EmbeddingReliabilityPanel({
     >
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-1.5">
-          <h3 className="text-sm font-semibold text-slate-800">Plot reliability{plot ? `: ${plot}` : ""}</h3>
-          <Help id="reliability.about" label="About plot reliability" side="below" />
+          <h3 className="text-sm font-semibold text-slate-800">
+            <Help id="reliability.about" side="below">Plot reliability{plot ? `: ${plot}` : ""}</Help>
+          </h3>
           {busy && <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500" aria-label="Loading" />}
         </div>
         <div className="flex items-center gap-1">
@@ -327,7 +328,11 @@ export function EmbeddingReliabilityPanel({
 
       {summary && !collapsed && (
         <>
-          <Caption testId="reliability-caption">{reliabilityCaption(summary)}</Caption>
+          <Caption testId="reliability-caption">
+            <HoverTip tip={summary.method} width={300}>
+              {reliabilityCaption(summary)}
+            </HoverTip>
+          </Caption>
           <dl className="grid grid-cols-3 gap-2 rounded-lg bg-slate-50 px-2 py-1.5">
             <div title="Median over the scored cells; IQR = interquartile range">
               <dt className="text-[10px] text-slate-500">Median (IQR)</dt>
@@ -384,9 +389,6 @@ export function EmbeddingReliabilityPanel({
                 Worst first
               </button>
             )}
-            <InfoTip label="How plot reliability is computed" align="right" width={300}>
-              {summary.method}
-            </InfoTip>
           </div>
 
           {rows.length > 0 ? (

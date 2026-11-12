@@ -96,7 +96,9 @@ export function CompareColoringsControl({ disabledReason = null }: { disabledRea
           onClose={() => setOpen(false)}
           className="absolute left-0 top-full z-40 mt-1 w-64 rounded-lg border border-slate-200 bg-white p-3 text-xs shadow-lg"
         >
-          <p className="mb-2 font-semibold text-slate-700">Compare colourings side by side</p>
+          <p className="mb-2 font-semibold text-slate-700">
+            <Help id="plot.compare" side="below">Compare colourings side by side</Help>
+          </p>
           <p className="mb-2 text-[11px] text-slate-500">
             Pick {COMPARE_MIN_COLUMNS}–{COMPARE_MAX_COLUMNS} columns: one panel each, same camera.
           </p>
@@ -124,10 +126,6 @@ export function CompareColoringsControl({ disabledReason = null }: { disabledRea
             })}
           </div>
           <div className="mt-3 flex items-center justify-end gap-2">
-            {/* After the checkboxes in the DOM: the dialog's first focus stays on the first column */}
-            <span className="mr-auto flex items-center">
-              <Help id="plot.compare" label="About comparing colourings" />
-            </span>
             {active && (
               <button
                 onClick={() => {

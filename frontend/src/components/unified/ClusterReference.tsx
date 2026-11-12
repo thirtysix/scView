@@ -133,8 +133,7 @@ export function ClusterReference({
   return (
     <div className="rounded-lg border border-slate-200 bg-white">
       <div className="border-b border-slate-100 px-2.5 py-1.5 text-[11px] font-semibold text-slate-600">
-        Cluster map · {column}{" "}
-        <Help id="plot.cluster-map" label="About the cluster map" side="below" />
+        <Help id="plot.cluster-map" side="below">Cluster map · {column}</Help>
         {highlight != null && categories[highlight] && (
           <span className="ml-1 font-normal text-slate-400">
             (highlighting {categories[highlight]})

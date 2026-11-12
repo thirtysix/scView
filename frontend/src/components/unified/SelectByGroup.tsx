@@ -73,7 +73,7 @@ export function SelectByGroupControl({ source }: { source: GroupSelectSource | n
         >
           <fieldset>
             <legend className="mb-2 font-semibold text-slate-700">
-              Select cells by {prettyObsLabel(source.column)}
+              <Help id="plot.select-by-group" side="below">Select cells by {prettyObsLabel(source.column)}</Help>
             </legend>
             <div className="max-h-56 space-y-0.5 overflow-y-auto">
               {source.categories.map((g, i) => (
@@ -95,13 +95,9 @@ export function SelectByGroupControl({ source }: { source: GroupSelectSource | n
             </div>
           </fieldset>
           <div className="mt-3 flex items-center justify-end gap-2">
-            {/* After the checkboxes in the DOM: the dialog's first focus stays on the first group */}
-            <span className="mr-auto flex items-center gap-2">
-              <Help id="plot.select-by-group" label="About selecting by group" />
-              {total !== null && picked.length > 0 && (
-                <span className="text-slate-500">{total.toLocaleString("en-US")} cells</span>
-              )}
-            </span>
+            {total !== null && picked.length > 0 && (
+              <span className="mr-auto text-slate-500">{total.toLocaleString("en-US")} cells</span>
+            )}
             <button type="button" onClick={() => setOpen(false)} className="rounded px-2 py-1 text-slate-600 hover:bg-slate-100">
               Cancel
             </button>

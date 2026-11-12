@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import type { Data, Layout } from "plotly.js";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import Plot from "@/components/plots/Plot";
 import {
   donorBoxFigure,
@@ -193,14 +193,10 @@ export function DonorBoxPlot({
                 Mean change
               </th>
               <th className="pr-3 text-right font-medium">
-                <span className="inline-flex items-center gap-1">
-                  Wilcoxon signed-rank p <InfoTip label="About the Wilcoxon signed-rank test">{TEST_HELP.wilcoxon}</InfoTip>
-                </span>
+                <HoverTip tip={TEST_HELP.wilcoxon} align="right">Wilcoxon signed-rank p</HoverTip>
               </th>
               <th className="text-right font-medium">
-                <span className="inline-flex items-center gap-1">
-                  Paired t p <InfoTip label="About the paired t-test">{TEST_HELP.ttest}</InfoTip>
-                </span>
+                <HoverTip tip={TEST_HELP.ttest} align="right">Paired t p</HoverTip>
               </th>
             </tr>
           </thead>
@@ -245,14 +241,10 @@ export function DonorBoxPlot({
                 Difference ({conditions[1]} − {conditions[0]})
               </th>
               <th className="pr-3 text-right font-medium">
-                <span className="inline-flex items-center gap-1">
-                  Rank-sum p <InfoTip label="About the Wilcoxon rank-sum test">{TEST_HELP.ranksum}</InfoTip>
-                </span>
+                <HoverTip tip={TEST_HELP.ranksum} align="right">Rank-sum p</HoverTip>
               </th>
               <th className="text-right font-medium">
-                <span className="inline-flex items-center gap-1">
-                  Welch t p <InfoTip label="About the Welch t-test">{TEST_HELP.welch}</InfoTip>
-                </span>
+                <HoverTip tip={TEST_HELP.welch} align="right">Welch t p</HoverTip>
               </th>
             </tr>
           </thead>
