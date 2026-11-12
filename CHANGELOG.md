@@ -8,10 +8,17 @@ All notable changes to scView are documented here. The format is based on
 
 ## [0.74.0] - 2026-11-12
 
-The co-pilot's claims check reaches Write methods and marks sentences in place; hg19 ATAC is recognised; marker
-lists drop nameless genes.
+Each cluster's evidence in words; the co-pilot's claims check reaches Write methods and marks sentences in place;
+hg19 ATAC is recognised; marker lists drop nameless genes.
 
 ### Added
+- Evidence per cluster, in words (Data Assessment > Cluster QC > Evidence per cluster): why each cluster was
+  labelled or flagged. Its markers against random genes (the best database p vs what 1 in 10 random lists reach),
+  genes and % mito against the typical cluster with any flag that fired, a doublet-like cluster's two parents and
+  its RNA, database types as shares of the evidence on named groupings, and the label scView gave it itself. Never
+  a probability: a per-cluster probability model did worse than these rules on the annotation benchmark. Also
+  under the annotation's "scView labelled..." note (Show the evidence), in the cluster report, for the co-pilot
+  ("why is cluster 5 low quality?") and as the MCP tool `cluster_evidence`.
 - Write methods checks its own paragraph: each sentence with a number, tool or version is compared with the
   recorded analysis recipe. A changed setting is marked refuted ("30 principal components" when 50 were used,
   Louvain when Leiden ran, a different tool version); a tool or version the recipe does not record is uncertain.
