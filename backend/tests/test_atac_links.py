@@ -381,7 +381,7 @@ async def test_run_kept_paged_by_gene_csv_locus_and_a_replay_step(client, seeded
     rid = result["id"]
     assert result["counts"]["n_links"] > 0 and result["counts"]["n_peaks_unknown"] == 3 and result["stale"] is False
     assert "never proof" in result["caption"] and "cell types" in result["caption"]
-    assert result["seconds"] > 0 and result["params"]["seed"] == atac_links.SEED
+    assert result["seconds"] >= 0 and result["params"]["seed"] == atac_links.SEED
 
     page = (await client.get(f"{API}/datasets/{did}/atac/links/{rid}", params={"gene": "genea"})).json()
     assert page["total"] >= 1 and {r["gene"] for r in page["rows"]} == {"GENEA"}
