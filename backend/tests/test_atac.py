@@ -189,7 +189,7 @@ def test_genes_match_by_name_when_ids_are_absent(world):
 
 def test_missing_annotation_is_a_reason_not_a_failure(world):
     genes = atac.choose_genes(world["adata"], "hg19", world["dir"])
-    assert genes.names == [] and "not 'hg19'" in genes.reason
+    assert genes.names == [] and "on hg19 (GRCh37)" in genes.reason
 
 
 def test_activity_by_cell_and_by_gene_agree_and_mark_the_right_cells(world):
@@ -339,7 +339,7 @@ def test_differential_context_columns(world):
     assert {"peak", "nearest_gene", "distance_to_tss", "peak_class"} <= set(table.columns)
     assert table["peak"].iloc[0] in set(world["table"]["name"])
     table2, note2 = atac.attach_context(out["frame"].head(5), world["store"], "hg19", world["dir"])
-    assert "not 'hg19'" in note2 and (table2["nearest_gene"] == "").all()
+    assert "on hg19 (GRCh37)" in note2 and (table2["nearest_gene"] == "").all()
 
 
 def test_group_codes_refuses_what_cannot_be_tested(world):

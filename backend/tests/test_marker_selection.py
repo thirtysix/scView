@@ -194,3 +194,33 @@ def test_ora_query_reads_the_groupby_of_a_bare_result():
     a.uns["rank_genes_groups"] = a.uns.pop(markers_key("cluster"))
     assert ora_query_genes(a, "", "A", 3) == A_LOGFC
 
+
+def _named_result(genes: list[str]) -> ad.AnnData:
+    """One group 'A' against 'B': every gene in all of A's cells, fold change by list order."""
+    n = len(genes)
+    a = ad.AnnData(np.ones((2, n), dtype=np.float32))
+    a.var_names = genes
+    a.obs_names = ["c0", "c1"]
+    a.obs["cluster"] = pd.Categorical(["A", "B"])
+    a.uns[markers_key("cluster")] = {
+        "params": {"groupby": "cluster", "method": "wilcoxon"},
+        "names": _rec({"A": genes, "B": genes}, object),
+        "scores": _rec({"A": [float(n - i) for i in range(n)], "B": [0.0] * n}, float),
+        "logfoldchanges": _rec({"A": [float(n - i) for i in range(n)], "B": [0.0] * n}, float),
+        "pts": pd.DataFrame({"A": [1.0] * n, "B": [0.0] * n}, index=genes),
+    }
+    return a
+
+
+def test_unnamed_genes_are_skipped_and_the_list_refills():
+    genes = ["ENSG00000284418", "ADRA1A", "AC012345.1", "CPS1", "RP11-34P13.7", "LINC01687", "ACSM2B"]
+    a = _named_result(genes)
+    assert group_markers(a, "cluster", n=4)["A"] == ["ADRA1A", "CPS1", "LINC01687", "ACSM2B"]
+    assert ora_query_genes(a, "cluster", "A", 2) == ["ADRA1A", "CPS1"]
+    assert group_markers(a, "cluster", n=3, skip_unnamed=False)["A"] == genes[:3]
+
+
+def test_a_dataset_named_by_ensembl_id_keeps_its_genes():
+    genes = [f"ENSG{i:011d}" for i in range(1, 8)] + ["CD3E"]
+    assert group_markers(_named_result(genes), "cluster", n=3)["A"] == genes[:3]
+

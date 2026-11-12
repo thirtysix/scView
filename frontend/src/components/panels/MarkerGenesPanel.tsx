@@ -18,6 +18,7 @@ import { apiFetch } from "@/api/client";
 import { MARKERS_PER_GROUP, NO_MARKERS_REASON, noMarkersReason, type MarkersResponse } from "@/api/markers";
 import { formatFoldChange, formatPValue } from "@/lib/formatting";
 import { downloadCsv } from "@/lib/csv";
+import { errorMessage } from "@/lib/errorMessage";
 import {
   MARKER_CSV_HEADERS,
   SPECIFICITY_HELP,
@@ -128,7 +129,7 @@ export function MarkerGenesPanel() {
       if (cancelled) return;
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("404")) setNoMarkers(NO_MARKERS_REASON);
-      else setError(msg);
+      else setError(errorMessage(err));
     };
     const onDemand = () =>
       apiFetch<MarkersResponse>(

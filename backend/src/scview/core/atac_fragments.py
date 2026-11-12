@@ -49,7 +49,7 @@ import pandas as pd
 import scipy.sparse as sp
 
 from scview.core import fragment_file as ff
-from scview.core import gene_annotation, modality_store
+from scview.core import gene_annotation, genome_build, modality_store
 
 logger = logging.getLogger(__name__)
 
@@ -183,11 +183,12 @@ def detach(data_dir: str | Path, dataset_id: str) -> None:
 
 
 _AUTOSOME = re.compile(r"^(?:chr)?(\d+)$")
+_SPECIES = {"GRCh38": "human", genome_build.HG19: "human", "mm10": "mouse"}
 
 
 def genome_from_names(names: Sequence[str]) -> str | None:
-    """GRCh38 or mm10 from the chromosome names: autosomes to 22 or to 19 (hg19 and GRCh38 have
-    the same names, so a wrong build shows as a low TSS enrichment instead)."""
+    """GRCh38 or mm10 from the chromosome names: autosomes to 22 or to 19. hg19 has GRCh38's names:
+    ``verify`` tells it by the file's header and the index's chromosome ends (``core/genome_build.py``)."""
     numbers = [int(m.group(1)) for m in map(_AUTOSOME.match, map(str, names)) if m]
     if not numbers:
         return None
@@ -246,9 +247,16 @@ def verify(data_dir: str | Path, dataset_id: str, barcodes: Sequence[str], file_
             idx.unlink(missing_ok=True)
             raise FragmentsError(str(e)) from e
         genome = genome_from_names(index.names)
+        if genome in (None, "GRCh38") and path.exists() and (
+                genome_build.from_header(genome_build.read_header(path))
+                or genome_build.from_index(index.names, index.linear)):
+            genome = genome_build.HG19
         state.update(genome=genome, chromosomes=index.names)
+        state.pop("genome_note", None)
+        if genome == genome_build.HG19:
+            state["genome_note"] = genome_build.HG19_REFUSAL
         expected = {"human": "GRCh38", "mouse": "mm10"}.get(str(species or "").lower())
-        if genome and expected and genome != expected:
+        if genome and expected and _SPECIES.get(genome) != _SPECIES[expected]:
             detach(data_dir, dataset_id)
             raise FragmentsError(f"The fragments file's chromosomes are {genome}'s but this dataset's genes are "
                                  f"{species}: attach the fragments file of this sample.")
@@ -278,7 +286,7 @@ def status(data_dir: str | Path, dataset_id: str, n_cells: int | None = None) ->
         "attached": has_f and has_i, "fragments": has_f, "index": has_i, "missing": message,
         "name": state.get("name"), "size_bytes": frag.stat().st_size if has_f else None,
         "barcode_share": state.get("share"), "lines_checked": state.get("lines_checked"),
-        "cells_seen": state.get("cells_seen"), "genome": state.get("genome"),
+        "cells_seen": state.get("cells_seen"), "genome": state.get("genome"), "genome_note": state.get("genome_note"),
         "n_chromosomes": len(state.get("chromosomes") or []) or None,
     }
     if has_f and n_cells is not None:

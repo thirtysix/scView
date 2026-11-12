@@ -4,7 +4,24 @@ from __future__ import annotations
 
 import pytest
 
-from scview.core.gene_filters import is_ribo_mito, select_query_genes
+from scview.core.gene_filters import is_ribo_mito, is_unnamed, select_query_genes
+
+
+class TestIsUnnamed:
+    @pytest.mark.parametrize("gene", [
+        "ENSG00000289963", "ENSG00000289963.2", "ENSMUSG00000064370",  # Ensembl ids
+        "AC012345.1", "AL627309.5", "AP000233.2", "BX284668.6", "Z98884.1",  # clone (GenBank) ids
+        "RP11-34P13.7", "CTD-2245F17.3", "XXbac-B461K10.4",  # old GENCODE clone names
+    ])
+    def test_ids_without_a_name(self, gene):
+        assert is_unnamed(gene) is True
+
+    @pytest.mark.parametrize("gene", [
+        "CD3E", "LINC01857", "ADAM7-AS1", "MMADHC-DT", "FTH1P20", "HLA-DRB1", "MT-CO1",
+        "Gm12345", "1700020I14Rik", "AC2", "RP2", "ENSG", "C14orf180",
+    ])
+    def test_names_stay(self, gene):
+        assert is_unnamed(gene) is False
 
 
 class TestIsRiboMito:

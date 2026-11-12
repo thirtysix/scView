@@ -6,7 +6,7 @@ import { useUnifiedViewStore } from "@/stores/unifiedViewStore";
 import { useDESettingsStore } from "@/stores/deSettingsStore";
 import { useSplitViewStore } from "@/stores/splitViewStore";
 import { useTissueViewStore } from "@/stores/tissueViewStore";
-import { defaultColorBy } from "@/lib/obsColumns";
+import { GROUPING_MIN_VALUES, defaultColorBy } from "@/lib/obsColumns";
 
 /** Per-dataset view state lives in other stores; a selection of cell indices or a
  *  column name from the previous dataset means nothing (or the wrong thing) in
@@ -23,7 +23,9 @@ export function resetViewForDataset(dataset: DatasetInfo | null) {
   const chosen = settings.colorByChosen ? keep(settings.colorBy) : "";
   if (!chosen) settings.setDefaultColorBy(defaultColorBy(dataset));
   const unified = useUnifiedViewStore.getState();
-  unified.setGroupByColumn(keep(unified.groupByColumn));
+  // The group-by stays only where it still has two groups (library_id of a one-library import has one).
+  const groupBy = (dataset?.obs_columns ?? []).find((c) => c.name === unified.groupByColumn);
+  unified.setGroupByColumn(groupBy && groupBy.n_unique < GROUPING_MIN_VALUES ? "" : keep(unified.groupByColumn));
   unified.clearOverlayState();
   unified.setCamera(null);
   unified.setPendingCamera(null);

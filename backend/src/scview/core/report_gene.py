@@ -168,7 +168,7 @@ def _markers(ctx: dict) -> dict:
     if key is None:
         return R.section("markers", title, status=R.NOT_COMPUTED, note=why,
                          caption=f"No marker genes are stored for '{groupby}'.")
-    passing = group_markers(adata, groupby, n=10**6, key=key)
+    passing = group_markers(adata, groupby, n=10**6, key=key, skip_unnamed=False)  # the gene asked about, named or not
     rows = []
     for group, genes in passing.items():
         if gene in genes:

@@ -526,7 +526,8 @@ def _flag_doublet_like(adata, column: str, rows: list["ClusterQC"]) -> bool:
     """Flag ``doublet_like`` clusters (``doublet_like_pair``) on their stored markers;
     False when the column has none (nothing to judge by). Never fails the table."""
     try:
-        top = marker_selection.group_markers(adata, column, n=DOUBLET_LIKE_MARKERS)
+        # Unnamed genes kept: the doublet-like rule was measured on the full lists.
+        top = marker_selection.group_markers(adata, column, n=DOUBLET_LIKE_MARKERS, skip_unnamed=False)
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("cluster QC: no markers for doublet-like clusters: %s", exc)
         return False

@@ -440,7 +440,7 @@ def marker_genes(adata, ref: Reference, sig: Signature) -> tuple[np.ndarray, str
     pos = {g: i for i, g in enumerate(U)}
     chosen: set[int] = set()
     try:
-        stored = group_markers(adata, ref.celltype_column, n=MARKERS_PER_TYPE)
+        stored = group_markers(adata, ref.celltype_column, n=MARKERS_PER_TYPE, skip_unnamed=False)  # a fit, not a reader
     except Exception as exc:  # a large dataset's fraction count, an odd stored result
         logger.debug("deconvolution: no stored markers: %s", exc)
         stored = {}

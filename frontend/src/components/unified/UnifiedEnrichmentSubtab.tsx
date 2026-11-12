@@ -10,6 +10,7 @@ import { collectionLabel } from "@/api/genesets";
 import { runGsea, type EnrichmentResult, type GseaResponse, type GseaTerm } from "@/api/enrichment";
 import { MSigDBCollectionTree, DEFAULT_MSIGDB_COLLECTIONS } from "@/components/panels/MSigDBCollectionTree";
 import { downloadCsv } from "@/lib/csv";
+import { errorMessage } from "@/lib/errorMessage";
 import { Caption } from "@/components/common/Caption";
 import { HoverTip } from "@/components/common/InfoTip";
 import { Help } from "@/components/common/Help";
@@ -154,7 +155,7 @@ export function UnifiedEnrichmentSubtab({
         if (cancelled) return;
         const msg = err instanceof Error ? err.message : String(err);
         if (msg.includes("404")) setNoMarkers(true);
-        else setMarkersError(msg);
+        else setMarkersError(errorMessage(err));
       } finally {
         if (!cancelled) setIsLoadingGroups(false);
       }
@@ -198,7 +199,7 @@ export function UnifiedEnrichmentSubtab({
         });
         if (groupRef.current === selectedGroup) setNetwork(net);
       } catch (err) {
-        setNetworkError(err instanceof Error ? err.message : String(err));
+        setNetworkError(errorMessage(err));
         setNetwork(null);
       } finally {
         setIsBuildingNetwork(false);
@@ -221,7 +222,7 @@ export function UnifiedEnrichmentSubtab({
       if (err) throw new Error(err);
       setCurrentDataset(await getDataset(datasetId));
     } catch (e) {
-      setMarkersError(e instanceof Error ? e.message : String(e));
+      setMarkersError(errorMessage(e));
     } finally {
       setIsComputingMarkers(false);
     }
@@ -252,7 +253,7 @@ export function UnifiedEnrichmentSubtab({
       setPanelCaution(data.panel_caution ?? null);
       void buildNetwork(resolution);
     } catch (err) {
-      setComputeError(err instanceof Error ? err.message : String(err));
+      setComputeError(errorMessage(err));
     } finally {
       setIsComputing(false);
     }
@@ -274,7 +275,7 @@ export function UnifiedEnrichmentSubtab({
         setPanelCaution(data.panel_caution ?? null);
       }
     } catch (err) {
-      setGseaError(err instanceof Error ? err.message : String(err));
+      setGseaError(errorMessage(err));
     } finally {
       setIsRunningGsea(false);
     }

@@ -165,3 +165,28 @@ export function defaultColorBy(
   const active = dataset.active_clustering ?? "";
   return active && (dataset.obs_columns ?? []).some((c) => c.name === active) ? active : "";
 }
+
+// ---------------------------------------------------------------------------
+// Default group-by: the column the Unified View's markers, violin and enrichment use
+// ---------------------------------------------------------------------------
+
+const CLUSTER_NAME_PATTERNS = ["leiden", "louvain", "cluster", "seurat_clusters", "cell_type", "celltype"];
+
+/** A column that splits the cells into two or more groups (one value groups nothing). */
+export function hasTwoGroups(col: Pick<ObsColumnInfo, "n_unique"> | undefined | null): boolean {
+  return !!col && col.n_unique >= GROUPING_MIN_VALUES;
+}
+
+/**
+ * The group-by a dataset opens with, among its categorical columns: the active
+ * clustering, else a clustering or cell-type column by name, else the first. A column
+ * with one group (a one-library import's library_id) is skipped, since markers of one
+ * group are refused. "" when no column has two groups.
+ */
+export function defaultGroupBy(columns: readonly ObsColumnInfo[], activeClustering?: string | null): string {
+  const usable = columns.filter(hasTwoGroups);
+  const active = activeClustering ? usable.find((c) => c.name === activeClustering) : undefined;
+  if (active) return active.name;
+  const match = usable.find((c) => CLUSTER_NAME_PATTERNS.some((p) => c.name.toLowerCase().includes(p)));
+  return match?.name ?? usable[0]?.name ?? "";
+}
