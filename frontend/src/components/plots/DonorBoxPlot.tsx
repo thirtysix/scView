@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { AlertTriangle } from "lucide-react";
 import type { Data, Layout } from "plotly.js";
 import { HoverTip } from "@/components/common/InfoTip";
@@ -39,6 +39,8 @@ interface Props {
   defaultFacet?: boolean;
   /** Text after the n-donors caption. */
   note?: string;
+  /** How to read the plot: shown on hovering the caption. */
+  captionTip?: ReactNode;
   /** Whether the donors recur across conditions; paired designs get a slope chart. */
   design?: PairedDesign | null;
   /** Group -> paired test (two conditions); printed under the slope chart. */
@@ -85,7 +87,7 @@ const TEST_HELP = {
  */
 export function DonorBoxPlot({
   points, groups, conditions, sampleKey, colorOf, valueLabel, format, title, plotName,
-  datasetName, height = 380, defaultFacet = false, note, design, pairedTests, unpairedTests, unit = "", unitHelp,
+  datasetName, height = 380, defaultFacet = false, note, captionTip, design, pairedTests, unpairedTests, unit = "", unitHelp,
   changeFormat = format,
 }: Props) {
   const [facet, setFacet] = useState(defaultFacet);
@@ -168,6 +170,7 @@ export function DonorBoxPlot({
         style={{ width: "100%" }}
       />
       <p className="mt-1 text-xs text-slate-500" data-testid="donor-caption">
+        <HoverTip tip={captionTip} disabled={!captionTip}>
         {slope ? (
           <>
             One line per {sampleKey} ({pairedCaption(points, conditions)}); the heavier marker is the mean per condition.
@@ -179,6 +182,7 @@ export function DonorBoxPlot({
           <>One point per {sampleKey} ({donorCaption(nDonors, conditions)}).</>
         )}
         {faceted && ` Y axis: ${valueLabel}.`}
+        </HoverTip>
         {note ? ` ${note}` : ""}
       </p>
       {slope && two && tested.length > 0 && (

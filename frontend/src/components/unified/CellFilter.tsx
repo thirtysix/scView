@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useDialogFocus } from "@/hooks/useDialogFocus";
 import { Filter, Loader2, Plus, Trash2, X } from "lucide-react";
 import { cellsMatching, filterCells } from "@/api/cells";
@@ -220,7 +220,7 @@ export function CellFilterPanel({ dataset, onClose }: CellFilterPanelProps) {
         </button>
       </div>
 
-      <OpToggle label="Cells matching" helpId="filter.match" op={draft.op} onChange={(op) => setDraft({ ...draft, op })} />
+      <OpToggle label="Cells matching" shown={<Help id="filter.match">Cells matching</Help>} op={draft.op} onChange={(op) => setDraft({ ...draft, op })} />
 
       <div className="max-h-[50vh] space-y-1.5 overflow-y-auto pr-1">
         {draft.items.map((item) =>
@@ -326,19 +326,19 @@ export function CellFilterPanel({ dataset, onClose }: CellFilterPanelProps) {
 
 function OpToggle({
   label,
-  helpId,
+  shown,
   op,
   onChange,
 }: {
   label: string;
-  /** Help catalog id: hovering the label opens its tip. */
-  helpId?: string;
+  /** What the label shows when it carries a catalog tip; else `label`. */
+  shown?: ReactNode;
   op: FilterOp;
   onChange: (op: FilterOp) => void;
 }) {
   return (
     <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
-      <span>{helpId ? <Help id={helpId}>{label}</Help> : label}</span>
+      <span>{shown ?? label}</span>
       <div className="flex overflow-hidden rounded border border-slate-300" role="radiogroup" aria-label={label}>
         {(["and", "or"] as const).map((o) => (
           <button

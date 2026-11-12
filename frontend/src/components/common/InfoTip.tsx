@@ -168,9 +168,12 @@ export function HoverTip({
   align = "left",
   width = 300,
   className = "",
+  disabled = false,
 }: {
   tip: ReactNode;
   children: ReactNode;
+  /** No tip (the children alone): for a tip that is optional at the call site. */
+  disabled?: boolean;
   side?: "above" | "below";
   align?: "left" | "right";
   width?: number;
@@ -186,6 +189,7 @@ export function HoverTip({
     window.clearTimeout(timer.current);
     setOpen(false);
   };
+  if (disabled) return <>{children}</>;
   return (
     <span
       ref={ref}

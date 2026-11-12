@@ -3,7 +3,6 @@ import { AlertCircle, AlertTriangle, Loader2 } from "lucide-react";
 import { getPerDonorExpression, type DonorMethod, type PerDonorExpression as Result } from "@/api/donors";
 import { DonorBoxPlot } from "@/components/plots/DonorBoxPlot";
 import { Help } from "@/components/common/Help";
-import { InfoTip } from "@/components/common/InfoTip";
 import { helpText } from "@/lib/help";
 import { useCategoryColors } from "@/hooks/useCategoryColors";
 import { rgbCss } from "@/lib/categoryColors";
@@ -194,9 +193,6 @@ export function PerDonorExpression({ datasetId, gene, noGeneReason, groupColumn,
             )}
           </span>
         )}
-        <InfoTip label="How to read the per-donor plot" align="right">
-          {helpText("perdonor.plot")}
-        </InfoTip>
         {loading && <Loader2 className="h-3 w-3 animate-spin text-slate-400" />}
       </div>
 
@@ -231,6 +227,7 @@ export function PerDonorExpression({ datasetId, gene, noGeneReason, groupColumn,
           plotName={`per_donor_${result.gene}_${result.group_key}`}
           datasetName={dataset?.name}
           height={height}
+          captionTip={helpText("perdonor.plot")}
           design={result.design}
           pairedTests={result.paired_tests}
           unpairedTests={result.unpaired_tests}

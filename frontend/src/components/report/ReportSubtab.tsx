@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Download, Loader2, RefreshCw } from "lucide-react";
-import { InfoTip } from "@/components/common/InfoTip";
-import { Help } from "@/components/common/Help";
+import { HoverTip } from "@/components/common/InfoTip";
+import { helpText } from "@/lib/help";
 import {
   clusterReportHtmlUrl,
   fetchClusterReport,
@@ -37,6 +37,12 @@ const sel = "w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs t
  * HTML download. The cluster defaults to the highlighted group, else the first
  * group of the colouring; the gene to the gene on the plot.
  */
+const ABOUT_REPORTS =
+  "A report collects what scView already knows about one cluster or one gene: sizes per donor and condition, other " +
+  "labels, marker genes and the marker databases, HALLMARK enrichment, QC, composition, co-expression and the recorded " +
+  "methods. Each section says how many cells it rests on and how it was computed. A section whose input was never " +
+  "computed says where to compute it; nothing slow is run here.";
+
 export function ReportSubtab({ groupByColumn }: { groupByColumn: string }) {
   const dataset = useDatasetStore((s) => s.currentDataset);
   const datasetId = useDatasetStore((s) => s.currentDatasetId);
@@ -126,7 +132,7 @@ export function ReportSubtab({ groupByColumn }: { groupByColumn: string }) {
               onClick={() => setMode(m)}
               className={`px-2.5 py-1 font-medium ${mode === m ? "bg-primary text-white" : "text-slate-600 hover:bg-slate-50"}`}
             >
-              <Help id="report.mode">{m === "cluster" ? "Cluster" : "Gene"}</Help>
+              <HoverTip tip={<>{helpText("report.mode")} {ABOUT_REPORTS}</>}>{m === "cluster" ? "Cluster" : "Gene"}</HoverTip>
             </button>
           ))}
         </div>
@@ -152,12 +158,6 @@ export function ReportSubtab({ groupByColumn }: { groupByColumn: string }) {
               Download HTML
             </a>
           )}
-          <InfoTip label="About reports" align="right">
-            A report collects what scView already knows about one cluster or one gene: sizes per donor and
-            condition, other labels, marker genes and the marker databases, HALLMARK enrichment, QC, composition,
-            co-expression and the recorded methods. Each section says how many cells it rests on and how it was
-            computed. A section whose input was never computed says where to compute it; nothing slow is run here.
-          </InfoTip>
         </div>
       </div>
 
