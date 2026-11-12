@@ -142,9 +142,9 @@ def few_cell_donors(sizes: dict[str, int], unit: str = "donor") -> str | None:
     shown = ", ".join(f"{k} ({n:,} cells)" for k, n in few[:MAX_NAMED]) + (" ..." if len(few) > MAX_NAMED else "")
     many = len(few) > 1
     return (f"{'These' if many else 'This'} {unit}{'s have' if many else ' has'} under a third of the median "
-            f"{unit}'s {med:,.0f} cells: {shown}. {'Their' if many else 'Its'} shares and pseudobulk rest on "
-            f"few cells, so they are noisier, yet each counts as a full replicate; check that one small "
-            f"{unit} does not drive a difference (leave it out and compare).")
+            f"{unit}'s {med:,.0f} cells: {shown}. {'Their' if many else 'Its'} numbers rest on few cells and "
+            f"are noisier, yet {'each counts' if many else 'it counts'} as a full replicate; check that one "
+            f"small {unit} does not drive a difference (leave it out and compare).")
 
 
 def pick_donor(obs, candidates: Sequence[str], groups: Sequence) -> str | None:
