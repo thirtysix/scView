@@ -15,7 +15,7 @@ import pandas as pd
 import pytest
 import scipy.sparse as sp
 
-from scview.core import chunked, large_run, pipeline, provenance, replay_script, step_failures
+from scview.core import chunked, large_run, memory_budget, pipeline, provenance, replay_script, step_failures
 from scview.core.pipeline import (
     CELL_CYCLE_G2M_GENES,
     CELL_CYCLE_S_GENES,
@@ -240,7 +240,11 @@ def test_the_replay_removes_what_the_run_removed(monkeypatch, tmp_path):
     assert "scview_active_clustering" not in rep.uns and "neighbors" not in rep.uns
 
 
-async def test_the_run_endpoints_report_finished_with_errors(client, dataset_manager):
+async def test_the_run_endpoints_report_finished_with_errors(client, dataset_manager, monkeypatch):
+    # The machine's memory, not a container limit: under one (a capped test container) the pre-step
+    # memory stop could stop the run before PCA, which is not what this test is about.
+    monkeypatch.setattr(memory_budget, "read_budget", lambda *a, **k: memory_budget.MemoryBudget(
+        64 * 2**30, 2**30, False, "machine"))
     d = Path(dataset_manager.data_dir) / "uploads" / "sf1"
     d.mkdir(parents=True)
     (d / "metadata.json").write_text(json.dumps({"id": "sf1", "name": "sf1", "status": "ready"}))

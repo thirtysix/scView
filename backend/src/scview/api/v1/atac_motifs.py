@@ -102,7 +102,7 @@ def _genome(name: str | None) -> str:
     try:
         return canonical_genome(name)
     except AnnotationError as e:
-        if genome_build.names_hg19(name):
+        if genome_build.old_build(name):
             raise atac.AtacError(str(e), 422) from None
         raise atac.AtacError(f"scView has genome sequence for GRCh38 and mm10, not {name!r}: motifs cannot be read from peaks "
                              "on another reference.", 422) from None

@@ -183,12 +183,12 @@ def detach(data_dir: str | Path, dataset_id: str) -> None:
 
 
 _AUTOSOME = re.compile(r"^(?:chr)?(\d+)$")
-_SPECIES = {"GRCh38": "human", genome_build.HG19: "human", "mm10": "mouse"}
+_SPECIES = {"GRCh38": "human", genome_build.HG19: "human", "mm10": "mouse", genome_build.MM9: "mouse"}
 
 
 def genome_from_names(names: Sequence[str]) -> str | None:
-    """GRCh38 or mm10 from the chromosome names: autosomes to 22 or to 19. hg19 has GRCh38's names:
-    ``verify`` tells it by the file's header and the index's chromosome ends (``core/genome_build.py``)."""
+    """GRCh38 or mm10 from the chromosome names: autosomes to 22 or to 19. hg19 and mm9 have their
+    names: ``verify`` tells them by the file's header and the index's chromosome ends (``core/genome_build.py``)."""
     numbers = [int(m.group(1)) for m in map(_AUTOSOME.match, map(str, names)) if m]
     if not numbers:
         return None
@@ -247,14 +247,16 @@ def verify(data_dir: str | Path, dataset_id: str, barcodes: Sequence[str], file_
             idx.unlink(missing_ok=True)
             raise FragmentsError(str(e)) from e
         genome = genome_from_names(index.names)
-        if genome in (None, "GRCh38") and path.exists() and (
-                genome_build.from_header(genome_build.read_header(path))
-                or genome_build.from_index(index.names, index.linear)):
-            genome = genome_build.HG19
+        if genome in (None, "GRCh38", "mm10") and path.exists():
+            header = genome_build.from_header(genome_build.read_header(path))
+            for old in (header, genome_build.from_index(index.names, index.linear)):
+                if old and genome in (None, genome_build.NEWER[old]):  # an older build of the same species
+                    genome = old
+                    break
         state.update(genome=genome, chromosomes=index.names)
         state.pop("genome_note", None)
-        if genome == genome_build.HG19:
-            state["genome_note"] = genome_build.HG19_REFUSAL
+        if genome in genome_build.REFUSALS:
+            state["genome_note"] = genome_build.REFUSALS[genome]
         expected = {"human": "GRCh38", "mouse": "mm10"}.get(str(species or "").lower())
         if genome and expected and _SPECIES.get(genome) != _SPECIES[expected]:
             detach(data_dir, dataset_id)
