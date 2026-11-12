@@ -3,6 +3,7 @@ import { filterCells as fetchFilterCells } from "@/api/cells";
 import type { DatasetInfo } from "@/api/types";
 import { bitsetFromMask, emptyBitset, evaluateGates, gateTree, type Gate, type GateEval, type TreeRow } from "@/lib/gates";
 import { filterGeneration, staleReason, useGatesStore, type GateRecord } from "@/stores/gatesStore";
+import { errorMessage } from "@/lib/errorMessage";
 
 const NO_GATES: Gate[] = [];
 
@@ -59,7 +60,7 @@ export function useResolveFilterGates(dataset: DatasetInfo | null, gates: Gate[]
         })
         .catch((e: unknown) => {
           if (filterGeneration(id) !== gen) return;
-          useGatesStore.getState().setFilterCells(id, g.id, { error: e instanceof Error ? e.message : String(e) });
+          useGatesStore.getState().setFilterCells(id, g.id, { error: errorMessage(e) });
         })
         .finally(() => inFlight.delete(key));
     }

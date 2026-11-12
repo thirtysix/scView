@@ -5,6 +5,7 @@ import { MarkdownLite } from "@/components/assistant/MarkdownLite";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useViewStore } from "@/stores/viewStore";
+import { errorMessage } from "@/lib/errorMessage";
 
 /** A cluster-QC chip (result:qc:<column>:<cluster>) jumps to that cluster. */
 export function jumpToQcTag(tag: string): boolean {
@@ -82,7 +83,7 @@ export function QcReportCard({ datasetId, refreshKey = 0 }: { datasetId: string;
             setText(res.report);
           }
         } catch (e2) {
-          if (live()) setError(e2 instanceof Error ? e2.message : String(e2));
+          if (live()) setError(errorMessage(e2));
         }
       } finally {
         if (live()) setBusy(false);

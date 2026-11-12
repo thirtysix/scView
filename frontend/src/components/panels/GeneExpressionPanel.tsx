@@ -14,6 +14,7 @@ import { GeneSearch } from "@/components/common/GeneSearch";
 import { ViolinPlot } from "@/components/plots/ViolinPlot";
 import { ColorLegend } from "@/components/plots/ColorLegend";
 import { formatNumber } from "@/lib/formatting";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface ViolinResponse {
   gene: string;
@@ -131,7 +132,7 @@ export function GeneExpressionPanel() {
           setExpressionError("No expression data returned");
         }
       } catch (err) {
-        setExpressionError(err instanceof Error ? err.message : String(err));
+        setExpressionError(errorMessage(err));
         setExpressionValues(null);
       } finally {
         setIsLoadingExpression(false);

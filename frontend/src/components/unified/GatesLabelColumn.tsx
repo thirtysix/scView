@@ -7,6 +7,7 @@ import { planLabelColumn, suggestGateColumn, type Gate, type GateEval, type Labe
 import { columnNameError, UNASSIGNED } from "@/lib/labels";
 import { useLabelUndoStore } from "@/stores/labelUndoStore";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { errorMessage } from "@/lib/errorMessage";
 
 /** Labels in one column the UI keeps to, Unassigned included: its pickers hide columns with more
  * than 100 values (the backend, core/user_labels.py MAX_LABELS, allows 2,000). */
@@ -70,7 +71,7 @@ export function GatesLabelColumn({
         previous.push(res.previous);
         written.push(group);
       } catch (err) {
-        failure = `“${group.label}” failed: ${err instanceof Error ? err.message : String(err)}`;
+        failure = `“${group.label}” failed: ${errorMessage(err)}`;
         break;
       }
     }

@@ -5,6 +5,7 @@ import { getVelocityGrid, type VelocityGrid } from "@/api/velocity";
 import { useEmbeddingReady } from "@/hooks/useEmbeddingReady";
 import { arrowColor, arrowSegments, arrowsBlocked, type ArrowSegment } from "@/lib/velocityArrows";
 import { useUnifiedViewStore } from "@/stores/unifiedViewStore";
+import { errorMessage } from "@/lib/errorMessage";
 
 const NO_LAYERS: readonly Layer[] = [];
 
@@ -40,7 +41,7 @@ export function useVelocityArrows(
       .catch((e: unknown) => {
         if (e instanceof DOMException && e.name === "AbortError") return;
         setGrid(null);
-        useUnifiedViewStore.getState().setVelocityGridNote(e instanceof Error ? e.message : String(e));
+        useUnifiedViewStore.getState().setVelocityGridNote(errorMessage(e));
       });
     return () => ctl.abort();
   }, [key, datasetId, embedding, arrows.density]);

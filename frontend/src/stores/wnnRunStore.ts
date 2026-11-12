@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { runWnn, type WnnInfo, type WnnRunBody, type WnnStage, type WnnStart } from "@/api/wnn";
 import { watchdogMessage, type WatchdogEvent } from "@/api/pipelineRun";
+import { errorMessage } from "@/lib/errorMessage";
 
 /**
  * A WNN run in flight (Protein subtab). Kept here, not in the card, so switching
@@ -46,7 +47,7 @@ export const useWnnRunStore = create<WnnRunState>((set, get) => ({
       return result;
     } catch (e) {
       const aborted = signal.aborted;
-      set({ running: false, error: aborted ? "Cancelled: nothing was saved." : e instanceof Error ? e.message : String(e) });
+      set({ running: false, error: aborted ? "Cancelled: nothing was saved." : errorMessage(e) });
       return null;
     } finally {
       if (controller?.signal === signal) controller = null;

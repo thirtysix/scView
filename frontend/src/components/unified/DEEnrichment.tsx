@@ -24,6 +24,7 @@ import { deEnrichmentQuery } from "@/lib/de";
 import { gseaSourceFromDE } from "@/lib/gsea";
 import { hasPValues } from "@/lib/deMethods";
 import { useViewStore } from "@/stores/viewStore";
+import { errorMessage } from "@/lib/errorMessage";
 
 type Side = "up" | "down";
 
@@ -119,7 +120,7 @@ export function DEEnrichment({
       setRanWith({ pThreshold, fcThreshold });
       setSide(res.up.n_genes_used > 0 || res.down.n_genes_used === 0 ? "up" : "down");
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorMessage(e));
     } finally {
       setLoading(false);
     }
@@ -137,7 +138,7 @@ export function DEEnrichment({
       });
       setGsea(res);
     } catch (e) {
-      setGseaError(e instanceof Error ? e.message : String(e));
+      setGseaError(errorMessage(e));
     } finally {
       setGseaLoading(false);
     }

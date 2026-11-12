@@ -42,6 +42,7 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { useSplitViewStore } from "@/stores/splitViewStore";
 import { useUnifiedViewStore } from "@/stores/unifiedViewStore";
 import { useViewStore } from "@/stores/viewStore";
+import { errorMessage, errorStatus } from "@/lib/errorMessage";
 
 /** The workspace now, as a session file. */
 export function captureSession(now: Date = new Date()): SessionFile {
@@ -228,9 +229,8 @@ export async function restoreSession(session: SessionFile): Promise<RestoreRepor
       found = await getDataset(saved.id);
     } catch (e) {
       // Only "no such dataset" falls back; a busy or unreachable server is an error.
-      const message = e instanceof Error ? e.message : String(e);
-      if (!/^API error 404\b/.test(message)) {
-        throw new Error(`The session's dataset ${name} could not be opened (${message.replace(/^API error /, "")}).`);
+      if (errorStatus(e) !== 404) {
+        throw new Error(`The session's dataset ${name} could not be opened (${errorMessage(e)}).`);
       }
     }
     if (found) {
@@ -547,7 +547,7 @@ async function applySelection(session: SessionFile, d: DatasetInfo, sameCells: b
       if (cells.size > 0) store.setSelection(cells, sel.filter);
       else notes.push(`Selection ${quote(sentence)}: no cells match in this dataset.`);
     } catch (e) {
-      notes.push(`Selection ${quote(sentence)}: ${e instanceof Error ? e.message : String(e)}`);
+      notes.push(`Selection ${quote(sentence)}: ${errorMessage(e)}`);
     }
     return;
   }

@@ -77,7 +77,7 @@ export function UnifiedGeneListsSubtab({ onGeneClick, onScoreGeneSet, activeGene
     try {
       importFile(file.name, await file.text());
     } catch (err) {
-      setImportError(err instanceof Error ? err.message : String(err));
+      setImportError(errorMessage(err));
     }
   };
 

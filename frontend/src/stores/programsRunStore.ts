@@ -8,6 +8,7 @@ import {
   type ProgramsSummary,
 } from "@/api/programs";
 import { watchdogMessage, type WatchdogEvent } from "@/api/pipelineRun";
+import { errorMessage } from "@/lib/errorMessage";
 
 /**
  * A gene programs run in flight (Programs subtab). Kept here, not in the subtab,
@@ -69,7 +70,7 @@ export const useProgramsRunStore = create<ProgramsRunState>((set, get) => ({
       const aborted = signal.aborted;
       set({
         running: false,
-        error: aborted ? "Cancelled: nothing was saved." : e instanceof Error ? e.message : String(e),
+        error: aborted ? "Cancelled: nothing was saved." : errorMessage(e),
       });
     } finally {
       if (controller?.signal === signal) controller = null;

@@ -7,6 +7,7 @@ import { apiFetch } from "@/api/client";
 import { streamEvents } from "@/api/clustering";
 import type { RunOutcomeFields } from "@/api/pipelineRun";
 import type { DatasetInfo, ObsColumnInfo } from "@/api/types";
+import { errorMessage } from "@/lib/errorMessage";
 
 export type StepStatus = "pending" | "running" | "done" | "failed" | "skipped";
 export type PlanStatus = "ready" | "running" | "done" | "failed" | "cancelled";
@@ -206,7 +207,7 @@ export async function runPlan(steps: AssistantAction[], deps: PlanDeps, hooks: P
     } catch (e) {
       hooks.onStep(i, "failed");
       skipFrom(i + 1);
-      const why = e instanceof Error ? e.message : String(e);
+      const why = errorMessage(e);
       return { status: "failed", failedAt: i, message: `Step ${i + 1} (${stepName(steps[i]!)}) failed: ${why}.` };
     }
   }

@@ -21,6 +21,7 @@ import { decodeArrowBuffer } from "@/lib/arrow";
 import { formatNumber, prettyObsLabel } from "@/lib/formatting";
 import { DEFAULT_PAGA_THRESHOLD, branchEnds as pagaBranchEnds, pagaLayers, treePath, visibleEdges } from "@/lib/paga";
 import { DPT_COLUMN, defaultRootColumn, rootGroupColumns } from "@/lib/trajectory";
+import { errorMessage } from "@/lib/errorMessage";
 
 /** How the in-app pseudotime column was computed (POST /trajectory/dpt). */
 interface DPTParams {
@@ -147,7 +148,7 @@ export function TrajectoryPanel() {
         );
       })
       .catch((err) => {
-        setError(err instanceof Error ? err.message : String(err));
+        setError(errorMessage(err));
         setAvailableColumns([]);
       })
       .finally(() => setIsLoadingColumns(false));
@@ -171,7 +172,7 @@ export function TrajectoryPanel() {
         setPseudotimeMinMax({ min: data.min, max: data.max });
       })
       .catch((err) => {
-        setError(err instanceof Error ? err.message : String(err));
+        setError(errorMessage(err));
         setPseudotimeValues(null);
       })
       .finally(() => setIsLoadingPseudotime(false));
@@ -209,7 +210,7 @@ export function TrajectoryPanel() {
       setSelectedColumn(res.column);
       setRefreshKey((k) => k + 1);
     } catch (err) {
-      setComputeError(err instanceof Error ? err.message : String(err));
+      setComputeError(errorMessage(err));
     } finally {
       setIsComputing(false);
     }
@@ -255,7 +256,7 @@ export function TrajectoryPanel() {
       setShowPaga(true);
       await queryClient.invalidateQueries({ queryKey: ["paga", datasetId] });
     } catch (err) {
-      setPagaError(err instanceof Error ? err.message : String(err));
+      setPagaError(errorMessage(err));
     } finally {
       setPagaComputing(false);
     }

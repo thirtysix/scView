@@ -1,5 +1,6 @@
 import type { QcStateGroup, QcStates } from "@/api/qcStates";
 import { rgbCss, sortByCategoryOrder } from "@/lib/categoryColors";
+import { errorMessage } from "@/lib/errorMessage";
 
 type Rgb = readonly [number, number, number];
 
@@ -18,12 +19,7 @@ export function validStateName(name: string): boolean {
 
 /** The server's reason from an apiFetch error ("API error 400: {detail}"). */
 export function errorText(e: unknown): string {
-  const body = (e instanceof Error ? e.message : String(e)).replace(/^API error \d+: /, "");
-  try {
-    return String(JSON.parse(body).detail ?? body);
-  } catch {
-    return body;
-  }
+  return errorMessage(e);
 }
 
 export function pctText(v: number | null | undefined, digits = 0): string {

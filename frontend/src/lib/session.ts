@@ -29,6 +29,7 @@ import { DOT_SIZE_RANGE } from "@/lib/transcripts";
 import { ARROW_DENSITY_RANGE, ARROW_SCALE_RANGE } from "@/lib/velocityArrows";
 import type { DEMode, DETest } from "@/stores/deSettingsStore";
 import type { CellMethod } from "@/lib/deMethods";
+import { errorMessage } from "@/lib/errorMessage";
 
 export const SESSION_FORMAT = "scview-session";
 export const SESSION_VERSION = 1;
@@ -372,7 +373,7 @@ function parseSelection(x: unknown, where: string): SessionSelection {
     try {
       return { filter: parseCellFilter(o.filter, `${where}.filter`) };
     } catch (e) {
-      throw new SessionError(`${e instanceof Error ? e.message : String(e)}.`);
+      throw new SessionError(`${errorMessage(e)}.`);
     }
   }
   const nCells = number(o.n_cells, `${where}.n_cells`, 1, MAX_CELLS, true);
@@ -544,7 +545,7 @@ export function parseSession(x: unknown): SessionFile {
     try {
       session.gates = parseGateList(x.gates, "gates");
     } catch (e) {
-      throw new SessionError(`${e instanceof Error ? e.message : String(e)}.`);
+      throw new SessionError(`${errorMessage(e)}.`);
     }
   }
   return session;

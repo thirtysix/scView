@@ -25,6 +25,7 @@ import {
 import { WaffleChart } from "@/components/plots/WaffleChart";
 import { SelectionChip } from "@/components/common/SelectionChip";
 import { useCompositionSelection } from "@/hooks/useCompositionSelection";
+import { errorMessage } from "@/lib/errorMessage";
 
 /** The waffle's "every cell" option, beside one bar per row. */
 const ALL_CELLS = "\u0000all";
@@ -129,7 +130,7 @@ export function ObservationsPanel() {
         }
         setSummary({ groupby: raw.groupby, groups, total });
       })
-      .catch((err) => setError(err instanceof Error ? err.message : String(err)))
+      .catch((err) => setError(errorMessage(err)))
       .finally(() => setIsLoading(false));
   }, [datasetId, primaryCol]);
 

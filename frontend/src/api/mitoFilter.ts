@@ -1,5 +1,6 @@
 import { apiFetch, readError } from "./client";
 import { API_BASE } from "@/lib/constants";
+import { errorMessage } from "@/lib/errorMessage";
 
 /** How the filtering step judges % mito (backend PipelineParams.qc_mito_mode). */
 export type MitoMode = "global" | "per_type";
@@ -106,15 +107,7 @@ export interface RefilterPreview {
 }
 
 function detailOf(e: unknown): Error {
-  const msg = e instanceof Error ? e.message : String(e);
-  const body = msg.replace(/^API error \d+: /, "");
-  try {
-    const detail = JSON.parse(body).detail;
-    if (detail) return new Error(String(detail));
-  } catch {
-    /* not JSON */
-  }
-  return e instanceof Error ? e : new Error(msg);
+  return new Error(errorMessage(e));
 }
 
 export async function getMitoRefilter(datasetId: string, column?: string, floor = false): Promise<RefilterPreview> {
