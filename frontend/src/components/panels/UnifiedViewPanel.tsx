@@ -62,7 +62,7 @@ import { GeneFeatureGrid } from "@/components/unified/GeneFeatureGrid";
 import { useSplitViewStore } from "@/stores/splitViewStore";
 import type { ScatterLegend } from "@/lib/scatterExport";
 import { mapCategoryToColor } from "@/lib/colors";
-import { isCategoricalDtype } from "@/lib/obsColumns";
+import { defaultGroupBy, isCategoricalDtype } from "@/lib/obsColumns";
 import { colorByLine, type HoverLine } from "@/lib/hoverInfo";
 import { HoverLineRow } from "@/components/plots/HoverLineRow";
 import { useCategoryColors } from "@/hooks/useCategoryColors";
@@ -346,16 +346,9 @@ export function UnifiedViewPanel() {
   }, [dataset]);
 
   useEffect(() => {
-    if (groupByColumn || categoricalColumns.length === 0) return;
-    if (dataset?.active_clustering) {
-      const found = categoricalColumns.find((c) => c.name === dataset.active_clustering);
-      if (found) { setGroupByColumn(found.name); return; }
-    }
-    const clusterPatterns = ["leiden", "louvain", "cluster", "seurat_clusters", "cell_type", "celltype"];
-    const match = categoricalColumns.find((c) =>
-      clusterPatterns.some((p) => c.name.toLowerCase().includes(p)),
-    );
-    setGroupByColumn(match?.name ?? categoricalColumns[0]!.name);
+    if (groupByColumn) return;
+    const pick = defaultGroupBy(categoricalColumns, dataset?.active_clustering);
+    if (pick) setGroupByColumn(pick);
   }, [categoricalColumns, groupByColumn, dataset, setGroupByColumn]);
 
   // --- The camera the user moved, linking the main plot and the cluster map ---

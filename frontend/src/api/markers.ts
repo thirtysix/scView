@@ -40,3 +40,10 @@ export function noMarkersReason(data: MarkersResponse | null | undefined): strin
   if (!data || !Array.isArray(data.groups)) return NO_MARKERS_REASON;
   return data.groups.length === 0 ? (data.reason ?? NO_MARKERS_REASON) : null;
 }
+
+/** Why a grouping column has no markers to ask for (one group: the backend's 400), or
+ *  null when it has two or more groups or is not a known column. */
+export function oneGroupReason(col: { name: string; n_unique: number } | undefined | null): string | null {
+  if (!col || col.n_unique >= 2) return null;
+  return `${col.name} has only one group, and markers compare groups. Pick a column with two or more.`;
+}
