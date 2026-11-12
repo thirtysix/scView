@@ -130,13 +130,14 @@ def markers_line(group: str, check: marker_randomness.RandomCheck | None, has_li
         return Line(kind="markers", text=(
             f"Only {n} of its markers are in the marker databases (best match {kind}, p {p_text(best)}): too few "
             f"to compare with random genes (that needs {marker_randomness.MIN_NAMED})."))
+    # The bar is the 90th percentile of random lists: "beats 9 of 10", never "better than random".
     if group in check.flagged:
         return Line(kind="markers", fired=True, text=(
-            f"Markers match no database type better than random genes: best p {p_text(best)} ({kind}), while 1 in "
-            f"10 random lists of {n} database genes reach {p_text(cut)}."))
+            f"Markers do not beat 9 of 10 random lists of {n} database genes: best p {p_text(best)} ({kind}), "
+            f"while 1 in 10 random lists reach {p_text(cut)}."))
     return Line(kind="markers", text=(
-        f"Markers match {kind} better than random genes: best p {p_text(best)}, while 1 in 10 random lists of "
-        f"{n} database genes reach {p_text(cut)}."))
+        f"Markers match {kind} at best p {p_text(best)}, which beats 9 of 10 random lists of {n} database "
+        f"genes (1 in 10 reach {p_text(cut)})."))
 
 
 def qc_line(row: cluster_qc.ClusterQC, typical: dict[str, float]) -> Line:

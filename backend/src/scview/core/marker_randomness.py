@@ -1,4 +1,4 @@
-"""Marker lists that name no known cell type better than random genes do (no LLM).
+"""Marker lists that do not beat 9 of 10 random gene lists of their size (no LLM).
 
 The annotation benchmark's T4 controls (2026-11-08) gave the annotator 25 random genes as a
 "cluster": the default model named a cell type every time (0 of 54). This check finds such lists, and
@@ -34,7 +34,7 @@ NULL_QUANTILE = 0.90
 MIN_NAMED = 10
 POOL_MIN_DETECTED = 0.10
 SEED = 0
-NOTE = "markers match no cell type in the marker databases better than random genes do"
+NOTE = "markers do not beat 9 of 10 random gene lists of the same size against the marker databases"
 
 
 @dataclass

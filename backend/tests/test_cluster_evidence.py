@@ -111,10 +111,12 @@ def test_each_cluster_gets_its_evidence_in_words(markers):
     assert rep.markers and rep.typing and rep.annotation is None
     # Markers vs random genes: the rule's own numbers, in both directions.
     junk = _text(by["junk"], "markers")
-    assert junk.startswith("Markers match no database type better than random genes: best p 1e-")
-    assert "1 in 10 random lists of 25 database genes reach 1e-" in junk
+    assert junk.startswith("Markers do not beat 9 of 10 random lists of ")
+    assert "better than random" not in junk
+    assert "9 of 10 random lists of 25 database genes" in junk and "1 in 10 random lists reach 1e-" in junk
     assert next(ln for ln in by["junk"].lines if ln.kind == "markers").fired
-    assert _text(by["CD8 T"], "markers").startswith("Markers match type0 better than random genes")
+    assert _text(by["CD8 T"], "markers").startswith("Markers match type0 at best p ")
+    assert "which beats 9 of 10 random lists of" in _text(by["CD8 T"], "markers")
     # QC against the typical cluster, naming the flag that fired.
     assert _text(by["damaged"], "qc") == ("1,115 genes vs 1,370 typical; 11.2% vs 5.9% mito. Cluster QC flags it "
                                           "low quality (few genes and high mito).")

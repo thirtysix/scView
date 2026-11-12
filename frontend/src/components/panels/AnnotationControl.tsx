@@ -457,8 +457,8 @@ function DecidedNote({ decided, datasetId }: { decided: Decided; datasetId: stri
       )}
       {decided.unidentified.length > 0 && (
         <p>
-          scView labelled {clusterList(decided.unidentified)} <b>Unidentified</b> itself: their markers match no
-          cell type in the marker databases better than random genes do.
+          scView labelled {clusterList(decided.unidentified)} <b>Unidentified</b> itself: their markers do not beat
+          9 of 10 random gene lists of the same size against the marker databases.
         </p>
       )}
       {decided.toAi.length > 0 && (

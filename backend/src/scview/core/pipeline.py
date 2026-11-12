@@ -1873,8 +1873,8 @@ def _record_llm_cl_ids(adata: ad.AnnData, target: str, model_ids: dict[str, str 
 
 LOW_QUALITY_LABEL = "Low-quality cells"
 _LOW_QUALITY = re.compile(r"^\s*(?:likely\s+|probable\s+)?low[-\s]?quality(?:\s+cells?)?\s*$", re.I)
-# The label scView gives a cluster whose markers match no database type better than random genes
-# (core/marker_randomness.py), without asking the AI. Not "Unknown": that is the label of clusters
+# The label scView gives a cluster whose markers do not beat 9 of 10 random gene lists of the same
+# size against the marker databases (core/marker_randomness.py), without asking the AI. Not "Unknown": that is the label of clusters
 # a cut reply never reached.
 UNIDENTIFIED_LABEL = "Unidentified"
 # Cluster QC flags that mean damaged cells: scView labels these clusters "Low-quality cells" itself.
@@ -1933,8 +1933,8 @@ def _annotation_decided(adata: ad.AnnData, groupby: str,
     - "Low-quality cells": cluster QC flags it ``low_quality`` (few genes and high mito) or
       ``high_mito``, unless its markers best match a type with much mito RNA by nature
       (``_HIGH_MITO_TYPE``): that cluster goes to the AI with its QC note.
-    - "Unidentified": its markers match no database cell type better than random genes do
-      (``core/marker_randomness.py``). Damaged wins when both hold.
+    - "Unidentified": its markers do not beat 9 of 10 random gene lists of the same size
+      against the marker databases (``core/marker_randomness.py``). Damaged wins when both hold.
 
     In the annotation benchmark the AI's low-quality call moved with the wording and with the other
     clusters in the prompt (arms pp, ox), and a random-marker note in the prompt moved other clusters'

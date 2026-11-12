@@ -66,8 +66,8 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
      "name clusters by an LLM from their markers, a CellTypist model or marker-database scores, into an obs "
      "column; with Cell Ontology ids; <column>_qualified adds the genes that set a cluster apart where clusters "
      "share a label or a label is a mixture or no cell type, e.g. 'Monocytes (CCL8+ RSAD2+)'; with the LLM, "
-     "scView itself labels clusters cluster QC flags as damaged 'Low-quality cells' and marker lists that match "
-     "no database type better than random genes 'Unidentified', and the LLM names the rest"),
+     "scView itself labels clusters cluster QC flags as damaged 'Low-quality cells' and marker lists that do "
+     "not beat 9 of 10 random gene lists of the same size 'Unidentified', and the LLM names the rest"),
     ("Data Assessment > Label from a reference dataset", "reference mapping",
      "label cells from another annotated library dataset; flags cells not in the reference"),
     ("Data Assessment > Annotation confidence", "", "label-fit flags per cell"),
