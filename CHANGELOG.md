@@ -6,6 +6,16 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- Scores are kept: a scored gene set (score_genes, AUCell, ssGSEA, GSVA) or a drawn TF/pathway activity is saved
+  as a cell column (`score_<set>`, `activity_<source>`) with how it was made (method, genes used and missing,
+  matrix, network). Scoring the same set again replaces it; a column the file brought is never overwritten.
+- Compare (toolbar) offers saved scores under Scores, beside the groupings, each drawn with its own colour bar;
+  cell-cycle and dissociation-stress scores are offered too. Remove a saved score from the same list. Saved
+  scores also appear in Color by (with a violin by group), the histogram's Values, sessions and the h5ad export,
+  and the replay script recomputes score_genes and AUCell scores exactly.
+- MCP: `score_gene_set` saves the score when given a `name`; new `remove_saved_score`.
+
 ### Changed
 - Error messages in the older panels (Gene Expression, Gene Sets, Trajectory, Observations, the co-pilot and
   others) show the server's reason instead of the raw `{"detail": ...}` text; validation errors give their
