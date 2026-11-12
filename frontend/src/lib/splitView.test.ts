@@ -37,10 +37,10 @@ const col = (name: string, values?: string[], dtype = "category"): ObsColumnInfo
 const rgbaAt = (rgba: Uint8Array, s: number) => Array.from(rgba.slice(s * 4, s * 4 + 4));
 
 describe("splitColumnOptions", () => {
-  it("offers categorical columns with 2–6 values and disables bigger ones with the reason", () => {
+  it("offers categorical columns with 2–24 values and disables bigger ones with the reason", () => {
     const opts = splitColumnOptions([
       col("stim", ["CTRL", "STIM"]),
-      col("cell_type", Array.from({ length: 13 }, (_, i) => `t${i}`)),
+      col("cell_type", Array.from({ length: 25 }, (_, i) => `t${i}`)),
       col("sample", ["a", "b", "c", "d", "e", "f"], "object"),
       col("is_doublet", ["False", "True"], "bool"),
       col("one", ["only"]),
@@ -50,8 +50,11 @@ describe("splitColumnOptions", () => {
     expect(opts.map((o) => o.name)).toEqual(["is_doublet", "sample", "stim", "cell_type"]);
     expect(opts.filter((o) => o.disabledReason == null)).toHaveLength(3);
     const ct = opts.find((o) => o.name === "cell_type")!;
-    expect(ct.nValues).toBe(13);
-    expect(ct.disabledReason).toMatch(/13 values.*at most 6/);
+    expect(ct.nValues).toBe(25);
+    expect(ct.disabledReason).toMatch(/25 values.*at most 24/);
+    // 24 values is still a split (paged): e.g. 24 donors.
+    const donors = splitColumnOptions([col("donor", Array.from({ length: 24 }, (_, i) => `d${i}`))]);
+    expect(donors[0]!.disabledReason).toBeNull();
   });
 });
 

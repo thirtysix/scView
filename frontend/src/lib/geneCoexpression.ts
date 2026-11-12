@@ -9,8 +9,8 @@ export { spearman };
 
 type RGB = [number, number, number];
 
-/** Most genes the feature grid and the stacked violin take at once. */
-export const MAX_GRID_GENES = 9;
+/** Most genes the feature grid (paged above six) and the stacked violin take at once. */
+export const MAX_GRID_GENES = 24;
 /** Fewest genes worth a grid (one gene is the single plot). */
 export const MIN_GRID_GENES = 2;
 

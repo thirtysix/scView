@@ -32,6 +32,17 @@ export function DatasetLibrary() {
   const [draftName, setDraftName] = useState("");
   // Enter and the blur that follows both commit; the ref makes the second a no-op.
   const renamingRef = useRef<string | null>(null);
+  // Opening reads the file on the server (often 5-10 s): say so on the row, count the seconds,
+  // and hold the other rows until it is open.
+  const [openingId, setOpeningId] = useState<string | null>(null);
+  const [openingSeconds, setOpeningSeconds] = useState(0);
+  useEffect(() => {
+    if (!openingId) return;
+    setOpeningSeconds(0);
+    const started = Date.now();
+    const t = window.setInterval(() => setOpeningSeconds(Math.floor((Date.now() - started) / 1000)), 1000);
+    return () => window.clearInterval(t);
+  }, [openingId]);
 
   const toggleSelected = useCallback((id: string) => {
     setSelectedIds((prev) => {
@@ -248,7 +259,9 @@ export function DatasetLibrary() {
                 <div className="group flex min-w-0 items-start gap-1.5">
                   <button
                     onClick={async () => {
+                      if (openingId) return;
                       setError(null);
+                      setOpeningId(ds.id);
                       try {
                         const dataset = await getDataset(ds.id);
                         setCurrentDataset(dataset);
@@ -256,11 +269,22 @@ export function DatasetLibrary() {
                       } catch (e) {
                         // A 507's detail names the run that holds the memory (or the limit).
                         setError(openFailureMessage(e));
+                      } finally {
+                        setOpeningId(null);
                       }
                     }}
-                    className="min-w-0 text-left"
+                    disabled={openingId != null && openingId !== ds.id}
+                    aria-busy={openingId === ds.id}
+                    className={`min-w-0 text-left ${openingId != null && openingId !== ds.id ? "cursor-wait opacity-60" : ""} ${openingId === ds.id ? "cursor-wait" : ""}`}
                   >
                     <p className="break-words text-sm font-medium text-slate-900">{ds.name}</p>
+                    {openingId === ds.id && (
+                      <p role="status" className="flex items-center gap-1 text-xs font-medium text-blue-600">
+                        <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin" />
+                        {`Opening${ds.n_cells != null ? ` ${formatNumber(ds.n_cells)} cells` : ""}…`}
+                        {openingSeconds >= 2 && <span className="font-normal text-slate-500">{` ${openingSeconds} s`}</span>}
+                      </p>
+                    )}
                     <p className="text-xs text-slate-500">
                       {[
                         ds.n_cells != null && `${formatNumber(ds.n_cells)} cells`,

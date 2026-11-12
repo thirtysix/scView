@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { SpatialLibrary } from "@/api/types";
 import type { CellOutlines } from "@/lib/cellOutlines";
 
@@ -14,6 +14,25 @@ vi.mock("@deck.gl/react", async () => {
       deckProps.current = props;
       return <div ref={ref} data-testid="deck" />;
     }),
+  };
+});
+
+// The SVG / PDF download: keep what would be saved; the outline limits can be lowered per test.
+const saved = vi.hoisted(() => ({ calls: [] as { format: string; svg: string }[] }));
+vi.mock("@/lib/pdfExport", () => ({
+  saveFigure: vi.fn(async (format: string, figure: { svg: string }) => {
+    saved.calls.push({ format, svg: figure.svg });
+  }),
+}));
+const figureLimits = vi.hoisted(() => ({ current: null as { maxOutlines: number; maxVertices: number } | null }));
+vi.mock("@/lib/outlineSvg", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/outlineSvg")>();
+  return {
+    ...real,
+    figureOutlines: (...args: Parameters<typeof real.figureOutlines>) =>
+      real.figureOutlines(args[0], args[1], args[2], args[3], args[4], figureLimits.current ?? undefined),
+    omittedOutlinesNote: (f: Parameters<typeof real.omittedOutlinesNote>[0], kind: "cell" | "nucleus") =>
+      real.omittedOutlinesNote(f, kind, figureLimits.current ?? undefined),
   };
 });
 
@@ -77,6 +96,8 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.stubGlobal("ResizeObserver", FakeResizeObserver);
   deckProps.current = null;
+  saved.calls = [];
+  figureLimits.current = null;
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -178,5 +199,76 @@ describe("EmbeddingScatter outlines", () => {
     settle();
     const rect = onSettledView.mock.calls.at(-1)![0];
     expect([rect.x0, rect.x1, rect.y0, rect.y1, rect.scale]).toEqual([-50, 150, -125, 25, 2]);
+  });
+});
+
+
+describe("EmbeddingScatter outlines in the SVG / PDF", () => {
+  async function saveSvg(): Promise<Document> {
+    fireEvent.click(screen.getByRole("button", { name: "Download figure" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: /SVG \(vector\)/ }));
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    expect(saved.calls).toHaveLength(1);
+    return new DOMParser().parseFromString(saved.calls[0]!.svg, "image/svg+xml");
+  }
+
+  it("the outlines on screen are in the file, over the points, their cells not also dots", async () => {
+    renderTissue(tissue({ outlines }));
+    settle();
+    moveTo([50, -50], 3);
+    settle();
+    fireEvent.click(screen.getByRole("button", { name: "Download figure" }));
+    const hints = screen.getAllByRole("menuitem").map((b) => b.textContent ?? "").join(" | ");
+    expect(hints).not.toMatch(/without the outlines/);
+    fireEvent.click(screen.getByRole("button", { name: "Download figure" }));
+    const doc = await saveSvg();
+    const paths = doc.querySelectorAll("g.panel g.outlines path");
+    expect(paths).toHaveLength(1); // cell 1 only: the margin's cells are out of the view
+    expect(paths[0]!.getAttribute("fill-opacity")).toBe("0.502"); // the plot's opacity 0.5
+    // 2 units at 8 px a unit: a 16 px square
+    expect(paths[0]!.getAttribute("d")).toMatch(/^M[\d.]+ [\d.]+l16 0l0 -?16l-16 0z$/);
+    const g = doc.querySelector("g.outlines")!;
+    expect(g.getAttribute("stroke")).toBe("#1e293b"); // 16 px a cell: edged, as on screen
+    expect(doc.querySelectorAll("g.points circle")).toHaveLength(0); // cell 1's dot is hidden under it
+    const texts = [...doc.querySelectorAll("text")].map((t) => t.textContent);
+    expect(texts.join(" ")).not.toContain("Drawing the"); // the on-screen status is not a caption
+  });
+
+  it("zoomed out, every outline in view and no edge (cells under 4 px)", async () => {
+    renderTissue(tissue({ outlines }));
+    settle();
+    moveTo([50, -50], 0);
+    settle();
+    const doc = await saveSvg();
+    const g = doc.querySelector("g.outlines")!;
+    expect(g.hasAttribute("stroke")).toBe(false);
+    const rings = [...g.querySelectorAll("path")].map((p) => p.getAttribute("d")!.split("z").filter(Boolean).length);
+    expect(rings.reduce((a, b) => a + b, 0)).toBe(3);
+  });
+
+  it("nothing changes without outlines: dots only, no outline group", async () => {
+    renderTissue(tissue());
+    settle();
+    moveTo([50, -50], 0);
+    settle();
+    const doc = await saveSvg();
+    expect(doc.querySelector("g.outlines")).toBeNull();
+    expect(doc.querySelectorAll("g.points circle")).toHaveLength(3);
+  });
+
+  it("over the size limit: saved with the cells as dots, a note in the file and in the menu", async () => {
+    figureLimits.current = { maxOutlines: 0, maxVertices: 1e9 };
+    renderTissue(tissue({ outlines }));
+    settle();
+    moveTo([50, -50], 3);
+    settle();
+    const doc = await saveSvg();
+    expect(doc.querySelector("g.outlines")).toBeNull();
+    expect(doc.querySelectorAll("g.points circle")).toHaveLength(1); // cell 1 shown as its dot again
+    const note = "Cell outlines left out (1 in view, over the 0 a figure holds): zoom in for them. The cells are drawn as points.";
+    expect([...doc.querySelectorAll("text")].map((t) => t.textContent).join(" ")).toContain(note); // wrapped over lines
+    expect(screen.getByRole("alert").textContent).toBe(`Saved. ${note}`);
   });
 });

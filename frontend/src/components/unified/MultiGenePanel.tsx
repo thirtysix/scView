@@ -27,7 +27,7 @@ interface MultiGenePanelProps {
 }
 
 /**
- * The Expression subtab's "Several genes" section: pick 2–9 genes, then see
+ * The Expression subtab's "Several genes" section: pick 2–24 genes, then see
  * the embedding coloured by each side by side (GeneFeatureGrid over the plot)
  * or a stacked violin of them across the group-by; and for two of them, their
  * blend on the embedding or one against the other, cell by cell.

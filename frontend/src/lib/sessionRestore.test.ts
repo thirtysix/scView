@@ -72,7 +72,7 @@ function resetStores() {
     colorClip: { preset: "none" },
     maxRenderedCells: 100_000,
   });
-  useSplitViewStore.setState({ splitBy: null, compareColumns: null, showContext: true });
+  useSplitViewStore.setState({ splitBy: null, compareColumns: null, showContext: true, panelsPerPage: 6, page: 0 });
   useSelectionStore.setState({ selectedCellIndices: null, selectionFilter: null, highlightedGroup: null });
   useUnifiedViewStore.setState({
     activeSubtab: "markers",
@@ -113,6 +113,7 @@ function buildWorkspace(selection: "filter" | "lasso") {
   u.setOverlayDatasetId("kang");
   u.setColorClip({ preset: "manual", min: 0, max: 3 });
   useSplitViewStore.getState().setCompareColumns(["cell_type", "stim"]);
+  useSplitViewStore.getState().setPanelsPerPage(4, 1);
   useSelectionStore.getState().setHighlight({ column: "cell_type", value: "CD14 Mono" });
   if (selection === "filter") useSelectionStore.getState().setSelection(new Set([1, 3, 9]), filter);
   else useSelectionStore.getState().setSelection(new Set([2, 4, 99]));
@@ -261,6 +262,8 @@ describe("save then open on the same dataset", () => {
     expect(u.pendingCamera).toEqual({ datasetId: "kang", embedding: "X_pca", camera: { target: [3, 4, 0], zoom: 2.5 } });
     expect(u.pendingOverlay).toEqual({ datasetId: "kang", overlay: { type: "expression", gene: "CD14" } });
     expect(useSplitViewStore.getState().compareColumns).toEqual(["cell_type", "stim"]);
+    // The grid's page size and page come back after the comparison (which starts on page 1).
+    expect([useSplitViewStore.getState().panelsPerPage, useSplitViewStore.getState().page]).toEqual([4, 1]);
     const sel = useSelectionStore.getState();
     expect(sel.highlightedGroup).toEqual({ column: "cell_type", value: "CD14 Mono" });
     expect([...sel.selectedCellIndices!].sort((a, b) => a - b)).toEqual([2, 4, 99]);
@@ -312,6 +315,17 @@ describe("save then open on the same dataset", () => {
     await restoreSession({ ...session, selection: null, view: { ...session.view, split_by: null } });
     expect(useSelectionStore.getState().selectedCellIndices).toBeNull();
     expect(useSplitViewStore.getState().splitBy).toBeNull();
+  });
+
+  it("opens an older session without paging as six panels a page, page 1", async () => {
+    buildWorkspace("lasso");
+    const session = saveAndReset();
+    const view = { ...session.view };
+    delete view.panels_per_page;
+    delete view.grid_page;
+    await restoreSession({ ...session, view });
+    expect(useSplitViewStore.getState().compareColumns).toEqual(["cell_type", "stim"]);
+    expect([useSplitViewStore.getState().panelsPerPage, useSplitViewStore.getState().page]).toEqual([6, 0]);
   });
 });
 

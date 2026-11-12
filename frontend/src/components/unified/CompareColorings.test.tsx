@@ -117,15 +117,17 @@ describe("CompareColoringsControl", () => {
     expect(ticked.map((c) => c.closest("label")!.textContent)).toEqual(["sample2", "stim2"]);
   });
 
-  it("allows at most four columns and needs two", () => {
+  it("allows at most twelve columns and needs two", () => {
+    const extra = Array.from({ length: 9 }, (_, i) => ({ ...SAMPLE, name: `donor_${i}` }));
     useDatasetStore.setState({
-      currentDataset: dataset([STIM, CELL_TYPE, LEIDEN, SAMPLE, { ...SAMPLE, name: "donor" }]),
+      currentDataset: dataset([STIM, CELL_TYPE, LEIDEN, SAMPLE, ...extra]),
     });
     render(<CompareColoringsControl />);
     fireEvent.click(screen.getByRole("button", { name: /Compare/ }));
     const boxes = () => screen.getAllByRole("checkbox") as HTMLInputElement[];
+    expect(boxes()).toHaveLength(13);
     boxes().forEach((b) => !b.checked && !b.disabled && fireEvent.click(b));
-    expect(boxes().filter((b) => b.checked)).toHaveLength(4);
+    expect(boxes().filter((b) => b.checked)).toHaveLength(12);
     expect(boxes().filter((b) => b.disabled)).toHaveLength(1);
     boxes().forEach((b) => b.checked && fireEvent.click(b));
     fireEvent.click(boxes()[0]!);
@@ -156,7 +158,7 @@ describe("CompareColoringsGrid", () => {
       const table = tableFromArrays({
         x: Float32Array.from([0, 1, 2, 3, 4, 5]),
         y: Float32Array.from([0, 1, 2, 3, 4, 5]),
-        [column]: codes[column]!,
+        [column]: codes[column] ?? codes.leiden!,
       });
       return tableToIPC(table).slice().buffer;
     });
@@ -180,6 +182,34 @@ describe("CompareColoringsGrid", () => {
         />,
       ),
     );
+
+  it("pages up to twelve columns; a page shows and exports only its columns' legends", async () => {
+    const more = ["c2", "c3", "c4", "c5", "c6"];
+    useDatasetStore.setState({
+      currentDataset: dataset([CELL_TYPE, LEIDEN, ...more.map((name) => ({ ...LEIDEN, name }))]),
+      currentDatasetId: "ds1",
+    });
+    useSplitViewStore.setState({ panelsPerPage: 6, page: 0 });
+    render(
+      withQuery(
+        <CompareColoringsGrid
+          datasetId="ds1"
+          embedding="X_umap"
+          columns={["cell_type", "leiden", ...more]}
+          positions={positions}
+          dimensions={2}
+        />,
+      ),
+    );
+    await screen.findByTestId("deck");
+    expect(screen.getByText("Page 1 of 2")).toBeInTheDocument();
+    expect(screen.getAllByText("cell_type")).toHaveLength(2); // title + legend
+    fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+    expect((deckProps.current!.views as { id: string }[]).map((v) => v.id)).toEqual(["split-0"]);
+    expect(screen.getAllByText("c6")).toHaveLength(2);
+    expect(screen.queryAllByText("cell_type")).toHaveLength(0);
+    useSplitViewStore.setState({ page: 0 });
+  });
 
   it("draws every cell once per column, each panel in its own view, with a legend per column", async () => {
     renderGrid();

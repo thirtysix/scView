@@ -24,9 +24,11 @@ import {
   type CapturableDeck,
   type ScatterLegends,
 } from "@/lib/scatterExport";
+import { rasterizePanels, type SvgPanel } from "@/lib/scatterSvg";
 
 export const SPLIT_MIN_VALUES = 2;
-export const SPLIT_MAX_VALUES = 6;
+/** Most values a split shows; above six panels the grid pages (lib/gridPaging.ts). */
+export const SPLIT_MAX_VALUES = 24;
 /** Gap between panels, and the title band above each one, in CSS pixels. */
 export const SPLIT_GAP = 8;
 export const SPLIT_TITLE_H = 22;
@@ -46,7 +48,7 @@ const isCategorical = (c: ObsColumnInfo) =>
   c.dtype === "category" || c.dtype === "object" || c.dtype === "bool";
 
 /**
- * Categorical obs columns offered by the "Split by" control. Columns with 2–6
+ * Categorical obs columns offered by the "Split by" control. Columns with 2–24
  * values can be chosen; those with more come back disabled with the reason.
  * Single-value columns, and those over the backend's 100-value cap (no values
  * listed), are left out.
@@ -72,11 +74,11 @@ export function splitColumnOptions(columns: readonly ObsColumnInfo[]): SplitColu
 }
 
 // ---------------------------------------------------------------------------
-// Compare colourings: the same cells coloured by 2–4 columns, one panel each
+// Compare colourings: the same cells coloured by 2–12 columns, one panel each
 // ---------------------------------------------------------------------------
 
 export const COMPARE_MIN_COLUMNS = 2;
-export const COMPARE_MAX_COLUMNS = 4;
+export const COMPARE_MAX_COLUMNS = 12;
 
 export interface CompareColumnOption {
   name: string;
@@ -422,6 +424,53 @@ export function fitSplitViewState(
   };
 }
 
+/**
+ * The shared camera moved to a view of another size so it frames the same
+ * part of the embedding: the zoom shifts by the difference between the two
+ * sizes' fitted zooms (the all-panels export lays panels out at a new size).
+ */
+export function rescaleViewState(
+  viewState: Record<string, unknown>,
+  b: DataBounds,
+  dimensions: 2 | 3,
+  from: { width: number; height: number },
+  to: { width: number; height: number },
+): Record<string, unknown> {
+  const zoomOf = (w: number, h: number) => fitSplitViewState(b, dimensions, w, h).zoom as number;
+  const dz = zoomOf(to.width, to.height) - zoomOf(from.width, from.height);
+  if (!Number.isFinite(dz) || dz === 0) return { ...viewState };
+  const shift = (z: unknown) =>
+    typeof z === "number" ? z + dz : Array.isArray(z) ? z.map((v) => (typeof v === "number" ? v + dz : v)) : z;
+  const out: Record<string, unknown> = { ...viewState };
+  for (const k of ["zoom", "minZoom", "maxZoom"]) if (k in out) out[k] = shift(out[k]);
+  return out;
+}
+
+/**
+ * Every one of `n` panels on one sheet: the on-screen area grown by
+ * sqrt(n / panels a page is laid out for), so each panel stays about its size
+ * on screen, laid out by splitGridLayout and trimmed to the panels.
+ */
+export function splitSheetLayout(
+  n: number,
+  pageLayoutCount: number,
+  width: number,
+  height: number,
+  aspect = 1,
+): { width: number; height: number; grid: SplitGrid } {
+  const s = Math.sqrt(Math.max(1, n) / Math.max(1, pageLayoutCount));
+  const grid = splitGridLayout(n, Math.round(width * s), Math.round(height * s), aspect);
+  const first = grid.cells[0];
+  if (!first) return { width: 0, height: 0, grid };
+  const cellW = first.view.width;
+  const cellH = first.view.y + first.view.height - first.title.y;
+  return {
+    width: grid.cols * cellW + (grid.cols - 1) * SPLIT_GAP,
+    height: grid.rows * cellH + (grid.rows - 1) * SPLIT_GAP,
+    grid,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // deck.gl ids: view `split-<i>` draws the context layer and layer `split-fg-<i>`
 // ---------------------------------------------------------------------------
@@ -518,4 +567,25 @@ export function downloadSplitPng(
     deck.redraw("png export done");
   }
   downloadCanvasPng(image, opts.filename);
+}
+
+/**
+ * Save panels laid out off screen (the all-panels sheet) as one PNG: the
+ * panels painted from their projected points (lib/scatterSvg.ts rasterizePanels,
+ * the same panels the SVG / PDF draw), then the shared legend beside them, as
+ * downloadSplitPng does for the live grid. No WebGL: the on-screen grid and its
+ * page are left as they are.
+ */
+export function downloadSplitSheetPng(opts: {
+  width: number;
+  height: number;
+  panels: readonly SvgPanel[];
+  legend: ScatterLegends;
+  colormap: AnyColormapName;
+  filename: string;
+  note?: string;
+}): void {
+  const scale = captureScale(opts.width, opts.height);
+  const sheet = rasterizePanels(opts.panels, opts.width, opts.height, scale);
+  downloadCanvasPng(composeScatterPng(sheet, opts.legend, scale, opts.colormap, opts.note), opts.filename);
 }

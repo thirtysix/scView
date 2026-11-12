@@ -1,8 +1,9 @@
 /**
  * SVG (and, through lib/pdfExport.ts, PDF) export of the deck.gl embedding
  * scatter and of the split / compare grids: the points as vector circles in
- * the order, colours, size and opacity drawn on screen, the group labels, axis
- * names, a title and the same legend the PNG gets (lib/scatterExport.ts).
+ * the order, colours, size and opacity drawn on screen, the tissue plot's cell
+ * outlines over them (lib/outlineSvg.ts), the group labels, axis names, a
+ * title and the same legend the PNG gets (lib/scatterExport.ts).
  *
  * Above HYBRID_THRESHOLD points a vector file gets large and slow to open, so
  * the points can instead be one embedded high-resolution PNG with every piece
@@ -23,6 +24,7 @@ import {
 } from "@/lib/scatterExport";
 import { prettyEmbeddingLabel } from "@/lib/formatting";
 import { LABEL_SIZE } from "@/lib/centroidLabels";
+import { outlinesSvg, type SvgOutlines } from "@/lib/outlineSvg";
 
 /** Above this many drawn points the export defaults to points as an image. */
 export const HYBRID_THRESHOLD = 50_000;
@@ -71,6 +73,8 @@ export interface SvgPanel {
   title?: { box: SvgRect; label: string; subtitle?: string };
   /** Thin frame around the view (grids) */
   frame?: boolean;
+  /** Segmented cell outlines over the points, as on the tissue plot (lib/outlineSvg.ts) */
+  outlines?: SvgOutlines | null;
 }
 
 /** Draws a panel's point sets into an image of its view, returning a data URL. */
@@ -346,6 +350,7 @@ export function buildScatterSvg(o: ScatterSvgOptions): ScatterSvg {
       for (const set of p.sets) circles += circlesSvg(set, p.view, out);
     }
     out.push("</g>");
+    if (p.outlines) outlinesSvg(p.outlines, `panel-clip-${i}`, out);
     if (p.labels?.length) labelsSvg(p.labels, out);
     if (p.frame) {
       out.push(
@@ -478,3 +483,94 @@ export const canvasRasterizer: Rasterizer = (sets, width, height, scale) => {
   }
   return canvas.toDataURL("image/png");
 };
+
+/** Paint point sets as circles on a 2D context, in order (what canvasRasterizer draws). */
+export function paintPointSets(ctx: CanvasRenderingContext2D, sets: readonly SvgPointSet[]): void {
+  for (const set of sets) {
+    const n = set.xy.length / 2;
+    const r = set.radius;
+    const one = set.colors instanceof Uint8Array ? null : set.colors;
+    if (one) ctx.fillStyle = `rgba(${one[0]},${one[1]},${one[2]},${one[3] / 255})`;
+    for (let i = 0; i < n; i++) {
+      if (!one) {
+        const c = set.colors as Uint8Array;
+        if (c[i * 4 + 3] === 0) continue;
+        ctx.fillStyle = `rgba(${c[i * 4]},${c[i * 4 + 1]},${c[i * 4 + 2]},${c[i * 4 + 3]! / 255})`;
+      }
+      ctx.beginPath();
+      ctx.arc(set.xy[i * 2]!, set.xy[i * 2 + 1]!, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+}
+
+const CANVAS_TITLE_FONT = "600 13px Inter, system-ui, sans-serif";
+const CANVAS_TEXT_FONT = "12px Inter, system-ui, sans-serif";
+
+/**
+ * Panels painted on a canvas of `width` x `height` CSS px at `scale` (white is
+ * left to the caller): each panel's title and subtitle, its points clipped to
+ * its view, its group labels with a white halo, and its frame. What the SVG
+ * draws, as pixels: the all-panels PNG of a paged grid, drawn without WebGL.
+ */
+export function rasterizePanels(
+  panels: readonly SvgPanel[],
+  width: number,
+  height: number,
+  scale: number,
+): HTMLCanvasElement {
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(width * scale));
+  canvas.height = Math.max(1, Math.round(height * scale));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("2D canvas not available");
+  ctx.scale(scale, scale);
+  ctx.textBaseline = "middle";
+  for (const p of panels) {
+    if (p.title) {
+      const { box, label, subtitle } = p.title;
+      const y = box.y + box.height / 2;
+      ctx.font = CANVAS_TITLE_FONT;
+      ctx.fillStyle = TEXT;
+      ctx.fillText(label, box.x + 4, y);
+      if (subtitle) {
+        const w = ctx.measureText(label).width;
+        ctx.font = CANVAS_TEXT_FONT;
+        ctx.fillStyle = MUTED;
+        ctx.fillText(subtitle, box.x + 4 + w + 8, y);
+      }
+    }
+    const { x, y, width: w, height: h } = p.view;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.beginPath();
+    ctx.rect(0, 0, w, h);
+    ctx.clip();
+    paintPointSets(ctx, p.sets);
+    ctx.restore();
+    if (p.labels?.length) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.font = `bold ${LABEL_SIZE}px Inter, system-ui, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.lineJoin = "round";
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = "#ffffff";
+      ctx.fillStyle = "#0f172a";
+      // Faded labels first, under the others, as the SVG draws them.
+      for (const l of [...p.labels.filter((l) => l.faded), ...p.labels.filter((l) => !l.faded)]) {
+        const text = l.text.length > 32 ? `${l.text.slice(0, 31)}…` : l.text;
+        ctx.globalAlpha = l.faded ? 0.3 : 1;
+        ctx.strokeText(text, l.x, l.y);
+        ctx.fillText(text, l.x, l.y);
+      }
+      ctx.restore();
+    }
+    if (p.frame) {
+      ctx.strokeStyle = FRAME;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+    }
+  }
+  return canvas;
+}

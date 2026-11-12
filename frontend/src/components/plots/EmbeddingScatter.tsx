@@ -41,7 +41,8 @@ import type { SpatialLibrary } from "@/api/types";
 import { spatialImageUrl } from "@/api/spatial";
 import { imageBounds, imageResFor, spotRadius, wantsHires } from "@/lib/spatial";
 import {
-  MIN_EDGE_PIXELS,
+  EDGE_RGBA,
+  drawsEdges,
   hideCovered,
   meshColors,
   outlineNote,
@@ -50,6 +51,7 @@ import {
   type CellOutlines,
   type WorldRect,
 } from "@/lib/cellOutlines";
+import { figureOutlines, omittedOutlinesNote } from "@/lib/outlineSvg";
 
 /** After this long without a camera change the view counts as settled (outlines, transcripts). */
 const SETTLE_MS = 120;
@@ -532,23 +534,28 @@ export function EmbeddingScatter({
     }
   }, [initialViewState]);
 
-  // When initial view state changes (new data), reset (to a restored camera if
-  // there is one; the fit's zoom limits still apply). When only the legend
-  // changed, the fit follows it only while the camera is still the fit.
-  const lastBaseRef = useRef(baseViewState);
-  useEffect(() => {
-    if (!initialViewState) return;
-    const newData = lastBaseRef.current !== baseViewState;
-    lastBaseRef.current = baseViewState;
-    if (!newData && !fittedRef.current) return;
-    fittedRef.current = !restoredRef.current;
-    setViewState({ ...initialViewState, ...restoredRef.current });
-  }, [initialViewState, baseViewState]);
-
-  // Another dataset or embedding: the restored camera meant the old one.
+  // Another dataset or embedding: the restored camera meant the old one. (Before
+  // the fit below, which runs on the same change.)
   useEffect(() => {
     restoredRef.current = null;
   }, [cameraKey]);
+
+  // New data (positions, dimensions, dataset or embedding): reset to the fit (to a
+  // restored camera if there is one; the fit's zoom limits still apply). When only
+  // the plot's size or the legend changed (the toolbar wrapped, a pane resized),
+  // the fit follows only while the camera is still the fit: a camera the user
+  // moved stays where it is.
+  const lastDataRef = useRef<{ positions: Float32Array | null; dimensions: number; cameraKey: string } | null>(null);
+  useEffect(() => {
+    if (!initialViewState) return;
+    const last = lastDataRef.current;
+    const newData =
+      !last || last.positions !== positions || last.dimensions !== dimensions || last.cameraKey !== cameraKey;
+    lastDataRef.current = { positions, dimensions, cameraKey };
+    if (!newData && !fittedRef.current) return;
+    fittedRef.current = !restoredRef.current;
+    setViewState({ ...initialViewState, ...restoredRef.current });
+  }, [initialViewState, positions, dimensions, cameraKey]);
 
   const onRestoreRef = useRef(onRestoreViewState);
   onRestoreRef.current = onRestoreViewState;
@@ -735,7 +742,7 @@ export function EmbeddingScatter({
       autoHighlight: true,
       highlightColor: [255, 255, 0, 180],
     });
-    if (mesh.meanSize * (settled?.scale ?? 0) < MIN_EDGE_PIXELS) return [fill];
+    if (!drawsEdges(mesh, settled?.scale ?? 0)) return [fill];
     const stride = 16;
     return [
       fill,
@@ -748,7 +755,7 @@ export function EmbeddingScatter({
             getTargetPosition: { value: mesh.edges, size: 2, stride, offset: 8 },
           },
         },
-        getColor: background === "dark" ? [255, 255, 255, 110] : [30, 41, 59, 130],
+        getColor: [...EDGE_RGBA[background === "dark" ? "dark" : "light"]],
         getWidth: 1,
         widthUnits: "pixels" as const,
         pickable: false,
@@ -828,17 +835,14 @@ export function EmbeddingScatter({
       filename: exportFilename(useDatasetStore.getState().currentDataset?.name, exportName),
       note:
         [
-          mesh && outlinePlan
-            ? outlineNote(outlinePlan, outlineKind)
-            : isSampled
-              ? `Showing ${renderCount.toLocaleString()} of ${totalCells.toLocaleString()} ${unit}s (sampled)`
-              : null,
+          // The on-screen outline status is a hint for the viewer, not a figure caption.
+          isSampled ? `Showing ${renderCount.toLocaleString()} of ${totalCells.toLocaleString()} ${unit}s (sampled)` : null,
           exportNote,
         ]
           .filter(Boolean)
           .join(" ") || undefined,
     });
-  }, [exportLegend, continuousColormap, exportName, isSampled, renderCount, totalCells, unit, mesh, outlinePlan, outlineKind, exportNote, exportOverlayLegend]);
+  }, [exportLegend, continuousColormap, exportName, isSampled, renderCount, totalCells, unit, exportNote, exportOverlayLegend]);
 
   // SVG / PDF: the drawn points projected with the camera shown, in their draw
   // order and colours, the labels where they are on screen (lib/scatterSvg.ts).
@@ -848,7 +852,10 @@ export function EmbeddingScatter({
       const view = labelViewOf(views, containerSize.width, containerSize.height, viewState);
       if (!view) return;
       await nextFrame();
-      const projected = projectPoints(view.project, renderPositions, stride, renderColors);
+      // The outlines drawn on screen, over points with their cells hidden; too many: points only.
+      const figOutlines = mesh ? figureOutlines(mesh, colorArray, view.project, view, 2 ** Number(viewState.zoom ?? 0)) : null;
+      const drawnColors = figOutlines?.outlines && pointColors ? pointColors : renderColors;
+      const projected = projectPoints(view.project, renderPositions, stride, drawnColors);
       const legendTitle = exportLegend?.title;
       const plotName = embedding ? prettyEmbeddingLabel(embedding) : "";
       const figure = buildScatterSvg({
@@ -865,24 +872,30 @@ export function EmbeddingScatter({
               },
             ],
             labels: placedLabels ? svgLabels(placedLabels, view.project, highlightCategory) : [],
+            outlines: figOutlines?.outlines ?? null,
           },
         ],
         legend: exportLegend,
         colormap: continuousColormap,
         title: exportTitle ?? [plotName, legendTitle].filter(Boolean).join(", coloured by "),
         axes: dimensions === 3 ? null : (axisLabels ?? embeddingAxisLabels(embedding)),
-        notes: isSampled
-          ? [`Showing ${renderCount.toLocaleString()} of ${totalCells.toLocaleString()} ${unit}s (sampled)`]
-          : [],
+        notes: figOutlines?.omitted
+          ? [omittedOutlinesNote(figOutlines, outlineKind)]
+          : isSampled
+            ? [`Showing ${renderCount.toLocaleString()} of ${totalCells.toLocaleString()} ${unit}s (sampled)`]
+            : [],
         mode,
         rasterize: canvasRasterizer,
       });
       await saveFigure(format, figure, exportFilename(useDatasetStore.getState().currentDataset?.name, exportName));
+      // Saved, but say so in the menu: the outlines on screen are not in the file.
+      if (figOutlines?.omitted) throw new Error(`Saved. ${omittedOutlinesNote(figOutlines, outlineKind)}`);
     },
     [
       viewState, renderPositions, renderColors, views, containerSize.width, containerSize.height, stride,
       pointSize, placedLabels, highlightCategory, exportLegend, continuousColormap, exportTitle, embedding,
       dimensions, axisLabels, isSampled, renderCount, totalCells, exportName, spotR, unit,
+      mesh, colorArray, pointColors, outlineKind,
     ],
   );
 
@@ -986,8 +999,6 @@ export function EmbeddingScatter({
           figureNote={
             overlayLayers?.length
               ? (overlayFigureNote ?? "Without the graph drawn over the points (the PNG has it).")
-              : mesh
-                ? "Points, without the outlines (the PNG has them)."
               : imageLayers.length
                 ? "Without the tissue image (the PNG has it)."
                 : undefined

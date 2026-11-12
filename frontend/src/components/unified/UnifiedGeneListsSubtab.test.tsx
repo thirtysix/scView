@@ -110,13 +110,13 @@ describe("UnifiedGeneListsSubtab", () => {
     expect([v.markerGenes, v.markerView, v.activePanel]).toEqual([["Lyz2", "Klf1", "Gata1"], "heatmap", "markers"]);
   });
 
-  it("caps the grid at nine genes and the plots at 300, and says so", async () => {
+  it("caps the grid at 24 genes and the plots at 300, and says so", async () => {
     const big = MOUSE_GENES.slice(5, 355); // 350 present genes
     useGeneListsStore.getState().create("Big", big);
     renderTab();
     await screen.findByText(/use the first 300 of the 350 genes/);
     fireEvent.click(screen.getByRole("button", { name: "Feature grid" }));
-    expect(useSplitViewStore.getState().geneGrid!.genes).toEqual(big.slice(0, 9));
+    expect(useSplitViewStore.getState().geneGrid!.genes).toEqual(big.slice(0, 24));
     fireEvent.click(screen.getByRole("button", { name: "Dot plot" }));
     expect(useViewStore.getState().markerGenes).toEqual(big.slice(0, 300));
   });

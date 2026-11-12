@@ -57,7 +57,7 @@ function useStableList<T>(list: T[]): T[] {
 }
 
 /**
- * The same cells coloured by 2–4 columns side by side (two annotations, or an
+ * The same cells coloured by 2–12 columns side by side (two annotations, or an
  * annotation and a clustering), on one camera, with each column's legend in the
  * legend column. Built on MultiPanelScatter like the split-by grid, so it costs
  * one WebGL context; a lasso in any panel selects the cells under it.
@@ -234,24 +234,26 @@ export function CompareColoringsGrid({
       lassoActive={lasso.lassoActive}
       onLasso={lasso.onLasso}
       exportLegend={exportLegend}
+      legendPerPanel
       exportFilename={exportFilename(
         dataset?.name,
         `${prettyEmbeddingLabel(embedding || "embedding")}_compare_${columns.join("_")}`,
       )}
       embedding={embedding}
-      legend={
+      // The legends of the page's columns (a paged comparison shows the others on their pages).
+      legend={({ start, end }) => (
         <div className="flex flex-col gap-3 p-2">
-          {columns.map((column, i) => (
+          {columns.slice(start, end).map((column, k) => (
             <ColorLegend
               key={column}
               type="categorical"
-              categories={categories[i]}
-              categoryColors={swatches[i]}
+              categories={categories[start + k]}
+              categoryColors={swatches[start + k]}
               label={prettyObsLabel(column)}
             />
           ))}
         </div>
-      }
+      )}
     />
   );
 }
