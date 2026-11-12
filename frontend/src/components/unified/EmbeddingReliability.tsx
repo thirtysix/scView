@@ -13,6 +13,7 @@ import { HoverTip } from "@/components/common/InfoTip";
 import { Help } from "@/components/common/Help";
 import { embeddingDims } from "@/hooks/useEmbedding";
 import { useEmbeddingReady } from "@/hooks/useEmbeddingReady";
+import { useDialogFocus } from "@/hooks/useDialogFocus";
 import { decodeArrowBuffer } from "@/lib/arrow";
 import {
   applyReliability,
@@ -213,6 +214,9 @@ export function EmbeddingReliabilityPanel({
   const [sort, setSort] = useState<{ key: GroupSortKey; desc: boolean } | null>(null);
   const [rowError, setRowError] = useState<string | null>(null);
   const codes = useRef<{ datasetId: string; column: string; codes: ArrayLike<number> } | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  // Used alongside the plot: focus moves in and Escape closes, but Tab is not held.
+  useDialogFocus(dialogRef, onClose, { trap: false });
 
   const groupColumns = useMemo(
     () =>
@@ -287,6 +291,7 @@ export function EmbeddingReliabilityPanel({
 
   return (
     <div
+      ref={dialogRef}
       role="dialog"
       aria-label="Plot reliability"
       className="fixed right-4 top-20 z-40 flex max-h-[calc(100vh-6rem)] w-[24rem] max-w-[calc(100vw-2rem)] flex-col gap-2 overflow-y-auto rounded-xl border border-slate-200 bg-white p-3 text-xs shadow-xl"

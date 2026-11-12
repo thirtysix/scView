@@ -4,6 +4,7 @@ import { buildShareUrl, describeSharedView, readShareHash } from "@/lib/shareUrl
 import { captureSession } from "@/lib/sessionRestore";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { errorMessage } from "@/lib/errorMessage";
+import { DialogBox } from "@/components/common/DialogBox";
 
 interface Made {
   url: string;
@@ -105,9 +106,9 @@ export function ShareLinkButton() {
       </span>
 
       {open && (
-        <div
-          role="dialog"
-          aria-label="Share link"
+        <DialogBox
+          label="Share link"
+          onClose={close}
           className="absolute right-0 z-50 mt-1 w-[26rem] space-y-2 rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-700 shadow-lg"
         >
           <div className="flex items-start gap-2">
@@ -161,7 +162,7 @@ export function ShareLinkButton() {
               </p>
             </>
           )}
-        </div>
+        </DialogBox>
       )}
     </div>
   );

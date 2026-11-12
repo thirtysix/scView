@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 
 import type { DatasetInfo } from "@/api/types";
 import { readShareHash } from "@/lib/shareUrl";
@@ -126,5 +126,22 @@ describe("ShareLinkButton", () => {
     await screen.findByRole("dialog", { name: "Share link" });
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "Share link" })).not.toBeInTheDocument();
+  });
+
+  it("takes focus, keeps Tab inside, and gives focus back to its button on Escape", async () => {
+    render(<ShareLinkButton />);
+    openKang();
+    copyButton().focus();
+    await act(async () => fireEvent.click(copyButton()));
+    const dialog = await screen.findByRole("dialog", { name: "Share link" });
+    const close = within(dialog).getByRole("button", { name: "Close" });
+    expect(close).toHaveFocus();
+    fireEvent.keyDown(close, { key: "Tab", shiftKey: true });
+    expect(linkBox()).toHaveFocus(); // the last control
+    fireEvent.keyDown(linkBox(), { key: "Tab" });
+    expect(close).toHaveFocus();
+    fireEvent.keyDown(close, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Share link" })).not.toBeInTheDocument();
+    expect(copyButton()).toHaveFocus();
   });
 });

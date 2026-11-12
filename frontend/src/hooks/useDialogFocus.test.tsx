@@ -23,4 +23,22 @@ describe("useDialogFocus", () => {
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Close" }));
     expect(screen.queryByRole("tooltip")).toBeNull();
   });
+
+  it("puts first focus on `initial` when given (a confirm's Cancel)", () => {
+    function Confirm() {
+      const ref = useRef<HTMLDivElement>(null);
+      const cancel = useRef<HTMLButtonElement>(null);
+      useDialogFocus(ref, () => {}, { initial: cancel });
+      return (
+        <div ref={ref}>
+          <button type="button">Delete</button>
+          <button type="button" ref={cancel}>
+            Cancel
+          </button>
+        </div>
+      );
+    }
+    render(<Confirm />);
+    expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
+  });
 });

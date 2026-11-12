@@ -241,6 +241,22 @@ describe("GatesPanel", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Deleted “ISG-high”, “Inner”.");
   });
 
+  it("the delete confirm takes focus on Cancel, keeps Tab inside, and Escape cancels it", async () => {
+    await buildTree();
+    const trash = within(row("Monocytes")).getByRole("button", { name: "Delete Monocytes" });
+    trash.focus();
+    fireEvent.click(trash);
+    const dialog = screen.getByRole("dialog", { name: "Delete Monocytes" });
+    const cancel = within(dialog).getByRole("button", { name: "Cancel" });
+    expect(cancel).toHaveFocus(); // not a delete button: Enter must not delete
+    fireEvent.keyDown(cancel, { key: "Tab" });
+    expect(within(dialog).getAllByRole("button")[0]).toHaveFocus();
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Delete Monocytes" })).not.toBeInTheDocument();
+    expect(screen.getByTestId("gate-row-Monocytes")).toBeInTheDocument();
+    expect(trash).toHaveFocus();
+  });
+
   it("a leaf with nothing built from it is deleted straight away", async () => {
     await buildTree();
     fireEvent.click(within(row("ISG-high")).getByRole("button", { name: "Delete ISG-high" }));
