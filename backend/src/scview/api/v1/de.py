@@ -953,8 +953,9 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
     # Replicates nested in people (a sample column, several samples per donor), and few people.
     obs = adata.obs
     rep = repeated_donors(obs, key, [mask_a, mask_b], body.donor_key,
-                          exclude={c for c in (body.split_by, body.within_column) if c})
-    rep_warnings = [rep["message"]] if rep else []
+                          exclude={c for c in (body.split_by, body.within_column) if c},
+                          covariates=res.covariates)
+    rep_warnings = [rep["message"]] if rep and rep["message"] else []
     people = {body.group_a: res.n_samples_a, body.group_b: res.n_samples_b}
     if rep:
         person = obs[rep["donor_key"]]

@@ -617,7 +617,8 @@ def composition_test(
     rep = repeated_donors(obs, sample_key, sides, donor_key, exclude={condition_key, group_key})
     if rep:
         result.repeated_donors = rep
-        result.warnings.append(rep["message"])
+        if rep["message"]:
+            result.warnings.append(rep["message"])
         person = _labels(obs, rep["donor_key"])
         people = {k: int(person[side].nunique()) for k, side in zip(chosen, sides)}
     else:
