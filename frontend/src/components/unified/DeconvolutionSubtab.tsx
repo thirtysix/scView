@@ -3,7 +3,7 @@ import { Download, Loader2 } from "lucide-react";
 import Plot from "@/components/plots/Plot";
 import { Caption } from "@/components/common/Caption";
 import { Help } from "@/components/common/Help";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
 import { DeconvolutionCheck } from "@/components/unified/DeconvolutionCheck";
 import {
@@ -41,9 +41,6 @@ export function DeconvolutionSubtab() {
   const datasetId = useDatasetStore((s) => s.currentDatasetId);
   const palette = useSettingsStore((s) => s.categoricalPalette);
   const methodId = useId();
-  const typesId = useId();
-  const donorsId = useId();
-  const cellsId = useId();
   const [defaults, setDefaults] = useState<DeconvDefaults | null>(null);
   const [result, setResult] = useState<DeconvResult | null>(null);
   const [celltype, setCelltype] = useState("");
@@ -123,17 +120,13 @@ export function DeconvolutionSubtab() {
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-1.5 text-xs font-medium text-slate-700">
-        Bulk deconvolution
-        <Help id="deconvolution.about" label="About bulk deconvolution" width={300} />
+        <Help id="deconvolution.about">Bulk deconvolution</Help>
       </div>
 
       <div className="flex flex-wrap items-end gap-2 text-xs">
-        <div className="flex flex-col gap-0.5 text-[11px] text-slate-500">
-          <span className="flex items-center gap-1">
-            <label htmlFor={typesId}>Cell types</label>
-            <Help id="deconvolution.celltypes" label="About the cell types" />
-          </span>
-          <select id={typesId} value={celltype} onChange={(e) => setCelltype(e.target.value)} className={SELECT}>
+        <label className="flex flex-col gap-0.5 text-[11px] text-slate-500">
+          <Help id="deconvolution.celltypes">Cell types</Help>
+          <select value={celltype} onChange={(e) => setCelltype(e.target.value)} className={SELECT}>
             {!celltype && <option value="">(choose)</option>}
             {columns.map((c) => (
               <option key={c.name} value={c.name}>
@@ -141,13 +134,10 @@ export function DeconvolutionSubtab() {
               </option>
             ))}
           </select>
-        </div>
-        <div className="flex flex-col gap-0.5 text-[11px] text-slate-500">
-          <span className="flex items-center gap-1">
-            <label htmlFor={donorsId}>Donors</label>
-            <Help id="deconvolution.donors" label="About the donor column" />
-          </span>
-          <select id={donorsId} value={donor} onChange={(e) => setDonor(e.target.value)} className={SELECT}>
+        </label>
+        <label className="flex flex-col gap-0.5 text-[11px] text-slate-500">
+          <Help id="deconvolution.donors">Donors</Help>
+          <select value={donor} onChange={(e) => setDonor(e.target.value)} className={SELECT}>
             <option value={AUTO_DONOR}>
               Auto{defaults?.donor_column ? ` (${prettyObsLabel(defaults.donor_column)})` : " (none found)"}
             </option>
@@ -160,16 +150,19 @@ export function DeconvolutionSubtab() {
                 </option>
               ))}
           </select>
-        </div>
+        </label>
         <div className="flex flex-col gap-0.5 text-[11px] text-slate-500">
-          <span className="flex items-center gap-1">
-            <label htmlFor={methodId}>Method</label>
-            <InfoTip label="About the methods" width={300}>
-              Weighted (MuSiC-style, Wang 2019): every gene, weighted down where the donors of this dataset
-              disagree, so it needs {defaults?.min_donors_weighted ?? 2}+ donors. NNLS: the marker genes of each
-              type, equally weighted; works without donors. Auto picks weighted when the donors allow it.
-            </InfoTip>
-          </span>
+          <label htmlFor={methodId}>
+            <HoverTip
+              tip={<>
+                Weighted (MuSiC-style, Wang 2019): every gene, weighted down where the donors of this dataset
+                disagree, so it needs {defaults?.min_donors_weighted ?? 2}+ donors. NNLS: the marker genes of each
+                type, equally weighted; works without donors. Auto picks weighted when the donors allow it.
+              </>}
+            >
+              Method
+            </HoverTip>
+          </label>
           <select
             id={methodId}
             value={method}
@@ -182,12 +175,9 @@ export function DeconvolutionSubtab() {
           </select>
         </div>
         {refColumns.length > 0 && (
-          <div className="flex flex-col gap-0.5 text-[11px] text-slate-500">
-            <span className="flex items-center gap-1">
-              <label htmlFor={cellsId}>Reference cells</label>
-              <Help id="deconvolution.reference_cells" label="About the reference cells" />
-            </span>
-            <select id={cellsId} value={cells} onChange={(e) => setCells(e.target.value)} className={SELECT}>
+          <label className="flex flex-col gap-0.5 text-[11px] text-slate-500">
+            <Help id="deconvolution.reference_cells">Reference cells</Help>
+            <select value={cells} onChange={(e) => setCells(e.target.value)} className={SELECT}>
               <option value="">All cells</option>
               {refColumns.map((c) => (
                 <optgroup key={c.column} label={prettyObsLabel(c.column)}>
@@ -199,7 +189,7 @@ export function DeconvolutionSubtab() {
                 </optgroup>
               ))}
             </select>
-          </div>
+          </label>
         )}
       </div>
       {refColumns.length > 0 && (
@@ -245,7 +235,10 @@ export function DeconvolutionSubtab() {
       {result && (
         <div className="space-y-2" data-testid="deconv-result">
           <Caption n={[{ value: result.n_samples, unit: "bulk samples" }, { value: result.types.length, unit: "cell types" }]}>
-            <Help id="deconvolution.result" label="How to read the fractions" /> {result.filename}: {result.method_name}, reference {prettyObsLabel(result.celltype_column)} (
+            <Help id="deconvolution.result">
+              {result.filename}: {result.method_name}
+            </Help>
+            , reference {prettyObsLabel(result.celltype_column)} (
             {result.n_reference_cells.toLocaleString()} cells
             {result.n_reference_donors ? `, ${result.n_reference_donors} donors in ${prettyObsLabel(result.donor_column)}` : ""}
             {result.reference_cells
@@ -279,10 +272,11 @@ export function DeconvolutionSubtab() {
                     : "text-slate-500 hover:text-slate-700"
                 }`}
               >
-                {k === "cell" ? "Cell fractions" : "RNA fractions"}
+                <Help id="deconvolution.fractions" width={260}>
+                  {k === "cell" ? "Cell fractions" : "RNA fractions"}
+                </Help>
               </button>
             ))}
-            <Help id="deconvolution.fractions" label="Cell or RNA fractions" width={260} />
             <a
               href={deconvolutionCsvUrl(datasetId, result.result_id)}
               download

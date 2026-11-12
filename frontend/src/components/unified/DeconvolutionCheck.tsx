@@ -84,8 +84,7 @@ export function DeconvolutionCheck({
   return (
     <section className="space-y-2 rounded-lg border border-slate-200 p-2" aria-label="Self-check">
       <div className="flex items-center gap-1.5 text-xs font-medium text-slate-700">
-        Self-check
-        <Help id="deconvolution.check" label="About the self-check" width={300} />
+        <Help id="deconvolution.check">Self-check</Help>
       </div>
       <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
         <button
@@ -199,7 +198,10 @@ export function DeconvolutionCheck({
               { value: check.n_mixtures, unit: "mixtures each" },
             ]}
           >
-            <Help id="deconvolution.check_read" label="How to read the self-check" /> Reference {prettyObsLabel(check.celltype_column)} by {prettyObsLabel(check.donor_column)}. Truth against
+            <Help id="deconvolution.check_read">
+              Reference {prettyObsLabel(check.celltype_column)} by {prettyObsLabel(check.donor_column)}.
+            </Help>{" "}
+            Truth against
             estimate for {check.method_names[shownMethod] ?? shownMethod}, each point one cell type in one mixture or
             held-out donor
             {check.points_capped ? ` (a sample of the ${(check.n_points[shownMethod] ?? 0).toLocaleString()} points)` : ""}. Points on

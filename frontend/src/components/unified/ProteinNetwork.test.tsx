@@ -9,6 +9,7 @@ vi.mock("@/api/ppi", async (orig) => ({
 }));
 
 import { ProteinNetwork } from "./ProteinNetwork";
+import { hoverTip, unhover } from "@/test/hoverTip";
 
 globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
 
@@ -34,12 +35,13 @@ describe("ProteinNetwork", () => {
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
   });
 
-  it("labels its settings and explains them from the help catalog", () => {
+  it("labels its settings and explains them from the help catalog", async () => {
     render(<ProteinNetwork datasetId="d1" sources={[{ value: "de:r1", label: "STIM" }]} />);
     expect(screen.getByLabelText("Top genes")).toHaveValue("100");
     expect(screen.getByLabelText("Minimum score")).toHaveValue("400");
-    fireEvent.mouseEnter(screen.getByRole("button", { name: "About the STRING score" }));
-    expect(screen.getByRole("tooltip")).toHaveTextContent(/confidence that an interaction is real/);
+    expect(await hoverTip(screen.getByText("Minimum score"))).toMatch(/confidence that an interaction is real/);
+    unhover(screen.getByText("Minimum score"));
+    expect(await hoverTip(screen.getByText("Protein network"))).toMatch(/physically interact in STRING/);
   });
 
   it("builds the network on request and lists every protein in a keyboard table", async () => {

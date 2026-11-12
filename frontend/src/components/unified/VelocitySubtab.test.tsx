@@ -21,6 +21,7 @@ vi.mock("@/hooks/useEmbedding", () => ({ useEmbedding: () => ({ dimensions: 2 })
 vi.mock("@/components/plots/Plot", () => ({ default: () => <div data-testid="phase-plot" /> }));
 
 import { VelocitySubtab } from "./VelocitySubtab";
+import { hoverTip, unhover } from "@/test/hoverTip";
 
 const base = {
   methods: ["stochastic", "steady_state"],
@@ -102,6 +103,21 @@ describe("VelocitySubtab", () => {
     expect(useUnifiedViewStore.getState().velocityArrows.on).toBe(false);
     fireEvent.click(screen.getByText("Colour by confidence"));
     expect(useSettingsStore.getState().colorBy).toBe("velocity_confidence");
+
+    // Tips open on the labels themselves; the labels still name their controls.
+    expect(document.querySelector("[data-infotip]")).toBeNull();
+    const tip = async (el: Element) => {
+      const t = await hoverTip(el);
+      unhover(el);
+      return t;
+    };
+    expect(await tip(screen.getByText("Model"))).toMatch(/Steady state fits each gene's ratio/);
+    expect(await tip(screen.getByText("Neighbours"))).toMatch(/neighbouring cells each cell's counts are averaged/);
+    expect(await tip(screen.getByText("Arrows on the plot"))).toMatch(/Scale sets their length/);
+    expect(await tip(screen.getByText("Phase portrait"))).toMatch(/The red line is the fitted steady-state ratio/);
+    expect(await tip(screen.getByText("STARsolo files"))).toMatch(/spliced and unspliced reads/);
+    expect(screen.getByLabelText("Neighbours")).toBeTruthy();
+    expect(screen.getByLabelText("Top genes")).toBeTruthy();
   });
 
   it("says when the cells changed and draws nothing, and on 3D says why no arrows", async () => {

@@ -4,7 +4,7 @@ import { Download, Loader2, Play, Search, Square } from "lucide-react";
 import type { Data, PlotMouseEvent } from "plotly.js";
 import Plot from "@/components/plots/Plot";
 import { Help } from "@/components/common/Help";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import {
   communicationCsvUrl,
   getCommunicationOptions,
@@ -45,6 +45,13 @@ const VIEWS: { id: View; label: string }[] = [
   { id: "heatmap", label: "Heatmap" },
   { id: "roles", label: "Roles" },
 ];
+/** A view button's label, with how to read that view on hover. */
+function ViewLabel({ view }: { view: { id: View; label: string } }) {
+  if (view.id === "dot") return <Help id="communication.dot">{view.label}</Help>;
+  if (view.id === "circle") return <Help id="communication.circle">{view.label}</Help>;
+  if (view.id === "heatmap") return <Help id="communication.heatmap">{view.label}</Help>;
+  return <Help id="communication.roles">{view.label}</Help>;
+}
 const TABLE_LIMIT = 200;
 /** Circle plot: edges under this share of the strongest are left out (a hairball otherwise). */
 const CIRCLE_MIN_SHARE = 0.1;
@@ -175,43 +182,46 @@ export function UnifiedCommunicationSubtab({ groupByColumn }: Props) {
   const top = (
     <>
       <div className="flex items-center justify-between">
-        <span className="text-xs font-medium text-slate-600">Ligand-receptor communication</span>
-        <InfoTip label="About cell-cell communication" align="right">
-          For every sender group, receiver group and ligand-receptor pair in LIANA&apos;s consensus
-          resource (human, or mouse for a mouse dataset), five methods score the ligand&apos;s
-          expression in the sender and the receptor&apos;s in the receiver (CellPhoneDB, Connectome,
-          log2FC, NATMI, SingleCellSignalR) on log-normalised values. Their ranks are combined (robust
-          rank aggregation, as LIANA&apos;s rank_aggregate): magnitude rank = how strongly both are
-          expressed, specificity rank = how specific to these two groups. Lower is stronger. Both
-          genes must be detected in at least the set share of each group&apos;s cells; a complex
-          counts by its weakest subunit. These are predictions from expression, not measured
-          signalling. To compare two conditions, use Compare conditions.
-        </InfoTip>
+        <span className="text-xs font-medium text-slate-600">
+          <HoverTip
+            tip={<>
+              For every sender group, receiver group and ligand-receptor pair in LIANA&apos;s consensus
+              resource (human, or mouse for a mouse dataset), five methods score the ligand&apos;s
+              expression in the sender and the receptor&apos;s in the receiver (CellPhoneDB, Connectome,
+              log2FC, NATMI, SingleCellSignalR) on log-normalised values. Their ranks are combined (robust
+              rank aggregation, as LIANA&apos;s rank_aggregate): magnitude rank = how strongly both are
+              expressed, specificity rank = how specific to these two groups. Lower is stronger. Both
+              genes must be detected in at least the set share of each group&apos;s cells; a complex
+              counts by its weakest subunit. These are predictions from expression, not measured
+              signalling. To compare two conditions, use Compare conditions.
+            </>}
+          >
+            Ligand-receptor communication
+          </HoverTip>
+        </span>
       </div>
-      <div className="flex items-center gap-1">
-        <div className="flex flex-1 overflow-hidden rounded-md border border-slate-300 text-[11px]" role="group" aria-label="Mode">
-          {(["single", "compare"] as const).map((m) => (
-            <button
-              key={m}
-              type="button"
-              aria-pressed={mode === m}
-              onClick={() => update({ mode: m })}
-              className={`flex-1 px-2 py-1 ${mode === m ? "bg-primary/10 font-medium text-primary" : "bg-white text-slate-600 hover:bg-slate-50"}`}
-            >
+      <div className="flex overflow-hidden rounded-md border border-slate-300 text-[11px]" role="group" aria-label="Mode">
+        {(["single", "compare"] as const).map((m) => (
+          <button
+            key={m}
+            type="button"
+            aria-pressed={mode === m}
+            onClick={() => update({ mode: m })}
+            className={`flex-1 px-2 py-1 ${mode === m ? "bg-primary/10 font-medium text-primary" : "bg-white text-slate-600 hover:bg-slate-50"}`}
+          >
+            <Help id="communication.mode" align={m === "compare" ? "right" : "left"}>
               {m === "single" ? "One run" : "Compare conditions"}
-            </button>
-          ))}
-        </div>
-        <Help id="communication.mode" label="About One run and Compare conditions" align="right" />
+            </Help>
+          </button>
+        ))}
       </div>
     </>
   );
   const groupbySelect = (
     <div>
-      <div className="mb-1 flex items-center gap-1 text-[11px] font-medium text-slate-500">
-        <label htmlFor="ccc-groupby">Senders and receivers</label>
-        <Help id="communication.groupby" label="About senders and receivers" />
-      </div>
+      <label htmlFor="ccc-groupby" className="mb-1 block text-[11px] font-medium text-slate-500">
+        <Help id="communication.groupby">Senders and receivers</Help>
+      </label>
       <select id="ccc-groupby" value={groupby} onChange={(e) => update({ groupby: e.target.value })} className={sel}>
         <option value="">Choose a column</option>
         {groupColumns.map((c) => (
@@ -241,10 +251,9 @@ export function UnifiedCommunicationSubtab({ groupByColumn }: Props) {
       <div className="grid grid-cols-2 gap-2">
         {groupbySelect}
         <div>
-          <div className="mb-1 flex items-center gap-1 text-[11px] font-medium text-slate-500">
-            <label>Cells</label>
-            <Help id="communication.cells" label="About the cells scored" align="right" />
-          </div>
+          <label className="mb-1 block text-[11px] font-medium text-slate-500">
+            <Help id="communication.cells" align="right">Cells</Help>
+          </label>
           <select
             aria-label="Cells"
             value={subsetColumn ? `${subsetColumn}\u0000${subsetValue}` : ""}
@@ -267,7 +276,7 @@ export function UnifiedCommunicationSubtab({ groupByColumn }: Props) {
       </div>
       <div className="flex items-center gap-2">
         <label className="text-[11px] text-slate-500" htmlFor="ccc-expr-prop">
-          Detected in at least
+          <Help id="communication.expr_prop">Detected in at least</Help>
         </label>
         <select
           id="ccc-expr-prop"
@@ -282,7 +291,6 @@ export function UnifiedCommunicationSubtab({ groupByColumn }: Props) {
           ))}
         </select>
         <span className="text-[11px] text-slate-500">of a group&apos;s cells</span>
-        <Help id="communication.expr_prop" label="About the detection threshold" />
         <div className="ml-auto">
           {running ? (
             <button
@@ -374,25 +382,22 @@ export function UnifiedCommunicationSubtab({ groupByColumn }: Props) {
                   view === v.id ? "bg-primary text-white" : "border border-slate-200 text-slate-600 hover:bg-slate-50"
                 }`}
               >
-                {v.label}
+                <ViewLabel view={v} />
               </button>
             ))}
-            {view === "dot" && <Help id="communication.dot" label="How to read the dot plot" />}
-            {view === "circle" && <Help id="communication.circle" label="How to read the circle plot" />}
-            {view === "heatmap" && <Help id="communication.heatmap" label="How to read the heatmap" />}
-            {view === "roles" && <Help id="communication.roles" label="How to read the roles plot" />}
             {view !== "dot" && (
-              <select
-                aria-label="Weight"
-                value={weight}
-                onChange={(e) => setWeight(e.target.value as Weight)}
-                className="ml-auto rounded border border-slate-200 bg-white px-1 py-0.5 text-[11px]"
-              >
-                <option value="count">Count</option>
-                <option value="strength">Strength</option>
-              </select>
+              <Help id="communication.weight" align="right" className="ml-auto">
+                <select
+                  aria-label="Weight"
+                  value={weight}
+                  onChange={(e) => setWeight(e.target.value as Weight)}
+                  className="rounded border border-slate-200 bg-white px-1 py-0.5 text-[11px]"
+                >
+                  <option value="count">Count</option>
+                  <option value="strength">Strength</option>
+                </select>
+              </Help>
             )}
-            {view !== "dot" && <Help id="communication.weight" label="About Count and Strength" align="right" />}
           </div>
 
           {view === "dot" && <DotPlotView dot={dot} />}

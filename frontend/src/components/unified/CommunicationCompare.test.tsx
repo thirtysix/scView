@@ -24,6 +24,7 @@ vi.mock("@/components/plots/Plot", () => ({
 }));
 
 import { UnifiedCommunicationSubtab } from "./UnifiedCommunicationSubtab";
+import { hoverTip, unhover } from "@/test/hoverTip";
 import { useCommunicationStore } from "@/stores/communicationStore";
 import { useDatasetStore } from "@/stores/datasetStore";
 
@@ -72,6 +73,26 @@ describe("Communication: compare conditions", () => {
         ],
       } as DatasetInfo,
     });
+  });
+
+  it("explains the comparison and its filters on hover, with no info icons", async () => {
+    render(<UnifiedCommunicationSubtab groupByColumn="cell" />);
+    fireEvent.click(screen.getByRole("button", { name: "Compare conditions" }));
+    await waitFor(() => screen.getByLabelText("Baseline (A)"));
+    fireEvent.click(screen.getByRole("button", { name: /^Compare$/ }));
+    await waitFor(() => screen.getByText("CXCL10"));
+    expect(document.querySelector("[data-infotip]")).toBeNull();
+    const tip = async (el: Element) => {
+      const t = await hoverTip(el);
+      unhover(el);
+      return t;
+    };
+    expect(await tip(screen.getByText(/STIM vs CTRL: 1 gained/))).toMatch(/Each condition is scored as a single run/);
+    expect(await tip(screen.getByText("Condition"))).toMatch(/Every change reads as B against A/);
+    expect(await tip(screen.getByText(/^Change between groups/))).toMatch(/Each square is B minus A/);
+    expect(await tip(screen.getByLabelText("Call"))).toMatch(/Filter the table by its call/);
+    expect(await tip(screen.getByText(/^Only adjusted p/))).toMatch(/donor-level test/);
+    expect(screen.getByLabelText("Condition")).toHaveValue("stim");
   });
 
   it("compares two conditions: heatmap about 0, filtered table, donor plot", async () => {

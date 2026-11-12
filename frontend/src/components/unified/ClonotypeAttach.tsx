@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useState } from "react";
 import { Loader2, Upload } from "lucide-react";
 import { attachVdj, type VdjFile, type VdjSummary } from "@/api/vdj";
 import { Help } from "@/components/common/Help";
@@ -26,7 +26,6 @@ export function ClonotypeAttach({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<VdjFile | null>(null);
-  const fileId = useId();
 
   const choices = summary.sample_choices;
   const values = choices.find((c) => c.name === column)?.values ?? [];
@@ -55,13 +54,11 @@ export function ClonotypeAttach({
 
   return (
     <div className="space-y-1.5 text-[11px] text-slate-600" data-testid="vdj-attach">
-      <div className="flex items-center gap-1.5">
-        <span className="flex shrink-0 items-center gap-1 font-medium">
-          <label htmlFor={fileId}>Contig table</label>
-          <Help id="clonotypes.contig_table" label="About the contig table" />
+      <label className="flex items-center gap-1.5">
+        <span className="shrink-0 font-medium">
+          <Help id="clonotypes.contig_table">Contig table</Help>
         </span>
         <input
-          id={fileId}
           aria-label="Contig table file"
           type="file"
           accept=".csv,.tsv,.txt,.gz"
@@ -69,11 +66,10 @@ export function ClonotypeAttach({
           onChange={(e) => setFile(e.target.files?.[0] ?? null)}
           className="min-w-0 text-[11px]"
         />
-      </div>
+      </label>
       {choices.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5">
-          <span title="The sample these contigs came from: barcodes are matched within its cells only">Sample</span>
-          <Help id="clonotypes.sample" label="About the sample" />
+          <Help id="clonotypes.sample">Sample</Help>
           <select
             aria-label="Sample column"
             value={column}
