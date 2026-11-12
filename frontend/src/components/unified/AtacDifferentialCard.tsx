@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { daCsvUrl, getDaEstimate, getDaPage, getLatestDa, type AtacDaEstimate, type AtacDaRow, type AtacDaTest, type AtacState } from "@/api/atac";
 import { CapNote, Caption } from "@/components/common/Caption";
+import { Help } from "@/components/common/Help";
 import { InfoTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
 import { daFitLabel, daFitText, daMostPass, daTestName, formatDistance, formatP } from "@/lib/atac";
@@ -120,6 +121,7 @@ export function AtacDifferentialCard({
             <option value="">Choose a column</option>
             {columns.map((c) => <option key={c} value={c}>{prettyObsLabel(c)}</option>)}
           </select>
+          <Help id="atac.da-groups" label="About the groups compared" />
         </label>
         <label className="flex items-center gap-1.5 text-[11px] text-slate-600">
           Test
@@ -164,7 +166,7 @@ export function AtacDifferentialCard({
             <table className="w-full min-w-max border-separate border-spacing-x-1 text-[11px] text-slate-600">
               <thead className="sticky top-0 bg-white text-left text-slate-500">
                 <tr>
-                  <th className="font-medium">Peak</th>
+                  <th className="font-medium" title="The peak's place on the genome: chromosome, start and end">Peak</th>
                   <th className="font-medium" title="The gene whose TSS is nearest; pseudogenes and small RNAs left out">Nearest gene</th>
                   <th className="text-right font-medium" title="To that gene's TSS: + downstream, - upstream on its strand">To TSS</th>
                   <th className="pl-2 font-medium" title="Promoter: within 2 kb of a TSS; gene body; distal">Class</th>

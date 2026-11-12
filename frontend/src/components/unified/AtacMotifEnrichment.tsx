@@ -12,6 +12,7 @@ import {
   type MotifLogo,
 } from "@/api/atacMotifs";
 import { CapNote, Caption } from "@/components/common/Caption";
+import { Help } from "@/components/common/Help";
 import { InfoTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
 import { daTestName, formatP } from "@/lib/atac";
@@ -123,6 +124,7 @@ export function AtacMotifEnrichment({ datasetId }: { datasetId: string }) {
           open in over
           <input value={minPct} onChange={(e) => setMinPct(e.target.value)} inputMode="decimal" aria-label="Smallest % of the group's cells" className={numberInput} />
           % of the group
+          <Help id="atac.motif-query" label="About the query cut-offs" />
         </label>
         <button type="button" disabled={!da || busy || !(Number(pMax) > 0) || !(Number(minPct) >= 0)} onClick={() => void run()}
                 className="rounded bg-primary px-2.5 py-1 text-xs font-medium text-white hover:bg-primary/90 disabled:opacity-50">

@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { Help } from "@/components/common/Help";
 import { InfoTip } from "@/components/common/InfoTip";
 import {
   CUT_LABELS,
@@ -224,6 +225,7 @@ export function SpotReferenceLabels({
             >
               {previewing ? "Hide preview" : "Preview"}
             </button>
+            <Help id="spotcomp.merge-names" label="About merging by shared name" />
           </div>
           {previewing && (
             <div className="space-y-1 rounded bg-slate-50 p-1.5" data-testid="spot-labels-preview">

@@ -14,6 +14,7 @@ import {
   type SpotSummary,
 } from "@/api/spotDeconvolution";
 import { Caption } from "@/components/common/Caption";
+import { Help } from "@/components/common/Help";
 import { InfoTip } from "@/components/common/InfoTip";
 import { unitWord } from "@/lib/spatial";
 import { SpotCompositionCheck } from "@/components/unified/SpotCompositionCheck";
@@ -275,6 +276,7 @@ export function SpotCompositionSubtab() {
                   </option>
                 ))}
               </select>
+              <Help id="spotcomp.reference" label="About the reference dataset" />
             </label>
             {check?.label_columns && check.label_columns.length > 0 && (
               <label className="flex items-center gap-1">
@@ -295,6 +297,7 @@ export function SpotCompositionSubtab() {
                     </option>
                   ))}
                 </select>
+                <Help id="spotcomp.celltypes" label="About the cell-type column" />
               </label>
             )}
             <label className="flex items-center gap-1">
@@ -493,7 +496,8 @@ export function SpotCompositionSubtab() {
           </table>
           <Caption n={{ value: result.n_fitted, unit: units }}>
             {kind === "rna" ? `Share of each ${unit}'s RNA` : `Estimated share of each ${unit}'s cells`} per reference type.
-            {rows.length > TYPE_LIMIT && !showAll && ` Top ${TYPE_LIMIT} of ${rows.length} by mean share.`}
+            {rows.length > TYPE_LIMIT && !showAll && ` Top ${TYPE_LIMIT} of ${rows.length} by mean share.`}{" "}
+            <Help id="spotcomp.table" label="How to read the type table" />
           </Caption>
           {rows.length > TYPE_LIMIT && (
             <button className="text-slate-500 hover:underline" onClick={() => setShowAll((v) => !v)}>
@@ -539,7 +543,8 @@ export function SpotCompositionSubtab() {
               </table>
               <Caption n={{ value: heat.clusters.length, unit: "clusters" }}>
                 Mean {kind === "rna" ? "RNA" : "cell"} share (%) of each type in each cluster&apos;s spots
-                {heat.types.length < result.types.length ? `; the ${heat.types.length} largest types` : ""}.
+                {heat.types.length < result.types.length ? `; the ${heat.types.length} largest types` : ""}.{" "}
+                <Help id="spotcomp.cluster-heatmap" label="How to read the cluster table" />
               </Caption>
             </div>
           )}

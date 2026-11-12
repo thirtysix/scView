@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { SpatialInfo } from "@/api/types";
 import { useTissueViewStore } from "@/stores/tissueViewStore";
+import { SPATIAL_HELP } from "@/lib/help/spatial";
 import { TissueControls } from "./TissueControls";
 
 const library = { id: "a", n_obs: 3, images: { lowres: { width: 2, height: 2, scalef: 1 } }, spot_diameter_fullres: 29.2, bounds: [0, 0, 1, 1] as [number, number, number, number] };
@@ -38,5 +39,16 @@ describe("TissueControls", () => {
   it("keeps the Visium sentence for spots", () => {
     renderFor({});
     expect(screen.getAllByText(/Visium spot \(55 µm\)/).length).toBeGreaterThan(0);
+  });
+
+  it("explains section, image and draw from the help catalog, and the section select keeps its label", () => {
+    renderFor({ technology: "xenium", unit: "cell", outlines: ["cell"], libraries: [library, { ...library, id: "b" }] });
+    for (const [name, id] of [["About the section choice", "tissue.section"], ["About the tissue image", "tissue.image"],
+      ["About drawing cells or points", "tissue.draw"]] as const) {
+      fireEvent.mouseEnter(screen.getByRole("button", { name }));
+      expect(screen.getByText(SPATIAL_HELP[id]!)).toHaveAttribute("role", "tooltip");
+      fireEvent.mouseLeave(screen.getByRole("button", { name }));
+    }
+    expect(screen.getByLabelText("Section").tagName).toBe("SELECT");
   });
 });

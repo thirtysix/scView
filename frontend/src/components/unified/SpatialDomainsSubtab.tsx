@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import {
   getSpatialDomains,
   runDomains,
@@ -12,6 +12,7 @@ import {
 } from "@/api/spatialDomains";
 import { SPATIAL_EMBEDDING } from "@/api/spatial";
 import { Caption } from "@/components/common/Caption";
+import { Help } from "@/components/common/Help";
 import { InfoTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
 import Plot from "@/components/plots/Plot";
@@ -76,6 +77,7 @@ export function SpatialDomainsSubtab({
   const [nicheLabel, setNicheLabel] = useState("");
   const [nicheWindow, setNicheWindow] = useState(20);
   const [nicheCount, setNicheCount] = useState(8);
+  const uid = useId();
 
   useEffect(() => {
     if (!datasetId || !spatial) return;
@@ -193,9 +195,13 @@ export function SpatialDomainsSubtab({
         {info && !info.runnable.ok && <p className="text-[11px] leading-snug text-slate-500">{info.runnable.reason}</p>}
 
         <div className="flex flex-wrap items-end gap-2 text-xs">
-          <label className={FIELD}>
-            Domains (k)
+          <div className={FIELD}>
+            <span className="flex items-center gap-1">
+              <label htmlFor={`${uid}-k`}>Domains (k)</label>
+              <Help id="domains.k" label="About the number of domains" />
+            </span>
             <input
+              id={`${uid}-k`}
               type="number"
               min={2}
               max={40}
@@ -203,32 +209,46 @@ export function SpatialDomainsSubtab({
               onChange={(e) => setK(num(e.target.value, k))}
               className={`${INPUT} w-14`}
             />
-          </label>
-          <label className={FIELD} title="How many rings of neighbours each profile is joined with; 0 = no spatial information">
-            Hops
+          </div>
+          <div className={FIELD}>
+            <span className="flex items-center gap-1">
+              <label htmlFor={`${uid}-hops`}>Hops</label>
+              <Help id="domains.hops" label="About hops" />
+            </span>
             <input
+              id={`${uid}-hops`}
               type="number"
               min={0}
               max={6}
               value={hops}
+              title="How many rings of neighbours each profile is joined with; 0 = no spatial information"
               onChange={(e) => setHops(num(e.target.value, hops))}
               className={`${INPUT} w-14`}
             />
-          </label>
-          <label className={FIELD} title="Leading components of the embedding each profile uses">
-            Components
+          </div>
+          <div className={FIELD}>
+            <span className="flex items-center gap-1">
+              <label htmlFor={`${uid}-components`}>Components</label>
+              <Help id="domains.components" label="About the number of components" />
+            </span>
             <input
+              id={`${uid}-components`}
               type="number"
               min={2}
               max={plan?.n_pcs_available ?? 100}
               value={pcs}
+              title="Leading components of the embedding each profile uses"
               onChange={(e) => setPcs(num(e.target.value, pcs))}
               className={`${INPUT} w-14`}
             />
-          </label>
-          <label className={FIELD}>
-            Save as
+          </div>
+          <div className={FIELD}>
+            <span className="flex items-center gap-1">
+              <label htmlFor={`${uid}-save-as`}>Save as</label>
+              <Help id="domains.save-as" label="About the column name" />
+            </span>
             <input
+              id={`${uid}-save-as`}
               type="text"
               value={name}
               onChange={(e) => {
@@ -237,7 +257,7 @@ export function SpatialDomainsSubtab({
               }}
               className={`${INPUT} w-40`}
             />
-          </label>
+          </div>
           <button type="button" disabled={busy || !info?.runnable.ok || nameBlocked} onClick={() => startDomains(k)} className={SOLID}>
             Find domains
           </button>
@@ -303,16 +323,19 @@ export function SpatialDomainsSubtab({
           </InfoTip>
         </div>
         <div className="flex flex-wrap items-end gap-2 text-xs">
-          <label className={FIELD}>
-            Labels
-            <select value={enrichPick} onChange={(e) => setEnrichColumn(e.target.value)} className={INPUT}>
+          <div className={FIELD}>
+            <span className="flex items-center gap-1">
+              <label htmlFor={`${uid}-enrichment-labels`}>Labels</label>
+              <Help id="domains.enrichment-labels" label="About the labels" />
+            </span>
+            <select id={`${uid}-enrichment-labels`} value={enrichPick} onChange={(e) => setEnrichColumn(e.target.value)} className={INPUT}>
               {columns.map((c) => (
                 <option key={c.name} value={c.name}>
                   {prettyObsLabel(c.name)} ({c.n_unique})
                 </option>
               ))}
             </select>
-          </label>
+          </div>
           <button type="button" disabled={busy || !enrichPick} onClick={startEnrichment} className={SOLID}>
             Compute enrichment
           </button>
@@ -341,19 +364,26 @@ export function SpatialDomainsSubtab({
           <>
             {info?.niches_allowed.note && <p className="text-[11px] leading-snug text-amber-700">{info.niches_allowed.note}</p>}
             <div className="flex flex-wrap items-end gap-2 text-xs">
-              <label className={FIELD}>
-                Labels
-                <select value={nichePick} onChange={(e) => setNicheLabel(e.target.value)} className={INPUT}>
+              <div className={FIELD}>
+                <span className="flex items-center gap-1">
+                  <label htmlFor={`${uid}-niche-labels`}>Labels</label>
+                  <Help id="domains.niche-labels" label="About the labels" />
+                </span>
+                <select id={`${uid}-niche-labels`} value={nichePick} onChange={(e) => setNicheLabel(e.target.value)} className={INPUT}>
                   {columns.map((c) => (
                     <option key={c.name} value={c.name}>
                       {prettyObsLabel(c.name)} ({c.n_unique})
                     </option>
                   ))}
                 </select>
-              </label>
-              <label className={FIELD}>
-                Window
+              </div>
+              <div className={FIELD}>
+                <span className="flex items-center gap-1">
+                  <label htmlFor={`${uid}-niche-window`}>Window</label>
+                  <Help id="domains.niche-window" label="About the window" />
+                </span>
                 <input
+                  id={`${uid}-niche-window`}
                   type="number"
                   min={2}
                   max={200}
@@ -361,10 +391,14 @@ export function SpatialDomainsSubtab({
                   onChange={(e) => setNicheWindow(num(e.target.value, nicheWindow))}
                   className={`${INPUT} w-14`}
                 />
-              </label>
-              <label className={FIELD}>
-                Niches
+              </div>
+              <div className={FIELD}>
+                <span className="flex items-center gap-1">
+                  <label htmlFor={`${uid}-niche-count`}>Niches</label>
+                  <Help id="domains.niche-count" label="About the number of niches" />
+                </span>
                 <input
+                  id={`${uid}-niche-count`}
                   type="number"
                   min={2}
                   max={40}
@@ -372,7 +406,7 @@ export function SpatialDomainsSubtab({
                   onChange={(e) => setNicheCount(num(e.target.value, nicheCount))}
                   className={`${INPUT} w-14`}
                 />
-              </label>
+              </div>
               <button type="button" disabled={busy || !nichePick} onClick={startNiches} className={SOLID}>
                 Find niches
               </button>
@@ -443,7 +477,8 @@ function StabilityPlot({
       <Caption n={{ value: curve.n_fit, unit: "observations per fit" }}>
         Stability of each k: mean ARI of its {curve.repeats} fits against the other fits at k - 1 and k + 1 (error bars: SD).{" "}
         {curve.has_peak ? `Suggested k = ${curve.suggested}, the highest local peak.` : `No local peak, so k = ${curve.suggested}, the highest value.`}{" "}
-        It advises; the biology decides. Click a point to use that k.
+        It advises; the biology decides. Click a point to use that k.{" "}
+        <Help id="domains.stability" label="How to read the stability plot" />
       </Caption>
     </figure>
   );
@@ -490,6 +525,7 @@ function DomainsTable({
         <button type="button" onClick={() => onMarkers(column)} className={OUTLINE} title="Open Markers grouped by these domains">
           Find markers
         </button>
+        <Help id="domains.table" label="About the domain table" />
       </div>
       <div className="max-h-56 overflow-auto rounded-lg border border-slate-200">
         <table className="w-full text-[11px]">
@@ -565,7 +601,8 @@ function EnrichmentHeatmap({ result }: { result: EnrichmentResult }) {
       <Caption n={[{ value: result.n_labelled ?? 0, unit: units }, { value: labels.length, unit: "labels" }]}>
         Neighbourhood enrichment of {prettyObsLabel(result.column ?? "")} ({(result.n_perms ?? 0).toLocaleString()} permutations).{" "}
         {pairs.high ? `Most often side by side: ${pairs.high[0]} and ${pairs.high[1]} (z ${pairs.high[2].toFixed(1)}). ` : ""}
-        {pairs.low ? `Most apart: ${pairs.low[0]} and ${pairs.low[1]} (z ${pairs.low[2].toFixed(1)}).` : ""}
+        {pairs.low ? `Most apart: ${pairs.low[0]} and ${pairs.low[1]} (z ${pairs.low[2].toFixed(1)}).` : ""}{" "}
+        <Help id="domains.enrichment-heatmap" label="How to read the enrichment heatmap" />
       </Caption>
       {result.notes?.map((n) => (
         <p key={n} className="text-[11px] text-amber-700">
@@ -635,7 +672,8 @@ function NicheHeatmap({
       />
       <Caption n={{ value: result.n_labelled ?? 0, unit: units }}>
         {result.n_niches} niches in &quot;{column}&quot;: the mean share of each {prettyObsLabel(result.label_column ?? "")} label in the
-        windows of each niche (the {result.k_window} nearest).
+        windows of each niche (the {result.k_window} nearest).{" "}
+        <Help id="domains.niche-heatmap" label="How to read the niche heatmap" />
       </Caption>
       {result.notes?.map((n) => (
         <p key={n} className="text-[11px] text-amber-700">

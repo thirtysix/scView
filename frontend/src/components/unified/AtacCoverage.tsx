@@ -3,6 +3,7 @@ import { Loader2 } from "lucide-react";
 import { getCoverage, getFragments, type Coverage } from "@/api/atacFragments";
 import type { LinksLocus } from "@/api/atacLinks";
 import { Caption } from "@/components/common/Caption";
+import { Help } from "@/components/common/Help";
 import { InfoTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
 import Plot from "@/components/plots/Plot";
@@ -214,6 +215,7 @@ export function AtacCoverage({
               <option key={c.name} value={c.name}>{c.name}</option>
             ))}
           </select>
+          <Help id="atac.coverage-group" label="About grouping the tracks" />
         </label>
         <button
           type="submit"
@@ -242,7 +244,8 @@ export function AtacCoverage({
             {Math.round(cov.bin_size).toLocaleString()} bp per bin. {cov.normalisation}{" "}
             {cov.peaks.length > 0 ? `${cov.peaks.length} peaks marked. ` : "No peak table on this dataset. "}
             {cov.genes_note}
-            {arcs && " Arcs: a peak's correlation with the gene, a candidate and never proof of regulation."}
+            {arcs && " Arcs: a peak's correlation with the gene, a candidate and never proof of regulation."}{" "}
+            <Help id="atac.coverage-tracks" label="How to read the coverage tracks" />
           </Caption>
           {cov.notes.map((n) => (
             <p key={n} className="text-[11px] leading-snug text-amber-700">{n}</p>

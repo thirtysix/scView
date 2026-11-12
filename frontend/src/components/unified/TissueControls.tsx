@@ -1,4 +1,5 @@
 import type { SpatialInfo } from "@/api/types";
+import { Help } from "@/components/common/Help";
 import { InfoTip } from "@/components/common/InfoTip";
 import { activeLibrary, unitWord } from "@/lib/spatial";
 import { useTissueViewStore, type TissueDraw } from "@/stores/tissueViewStore";
@@ -46,6 +47,7 @@ export function TissueControls({ spatial }: { spatial: SpatialInfo }) {
               </option>
             ))}
           </select>
+          <Help id="tissue.section" label="About the section choice" />
         </>
       )}
       <label
@@ -74,6 +76,7 @@ export function TissueControls({ spatial }: { spatial: SpatialInfo }) {
           className="w-14 accent-blue-500"
         />
       )}
+      {hasImage && <Help id="tissue.image" label="About the tissue image" />}
       {outlines.length > 0 && (
         <div className="flex items-center gap-1" role="group" aria-labelledby="tissue-draw">
           <span id="tissue-draw" className="text-[11px] font-medium text-slate-500">Draw</span>
@@ -89,6 +92,7 @@ export function TissueControls({ spatial }: { spatial: SpatialInfo }) {
               {label}
             </button>
           ))}
+          <Help id="tissue.draw" label="About drawing cells or points" />
         </div>
       )}
       <InfoTip label="About the tissue plot">

@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { Download, Loader2 } from "lucide-react";
 import { Caption, CapNote } from "@/components/common/Caption";
+import { Help } from "@/components/common/Help";
 import { InfoTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
 import { SortableTh, ariaSort } from "@/components/common/SortableTh";
@@ -69,6 +70,7 @@ export function SpatialGenesSubtab({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sort, setSort] = useState<{ key: SortKey; dir: "asc" | "desc" }>({ key: "I", dir: "desc" });
+  const uid = useId();
 
   // The last run, restored on opening the tab.
   useEffect(() => {
@@ -130,9 +132,13 @@ export function SpatialGenesSubtab({
       </div>
 
       <div className="flex flex-wrap items-end gap-2 text-xs">
-        <label className="flex flex-col gap-0.5 text-[11px] text-slate-500">
-          Genes
+        <div className="flex flex-col gap-0.5 text-[11px] text-slate-500">
+          <span className="flex items-center gap-1">
+            <label htmlFor={`${uid}-genes`}>Genes</label>
+            <Help id="spatial.genes" label="About the gene choice" />
+          </span>
           <select
+            id={`${uid}-genes`}
             value={genes}
             onChange={(e) => setGenes(e.target.value as "hvg" | "all")}
             className="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-700"
@@ -140,11 +146,15 @@ export function SpatialGenesSubtab({
             <option value="hvg">Variable genes</option>
             <option value="all">All genes</option>
           </select>
-        </label>
+        </div>
         {libs.length > 1 && (
-          <label className="flex flex-col gap-0.5 text-[11px] text-slate-500">
-            Section
+          <div className="flex flex-col gap-0.5 text-[11px] text-slate-500">
+            <span className="flex items-center gap-1">
+              <label htmlFor={`${uid}-section`}>Section</label>
+              <Help id="spatial.section" label="About the section choice" />
+            </span>
             <select
+              id={`${uid}-section`}
               value={library}
               onChange={(e) => setLibrary(e.target.value)}
               className="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-700"
@@ -156,7 +166,7 @@ export function SpatialGenesSubtab({
                 </option>
               ))}
             </select>
-          </label>
+          </div>
         )}
         <button
           type="button"
@@ -215,6 +225,7 @@ export function SpatialGenesSubtab({
                   : "the CSV has all"
               }
             />
+            <Help id="spatial.table" label="How to read the table" />
             <a
               href={spatialAutocorrCsvUrl(datasetId, result.result_id)}
               download

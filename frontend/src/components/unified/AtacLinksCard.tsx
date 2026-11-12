@@ -13,6 +13,7 @@ import {
 } from "@/api/atacLinks";
 import type { AtacState } from "@/api/atac";
 import { CapNote, Caption } from "@/components/common/Caption";
+import { Help } from "@/components/common/Help";
 import { InfoTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
 import { formatDistance, formatP } from "@/lib/atac";
@@ -205,6 +206,7 @@ export function AtacLinksCard({
             <option value="all">All genes</option>
             <option value="list">A list</option>
           </select>
+          <Help id="atac.links-genes" label="About the gene choice" />
         </label>
         <label className="flex items-center gap-1.5 text-[11px] text-slate-600">
           Cells
@@ -220,6 +222,7 @@ export function AtacLinksCard({
             <option value="">All cells</option>
             {columns.map((c) => <option key={c} value={c}>{prettyObsLabel(c)}</option>)}
           </select>
+          <Help id="atac.links-cells" label="About the cell choice" />
         </label>
         {!live && (
           <button type="button" disabled={run.running || elsewhere || listEmpty || noCells || !!estimateError} onClick={start}
@@ -272,6 +275,7 @@ export function AtacLinksCard({
               </option>
             ))}
           </select>
+          <Help id="atac.links-runs" label="About kept runs" />
         </label>
       )}
       {links && (

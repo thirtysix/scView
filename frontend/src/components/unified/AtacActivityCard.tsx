@@ -3,6 +3,7 @@ import { Loader2 } from "lucide-react";
 import { getAtacActivity, type AtacActivity, type AtacState } from "@/api/atac";
 import { Caption, CapNote } from "@/components/common/Caption";
 import { GeneSearch } from "@/components/common/GeneSearch";
+import { Help } from "@/components/common/Help";
 import { InfoTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
 import Plot from "@/components/plots/Plot";
@@ -96,7 +97,8 @@ export function AtacActivityCard({
           <Caption n={{ value: shown.rna.n_shown, unit: "cells", of: shown.n_cells }}>
             {shown.gene}{shown.gene === activeGene ? " (on the plot)" : ""}: RNA against peak-based activity
             {shown.r !== null ? `, r = ${shown.r.toFixed(2)} over all cells` : ""}. {shown.n_nonzero.toLocaleString()} cells have
-            activity.
+            activity.{" "}
+            <Help id="atac.activity-vs-rna" label="How to read the activity plot" />
           </Caption>
           <CapNote shown={shown.rna.n_shown} total={shown.n_cells} by="even spacing through the cells" />
         </div>

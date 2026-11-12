@@ -1,5 +1,6 @@
 import { atacExportUrl, type AtacState } from "@/api/atac";
 import { Caption } from "@/components/common/Caption";
+import { Help } from "@/components/common/Help";
 import { InfoTip } from "@/components/common/InfoTip";
 import Plot from "@/components/plots/Plot";
 import { embeddingReady } from "@/hooks/useEmbeddingReady";
@@ -78,7 +79,8 @@ export function AtacLsiCard({ datasetId, state }: { datasetId: string; state: At
           />
           <Caption n={{ value: lsi.n_selected, unit: "peaks" }}>
             Each component&rsquo;s correlation with the cell&rsquo;s total counts (the first {rs.length} of {lsi.depth_r.length}); grey
-            components are not in the graph. {lsi.n_clusters} ATAC clusters.
+            components are not in the graph. {lsi.n_clusters} ATAC clusters.{" "}
+            <Help id="atac.lsi-depth" label="How to read the depth plot" />
           </Caption>
           <div className="flex flex-wrap gap-1.5">
             <button type="button" className={BUTTON} disabled={!hasUmap} onClick={() => setEmbedding(ATAC_UMAP)}>Show ATAC UMAP</button>

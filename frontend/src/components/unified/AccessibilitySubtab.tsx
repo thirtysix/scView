@@ -4,6 +4,7 @@ import { getAtac, type AtacActivity, type AtacState } from "@/api/atac";
 import type { LinksLocus } from "@/api/atacLinks";
 import type { ChromVarMotif } from "@/api/atacMotifs";
 import { Caption } from "@/components/common/Caption";
+import { Help } from "@/components/common/Help";
 import { InfoTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
@@ -118,6 +119,7 @@ export function AccessibilitySubtab({
                 <option key={c.name} value={c.name}>{prettyObsLabel(c.name)}</option>
               ))}
             </select>
+            <Help id="atac.group-by" label="About grouping the cells" />
           </label>
         )}
       </div>

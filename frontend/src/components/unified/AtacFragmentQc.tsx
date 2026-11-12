@@ -15,6 +15,7 @@ import {
 } from "@/api/atacFragments";
 import type { WatchdogEvent } from "@/api/pipelineRun";
 import { Caption } from "@/components/common/Caption";
+import { Help } from "@/components/common/Help";
 import { InfoTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
 import Plot from "@/components/plots/Plot";
@@ -307,7 +308,10 @@ export function AtacFragmentQc({ datasetId }: { datasetId: string }) {
               <dd className="font-medium tabular-nums text-slate-700">{fmt(qc.medians.nucleosome_signal)} (median)</dd>
             </div>
             <div>
-              <dt className="text-slate-400">Fragments per cell</dt>
+              <dt className="flex items-center gap-1 text-slate-400">
+                Fragments per cell
+                <Help id="atac.fragments-per-cell" label="About fragments per cell" />
+              </dt>
               <dd className="font-medium tabular-nums text-slate-700">{fmt(qc.medians.n_fragments, 0)} (median)</dd>
             </div>
           </dl>
@@ -331,6 +335,7 @@ export function AtacFragmentQc({ datasetId }: { datasetId: string }) {
                 <option key={c.name} value={c.name}>{c.name}</option>
               ))}
             </select>
+            <Help id="atac.fragment-group" label="About grouping the QC plots" />
           </label>
 
           {values && (
