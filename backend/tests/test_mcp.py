@@ -351,6 +351,20 @@ async def test_score_gene_set_per_sample_with_the_donor_level_test(client, datas
     assert "'nope'" in text
 
 
+async def test_score_gene_set_with_a_name_saves_and_remove_saved_score_drops_it(client, dataset_manager):
+    did = _register(dataset_manager)
+    r = await _call("score_gene_set", {"dataset_id": did, "genes": S_SET, "groupby": "cluster"})
+    assert "saved_column" not in r  # no name: nothing saved
+    r = await _call("score_gene_set", {"dataset_id": did, "genes": S_SET, "name": "My set", "method": "aucell"})
+    assert r["saved_column"] == "score_My_set" and r["method"] == "aucell"
+    info = await tools._get(f"/datasets/{did}")
+    assert {c["name"]: c.get("saved_score") for c in info["obs_columns"]}["score_My_set"]["name"] == "My set"
+    r = await _call("remove_saved_score", {"dataset_id": did, "column": "score_My_set"})
+    assert r["removed"] == "score_My_set"
+    text = await _call("remove_saved_score", {"dataset_id": did, "column": "cluster"}, error=True)
+    assert "not a saved score" in text
+
+
 async def test_de_per_donor_composition_and_enrichment(client, dataset_manager):
     did = _register(dataset_manager)
     de = await _call("differential_expression", {
