@@ -127,6 +127,24 @@ describe("GeneFeatureGrid", () => {
     expect(colorsByCell(0)[2]).toEqual(colorsByCell(1)[4]);
   });
 
+  it("pages a grid of more than six genes, with the page's genes in the legend", async () => {
+    const genes = Array.from({ length: 7 }, (_, i) => `G${i}`);
+    fetchGeneExpression.mockImplementation(async (_ds: string, gs: string[]) =>
+      Object.fromEntries(gs.map((g, i) => [g, Float32Array.from([i, 1, 2, 3, 0, 0])])),
+    );
+    useSplitViewStore.setState({ panelsPerPage: 6, page: 0 });
+    renderGrid({ datasetId: "ds1", kind: "features", genes });
+    await screen.findByTestId("deck");
+    expect(screen.getByText("Page 1 of 2")).toBeInTheDocument();
+    expect(layers().map((l) => l.id)).toEqual([0, 1, 2, 3, 4, 5].map((i) => `split-fg-${i}`));
+    expect(screen.getAllByText("G0")).toHaveLength(2); // panel title + legend
+    fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+    expect(layers().map((l) => l.id)).toEqual(["split-fg-0"]);
+    expect(screen.getAllByText("G6")).toHaveLength(2);
+    expect(screen.queryAllByText("G0")).toHaveLength(0);
+    useSplitViewStore.setState({ page: 0 });
+  });
+
   it("puts every gene on one scale when shared", async () => {
     renderGrid({ datasetId: "ds1", kind: "features", genes: ["CD3D", "MS4A1"] });
     await screen.findByTestId("deck");

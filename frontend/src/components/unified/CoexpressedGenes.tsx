@@ -14,6 +14,9 @@ import { errorMessage } from "@/lib/errorMessage";
 /** The backend's floor on cells (core/coexpression.py MIN_CELLS). */
 const MIN_CELLS = 10;
 const TOP_N = 25;
+/** Genes "To grid" sends: the query and its top 8 partners, as before the grid
+ *  paged (it takes up to MAX_GRID_GENES; more can be added by hand). */
+const TO_GRID = Math.min(9, MAX_GRID_GENES);
 
 type Scope = "all" | "selection" | "group";
 type Side = "positive" | "negative";
@@ -91,7 +94,7 @@ export function CoexpressedGenes({ datasetId, activeGene, onGeneSelect }: Props)
   // The query and its strongest partners on this side, as the "Several genes" picks.
   const sendToGrid = () => {
     if (!data) return;
-    const genes = [data.gene, ...data[side].map((g) => g.gene)].slice(0, MAX_GRID_GENES);
+    const genes = [data.gene, ...data[side].map((g) => g.gene)].slice(0, TO_GRID);
     setGridGenes(datasetId, genes);
     if (geneGrid?.datasetId === datasetId && geneGrid.kind === "features") {
       setGeneGrid({ datasetId, kind: "features", genes });
@@ -210,7 +213,7 @@ export function CoexpressedGenes({ datasetId, activeGene, onGeneSelect }: Props)
             <button
               onClick={sendToGrid}
               disabled={data[side].length === 0}
-              title={`Put ${data.gene} and its top ${MAX_GRID_GENES - 1} ${side} partners in "Several genes"`}
+              title={`Put ${data.gene} and its top ${TO_GRID - 1} ${side} partners in "Several genes"`}
               className="flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-slate-600 hover:bg-slate-50 disabled:opacity-50"
             >
               <Grid2x2 className="h-3 w-3" />

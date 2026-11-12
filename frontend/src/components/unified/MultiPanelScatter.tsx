@@ -22,23 +22,37 @@ import {
   type SvgPanel,
 } from "@/lib/scatterSvg";
 import { saveFigure } from "@/lib/pdfExport";
-import { ScatterExportMenu, type FigureFormat } from "@/components/plots/ScatterExportMenu";
+import { ScatterExportMenu, type AllPanelsExport, type FigureFormat } from "@/components/plots/ScatterExportMenu";
 import { EmbeddingCaveat } from "@/components/plots/EmbeddingCaveat";
-import { centroidLabelLayers, labelViewOf, placeLabels, type GroupCentroid } from "@/lib/centroidLabels";
+import { GridPager } from "@/components/common/GridPager";
+import {
+  centroidLabelLayers,
+  labelViewOf,
+  placeLabels,
+  type GroupCentroid,
+  type LabelView,
+  type PlacedLabel,
+} from "@/lib/centroidLabels";
 import {
   SPLIT_CONTEXT_LAYER,
   contextColor,
   dataBounds,
   downloadSplitPng,
+  downloadSplitSheetPng,
   fitSplitViewState,
   layerInView,
   panelOfLayer,
+  rescaleViewState,
   splitGridLayout,
   splitLabelLayerId,
   splitLayerId,
+  splitSheetLayout,
   splitViewId,
+  type SplitRect,
 } from "@/lib/splitView";
+import { clampPage, layoutCount, pageCount, pagePanelsText, pageRange } from "@/lib/gridPaging";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { useSplitViewStore } from "@/stores/splitViewStore";
 import { LIGHT_SLATE, useScatterBackground } from "@/lib/theme";
 import { GridLasso, type GridLassoResult } from "@/components/unified/GridLasso";
 
@@ -99,9 +113,12 @@ interface MultiPanelScatterProps {
   closeTitle: string;
   onHover?: (info: GridHover | null) => void;
   exportLegend?: ScatterLegend | ScatterLegend[] | null;
+  /** `exportLegend` holds one legend per panel: a page's export carries only its panels' legends */
+  legendPerPanel?: boolean;
   exportFilename: string;
-  /** Content of the legend column; empty when UnifiedViewPanel floats its own there */
-  legend?: ReactNode;
+  /** Content of the legend column (or, given the page's panels start..end - 1, the page's);
+   *  empty when UnifiedViewPanel floats its own there */
+  legend?: ReactNode | ((page: { start: number; end: number }) => ReactNode);
   /** The embedding's obsm key: a UMAP or t-SNE gets the cluster-distance caveat in the header */
   embedding?: string | null;
   /** Lasso on: a drag in a panel draws an outline there instead of moving the camera */
@@ -110,7 +127,7 @@ interface MultiPanelScatterProps {
   onLasso?: (lasso: GridLassoEvent) => void;
 }
 
-/** A lasso closed in one panel (see `onLasso`). */
+/** A lasso closed in one panel (see `onLasso`); `panel` indexes `panels`, whatever the page. */
 export interface GridLassoEvent extends GridLassoResult {
   viewState: Record<string, unknown>;
 }
@@ -120,8 +137,14 @@ export interface GridLassoEvent extends GridLassoResult {
  * WebGL context however many panels there are (browsers cap live contexts at
  * ~16, and the app already holds several), and keeps every panel on one camera
  * simply by giving all views the same view state. Used by the split-by grid
- * (one panel per value of a column) and the compare-colourings grid (the same
- * cells coloured by different columns).
+ * (one panel per value of a column), the compare-colourings grid (the same
+ * cells coloured by different columns) and the gene feature grid.
+ *
+ * More panels than a page holds are paged (GridPager, lib/gridPaging.ts): only
+ * the current page's panels get views and layers; every page is laid out for a
+ * full page, so the camera and panel size stay the same from page to page.
+ * Hover and lasso report indices into `panels`, not the page. The download
+ * menu saves the page, or every panel on one sheet laid out off screen.
  */
 export function MultiPanelScatter({
   positions,
@@ -139,6 +162,7 @@ export function MultiPanelScatter({
   closeTitle,
   onHover,
   exportLegend = null,
+  legendPerPanel = false,
   exportFilename,
   legend,
   embedding = null,
@@ -150,6 +174,18 @@ export function MultiPanelScatter({
   const background = useScatterBackground();
   const colormap = useSettingsStore((s) => s.continuousColormap);
   const stride = dimensions === 3 ? 3 : 2;
+
+  // --- Paging: the page's panels are panels[start..end) ---
+  const perPage = useSplitViewStore((s) => s.panelsPerPage);
+  const storedPage = useSplitViewStore((s) => s.page);
+  const setPage = useSplitViewStore((s) => s.setPage);
+  const setPanelsPerPage = useSplitViewStore((s) => s.setPanelsPerPage);
+  const nPanels = panels.length;
+  const page = clampPage(storedPage, nPanels, perPage);
+  const { start, end } = pageRange(nPanels, perPage, page);
+  const paged = pageCount(nPanels, perPage) > 1;
+  const pagePanels = useMemo(() => panels.slice(start, end), [panels, start, end]);
+  const slots = layoutCount(nPanels, perPage);
 
   // --- Layout ---
   const areaRef = useRef<HTMLDivElement>(null);
@@ -177,12 +213,18 @@ export function MultiPanelScatter({
   const bounds = useMemo(() => dataBounds(positions, stride), [positions, stride]);
   const aspect =
     dimensions === 3 ? 1 : (bounds.maxX - bounds.minX || 1) / (bounds.maxY - bounds.minY || 1);
-  const grid = useMemo(
-    () => splitGridLayout(panels.length, area.width, area.height, aspect),
-    [panels.length, area.width, area.height, aspect],
+  // Laid out for a full page; the page's panels take the first cells (a short
+  // last page leaves the rest empty, with no view, title or lasso).
+  const fullGrid = useMemo(
+    () => splitGridLayout(slots, area.width, area.height, aspect),
+    [slots, area.width, area.height, aspect],
   );
-  const viewW = grid.cells[0]?.view.width ?? 0;
-  const viewH = grid.cells[0]?.view.height ?? 0;
+  const grid = useMemo(
+    () => ({ ...fullGrid, cells: fullGrid.cells.slice(0, pagePanels.length) }),
+    [fullGrid, pagePanels.length],
+  );
+  const viewW = fullGrid.cells[0]?.view.width ?? 0;
+  const viewH = fullGrid.cells[0]?.view.height ?? 0;
 
   // --- One camera for every panel ---
   const fitted = useMemo(
@@ -268,26 +310,27 @@ export function MultiPanelScatter({
       });
     };
     const out: Layer[] = [];
+    // The context is drawn once per view: its cost grows with the panels a page shows.
     if (context) {
       out.push(point(SPLIT_CONTEXT_LAYER, context.length / stride, context, grey, false));
     }
-    panels.forEach((p, i) => {
+    pagePanels.forEach((p, i) => {
       out.push(point(splitLayerId(i), p.indices.length, p.positions, p.colors, true));
     });
     return out;
-  }, [ready, dimensions, context, stride, grey, panels, pointSize]);
+  }, [ready, dimensions, context, stride, grey, pagePanels, pointSize]);
   // Labels are placed for the current camera (every panel has the same view
   // size), inside the panel and off each other; drawn last, over the points.
   const placedLabels = useMemo(() => {
     if (!ready || !viewState || !views[0]) return null;
     const view = labelViewOf(views[0], area.width, area.height, viewState);
     if (!view) return null;
-    return panels.map((p) => (p.labels?.length ? placeLabels(p.labels, view, { highlight: p.highlight }) : []));
-  }, [ready, viewState, views, area.width, area.height, panels]);
+    return pagePanels.map((p) => (p.labels?.length ? placeLabels(p.labels, view, { highlight: p.highlight }) : []));
+  }, [ready, viewState, views, area.width, area.height, pagePanels]);
   const labelLayers = useMemo(
     () =>
       placedLabels
-        ? panels.flatMap((p, i) =>
+        ? pagePanels.flatMap((p, i) =>
             placedLabels[i]?.length
               ? centroidLabelLayers(splitLabelLayerId(i), placedLabels[i]!, {
                   dark: background === "dark",
@@ -296,7 +339,7 @@ export function MultiPanelScatter({
               : [],
           )
         : [],
-    [placedLabels, panels, background],
+    [placedLabels, pagePanels, background],
   );
   const layers = useMemo(() => [...pointLayers, ...labelLayers], [pointLayers, labelLayers]);
 
@@ -307,18 +350,19 @@ export function MultiPanelScatter({
   );
 
   // Hover reports the original cell index, with x/y moved from the canvas into
-  // the scatter area so UnifiedViewPanel's tooltip lands next to the cursor.
+  // the scatter area so UnifiedViewPanel's tooltip lands next to the cursor,
+  // and the panel's index in `panels` (the page's slot plus the page's start).
   const handleHover = useCallback(
     (info: PickingInfo) => {
       const p = panelOfLayer(info.layer?.id);
-      const panel = p == null ? undefined : panels[p];
+      const panel = p == null ? undefined : pagePanels[p];
       if (info.picked && panel && info.index >= 0 && info.index < panel.indices.length) {
-        onHover?.({ index: panel.indices[info.index]!, x: info.x + area.left, y: info.y + area.top, panel: p! });
+        onHover?.({ index: panel.indices[info.index]!, x: info.x + area.left, y: info.y + area.top, panel: start + p! });
       } else {
         onHover?.(null);
       }
     },
-    [panels, onHover, area.left, area.top],
+    [pagePanels, start, onHover, area.left, area.top],
   );
   // Clear a tooltip left over from the single plot, or from this grid on exit.
   useEffect(() => {
@@ -347,76 +391,149 @@ export function MultiPanelScatter({
     if (err.message?.toLowerCase().includes("context")) setGpuError(true);
   }, []);
 
+  // --- Downloads: the page as on screen, or every panel on one sheet ---
+  // One legend per panel (compare colourings): a page carries its own panels' legends.
+  const pageLegend = useMemo(
+    () => (legendPerPanel && Array.isArray(exportLegend) ? exportLegend.slice(start, end) : exportLegend),
+    [legendPerPanel, exportLegend, start, end],
+  );
+  const pageFilename = paged ? `${exportFilename}_page${page + 1}` : exportFilename;
+  const sheetFilename = `${exportFilename}_all`;
+
   const downloadPng = useCallback(() => {
     const deck = deckRef.current?.deck;
     if (!deck) return;
     downloadSplitPng(deck, {
       grid,
-      panels: panels.map((p) => ({ label: p.title, count: p.subtitle })),
-      legend: exportLegend,
+      panels: pagePanels.map((p) => ({ label: p.title, count: p.subtitle })),
+      legend: pageLegend,
       colormap,
-      filename: exportFilename,
+      filename: pageFilename,
       note: sampledNote,
     });
-  }, [grid, panels, exportLegend, colormap, exportFilename, sampledNote]);
+  }, [grid, pagePanels, pageLegend, colormap, pageFilename, sampledNote]);
 
-  // The whole grid as one SVG / PDF: each panel's points projected with the
-  // shared camera, its title band and frame, the grey context on white, and
-  // ONE legend beside the grid (lib/scatterSvg.ts).
-  const figurePanels = useCallback((): SvgPanel[] | null => {
+  // Panels as figure panels (lib/scatterSvg.ts): each panel's points projected
+  // with the shared camera, its title band and frame, the grey context on white.
+  const svgPanelsOf = useCallback(
+    (
+      cells: readonly { title: SplitRect; view: SplitRect }[],
+      list: readonly GridPanel[],
+      view: LabelView,
+      placed: readonly (readonly PlacedLabel[] | undefined)[] | null,
+    ): SvgPanel[] => {
+      const radius = pointRadius(pointSize, stride);
+      const greyOnWhite = contextColor("white", opacity);
+      // Every view has the same size and camera: the context projects once.
+      const contextXy = context ? projectPoints(view.project, context, stride, new Uint8Array(0)).xy : null;
+      return cells.flatMap((cell, i) => {
+        const p = list[i];
+        if (!p) return [];
+        const fg = projectPoints(view.project, p.positions, stride, p.colors);
+        const labels = placed?.[i];
+        return [
+          {
+            view: cell.view,
+            title: { box: cell.title, label: p.title, subtitle: p.subtitle },
+            frame: true,
+            sets: [
+              ...(contextXy ? [{ xy: contextXy, colors: greyOnWhite, radius }] : []),
+              { ...fg, radius },
+            ],
+            labels: labels?.length ? svgLabels(labels, view.project, p.highlight) : [],
+          },
+        ];
+      });
+    },
+    [pointSize, stride, opacity, context],
+  );
+
+  type Figure = { width: number; height: number; panels: SvgPanel[] };
+  // The page, laid out as on screen.
+  const pageFigure = useCallback((): Figure | null => {
     if (!viewState || !views[0]) return null;
     const view = labelViewOf(views[0], area.width, area.height, viewState);
     if (!view) return null;
-    const radius = pointRadius(pointSize, stride);
-    const greyOnWhite = contextColor("white", opacity);
-    const contextXy = context ? projectPoints(view.project, context, stride, new Uint8Array(0)).xy : null;
-    return grid.cells.flatMap((cell, i) => {
-      const p = panels[i];
-      if (!p) return [];
-      const fg = projectPoints(view.project, p.positions, stride, p.colors);
-      return [
-        {
-          view: cell.view,
-          title: { box: cell.title, label: p.title, subtitle: p.subtitle },
-          frame: true,
-          sets: [
-            ...(contextXy ? [{ xy: contextXy, colors: greyOnWhite, radius }] : []),
-            { ...fg, radius },
-          ],
-          labels: placedLabels?.[i]?.length ? svgLabels(placedLabels[i]!, view.project, p.highlight) : [],
-        },
-      ];
-    });
-  }, [viewState, views, area.width, area.height, pointSize, stride, opacity, context, grid, panels, placedLabels]);
-  const figurePoints = useMemo(() => {
-    const ctx = context ? (context.length / stride) * panels.length : 0;
-    return ctx + panels.reduce((n, p) => n + p.indices.length, 0);
-  }, [context, stride, panels]);
-  const downloadFigure = useCallback(
-    async (format: FigureFormat, mode: PointMode) => {
-      await nextFrame();
-      const svgPanels = figurePanels();
-      if (!svgPanels) return;
+    return { width: area.width, height: area.height, panels: svgPanelsOf(grid.cells, pagePanels, view, placedLabels) };
+  }, [viewState, views, area.width, area.height, svgPanelsOf, grid, pagePanels, placedLabels]);
+  // Every panel on one sheet, off screen: laid out for all of them at about the
+  // on-screen panel size, the camera rescaled to frame what each panel frames
+  // now, labels placed again for that view. The live grid stays on its page.
+  const sheetFigure = useCallback((): Figure | null => {
+    if (!viewState || !(viewW > 0 && viewH > 0)) return null;
+    const sheet = splitSheetLayout(nPanels, slots, area.width, area.height, aspect);
+    const rect = sheet.grid.cells[0]?.view;
+    if (!rect) return null;
+    const sheetView =
+      dimensions === 3
+        ? new OrbitView({ id: "sheet", ...rect, orbitAxis: "Y" })
+        : new OrthographicView({ id: "sheet", ...rect, flipY: false });
+    const vs = rescaleViewState(viewState, bounds, dimensions, { width: viewW, height: viewH }, rect);
+    const view = labelViewOf(sheetView, sheet.width, sheet.height, vs);
+    if (!view) return null;
+    const placed = panels.map((p) => (p.labels?.length ? placeLabels(p.labels, view, { highlight: p.highlight }) : []));
+    return { width: sheet.width, height: sheet.height, panels: svgPanelsOf(sheet.grid.cells, panels, view, placed) };
+  }, [viewState, viewW, viewH, nPanels, slots, area.width, area.height, aspect, dimensions, bounds, panels, svgPanelsOf]);
+
+  const pointsOf = useCallback(
+    (list: readonly GridPanel[]) =>
+      (context ? (context.length / stride) * list.length : 0) + list.reduce((n, p) => n + p.indices.length, 0),
+    [context, stride],
+  );
+  const figurePoints = useMemo(() => pointsOf(pagePanels), [pointsOf, pagePanels]);
+  const sheetPoints = useMemo(() => pointsOf(panels), [pointsOf, panels]);
+
+  const saveSvgFigure = useCallback(
+    async (fig: Figure, legend: typeof exportLegend, format: FigureFormat, mode: PointMode, filename: string) => {
       const figure = buildScatterSvg({
-        width: area.width,
-        height: area.height,
-        panels: svgPanels,
-        legend: exportLegend,
+        width: fig.width,
+        height: fig.height,
+        panels: fig.panels,
+        legend,
         colormap,
         notes: sampledNote ? [sampledNote] : [],
         mode,
         rasterize: canvasRasterizer,
       });
-      await saveFigure(format, figure, exportFilename);
+      await saveFigure(format, figure, filename);
     },
-    [figurePanels, area.width, area.height, exportLegend, colormap, sampledNote, exportFilename],
+    [colormap, sampledNote],
+  );
+  const downloadFigure = useCallback(
+    async (format: FigureFormat, mode: PointMode) => {
+      await nextFrame();
+      const fig = pageFigure();
+      if (fig) await saveSvgFigure(fig, pageLegend, format, mode, pageFilename);
+    },
+    [pageFigure, saveSvgFigure, pageLegend, pageFilename],
+  );
+  const downloadSheetFigure = useCallback(
+    async (format: FigureFormat, mode: PointMode) => {
+      await nextFrame();
+      const fig = sheetFigure();
+      if (fig) await saveSvgFigure(fig, exportLegend, format, mode, sheetFilename);
+    },
+    [sheetFigure, saveSvgFigure, exportLegend, sheetFilename],
+  );
+  const downloadSheetPng = useCallback(async () => {
+    await nextFrame();
+    const fig = sheetFigure();
+    if (!fig) return;
+    downloadSplitSheetPng({ ...fig, legend: exportLegend, colormap, filename: sheetFilename, note: sampledNote });
+  }, [sheetFigure, exportLegend, colormap, sheetFilename, sampledNote]);
+  const allPanels = useMemo<AllPanelsExport | null>(
+    () =>
+      paged
+        ? { count: nPanels, nPoints: sheetPoints, onPng: downloadSheetPng, onFigure: downloadSheetFigure }
+        : null,
+    [paged, nPanels, sheetPoints, downloadSheetPng, downloadSheetFigure],
   );
 
   const handleLasso = useCallback(
     (lasso: GridLassoResult) => {
-      if (viewState) onLasso?.({ ...lasso, viewState });
+      if (viewState) onLasso?.({ ...lasso, panel: start + lasso.panel, viewState });
     },
-    [viewState, onLasso],
+    [viewState, onLasso, start],
   );
 
   const dark = background === "dark";
@@ -439,6 +556,13 @@ export function MultiPanelScatter({
         <div className="flex-1" />
         <EmbeddingCaveat embedding={embedding} className="flex-shrink-0" />
         {headerControls}
+        <GridPager
+          n={nPanels}
+          perPage={perPage}
+          page={page}
+          onPerPageChange={setPanelsPerPage}
+          onPageChange={setPage}
+        />
         <button
           onClick={resetView}
           title="Reset view"
@@ -454,6 +578,8 @@ export function MultiPanelScatter({
           label="Download grid"
           disabled={!ready || !viewState || gpuError}
           onOpenChange={setMenuOpen}
+          pageNote={paged ? `This page, ${pagePanelsText(nPanels, perPage, page).toLowerCase()}.` : undefined}
+          allPanels={allPanels}
         />
         <button
           onClick={onClose}
@@ -491,7 +617,7 @@ export function MultiPanelScatter({
           {/* Titles + panel frames (the canvas underneath takes the events) */}
           {ready &&
             grid.cells.map((cell, i) => {
-              const p = panels[i];
+              const p = pagePanels[i];
               if (!p) return null;
               return (
                 <div key={p.key} className="pointer-events-none">
@@ -554,7 +680,9 @@ export function MultiPanelScatter({
           )}
         </div>
         {/* Legend column: the grid's own legend, or UnifiedViewPanel's floats here */}
-        <div className={`${LEGEND_COLUMN} flex-shrink-0 overflow-y-auto`}>{legend}</div>
+        <div className={`${LEGEND_COLUMN} flex-shrink-0 overflow-y-auto`}>
+          {typeof legend === "function" ? legend({ start, end }) : legend}
+        </div>
       </div>
     </div>
   );

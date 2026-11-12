@@ -286,12 +286,13 @@ export function GeneFeatureGrid({
       lassoActive={lasso.lassoActive}
       onLasso={lasso.onLasso}
       exportLegend={exportLegend}
+      legendPerPanel={!oneLegend && !blend}
       exportFilename={exportFilename(
         datasetName,
         `${prettyEmbeddingLabel(embedding || "embedding")}_${blend ? "blend" : "genes"}_${legendGenes.join("_")}`,
       )}
       embedding={embedding}
-      legend={
+      legend={({ start, end }) =>
         ready ? (
           <div className="flex flex-col gap-3 p-2">
             {oneLegend ? (
@@ -304,14 +305,15 @@ export function GeneFeatureGrid({
                 label="Expression (all genes)"
               />
             ) : (
-              legendGenes.map((g, i) => (
+              // The page's genes (a blend's two genes are on its one page).
+              legendGenes.slice(blend ? 0 : start, blend ? undefined : end).map((g, k) => (
                 <ColorLegend
                   key={g}
                   type="continuous"
-                  scale={ranges[i]!}
+                  scale={ranges[(blend ? 0 : start) + k]!}
                   label={g}
                   // The clip control once, under the first legend; it applies to every panel.
-                  {...(i === 0 ? { clip: clipSetting, onClipChange: setViewClip, clipOverridden: viewClip !== null } : {})}
+                  {...(k === 0 ? { clip: clipSetting, onClipChange: setViewClip, clipOverridden: viewClip !== null } : {})}
                 />
               ))
             )}

@@ -14,7 +14,7 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { useSplitViewStore } from "@/stores/splitViewStore";
 
 /**
- * Toolbar "Compare" button: pick 2–4 grouping columns (cell types, clusterings,
+ * Toolbar "Compare" button: pick 2–12 grouping columns (cell types, clusterings,
  * hand labels...) to see the same embedding coloured by each, side by side.
  * Sits next to "Split"; one grid at a time.
  */

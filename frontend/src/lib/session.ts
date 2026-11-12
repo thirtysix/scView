@@ -22,6 +22,8 @@ import {
 import type { ClipSetting, SignedColormapMode } from "@/lib/colorScale";
 import { PANEL_IDS, UNIFIED_SUBTABS, type PanelId, type UnifiedSubtab } from "@/lib/constants";
 import { exportFilename } from "@/lib/exportFilename";
+import { isPanelsPerPage, type PanelsPerPage } from "@/lib/gridPaging";
+import { COMPARE_MAX_COLUMNS, COMPARE_MIN_COLUMNS } from "@/lib/splitView";
 import { parseGateList, type SessionGate } from "@/lib/gates";
 import { DOT_SIZE_RANGE } from "@/lib/transcripts";
 import { ARROW_DENSITY_RANGE, ARROW_SCALE_RANGE } from "@/lib/velocityArrows";
@@ -102,6 +104,9 @@ export interface SessionView {
   split_by?: string | null;
   show_context?: boolean;
   compare_columns?: string[] | null;
+  /** Panels a grid page shows and the page shown (0-based); absent in older sessions */
+  panels_per_page?: PanelsPerPage;
+  grid_page?: number;
   labels?: LabelChoice | null;
   camera?: Camera | null;
   highlight?: { column: string; value: string } | null;
@@ -438,7 +443,12 @@ export function parseSession(x: unknown): SessionFile {
       group_by: (v, at) => text(v, at),
       split_by: nullable((v, at) => text(v, at, { empty: false })),
       show_context: bool,
-      compare_columns: nullable((v, at) => texts(v, at, 2, 4)),
+      compare_columns: nullable((v, at) => texts(v, at, COMPARE_MIN_COLUMNS, COMPARE_MAX_COLUMNS)),
+      panels_per_page: (v, at) => {
+        if (!isPanelsPerPage(v)) fail(at, 'must be 4, 6, 9, 12 or "all"');
+        return v;
+      },
+      grid_page: (v, at) => number(v, at, 0, 1000, true),
       labels: nullable((v, at) => {
         const o = object(v, at);
         return { key: text(o.key, `${at}.key`, { max: 4 * MAX_TEXT + 16 }), show: bool(o.show, `${at}.show`) };

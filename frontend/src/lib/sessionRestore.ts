@@ -64,6 +64,8 @@ export function captureSession(now: Date = new Date()): SessionFile {
     split_by: split.splitBy,
     show_context: split.showContext,
     compare_columns: split.compareColumns,
+    panels_per_page: split.panelsPerPage,
+    grid_page: split.page,
     labels: unified.centroidLabels,
     camera: null,
     highlight: selection.highlightedGroup,
@@ -403,6 +405,10 @@ async function applyView(session: SessionFile, d: DatasetInfo, sameCells: boolea
       }
     }
   }
+  // After the grid is set: a new split or comparison starts on page 1. The
+  // grid clamps a page past its last one.
+  if (v.panels_per_page !== undefined) split.setPanelsPerPage(v.panels_per_page);
+  if (v.grid_page !== undefined) split.setPage(v.grid_page);
   if (v.labels !== undefined) unified.setCentroidLabels(v.labels);
   if (v.subtab) unified.setActiveSubtab(v.subtab);
   if (v.color_clip !== undefined) unified.setColorClip(v.color_clip);

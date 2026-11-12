@@ -8,7 +8,9 @@ export const PLOT_HELP: Record<string, string> = {
   "plot.colour-by":
     "Colour the cells by a metadata column (cluster, cell type, sample) or a number per cell (counts, % mito). The bracket gives a column's number of groups. In the legend, click a group to select its cells; Ctrl/Cmd-click picks several.",
   "plot.split":
-    "One plot per value of a column with 2 to 6 values, such as condition or sample, all sharing the camera and colours. Use it to see whether a group or a gene's pattern appears in every sample or only in some.",
+    "One plot per value of a column with 2 to 24 values, such as condition or sample, all sharing the camera and colours. Use it to see whether a group or a gene's pattern appears in every sample or only in some.",
+  "plot.grid-pages":
+    "How many panels the grid shows at once. Prev and Next page through the rest; every page keeps the same camera and colour scale. Download offers this page, or all panels on one sheet.",
   "plot.layer":
     "Which values the gene colouring and the violins show. Log-normalised values are the usual choice. Raw counts depend on how deeply each cell was sequenced; scaled values are centred on each gene's mean, so below-average cells go negative.",
   "plot.opacity":
@@ -42,7 +44,7 @@ export const PLOT_HELP: Record<string, string> = {
 
   // Toolbar dialogs
   "plot.compare":
-    "The same plot coloured by 2 to 4 columns side by side, one camera for all. Use it to set two clusterings, or a clustering and cell-type labels, against each other: where the same cells form one group in every panel, the columns agree.",
+    "The same plot coloured by 2 to 12 columns side by side, one camera for all. Use it to set two clusterings, or a clustering and cell-type labels, against each other: where the same cells form one group in every panel, the columns agree.",
   "plot.select-by-group":
     "Tick groups, then Select to make their cells the selection, as a lasso would. Useful for groups that are scattered on the plot or hard to draw around.",
   "plot.label-selection":

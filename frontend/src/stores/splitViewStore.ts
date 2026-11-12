@@ -1,11 +1,14 @@
 import { create } from "zustand";
+import { DEFAULT_PANELS_PER_PAGE, type PanelsPerPage } from "@/lib/gridPaging";
 
 // Split-by small multiples in the Unified View (lib/splitView.ts), the
-// "compare colourings" grid (the same cells coloured by 2–4 columns), and the
+// "compare colourings" grid (the same cells coloured by 2–12 columns), and the
 // gene grids (several genes side by side, or a two-gene blend). Kept in a
 // store so the toolbar controls and the scatter area agree, and so a grid
 // survives the remount PanelContainer does on every tab switch. One grid at a
-// time: turning one on turns the others off.
+// time: turning one on turns the others off. The grids share one page size and
+// page (lib/gridPaging.ts); a different split, comparison or gene grid starts
+// on page 1.
 
 /** The embedding coloured by each of several genes, or by two genes and their blend. */
 export interface GeneGrid {
@@ -30,26 +33,60 @@ interface SplitViewState {
   /** Split view lasso: the panel's own cells under the outline, or every panel's. */
   lassoScope: "panel" | "all";
   setLassoScope: (scope: "panel" | "all") => void;
+  /** Panels a grid page shows (4 / 6 / 9 / 12 / all) */
+  panelsPerPage: PanelsPerPage;
+  /** Page size, and the page to show with it (GridPager passes `repage`, which keeps the panels in view) */
+  setPanelsPerPage: (perPage: PanelsPerPage, page?: number) => void;
+  /** Current page, 0-based (the grid clamps it to its panel count) */
+  page: number;
+  setPage: (page: number) => void;
 }
+
+const sameList = (a: readonly string[] | null | undefined, b: readonly string[] | null | undefined) =>
+  !!a && !!b && a.length === b.length && a.every((v, i) => v === b[i]);
 
 export const useSplitViewStore = create<SplitViewState>((set) => ({
   splitBy: null,
   setSplitBy: (column) =>
-    set(column ? { splitBy: column, compareColumns: null, geneGrid: null } : { splitBy: null }),
+    set((s) =>
+      column
+        ? { splitBy: column, compareColumns: null, geneGrid: null, page: column === s.splitBy ? s.page : 0 }
+        : { splitBy: null },
+    ),
   showContext: true,
   setShowContext: (show) => set({ showContext: show }),
   compareColumns: null,
   setCompareColumns: (columns) =>
-    set(
+    set((s) =>
       columns && columns.length > 0
-        ? { compareColumns: columns, splitBy: null, geneGrid: null }
+        ? {
+            compareColumns: columns,
+            splitBy: null,
+            geneGrid: null,
+            page: sameList(columns, s.compareColumns) ? s.page : 0,
+          }
         : { compareColumns: null },
     ),
   geneGrid: null,
+  // Adding or removing a gene keeps the page (the grid clamps it); another kind
+  // of grid, or another dataset's, starts on page 1.
   setGeneGrid: (grid) =>
-    set(grid && grid.genes.length > 0 ? { geneGrid: grid, splitBy: null, compareColumns: null } : { geneGrid: null }),
+    set((s) =>
+      grid && grid.genes.length > 0
+        ? {
+            geneGrid: grid,
+            splitBy: null,
+            compareColumns: null,
+            page: s.geneGrid && s.geneGrid.kind === grid.kind && s.geneGrid.datasetId === grid.datasetId ? s.page : 0,
+          }
+        : { geneGrid: null },
+    ),
   lassoScope: "panel",
   setLassoScope: (scope) => set({ lassoScope: scope }),
+  panelsPerPage: DEFAULT_PANELS_PER_PAGE,
+  setPanelsPerPage: (panelsPerPage, page) => set((s) => ({ panelsPerPage, page: page ?? s.page })),
+  page: 0,
+  setPage: (page) => set({ page: Math.max(0, Math.floor(page)) }),
 }));
 
 /** A grid covers the single plot (its panels take the lasso while it does). */
