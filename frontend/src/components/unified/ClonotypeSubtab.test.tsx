@@ -210,8 +210,10 @@ describe("ClonotypeSubtab", () => {
     renderTab();
     fireEvent.click(await screen.findByRole("button", { name: "Recompute" }));
     await waitFor(() => expect(api.redefineClonotypes).toHaveBeenCalledWith("d1", false));
+    // The button is disabled until the recompute has settled (a slow runner clicked it too early).
+    await waitFor(() => expect(screen.getByRole("button", { name: "Remove contigs" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Remove contigs" }));
-    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
     await waitFor(() => expect(api.removeVdj).toHaveBeenCalledWith("d1"));
     expect(await screen.findByTestId("vdj-empty")).toBeInTheDocument();
   });
