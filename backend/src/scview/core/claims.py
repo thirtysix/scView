@@ -651,6 +651,7 @@ _FAMILY_PREFIX = {
     "count_split": "result:count_split", "count": "result:count_split",
     "marker": "result:marker_panel", "panel": "result:marker_panel",
     "pca": "result:pca", "qcstates": "result:qcstates",
+    "evidence": "result:evidence:",  # each cluster's evidence (core/cluster_evidence.py)
     "mito": "result:mito_by_type",
     "programs": "result:programs",
     "cnv": "result:cnv",
@@ -745,6 +746,7 @@ def resolve_tag(tag: str, refs: list[str]) -> list[str]:
                 return any_col
         if fam_refs and (fam in ("dataset", "provenance", "preprocessing", "markers",
                                   "composition", "milo", "milode", "enrichment", "qc", "communication", "pca",
+                                  "evidence",
                                   "mito", "qcstates", "embedding", "reliability", "planner",
                                   "seqqc", "hashing", "vdj", "offtarget", "hpa",
                                   "cytokines", "cytokine", "cytosig",

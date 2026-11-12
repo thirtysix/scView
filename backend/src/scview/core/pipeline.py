@@ -1905,10 +1905,16 @@ def _annotation_decided(adata: ad.AnnData, groupby: str,
         check = marker_randomness.RandomCheck(skipped="check failed")
     try:
         report = cluster_qc.cluster_qc(adata, groupby)
-        damaged = [str(r.group) for r in report.clusters if any(f in _DAMAGE_FLAGS for f in r.flags)]
     except Exception as exc:
         logger.info("Damaged-cluster check skipped: %s", exc)
-        damaged = []
+        report = None
+    return decide_clusters(check, report, marker_map)
+
+
+def decide_clusters(check, report, marker_map) -> tuple[dict[str, str], dict[str, list[str]]]:
+    """``_annotation_decided`` from a random-marker check and a cluster QC report (None: not run),
+    so ``core/cluster_evidence.py`` shows the decision the annotator makes from the same inputs."""
+    damaged = [str(r.group) for r in report.clusters if any(f in _DAMAGE_FLAGS for f in r.flags)] if report else []
     in_map = {str(g) for g in marker_map}
     best = {str(g): t for g, t in check.best.items()}
     to_ai = sorted((g for g in damaged if g in in_map and _HIGH_MITO_TYPE.search(best.get(g, ""))), key=str)

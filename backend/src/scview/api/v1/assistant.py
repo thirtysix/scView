@@ -31,7 +31,7 @@ from scview.core.assistant import (
 )
 from scview.core.guards import enforce_query_limits
 from scview.core.rag.retrieve import retrieve_context
-from scview.core import results_store, selection_facts
+from scview.core import cluster_evidence, results_store, selection_facts
 from scview.core.rag.router import RouteState, classify_intent, mentions_app_ui, wants_methods
 
 logger = logging.getLogger(__name__)
@@ -325,6 +325,10 @@ async def _warm_cluster_qc(adaptor, kwargs: dict) -> None:
         await asyncio.to_thread(adaptor.qc_per_cell, True)
     except Exception as exc:  # grounding skips QC on its own if this fails
         logger.debug("cluster QC warm-up failed: %s", exc)
+    try:  # each cluster's evidence (random-marker null, cached): the facts read the cache only
+        await asyncio.to_thread(cluster_evidence.for_adaptor, adaptor)
+    except Exception as exc:  # no clustering, a bad column: no evidence facts
+        logger.debug("cluster evidence warm-up failed: %s", exc)
 
 
 @router.post("/datasets/{dataset_id}/assistant/chat", response_model=ChatResponse)

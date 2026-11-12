@@ -242,6 +242,27 @@ def _add_qc_states(adaptor, lines: list[str], sources: list[ChatSource]) -> None
                                   evidence="\n".join(st_lines[1:])))
 
 
+def _add_cluster_evidence(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """Why each cluster was labelled or flagged (core/cluster_evidence.py), so "why is cluster 5
+    low quality?" is answered from the rule's own numbers. Cached only: the chat route warms it
+    in a thread (api/v1/assistant._warm_cluster_qc); never computed on the loop."""
+    from scview.core import cluster_evidence
+
+    try:
+        report = cluster_evidence.cached(adaptor)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: cluster evidence failed: %s", exc)
+        return
+    if report is None:
+        return
+    ev_lines, cites = cluster_evidence.grounding_block(report)
+    lines.extend(ev_lines)
+    head = cites[0][0] if cites else ""
+    for t, d in cites:
+        ev = [ln.strip() for ln in ev_lines if f"[{t}]" in ln]
+        sources.append(ChatSource(kind="result", ref=t, detail=d, evidence="\n".join(ev if t != head else ev_lines[1:])))
+
+
 def _add_embedding_reliability(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """Per-cell neighbour preservation of a plot (core/embedding_reliability.py),
     only once it has been computed for this dataset."""
@@ -1076,6 +1097,7 @@ def build_grounding_context(
                 sources.append(ChatSource(kind="result", ref=t, detail=d, evidence="\n".join(ev)))
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("assistant: cluster QC failed: %s", exc)
+        _add_cluster_evidence(adaptor, lines, sources)
         # % mito by cell type: does the global ceiling cut one type hard (advisory).
         try:
             mito_lines, mito_detail = mito_by_type.grounding_lines(adaptor)
