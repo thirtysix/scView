@@ -107,7 +107,7 @@ export const MODALITIES_HELP: Record<string, string> = {
   "clonotypes.repertoire_by":
     "The column whose groups the diversity, overlap and gene usage views compare, usually samples or cell types.",
   "clonotypes.rarefy":
-    "Diversity grows with the number of cells sampled, so larger groups look more diverse. Rarefy subsamples every group to the size of the smallest and averages several draws, for a fair comparison. Groups below the minimum are left out.",
+    "Diversity grows with the number of cells sampled, so larger groups look more diverse. Rarefy subsamples every group to the size of the smallest, 20 seeded draws, and shows their mean and SD, for a fair comparison. Groups below the minimum cells are left out.",
   "clonotypes.usage":
     "Which V or J gene segments each group's receptors use, as a share of its clonotypes (each clone counted once) or of its cells. Rows are groups and columns genes; compare rows to see segments one group favours.",
 
