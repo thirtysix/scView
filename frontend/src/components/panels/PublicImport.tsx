@@ -13,7 +13,7 @@ import {
   type DiscoverSearch,
 } from "@/api/publicImport";
 import { Caption, capText } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
 
@@ -123,15 +123,19 @@ export function PublicImport({ onClose }: { onClose: () => void }) {
     <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4" data-testid="public-import">
       <div className="flex items-start justify-between gap-2">
         <div>
-          <h3 className="flex items-center gap-1.5 text-sm font-semibold text-slate-700">
-            Import a public dataset from CELLxGENE Discover
-            <InfoTip label="About public datasets" width={320}>
-              CELLxGENE Discover (cellxgene.cziscience.com) publishes curated single-cell datasets with
-              their cell types and the study they come from. scView downloads the chosen dataset's .h5ad
-              from datasets.cellxgene.cziscience.com, pinned to its version id, so the exact file can be
-              fetched again. The data is licensed CC BY 4.0: cite it (the citation is kept with the
-              dataset and shown in its info, the methods and the report).
-            </InfoTip>
+          <h3 className="text-sm font-semibold text-slate-700">
+            <HoverTip
+              width={320}
+              tip={<>
+                CELLxGENE Discover (cellxgene.cziscience.com) publishes curated single-cell datasets with
+                their cell types and the study they come from. scView downloads the chosen dataset's .h5ad
+                from datasets.cellxgene.cziscience.com, pinned to its version id, so the exact file can be
+                fetched again. The data is licensed CC BY 4.0: cite it (the citation is kept with the
+                dataset and shown in its info, the methods and the report).
+              </>}
+            >
+              Import a public dataset from CELLxGENE Discover
+            </HoverTip>
           </h3>
           <p className="mt-0.5 text-xs text-slate-500">
             The list comes from Discover's public API and is refreshed once a day. Nothing is downloaded

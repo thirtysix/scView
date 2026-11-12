@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { AlertTriangle, Copy, Info, Loader2 } from "lucide-react";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { Caption } from "@/components/common/Caption";
 import { getStructure, type ColumnSummary, type DatasetStructure, type KeyedArray, type TableSummary, type UnsNode } from "@/api/structure";
 import {
@@ -154,12 +154,17 @@ export function ObjectInspector({ datasetId, refreshKey = 0 }: { datasetId: stri
     <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-600" data-testid="object-inspector">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-1.5">
-          <h3 className="text-sm font-semibold text-slate-700">Object</h3>
-          <InfoTip label="About the object summary">
-            What the AnnData file holds: the expression matrices (X, .raw, layers), the cell (obs) and gene
-            (var) tables, embeddings and graphs (obsm, obsp, varm) and stored results (uns). Matrix values come
-            from a sample, so this is quick on any size of dataset.
-          </InfoTip>
+          <h3 className="text-sm font-semibold text-slate-700">
+            <HoverTip
+              tip={<>
+                What the AnnData file holds: the expression matrices (X, .raw, layers), the cell (obs) and gene
+                (var) tables, embeddings and graphs (obsm, obsp, varm) and stored results (uns). Matrix values come
+                from a sample, so this is quick on any size of dataset.
+              </>}
+            >
+              Object
+            </HoverTip>
+          </h3>
           {data && (
             <span className="text-slate-500">
               {data.n_obs.toLocaleString()} x {data.n_vars.toLocaleString()}, {MODE_LABEL[data.mode]}

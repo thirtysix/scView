@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, ChevronDown, ChevronRight, Loader2 } from "lucide-react";
 import { getMitoByType, type MitoByType as Report, type TypeMito } from "@/api/mitoByType";
 import { Caption } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { MitoRefilter } from "@/components/qc/MitoRefilter";
 import { useDatasetStore } from "@/stores/datasetStore";
 
@@ -203,14 +203,18 @@ export function MitoByType({
           className="flex items-center gap-1 text-sm font-semibold text-slate-700"
         >
           {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-          Mito by cell type
+          <HoverTip
+            width={300}
+            tip={<>
+              Cell types differ in their normal mitochondrial share, so one % mito ceiling can remove most
+              cells of a type with a high baseline and few of another. Each type&apos;s own bound here is its
+              median + 3 MADs. The filtering step applies them when &quot;% mito: Per cell type&quot; is chosen; on a
+              dataset already filtered, Re-filter applies them from the original upload. {data?.citations ?? ""}
+            </>}
+          >
+            Mito by cell type
+          </HoverTip>
         </button>
-        <InfoTip label="About per-type mito bounds" width={300}>
-          Cell types differ in their normal mitochondrial share, so one % mito ceiling can remove most
-          cells of a type with a high baseline and few of another. Each type&apos;s own bound here is its
-          median + 3 MADs. The filtering step applies them when &quot;% mito: Per cell type&quot; is chosen; on a
-          dataset already filtered, Re-filter applies them from the original upload. {data?.citations ?? ""}
-        </InfoTip>
         {loading ? (
           <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-400" />
         ) : headline ? (

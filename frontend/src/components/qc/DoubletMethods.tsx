@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { ClassifierCalls, DetectorAgreement } from "@/api/qc";
 import { Caption } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { ThresholdHistogram } from "@/components/plots/ThresholdHistogram";
 import { classifierText, detectorAgreementText } from "@/lib/doubletMethods";
 import { pct } from "@/lib/qcThresholds";
@@ -37,14 +37,18 @@ export function DoubletMethods({
   const cell = "px-2 text-right tabular-nums";
   return (
     <div className="space-y-1.5 border-t border-slate-100 pt-2" data-testid="doublet-methods">
-      <h5 className="flex items-center gap-1 text-[11px] font-semibold text-slate-700">
-        {methods ? "Scrublet vs the scDblFinder-style classifier" : "scDblFinder-style classifier"}
-        <InfoTip width={300} label="About the classifier">
-          A second doublet detector after Germain et al. 2021 (scDblFinder): it adds pairs of cells of different
-          clusters together as artificial doublets, trains a model to tell them from the real cells, and scores
-          each cell with a model that did not see it. Its threshold is its own, set in each channel; the threshold
-          above is Scrublet&apos;s.
-        </InfoTip>
+      <h5 className="text-[11px] font-semibold text-slate-700">
+        <HoverTip
+          width={300}
+          tip={<>
+            A second doublet detector after Germain et al. 2021 (scDblFinder): it adds pairs of cells of different
+            clusters together as artificial doublets, trains a model to tell them from the real cells, and scores
+            each cell with a model that did not see it. Its threshold is its own, set in each channel; the threshold
+            above is Scrublet&apos;s.
+          </>}
+        >
+          {methods ? "Scrublet vs the scDblFinder-style classifier" : "scDblFinder-style classifier"}
+        </HoverTip>
       </h5>
       {showHistogram && (
         <div className="space-y-1">

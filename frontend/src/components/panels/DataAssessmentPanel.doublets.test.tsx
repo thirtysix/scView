@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { DatasetInfo } from "@/api/types";
+import { hoverTip } from "@/test/hoverTip";
 
 const { apiFetch } = vi.hoisted(() => ({ apiFetch: vi.fn() }));
 vi.mock("@/api/client", () => ({ apiFetch }));
@@ -65,8 +66,7 @@ describe("DataAssessmentPanel doublet detector choice", () => {
     expect(Array.from((select as HTMLSelectElement).options).map((o) => o.textContent)).toEqual([
       "Scrublet (default)", "scDblFinder-style classifier", "Both, and compare",
     ]);
-    fireEvent.mouseEnter(screen.getByRole("button", { name: "About the doublet detectors" }));
-    expect(screen.getByText(/trains a model on artificial doublets/)).toBeTruthy();
+    expect(await hoverTip(screen.getByText("Detector"))).toMatch(/trains a model on artificial doublets/);
     fireEvent.change(select, { target: { value: "both" } });
     fireEvent.click(screen.getByRole("button", { name: /re-run this step/i }));
     await waitFor(() => expect(fetchSpy).toHaveBeenCalled());

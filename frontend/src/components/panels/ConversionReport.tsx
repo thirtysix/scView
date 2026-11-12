@@ -1,7 +1,7 @@
 import { FileCode2 } from "lucide-react";
 
 import type { ConversionReport as Report } from "@/api/types";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { conversionHeadline } from "@/lib/conversion";
 
 /**
@@ -19,14 +19,18 @@ export function ConversionReport({ report }: { report: Report }) {
       <div className="flex items-start gap-2">
         <FileCode2 className="mt-0.5 h-4 w-4 flex-shrink-0 text-slate-400" />
         <div className="min-w-0 flex-1">
-          <p className="flex items-center gap-1.5 text-slate-700">
-            <span>{conversionHeadline(report)}</span>
-            <InfoTip label="About the conversion" width={300}>
-              The R converter read the object with its own Bioconductor or Seurat accessors and wrote
-              an AnnData file: assays become X and layers, colData the cell table (obs), rowData the
-              gene table (var), reducedDims embeddings (obsm). This list is stored with the dataset
-              (uns scview_conversion), so a later export still says where everything came from.
-            </InfoTip>
+          <p className="text-slate-700">
+            <HoverTip
+              width={300}
+              tip={<>
+                The R converter read the object with its own Bioconductor or Seurat accessors and wrote
+                an AnnData file: assays become X and layers, colData the cell table (obs), rowData the
+                gene table (var), reducedDims embeddings (obsm). This list is stored with the dataset
+                (uns scview_conversion), so a later export still says where everything came from.
+              </>}
+            >
+              {conversionHeadline(report)}
+            </HoverTip>
           </p>
           {listed && (
             <details className="mt-1.5" open={skipped.length > 0}>

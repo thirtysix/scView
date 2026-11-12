@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Loader2, Play, Tag } from "lucide-react";
 import Plot from "@/components/plots/Plot";
 import { Panel } from "@/components/common/Panel";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { Caption } from "@/components/common/Caption";
 import {
   getHashing,
@@ -209,19 +209,23 @@ export function Hashing({
   return (
     <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-3" data-testid="hashing">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5">
-          <h3 className="text-sm font-semibold text-slate-700">Cell hashing</h3>
-          <InfoTip label="About cell hashing" width={320}>
-            Hashtag oligos (TotalSeq hashtags, or 10x CellPlex CMOs) label each sample&apos;s cells before
-            they share a lane. HTODemux (Seurat, Stoeckius et al. 2018) normalises each tag by CLR across
-            cells, groups the cells by k-medoids into tags + 1 groups, fits a negative binomial to each
-            tag&apos;s lowest group and calls a cell positive above the fit&apos;s 0.99 quantile: one positive
-            tag is a singlet, two or more a doublet, none a negative. hashedDrops (DropletUtils) removes an
-            ambient estimate and uses the log fold change of the top tag over the second (confident singlet)
-            and of the second over the ambient level (doublet). Both are ports checked against R on the same
-            counts.
-          </InfoTip>
-        </div>
+        <h3 className="text-sm font-semibold text-slate-700">
+          <HoverTip
+            width={320}
+            tip={<>
+              Hashtag oligos (TotalSeq hashtags, or 10x CellPlex CMOs) label each sample&apos;s cells before
+              they share a lane. HTODemux (Seurat, Stoeckius et al. 2018) normalises each tag by CLR across
+              cells, groups the cells by k-medoids into tags + 1 groups, fits a negative binomial to each
+              tag&apos;s lowest group and calls a cell positive above the fit&apos;s 0.99 quantile: one positive
+              tag is a singlet, two or more a doublet, none a negative. hashedDrops (DropletUtils) removes an
+              ambient estimate and uses the log fold change of the top tag over the second (confident singlet)
+              and of the second over the ambient level (doublet). Both are ports checked against R on the same
+              counts.
+            </>}
+          >
+            Cell hashing
+          </HoverTip>
+        </h3>
         <span className="flex items-center gap-2">
           {call && (
             <span className="text-[11px] text-slate-500" data-testid="hashing-badge">

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Loader2, Tag } from "lucide-react";
 import Plot from "@/components/plots/Plot";
 import { Panel } from "@/components/common/Panel";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { Caption } from "@/components/common/Caption";
 import { getQcStates, saveQcStateLabel, type QcStateGroup, type QcStateLabelSaved, type QcStates as Result } from "@/api/qcStates";
 import { useCategoryColors, useCategoryOrder } from "@/hooks/useCategoryColors";
@@ -138,18 +138,22 @@ export function QcStates({ datasetId, refreshKey = 0 }: { datasetId: string; ref
   return (
     <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-3" data-testid="qc-states">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5">
-          <h3 className="text-sm font-semibold text-slate-700">QC states: RP share vs mito</h3>
-          <InfoTip label="About the QC state check" width={300}>
-            A fixed mito cutoff can remove most of one cell type when that type holds a second state:
-            cells with a low ribosomal-protein (RP) share, high % mito and more ambient RNA. For each
-            group with 100 or more cells, a Gaussian mixture with 1 and with 2 components is fitted to
-            each cell&apos;s RP share of non-mito counts and its % mito (both on the logit scale). Two
-            states are called only when the BIC improves by more than 10, the components are apart
-            (Ashman&apos;s D of 2 or more) and the smaller holds at least 5% of cells. The state can be
-            saved as a label, to compare or exclude it, instead of a threshold.
-          </InfoTip>
-        </div>
+        <h3 className="text-sm font-semibold text-slate-700">
+          <HoverTip
+            width={300}
+            tip={<>
+              A fixed mito cutoff can remove most of one cell type when that type holds a second state:
+              cells with a low ribosomal-protein (RP) share, high % mito and more ambient RNA. For each
+              group with 100 or more cells, a Gaussian mixture with 1 and with 2 components is fitted to
+              each cell&apos;s RP share of non-mito counts and its % mito (both on the logit scale). Two
+              states are called only when the BIC improves by more than 10, the components are apart
+              (Ashman&apos;s D of 2 or more) and the smaller holds at least 5% of cells. The state can be
+              saved as a label, to compare or exclude it, instead of a threshold.
+            </>}
+          >
+            QC states: RP share vs mito
+          </HoverTip>
+        </h3>
         <span className="flex items-center gap-2">
           {loading && <Loader2 className="h-3 w-3 animate-spin text-slate-400" />}
           <button

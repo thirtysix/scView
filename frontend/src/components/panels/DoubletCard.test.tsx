@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import type { DoubletSummary } from "@/api/qc";
+import { hoverTip } from "@/test/hoverTip";
 
 const { getDoublets, applyDoubletThreshold, refresh } = vi.hoisted(() => ({
   getDoublets: vi.fn(),
@@ -188,7 +189,7 @@ describe("DoubletCard", () => {
       "STIM: Scrublet's automatic threshold (0.5412) called 9 of 7,263 cells (0.12%), where about 5.8% are expected.",
     );
     expect(warning).not.toHaveTextContent("CTRL");
-    fireEvent.mouseEnter(screen.getByRole("button", { name: "Why STIM is flagged" }));
+    await hoverTip(screen.getByText(/^STIM: Scrublet's automatic threshold/));
     const tip = screen.getByRole("tooltip");
     expect(tip).toHaveTextContent("The automatic threshold may have missed the doublets in this channel");
     expect(tip).toHaveTextContent("Look at this channel's histogram");
@@ -315,7 +316,9 @@ describe("DoubletCard", () => {
       "Scrublet calls 31 cells doublets, the classifier 12; both call 9 (26.5% of the cells either calls).",
     );
     expect(screen.getByTestId("doublet-classifier-text")).toHaveTextContent("The classifier calls 12 cells doublets (6.0%)");
-    expect(screen.getByRole("button", { name: "About the classifier" })).toBeInTheDocument();
+    expect(await hoverTip(screen.getByText("Scrublet vs the scDblFinder-style classifier"))).toContain(
+      "A second doublet detector after Germain et al. 2021",
+    );
   });
 
   it("with the classifier alone shows its own calls per channel, nothing to threshold", async () => {

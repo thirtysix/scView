@@ -1,5 +1,5 @@
 import type { FilterPreview, FilterThresholds } from "@/api/qc";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { asDoubletSource, choiceText, sourceOptionLabel } from "@/lib/doubletSource";
 
 /**
@@ -31,7 +31,19 @@ export function DoubletFilterControl({
             onChange={(e) => onChange({ drop_doublets: e.target.checked })}
             className="h-3 w-3"
           />
-          Also drop predicted doublets
+          <HoverTip
+            disabled={!choose}
+            tip={<>
+              Cell hashing sees doublets of two samples by their tags: the ground truth for those. It cannot
+              see two cells of one sample; Scrublet, from simulated doublets of the cells&apos; own profiles,
+              is the only call that can (the scDblFinder-style classifier too, when the doublet step ran it).
+              Auto uses hashing when it was run, else the classifier when it ran, else Scrublet; Both
+              detectors drops only a cell both call; Either drops a cell any of them calls. The counts are cells called on the current
+              data.
+            </>}
+          >
+            Also drop predicted doublets
+          </HoverTip>
         </label>
         {choose && (
           <label className="flex items-center gap-1">
@@ -48,14 +60,6 @@ export function DoubletFilterControl({
                 </option>
               ))}
             </select>
-            <InfoTip label="About the doublet sources">
-              Cell hashing sees doublets of two samples by their tags: the ground truth for those. It cannot
-              see two cells of one sample; Scrublet, from simulated doublets of the cells&apos; own profiles,
-              is the only call that can (the scDblFinder-style classifier too, when the doublet step ran it).
-              Auto uses hashing when it was run, else the classifier when it ran, else Scrublet; Both
-              detectors drops only a cell both call; Either drops a cell any of them calls. The counts are cells called on the current
-              data.
-            </InfoTip>
           </label>
         )}
         {choices && !choose && <span className="text-slate-400">({choices.auto.label})</span>}

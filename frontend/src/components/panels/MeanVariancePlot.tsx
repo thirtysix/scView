@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import Plot from "@/components/plots/Plot";
 import { Panel } from "@/components/common/Panel";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { getMeanVariance, type MeanVariance } from "@/api/normalization";
 import { meanVarianceTraces, splitGenes, type BeforeMode } from "@/lib/meanVariance";
 import { NORMALIZATION_LABELS } from "@/lib/pipelineParams";
@@ -59,15 +59,18 @@ export function MeanVariancePlot({ datasetId, refreshKey = 0 }: { datasetId: str
   return (
     <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5">
-          <h3 className="text-sm font-semibold text-slate-700">Mean–variance</h3>
-          <InfoTip label="About the mean–variance plot">
-            Counts vary more than a Poisson (var = mean) as the mean grows. The shifted log damps
-            that trend; analytic Pearson residuals put a gene that varies by sampling alone at
-            about 1 at any mean, so genes above the line vary for a reason. Red: the dataset&apos;s
-            current variable genes.
-          </InfoTip>
-        </div>
+        <h3 className="text-sm font-semibold text-slate-700">
+          <HoverTip
+            tip={<>
+              Counts vary more than a Poisson (var = mean) as the mean grows. The shifted log damps
+              that trend; analytic Pearson residuals put a gene that varies by sampling alone at
+              about 1 at any mean, so genes above the line vary for a reason. Red: the dataset&apos;s
+              current variable genes.
+            </>}
+          >
+            Mean–variance
+          </HoverTip>
+        </h3>
         {data ? (
           <div className="flex items-center gap-1 text-[11px]">
             <span className="text-slate-500">Before:</span>

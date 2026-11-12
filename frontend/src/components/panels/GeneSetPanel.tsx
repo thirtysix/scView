@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import Plot from "@/components/plots/Plot";
 import { plotConfig } from "@/lib/plotConfig";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { EnrichmentPrograms } from "@/components/unified/EnrichmentPrograms";
 import {
   fetchEnrichmentNetwork,
@@ -1181,14 +1181,18 @@ export function GeneSetPanel() {
                 onChange={(e) => setExcludeRiboMito(e.target.checked)}
                 className="h-4 w-4 rounded border-slate-300"
               />
-              Exclude ribosomal / mitochondrial genes from the query
-              <InfoTip width={320}>
-                Ribosomal and mitochondrial genes dominate single-cell markers as an artifact and
-                are shared across nearly every pathway and cell-type signature, so they inflate a
-                generic "translation" program and mislabel cell types (an ovary cluster tagged as
-                pancreatic). Dropping them from the query &mdash; not the background &mdash; fixes
-                both. Turn off only to study ribosome biology directly.
-              </InfoTip>
+              <HoverTip
+                width={320}
+                tip={<>
+                  Ribosomal and mitochondrial genes dominate single-cell markers as an artifact and
+                  are shared across nearly every pathway and cell-type signature, so they inflate a
+                  generic "translation" program and mislabel cell types (an ovary cluster tagged as
+                  pancreatic). Dropping them from the query &mdash; not the background &mdash; fixes
+                  both. Turn off only to study ribosome biology directly.
+                </>}
+              >
+                Exclude ribosomal / mitochondrial genes from the query
+              </HoverTip>
             </label>
 
             {/* MSigDB Collection tree */}
@@ -1228,16 +1232,20 @@ export function GeneSetPanel() {
                 {/* Bar chart */}
                 <div className="min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                   <div className="mb-2 flex items-center justify-between">
-                    <h3 className="flex items-center gap-1.5 text-sm font-semibold text-slate-700">
-                      Top {Math.min(topN, topResults.length)}
-                      {sortedResults.length > topN ? ` of ${sortedResults.length.toLocaleString()}` : ""} enriched terms by{" "}
-                      {SORT_LABELS[sortField]}
-                      <InfoTip width={300}>
-                        The most significant gene sets, ranked. Gene-set collections are highly
-                        redundant, so this list tends to repeat itself: the biggest, vaguest parent
-                        terms carry the most statistical power and crowd the top with rephrasings of
-                        one signal. Programs, on the right, groups those rephrasings.
-                      </InfoTip>
+                    <h3 className="text-sm font-semibold text-slate-700">
+                      <HoverTip
+                        width={300}
+                        tip={<>
+                          The most significant gene sets, ranked. Gene-set collections are highly
+                          redundant, so this list tends to repeat itself: the biggest, vaguest parent
+                          terms carry the most statistical power and crowd the top with rephrasings of
+                          one signal. Programs, on the right, groups those rephrasings.
+                        </>}
+                      >
+                        Top {Math.min(topN, topResults.length)}
+                        {sortedResults.length > topN ? ` of ${sortedResults.length.toLocaleString()}` : ""} enriched terms by{" "}
+                        {SORT_LABELS[sortField]}
+                      </HoverTip>
                     </h3>
                     <div className="flex items-center gap-2">
                       <label className="text-xs text-slate-500">
@@ -1323,13 +1331,17 @@ export function GeneSetPanel() {
 
                 {/* Programs: the same result, collapsed by gene overlap */}
                 <div className="min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-                  <h3 className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-slate-700">
-                    Programs
-                    <InfoTip width={300}>
-                      The same terms, grouped by how far their genes overlap. Terms describing one
-                      signal collapse into a single row named after the strongest of them. This is
-                      the readable version of the chart on the left.
-                    </InfoTip>
+                  <h3 className="mb-2 text-sm font-semibold text-slate-700">
+                    <HoverTip
+                      width={300}
+                      tip={<>
+                        The same terms, grouped by how far their genes overlap. Terms describing one
+                        signal collapse into a single row named after the strongest of them. This is
+                        the readable version of the chart on the left.
+                      </>}
+                    >
+                      Programs
+                    </HoverTip>
                   </h3>
                   <EnrichmentPrograms
                     data={network}
