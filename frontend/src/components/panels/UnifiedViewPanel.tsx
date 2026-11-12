@@ -97,6 +97,7 @@ import type { WorldRect } from "@/lib/cellOutlines";
 import { TRANSCRIPT_COLORS, shownText, transcriptColorCss } from "@/lib/transcripts";
 import { SPATIAL_EMBEDDING } from "@/api/spatial";
 import type { TissueMode } from "@/components/plots/EmbeddingScatter";
+import { helpText } from "@/lib/help";
 
 const SUBTABS = [
   { id: "markers" as const, label: "Markers" },
@@ -1603,7 +1604,7 @@ export function UnifiedViewPanel() {
           )}
           {/* Tab bar: wraps onto a second row rather than scrolling, so no tab is cut off */}
           <TabList
-            tabs={SUBTABS.filter(
+            tabs={SUBTABS.map((tab) => ({ ...tab, hint: helpText(`tab.${tab.id}`) })).filter(
               (tab) =>
                 (tab.id !== "protein" || dataset?.protein) &&
                 // Accessibility: only a dataset with 10x Multiome peaks has it. Peaks arrive with the

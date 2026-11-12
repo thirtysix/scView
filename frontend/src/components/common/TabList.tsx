@@ -3,6 +3,8 @@ import { useRef, type KeyboardEvent, type ReactNode } from "react";
 export interface TabItem<T extends string> {
   id: T;
   label: ReactNode;
+  /** A one-line explanation shown on hover (lib/help `tab.<id>`). */
+  hint?: string;
 }
 
 interface TabListProps<T extends string> {
@@ -71,6 +73,7 @@ export function TabList<T extends string>({
             onClick={() => onChange(tab.id)}
             onKeyDown={(e) => onKeyDown(e, i)}
             className={tabClassName(selected)}
+            title={tab.hint}
           >
             {tab.label}
           </button>
