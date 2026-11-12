@@ -6,6 +6,8 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.73.0] - 2026-11-12
+
 Bigger, paged small-multiple grids that export as figures; steadier lasso and camera.
 
 ### Added
