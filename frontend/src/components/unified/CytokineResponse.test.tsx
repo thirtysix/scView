@@ -4,6 +4,7 @@ import type { CytokineResult } from "@/api/cytokines";
 import type { DatasetInfo } from "@/api/types";
 import { comparisonText, cytokineHeatmap } from "@/lib/cytokines";
 import { GENES_HELP } from "@/lib/help/genes";
+import { hoverTip } from "@/test/hoverTip";
 
 const { getCytokineActivity, getActivitySummary } = vi.hoisted(() => ({
   getCytokineActivity: vi.fn(),
@@ -130,11 +131,10 @@ describe("CytokineResponse", () => {
     expect(screen.getByText(/Left out: pDC/)).toBeTruthy();
   });
 
-  it("keeps 'Compared with' naming its select beside the help icon, whose tip comes from the catalog", () => {
+  it("keeps 'Compared with' naming its select, and hovering it shows the catalog tip", async () => {
     render(<CytokineResponse groupByColumn="cell_type" setGroupByColumn={() => {}} />);
     expect((screen.getByLabelText("Compared with") as HTMLSelectElement).value).toBe("rest");
-    fireEvent.click(screen.getByRole("button", { name: "About the reference" }));
-    expect(screen.getByRole("tooltip").textContent).toBe(GENES_HELP["cytokine.reference"]);
+    expect(await hoverTip(screen.getByText("Compared with"))).toBe(GENES_HELP["cytokine.reference"]);
   });
 
   it("labels a tall heatmap's columns on top, where they are in view", async () => {
@@ -188,6 +188,6 @@ describe("CytokineResponse", () => {
     render(<UnifiedActivitySubtab onScore={vi.fn()} groupByColumn="" setGroupByColumn={() => {}} />);
     fireEvent.click(screen.getByRole("button", { name: "Cytokine response" }));
     expect(screen.getByRole("button", { name: "Score cytokine response" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "About cytokine response" })).toBeTruthy();
+    expect(await hoverTip(screen.getByText("Cytokine response (CytoSig)"))).toContain("CytoSig (Jiang et al. 2021)");
   });
 });

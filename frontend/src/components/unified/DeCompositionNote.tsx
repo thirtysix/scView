@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { fetchDEComposition, type DEComposition, type DECompositionParams } from "@/api/de";
 import { CapNote, Caption } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { balancedText, compositionRule, flaggedGroups, formatPoints, formatShare } from "@/lib/deComposition";
 import { prettyObsLabel } from "@/lib/formatting";
 import { errorMessage } from "@/lib/errorMessage";
@@ -108,10 +108,9 @@ export function DeCompositionNote({
     >
       <div className="flex flex-wrap items-center justify-between gap-1.5">
         <span className="flex items-center gap-1 font-medium">
-          {data?.warn ? "Composition differs between the sides" : "Composition of the two sides"}
-          <InfoTip label="About the composition check" width={280}>
-            {compositionRule(data ?? { threshold_points: 10, min_cells: 10 })}
-          </InfoTip>
+          <HoverTip tip={compositionRule(data ?? { threshold_points: 10, min_cells: 10 })} width={280}>
+            {data?.warn ? "Composition differs between the sides" : "Composition of the two sides"}
+          </HoverTip>
           {loading && <Loader2 className="h-3 w-3 animate-spin text-slate-400" />}
         </span>
         {picker}

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, Download, Grid2x2, Link2, Loader2 } from "lucide-react";
 import { fetchCoexpression, type CoexpressionMethod, type CoexpressionResponse } from "@/api/coexpression";
 import { AddToGeneListMenu } from "@/components/common/AddToGeneListMenu";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { sortCoexpressed, type CoexpressedSort } from "@/lib/coexpressedGenes";
 import { downloadCsv } from "@/lib/csv";
 import { MAX_GRID_GENES } from "@/lib/geneCoexpression";
@@ -121,14 +121,21 @@ export function CoexpressedGenes({ datasetId, activeGene, onGeneSelect }: Props)
     <div className="space-y-2 rounded-lg border border-slate-200 p-2 text-xs">
       <div className="flex items-center gap-1.5">
         <Link2 className="h-3.5 w-3.5 text-slate-400" />
-        <h4 className="font-semibold text-slate-600">Co-expressed genes</h4>
-        <InfoTip width={300}>
-          Correlation across cells with the gene on the scatter, on the log-normalised expression
-          the overlay shows. Pearson follows the values; Spearman their ranks, so a few very high
-          cells weigh less. A gene needs at least 10 expressing cells, or 1% of the chosen cells if
-          that is more, and some variation, or it is skipped. Correlation across all cells is
-          mostly driven by cell type; within one cell type it points to programmes inside it.
-        </InfoTip>
+        <h4 className="font-semibold text-slate-600">
+          <HoverTip
+            tip={
+              <>
+                Correlation across cells with the gene on the scatter, on the log-normalised expression
+                the overlay shows. Pearson follows the values; Spearman their ranks, so a few very high
+                cells weigh less. A gene needs at least 10 expressing cells, or 1% of the chosen cells if
+                that is more, and some variation, or it is skipped. Correlation across all cells is
+                mostly driven by cell type; within one cell type it points to programmes inside it.
+              </>
+            }
+          >
+            Co-expressed genes
+          </HoverTip>
+        </h4>
       </div>
 
       <div className="flex items-center gap-1.5">

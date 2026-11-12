@@ -9,7 +9,7 @@ import {
   type ScoreMethod,
 } from "@/api/genesetScore";
 import { Caption } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { errorMessage } from "@/lib/errorMessage";
 
 const METRICS: { id: DepthMetric; label: string; title: string }[] = [
@@ -99,20 +99,24 @@ export function ScoreDepthCheck({ datasetId, genes }: { datasetId: string; genes
           onClick={run}
           disabled={busy || genes.length === 0}
           className="flex items-center gap-1 rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[11px] text-slate-600 hover:bg-slate-50 disabled:opacity-50"
-          title="Score the set with every method and see which ones follow sequencing depth on this dataset"
         >
           {busy && <Loader2 className="h-3 w-3 animate-spin" />}
-          Check depth
+          <HoverTip
+            tip={
+              <>
+                Scores the set with score_genes, AUCell, ssGSEA and GSVA, then Spearman&apos;s rho of each score
+                with the cell&apos;s total counts and with its number of detected genes: {groups}. The
+                sentence quotes the measure either method follows most; |rho| of 0.3 or more reads
+                &quot;follows depth&quot;, 0.1 to 0.3 &quot;weakly&quot;. The last column is each
+                method&apos;s rho with score_genes. A biological signal can also
+                go with depth (activated cells make more RNA), so a correlation says the score and depth
+                move together, not which causes which.
+              </>
+            }
+          >
+            Check depth
+          </HoverTip>
         </button>
-        <InfoTip width={300} label="How the depth check works">
-          Scores the set with score_genes, AUCell, ssGSEA and GSVA, then Spearman&apos;s rho of each score
-          with the cell&apos;s total counts and with its number of detected genes: {groups}. The
-          sentence quotes the measure either method follows most; |rho| of 0.3 or more reads
-          &quot;follows depth&quot;, 0.1 to 0.3 &quot;weakly&quot;. The last column is each
-          method&apos;s rho with score_genes. A biological signal can also
-          go with depth (activated cells make more RNA), so a correlation says the score and depth
-          move together, not which causes which.
-        </InfoTip>
       </div>
       {error && <p className="mt-1 text-[11px] text-red-600">{error}</p>}
       {check && (

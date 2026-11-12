@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { Download, Maximize, Minus, Plus } from "lucide-react";
 import type { DiagramNode, DiagramShape, PathwayDiagramModel, PathwayValues, Segment } from "@/api/pathways";
 import { Caption } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { Help } from "@/components/common/Help";
 import type { ClipSetting, ResolvedColorScale } from "@/lib/colorScale";
 import { ClipControl } from "@/components/plots/ClipControl";
@@ -482,7 +482,7 @@ export function PathwayDiagram({ model, values, height = 460, onOpenPathway, dat
       <Legend scale={scale} values={values} palette={palette}
         clip={<ClipControl clip={clip} dataMin={scale?.dataMin} dataMax={scale?.dataMax} onChange={setClipOverride} overridden={clipOverride !== null} />} />
       <p className="text-[10px] leading-snug text-slate-500" data-testid="pathway-attribution">
-        <Help id="pathway.diagram" label="How to read the pathway diagram" width={300} /> Diagram:{" "}
+        <Help id="pathway.diagram">Diagram:</Help>{" "}
         <a href={model.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
           Reactome
         </a>{" "}
@@ -504,14 +504,19 @@ function Legend({ scale, values, palette, clip }: { scale: ResolvedColorScale | 
   return (
     <div className="flex flex-col gap-0.5" data-testid="pathway-legend">
       <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-600">
-        <span className="inline-flex items-center gap-1">
-          Log fold change
-          <InfoTip>
-            Each protein, gene or RNA box takes its gene&apos;s log fold change from the chosen result; a complex
-            or set takes the mean of its measured genes. Grey: none of its genes is in the result. White: no
-            gene (a small molecule). The colours say a gene&apos;s RNA changed, not that the step is more or
-            less active.
-          </InfoTip>
+        <span>
+          <HoverTip
+            tip={
+              <>
+                Each protein, gene or RNA box takes its gene&apos;s log fold change from the chosen result; a complex
+                or set takes the mean of its measured genes. Grey: none of its genes is in the result. White: no
+                gene (a small molecule). The colours say a gene&apos;s RNA changed, not that the step is more or
+                less active.
+              </>
+            }
+          >
+            Log fold change
+          </HoverTip>
         </span>
         {scale && (
           <span className="inline-flex items-center gap-1 tabular-nums">

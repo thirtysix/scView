@@ -10,7 +10,7 @@ import {
 } from "@/api/deOverlap";
 import { AddToGeneListMenu } from "@/components/common/AddToGeneListMenu";
 import { Caption, CapNote } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { Help } from "@/components/common/Help";
 import { UpSetPlot } from "@/components/plots/UpSetPlot";
 import { rgbCss } from "@/lib/categoryColors";
@@ -249,22 +249,18 @@ export function DeOverlap({ datasetId, latestResultId, pThreshold, fcThreshold, 
 
   return (
     <div className="rounded-lg border border-slate-200 text-xs" data-testid="de-overlap">
-      <div className="flex items-center gap-1 pr-2.5">
-        <button
-          type="button"
-          onClick={() => setOpen(!open)}
-          aria-expanded={open}
-          className="flex min-w-0 flex-1 items-center gap-1.5 px-2.5 py-2 text-left font-medium text-slate-700 hover:bg-slate-50"
-          title="Compare the significant genes of several DE results the backend still keeps (UpSet plot)"
-        >
-          {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-          Compare DE results
-          <span className="font-normal text-slate-400">
-            {list ? `${nResults} kept for this dataset` : ""}
-          </span>
-        </button>
-        <Help id="de.overlap" label="About comparing DE results" align="right" />
-      </div>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-1.5 px-2.5 py-2 text-left font-medium text-slate-700 hover:bg-slate-50"
+      >
+        {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+        <Help id="de.overlap">Compare DE results</Help>
+        <span className="font-normal text-slate-400">
+          {list ? `${nResults} kept for this dataset` : ""}
+        </span>
+      </button>
       {open && (
         <div className="flex flex-col gap-2 border-t border-slate-100 p-2.5">
           {listError && <div className="rounded border border-red-200 bg-red-50 p-2 text-red-700">{listError}</div>}
@@ -433,7 +429,7 @@ export function DeOverlap({ datasetId, latestResultId, pThreshold, fcThreshold, 
                       </button>
                     )}
                     <Caption testId="de-overlap-caption">
-                      <Help id="de.upset" label="How to read the UpSet plot" width={300} /> Comparisons run since the backend started (last {keep} kept, over all datasets).{" "}
+                      <Help id="de.upset">Comparisons run since the backend started (last {keep} kept, over all datasets).</Help>{" "}
                       {overlapSummary(res)}{" "}
                       {res.restrict_to_common_tested
                         ? `Only the ${res.n_common_tested.toLocaleString()} genes every picked result tested are counted.`
@@ -449,12 +445,17 @@ export function DeOverlap({ datasetId, latestResultId, pThreshold, fcThreshold, 
                     {res.pairs.length > 0 && (
                       <details className="text-[11px] text-slate-500">
                         <summary className="cursor-pointer select-none">
-                          Pairwise overlap (Jaccard){" "}
-                          <InfoTip>
-                            Shared genes over the genes in either set. With direction &ldquo;Both&rdquo;, two DE results
-                            share a gene only when it moves the same way in both; opposite signs are counted as
-                            discordant.
-                          </InfoTip>
+                          <HoverTip
+                            tip={
+                              <>
+                                Shared genes over the genes in either set. With direction &ldquo;Both&rdquo;, two DE results
+                                share a gene only when it moves the same way in both; opposite signs are counted as
+                                discordant.
+                              </>
+                            }
+                          >
+                            Pairwise overlap (Jaccard)
+                          </HoverTip>
                         </summary>
                         <table className="mt-1">
                           <tbody>

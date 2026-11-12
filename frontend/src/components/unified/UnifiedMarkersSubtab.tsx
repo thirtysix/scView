@@ -277,7 +277,7 @@ export function UnifiedMarkersSubtab({
   return (
     <div className="flex flex-col gap-2">
       {/* Groupby + group selectors */}
-      <div className="flex flex-wrap items-center gap-2">
+      <Help id="markers.groups" className="flex flex-wrap gap-2">
         {groupbyColumns.length > 0 && (
           <select
             value={groupByColumn}
@@ -302,8 +302,7 @@ export function UnifiedMarkersSubtab({
             </option>
           ))}
         </select>
-        <Help id="markers.groups" label="About the marker groups" align="right" />
-      </div>
+      </Help>
 
       {/* Filter + count */}
       <div className="flex items-center gap-2">
@@ -320,7 +319,6 @@ export function UnifiedMarkersSubtab({
         <span className="text-[10px] text-slate-400 whitespace-nowrap">
           {sortedMarkers.length}/{currentMarkers.length}
         </span>
-        <Help id="markers.table" label="How to read the marker table" align="right" width={300} />
         <button
           onClick={handleExportCSV}
           disabled={sortedMarkers.length === 0}
@@ -341,8 +339,9 @@ export function UnifiedMarkersSubtab({
 
       {/* |FC| threshold filter */}
       <div className="flex items-center gap-2">
-        <label className="text-[11px] font-medium text-slate-500 whitespace-nowrap">|FC| &ge;</label>
-        <Help id="markers.min-fc" label="About the fold-change filter" />
+        <label className="text-[11px] font-medium text-slate-500 whitespace-nowrap">
+          <Help id="markers.min-fc">|FC| &ge;</Help>
+        </label>
         <input
           aria-label="Minimum |FC|"
           type="range"
@@ -361,17 +360,14 @@ export function UnifiedMarkersSubtab({
       {/* Effect size vs specificity for the group's markers */}
       {specificity && (
         <div>
-          <div className="flex items-center gap-1">
-            <button
-              onClick={() => setShowPlot((v) => !v)}
-              aria-expanded={showPlot}
-              className="flex items-center gap-1 text-[11px] text-slate-500 hover:text-slate-700"
-            >
-              {showPlot ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-              Specificity vs fold change
-            </button>
-            <Help id="markers.specificity-plot" label="How to read the specificity plot" />
-          </div>
+          <button
+            onClick={() => setShowPlot((v) => !v)}
+            aria-expanded={showPlot}
+            className="flex items-center gap-1 text-[11px] text-slate-500 hover:text-slate-700"
+          >
+            {showPlot ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+            <Help id="markers.specificity-plot">Specificity vs fold change</Help>
+          </button>
           {showPlot && (
             <div className="mt-1 rounded-lg border border-slate-200 p-1">
               <MarkerSpecificityPlot
@@ -398,10 +394,9 @@ export function UnifiedMarkersSubtab({
               <SortableTh
                 onSort={() => handleSort("gene")}
                 sort={ariaSort("gene", sortField, sortDir)}
-                title="Gene symbol; click a row to colour the scatter by its expression"
                 className="px-2 py-1.5 text-left font-medium text-slate-600"
               >
-                Gene {sortIcon("gene")}
+                <Help id="markers.table">Gene</Help> {sortIcon("gene")}
               </SortableTh>
               <SortableTh
                 onSort={() => handleSort("logfoldchange")}

@@ -11,7 +11,7 @@ import { runGsea, type EnrichmentResult, type GseaResponse, type GseaTerm } from
 import { MSigDBCollectionTree, DEFAULT_MSIGDB_COLLECTIONS } from "@/components/panels/MSigDBCollectionTree";
 import { downloadCsv } from "@/lib/csv";
 import { Caption } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { Help } from "@/components/common/Help";
 import { EnrichmentPrograms } from "@/components/unified/EnrichmentPrograms";
 import { EnrichmentTermsTable } from "@/components/unified/EnrichmentTermsTable";
@@ -360,6 +360,17 @@ export function UnifiedEnrichmentSubtab({
     );
   }, [sortedResults, groupByColumn, selectedGroup, datasetId]);
 
+  const computeTip = (
+    <>
+      Compute tests up to N markers as a set (over-representation): genes in at least 20% of
+      the group&apos;s cells with adjusted p &lt; 0.05, highest fold change first, ribosomal and mitochondrial genes left out,
+      against every gene the marker test saw. GSEA ranks every gene by
+      its marker score (Wilcoxon, this group against the other cells) and asks whether a gene
+      set bunches at the top or bottom of that ranking, so it needs no top-N cut-off. The
+      leading edge is the genes that drive the score; click a row to score them on the scatter.
+    </>
+  );
+
   if (!dataset || !datasetId) {
     return <div className="text-xs text-slate-400">No dataset loaded.</div>;
   }
@@ -384,10 +395,9 @@ export function UnifiedEnrichmentSubtab({
           </select>
         </div>
         <div className="flex-1">
-          <div className="mb-1 flex items-center gap-1">
-            <label className="block text-[11px] font-medium text-slate-500">Group</label>
-            <Help id="enrichment.group" label="About the column and group" align="right" />
-          </div>
+          <label className="mb-1 block text-[11px] font-medium text-slate-500">
+            <Help id="enrichment.group">Group</Help>
+          </label>
           <select
             aria-label="Group"
             value={selectedGroup}
@@ -435,10 +445,9 @@ export function UnifiedEnrichmentSubtab({
       {/* Top N + compute */}
       <div className="flex items-end gap-2">
         <div className="w-20">
-          <div className="mb-1 flex items-center gap-1">
-            <label className="block text-[11px] font-medium text-slate-500">Top N</label>
-            <Help id="enrichment.top-n" label="About Top N" />
-          </div>
+          <label className="mb-1 block text-[11px] font-medium text-slate-500">
+            <Help id="enrichment.top-n">Top N</Help>
+          </label>
           <input
             aria-label="Top N"
             type="number"
@@ -455,25 +464,16 @@ export function UnifiedEnrichmentSubtab({
           className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-white transition hover:bg-primary/90 disabled:opacity-50"
         >
           {isComputing && <Loader2 className="h-3 w-3 animate-spin" />}
-          Compute
+          <HoverTip tip={computeTip}>Compute</HoverTip>
         </button>
         <button
           onClick={handleGsea}
           disabled={isRunningGsea || !selectedGroup || selectedCollections.size === 0}
-          title="GSEA on every gene, ranked by its marker score: no top-N cut-off"
           className="flex items-center gap-1.5 rounded-md border border-primary px-3 py-1.5 text-xs font-medium text-primary transition hover:bg-primary/5 disabled:opacity-50"
         >
           {isRunningGsea && <Loader2 className="h-3 w-3 animate-spin" />}
-          GSEA
+          <HoverTip tip={computeTip}>GSEA</HoverTip>
         </button>
-        <InfoTip width={300}>
-          Compute tests up to N markers as a set (over-representation): genes in at least 20% of
-          the group&apos;s cells with adjusted p &lt; 0.05, highest fold change first, ribosomal and mitochondrial genes left out,
-          against every gene the marker test saw. GSEA ranks every gene by
-          its marker score (Wilcoxon, this group against the other cells) and asks whether a gene
-          set bunches at the top or bottom of that ranking, so it needs no top-N cut-off. The
-          leading edge is the genes that drive the score; click a row to score them on the scatter.
-        </InfoTip>
         {sortedResults.length > 0 && (
           <button
             onClick={handleExportCSV}
@@ -493,14 +493,19 @@ export function UnifiedEnrichmentSubtab({
           onChange={(e) => setExcludeRiboMito(e.target.checked)}
           className="h-3 w-3 rounded border-slate-300"
         />
-        Exclude ribosomal / mitochondrial genes
-        <InfoTip width={300}>
-          Ribosomal and mitochondrial genes dominate single-cell markers as an artifact and are
-          shared across nearly every pathway and cell-type signature, so they inflate a generic
-          "translation" program and mislabel cell types (an ovary cluster tagged as pancreatic).
-          Dropping them from the query — not the background — fixes both. Turn off only to study
-          ribosome biology directly.
-        </InfoTip>
+        <HoverTip
+          tip={
+            <>
+              Ribosomal and mitochondrial genes dominate single-cell markers as an artifact and are
+              shared across nearly every pathway and cell-type signature, so they inflate a generic
+              "translation" program and mislabel cell types (an ovary cluster tagged as pancreatic).
+              Dropping them from the query — not the background — fixes both. Turn off only to study
+              ribosome biology directly.
+            </>
+          }
+        >
+          Exclude ribosomal / mitochondrial genes
+        </HoverTip>
       </label>
 
       {/* MSigDB collection tree */}
@@ -536,13 +541,20 @@ export function UnifiedEnrichmentSubtab({
         <div className="grid grid-cols-1 gap-3 @4xl:grid-cols-2">
         <div className="min-w-0">
         <div className="mb-1 flex items-center gap-1 px-0.5">
-          <h4 className="text-[11px] font-semibold text-slate-700">Terms</h4>
-          <InfoTip width={300}>
-            Every enriched gene set, ranked by adjusted p-value. Gene-set collections are highly
-            redundant, so this list repeats itself: the biggest, vaguest parent terms have the most
-            statistical power and crowd the top with rephrasings of one signal. The programs view
-            groups those rephrasings.
-          </InfoTip>
+          <h4 className="text-[11px] font-semibold text-slate-700">
+            <HoverTip
+              tip={
+                <>
+                  Every enriched gene set, ranked by adjusted p-value. Gene-set collections are highly
+                  redundant, so this list repeats itself: the biggest, vaguest parent terms have the most
+                  statistical power and crowd the top with rephrasings of one signal. The programs view
+                  groups those rephrasings.
+                </>
+              }
+            >
+              Terms
+            </HoverTip>
+          </h4>
           <span className="ml-auto text-[10px] tabular-nums text-slate-400">
             {sortedResults.length}
           </span>
@@ -561,12 +573,19 @@ export function UnifiedEnrichmentSubtab({
 
         <div className="min-w-0">
           <div className="mb-1 flex items-center gap-1 px-0.5">
-            <h4 className="text-[11px] font-semibold text-slate-700">Programs</h4>
-            <InfoTip width={300}>
-              The same terms, grouped by how much their genes overlap. Terms that describe one
-              signal collapse into a single row named after the strongest of them. This is the
-              readable version of the list on the left.
-            </InfoTip>
+            <h4 className="text-[11px] font-semibold text-slate-700">
+              <HoverTip
+                tip={
+                  <>
+                    The same terms, grouped by how much their genes overlap. Terms that describe one
+                    signal collapse into a single row named after the strongest of them. This is the
+                    readable version of the list on the left.
+                  </>
+                }
+              >
+                Programs
+              </HoverTip>
+            </h4>
           </div>
           <EnrichmentPrograms
             data={network}
@@ -596,8 +615,9 @@ export function UnifiedEnrichmentSubtab({
       {gsea && (
         <div className="text-xs">
           <div className="mb-1 flex items-center gap-1 px-0.5">
-            <h4 className="text-[11px] font-semibold text-slate-700">GSEA: {selectedGroup}, every gene ranked</h4>
-            <Help id="enrichment.gsea" label="How to read the GSEA table" width={300} />
+            <h4 className="text-[11px] font-semibold text-slate-700">
+              <Help id="enrichment.gsea">GSEA: {selectedGroup}, every gene ranked</Help>
+            </h4>
           </div>
           <GseaResults
             data={gsea}

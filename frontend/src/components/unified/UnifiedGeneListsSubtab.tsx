@@ -16,7 +16,7 @@ import {
 import { enrichGeneLists, type EnrichmentResult, type GeneListEnrichmentResponse } from "@/api/enrichment";
 import { collectionLabel, customCollectionFromLists, GeneSetUploadError } from "@/api/genesets";
 import { GeneSearch } from "@/components/common/GeneSearch";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { Help } from "@/components/common/Help";
 import { DEFAULT_MSIGDB_COLLECTIONS, MSigDBCollectionTree } from "@/components/panels/MSigDBCollectionTree";
 import { EnrichmentTermsTable } from "@/components/unified/EnrichmentTermsTable";
@@ -95,7 +95,7 @@ export function UnifiedGeneListsSubtab({ onGeneClick, onScoreGeneSet, activeGene
       <div className="grid grid-cols-[minmax(110px,36%)_1fr] gap-2">
         {/* Left: the lists */}
         <div className="flex min-w-0 flex-col gap-1.5">
-          <div className="flex flex-wrap items-center gap-1">
+          <div className="flex flex-wrap gap-1">
             <button type="button" className={btn} onClick={() => create("New list")} title="An empty list to add genes to">
               <Plus className="h-3 w-3" />
               New
@@ -104,10 +104,9 @@ export function UnifiedGeneListsSubtab({ onGeneClick, onScoreGeneSet, activeGene
               type="button"
               className={btn}
               onClick={() => fileRef.current?.click()}
-              title="A .txt or .csv of genes, or a .gmt (one list per set)"
             >
               <Upload className="h-3 w-3" />
-              Import
+              <Help id="genelists.lists">Import</Help>
             </button>
             <input
               ref={fileRef}
@@ -117,7 +116,6 @@ export function UnifiedGeneListsSubtab({ onGeneClick, onScoreGeneSet, activeGene
               aria-label="Import gene lists from a file"
               onChange={onFile}
             />
-            <Help id="genelists.lists" label="About gene lists" />
           </div>
           {importError && <p className="text-red-600">{importError}</p>}
           {lists.length === 0 ? (
@@ -384,26 +382,24 @@ function ListDetail({
               aria-pressed={gridOn}
               disabled={!ready || gridGenes.length < MIN_GRID_GENES}
               onClick={showGrid}
-              title={`The embedding coloured by each gene, side by side (the first ${MAX_GRID_GENES} genes in the dataset)`}
             >
               <Grid2x2 className="h-3.5 w-3.5" />
-              {gridOn ? "Hide feature grid" : "Feature grid"}
+              <Help id="genelists.actions">{gridOn ? "Hide feature grid" : "Feature grid"}</Help>
             </button>
-            <button type="button" className={btn} disabled={!ready || present.length === 0} onClick={() => showMarkerPlot("dotplot")} title="Open the Marker Genes dot plot with these genes">
-              Dot plot
+            <button type="button" className={btn} disabled={!ready || present.length === 0} onClick={() => showMarkerPlot("dotplot")}>
+              <Help id="genelists.actions">Dot plot</Help>
             </button>
-            <button type="button" className={btn} disabled={!ready || present.length === 0} onClick={() => showMarkerPlot("heatmap")} title="Open the Marker Genes heatmap with these genes">
-              Heatmap
+            <button type="button" className={btn} disabled={!ready || present.length === 0} onClick={() => showMarkerPlot("heatmap")}>
+              <Help id="genelists.actions">Heatmap</Help>
             </button>
             <button
               type="button"
               className={btn}
               disabled={!ready || present.length === 0 || !!scoringName}
               onClick={() => scoreGenes(present, list.name)}
-              title="Score each cell for these genes together (with the scoring method chosen) and colour the plot by it"
             >
               {scoringName ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-              Score
+              <Help id="genelists.actions">Score</Help>
             </button>
             <ScoringMethodChoice label="with" />
             <button
@@ -413,7 +409,7 @@ function ListDetail({
               disabled={!ready || present.length === 0}
               onClick={() => setPanel(panel === "enrich" ? null : "enrich")}
             >
-              Enrichment
+              <Help id="genelists.actions">Enrichment</Help>
             </button>
             <button
               type="button"
@@ -421,12 +417,10 @@ function ListDetail({
               aria-pressed={panel === "save"}
               disabled={list.genes.length === 0}
               onClick={() => setPanel(panel === "save" ? null : "save")}
-              title="Save as a custom gene-set collection, usable in enrichment and the gene-set browsers"
             >
               <FolderPlus className="h-3.5 w-3.5" />
-              Save as collection
+              <Help id="genelists.actions">Save as collection</Help>
             </button>
-            <Help id="genelists.actions" label="What each button does" align="right" width={300} />
           </div>
           {ready && present.length > MAX_PLOT_GENES && (
             <p className="text-[10px] text-amber-700">
@@ -525,12 +519,20 @@ function GeneListEnrichment({
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-slate-200 p-2">
       <div className="flex items-center gap-2">
-        <span className="font-semibold text-slate-700">Pathway enrichment</span>
-        <InfoTip width={280}>
-          Over-representation (hypergeometric test, Benjamini-Hochberg adjusted) of the list&apos;s genes
-          that this dataset measures, against the chosen collections. The background is every gene the
-          dataset measures.
-        </InfoTip>
+        <span className="font-semibold text-slate-700">
+          <HoverTip
+            width={280}
+            tip={
+              <>
+                Over-representation (hypergeometric test, Benjamini-Hochberg adjusted) of the list&apos;s genes
+                that this dataset measures, against the chosen collections. The background is every gene the
+                dataset measures.
+              </>
+            }
+          >
+            Pathway enrichment
+          </HoverTip>
+        </span>
         <span className="flex-1" />
         <button
           type="button"
