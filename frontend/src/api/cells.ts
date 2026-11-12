@@ -9,7 +9,7 @@ export interface CellFilterResult {
   mask: string | null;
 }
 
-/** The server's reason for a refused request (FastAPI `detail`, a 422's first message). */
+/** The server's reason for a refused request (FastAPI `detail`, a 422's messages). */
 function reason(e: unknown): Error {
   return new Error(errorMessage(e));
 }
