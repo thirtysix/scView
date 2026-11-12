@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Download, Loader2, RefreshCw } from "lucide-react";
 import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
 import {
   clusterReportHtmlUrl,
   fetchClusterReport,
@@ -116,18 +117,21 @@ export function ReportSubtab({ groupByColumn }: { groupByColumn: string }) {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-2">
-        <div className="flex rounded border border-slate-300 text-xs" role="group" aria-label="Report on">
-          {(["cluster", "gene"] as const).map((m) => (
-            <button
-              key={m}
-              type="button"
-              aria-pressed={mode === m}
-              onClick={() => setMode(m)}
-              className={`px-2.5 py-1 font-medium ${mode === m ? "bg-primary text-white" : "text-slate-600 hover:bg-slate-50"}`}
-            >
-              {m === "cluster" ? "Cluster" : "Gene"}
-            </button>
-          ))}
+        <div className="flex items-center gap-1">
+          <div className="flex rounded border border-slate-300 text-xs" role="group" aria-label="Report on">
+            {(["cluster", "gene"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                aria-pressed={mode === m}
+                onClick={() => setMode(m)}
+                className={`px-2.5 py-1 font-medium ${mode === m ? "bg-primary text-white" : "text-slate-600 hover:bg-slate-50"}`}
+              >
+                {m === "cluster" ? "Cluster" : "Gene"}
+              </button>
+            ))}
+          </div>
+          <Help id="report.mode" label="Cluster or gene report" />
         </div>
         <div className="flex items-center gap-2">
           <button

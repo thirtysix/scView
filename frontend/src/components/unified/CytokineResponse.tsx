@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { Loader2 } from "lucide-react";
 import Plot from "@/components/plots/Plot";
 import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
 import { Caption } from "@/components/common/Caption";
 import { RequestError } from "@/components/common/RequestError";
 import { useDatasetStore } from "@/stores/datasetStore";
@@ -33,6 +34,7 @@ export function CytokineResponse({ groupByColumn, setGroupByColumn }: Props) {
   const datasetId = useDatasetStore((s) => s.currentDatasetId);
   const [mode, setMode] = useState<"groups" | "conditions">("groups");
   const [reference, setReference] = useState<"rest" | "all">("rest");
+  const referenceId = useId(); // its label sits beside a Help button, so it names the select by id
   const [condition, setCondition] = useState("");
   const [a, setA] = useState("");
   const [b, setB] = useState("");
@@ -110,7 +112,7 @@ export function CytokineResponse({ groupByColumn, setGroupByColumn }: Props) {
         </InfoTip>
       </div>
 
-      <fieldset className="flex gap-3 text-xs text-slate-600">
+      <fieldset className="flex items-center gap-3 text-xs text-slate-600">
         <legend className="sr-only">Compare</legend>
         <label className="flex items-center gap-1">
           <input type="radio" name="cytokine-mode" checked={mode === "groups"} onChange={() => setMode("groups")} />
@@ -120,6 +122,7 @@ export function CytokineResponse({ groupByColumn, setGroupByColumn }: Props) {
           <input type="radio" name="cytokine-mode" checked={mode === "conditions"} onChange={() => setMode("conditions")} />
           Two conditions
         </label>
+        <Help id="cytokine.mode" label="About the two comparisons" />
       </fieldset>
 
       <div className="grid grid-cols-2 gap-2">
@@ -135,13 +138,21 @@ export function CytokineResponse({ groupByColumn, setGroupByColumn }: Props) {
           </select>
         </label>
         {mode === "groups" ? (
-          <label className="text-[11px] font-medium text-slate-500">
-            Compared with
-            <select value={reference} onChange={(e) => setReference(e.target.value as "rest" | "all")} className={`mt-1 ${selectCls}`}>
+          <div className="text-[11px] font-medium text-slate-500">
+            <span className="flex items-center gap-1">
+              <label htmlFor={referenceId}>Compared with</label>
+              <Help id="cytokine.reference" label="About the reference" align="right" />
+            </span>
+            <select
+              id={referenceId}
+              value={reference}
+              onChange={(e) => setReference(e.target.value as "rest" | "all")}
+              className={`mt-1 ${selectCls}`}
+            >
               <option value="rest">the rest of the cells</option>
               <option value="all">all cells</option>
             </select>
-          </label>
+          </div>
         ) : (
           <label className="text-[11px] font-medium text-slate-500">
             Condition column
@@ -237,7 +248,8 @@ export function CytokineResponse({ groupByColumn, setGroupByColumn }: Props) {
             ]}
             testId="cytokine-caption"
           >
-            CytoSig z-score per {result.mode === "conditions" ? "comparison" : "group"}: {comparisonText(result)}.
+            <Help id="cytokine.heatmap" label="How to read the cytokine heatmap" width={300} /> CytoSig z-score per{" "}
+            {result.mode === "conditions" ? "comparison" : "group"}: {comparisonText(result)}.
             Red: looks like a response to the cytokine; blue: the opposite.
           </Caption>
 

@@ -12,6 +12,7 @@ import { MSigDBCollectionTree, DEFAULT_MSIGDB_COLLECTIONS } from "@/components/p
 import { downloadCsv } from "@/lib/csv";
 import { Caption } from "@/components/common/Caption";
 import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
 import { EnrichmentPrograms } from "@/components/unified/EnrichmentPrograms";
 import { EnrichmentTermsTable } from "@/components/unified/EnrichmentTermsTable";
 import { GseaResults } from "@/components/unified/GseaResults";
@@ -383,7 +384,10 @@ export function UnifiedEnrichmentSubtab({
           </select>
         </div>
         <div className="flex-1">
-          <label className="mb-1 block text-[11px] font-medium text-slate-500">Group</label>
+          <div className="mb-1 flex items-center gap-1">
+            <label className="block text-[11px] font-medium text-slate-500">Group</label>
+            <Help id="enrichment.group" label="About the column and group" align="right" />
+          </div>
           <select
             aria-label="Group"
             value={selectedGroup}
@@ -431,7 +435,10 @@ export function UnifiedEnrichmentSubtab({
       {/* Top N + compute */}
       <div className="flex items-end gap-2">
         <div className="w-20">
-          <label className="mb-1 block text-[11px] font-medium text-slate-500">Top N</label>
+          <div className="mb-1 flex items-center gap-1">
+            <label className="block text-[11px] font-medium text-slate-500">Top N</label>
+            <Help id="enrichment.top-n" label="About Top N" />
+          </div>
           <input
             aria-label="Top N"
             type="number"
@@ -590,6 +597,7 @@ export function UnifiedEnrichmentSubtab({
         <div className="text-xs">
           <div className="mb-1 flex items-center gap-1 px-0.5">
             <h4 className="text-[11px] font-semibold text-slate-700">GSEA: {selectedGroup}, every gene ranked</h4>
+            <Help id="enrichment.gsea" label="How to read the GSEA table" width={300} />
           </div>
           <GseaResults
             data={gsea}

@@ -10,6 +10,7 @@ import {
   type ActivityRef,
 } from "@/api/activity";
 import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
 import { activityLabel, deProfile } from "@/lib/activity";
 import { downloadCsv } from "@/lib/csv";
 import { formatPct } from "@/lib/deDetection";
@@ -115,18 +116,21 @@ export function DEActivity({ datasetId, result, labelA, labelB, onScore }: Props
         </button>
       </div>
 
-      <div className="flex rounded-md border border-slate-200 p-0.5">
-        {(Object.keys(NETWORK_LABELS) as ActivityNetwork[]).map((n) => (
-          <button
-            key={n}
-            onClick={() => pick(n)}
-            className={`flex-1 rounded px-2 py-1 transition ${
-              network === n ? "bg-primary font-medium text-white" : "text-slate-500 hover:text-slate-700"
-            }`}
-          >
-            {NETWORK_LABELS[n].long}
-          </button>
-        ))}
+      <div className="flex items-center gap-1.5">
+        <div className="flex flex-1 rounded-md border border-slate-200 p-0.5">
+          {(Object.keys(NETWORK_LABELS) as ActivityNetwork[]).map((n) => (
+            <button
+              key={n}
+              onClick={() => pick(n)}
+              className={`flex-1 rounded px-2 py-1 transition ${
+                network === n ? "bg-primary font-medium text-white" : "text-slate-500 hover:text-slate-700"
+              }`}
+            >
+              {NETWORK_LABELS[n].long}
+            </button>
+          ))}
+        </div>
+        <Help id="de.activity-network" label="TFs or pathways" align="right" />
       </div>
 
       {error && (

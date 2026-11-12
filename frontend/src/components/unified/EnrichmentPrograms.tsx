@@ -228,6 +228,7 @@ export function EnrichmentPrograms({
                     <button
                       onClick={(e) => { e.stopPropagation(); onScoreGenes(c.genes, c.label); }}
                       title={`Score all ${c.genes.length} genes across this program on the scatter`}
+                      aria-label={`Score the ${c.label} program on the scatter`}
                       className="flex-shrink-0 text-slate-300 opacity-0 transition-opacity hover:text-primary focus:opacity-100 group-hover:opacity-100"
                     >
                       {isScoring ? <Loader2 className="h-3 w-3 animate-spin text-blue-500" /> : <Target className="h-3 w-3" />}
@@ -235,6 +236,7 @@ export function EnrichmentPrograms({
                     <button
                       onClick={(e) => { e.stopPropagation(); onAsk(c.label, c.terms, c.genes); }}
                       title="Ask the co-pilot about this program"
+                      aria-label={`Ask the co-pilot about the ${c.label} program`}
                       className="flex-shrink-0 text-slate-300 opacity-0 transition-opacity hover:text-primary focus:opacity-100 group-hover:opacity-100"
                     >
                       <Sparkles className="h-3 w-3" />

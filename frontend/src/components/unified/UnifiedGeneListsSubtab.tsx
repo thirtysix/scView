@@ -17,6 +17,7 @@ import { enrichGeneLists, type EnrichmentResult, type GeneListEnrichmentResponse
 import { collectionLabel, customCollectionFromLists, GeneSetUploadError } from "@/api/genesets";
 import { GeneSearch } from "@/components/common/GeneSearch";
 import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
 import { DEFAULT_MSIGDB_COLLECTIONS, MSigDBCollectionTree } from "@/components/panels/MSigDBCollectionTree";
 import { EnrichmentTermsTable } from "@/components/unified/EnrichmentTermsTable";
 import { useDatasetGenes, type DatasetGenes } from "@/hooks/useDatasetGenes";
@@ -94,7 +95,7 @@ export function UnifiedGeneListsSubtab({ onGeneClick, onScoreGeneSet, activeGene
       <div className="grid grid-cols-[minmax(110px,36%)_1fr] gap-2">
         {/* Left: the lists */}
         <div className="flex min-w-0 flex-col gap-1.5">
-          <div className="flex flex-wrap gap-1">
+          <div className="flex flex-wrap items-center gap-1">
             <button type="button" className={btn} onClick={() => create("New list")} title="An empty list to add genes to">
               <Plus className="h-3 w-3" />
               New
@@ -116,6 +117,7 @@ export function UnifiedGeneListsSubtab({ onGeneClick, onScoreGeneSet, activeGene
               aria-label="Import gene lists from a file"
               onChange={onFile}
             />
+            <Help id="genelists.lists" label="About gene lists" />
           </div>
           {importError && <p className="text-red-600">{importError}</p>}
           {lists.length === 0 ? (
@@ -424,6 +426,7 @@ function ListDetail({
               <FolderPlus className="h-3.5 w-3.5" />
               Save as collection
             </button>
+            <Help id="genelists.actions" label="What each button does" align="right" width={300} />
           </div>
           {ready && present.length > MAX_PLOT_GENES && (
             <p className="text-[10px] text-amber-700">

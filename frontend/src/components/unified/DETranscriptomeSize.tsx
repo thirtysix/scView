@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import type { TranscriptomeSize } from "@/api/de";
 import { ViolinPlot } from "@/components/plots/ViolinPlot";
+import { Help } from "@/components/common/Help";
 import { sizeCaution } from "@/lib/transcriptomeSize";
 
 interface Props {
@@ -28,7 +29,8 @@ export function DETranscriptomeSize({ size, labelA, labelB, groupColumn }: Props
     <div role="alert" className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-[10px] leading-snug text-amber-900">
       <p>
         <span className="font-semibold">Transcriptome size differs: </span>
-        {sizeCaution(size, labelA, labelB)}
+        {sizeCaution(size, labelA, labelB)}{" "}
+        <Help id="de.transcriptome-size" label="About transcriptome size" />
       </p>
       <div className="mt-1.5 rounded border border-amber-100 bg-white">
         <ViolinPlot
