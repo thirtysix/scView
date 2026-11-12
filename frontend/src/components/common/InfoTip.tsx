@@ -40,6 +40,7 @@ export function InfoTip({
     <span className="relative inline-flex">
       <button
         type="button"
+        data-infotip=""
         aria-label={label}
         aria-expanded={open}
         aria-describedby={open ? id : undefined}

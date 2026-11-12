@@ -13,7 +13,7 @@ export function focusableIn(root: HTMLElement): HTMLElement[] {
 
 /**
  * Keyboard behaviour of a dialog or popover, from the moment it mounts:
- * focus moves into it (the first field or button, unless something in it
+ * focus moves into it (the first field or button, never an info icon, unless something in it
  * already has focus), Tab and Shift+Tab stay inside it (`trap`; off for a
  * floating panel used alongside the plot), Escape calls `onClose`, and on
  * unmount focus goes back to where it was before.
@@ -29,7 +29,11 @@ export function useDialogFocus(
     const root = ref.current;
     if (!root) return;
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    if (!root.contains(document.activeElement)) (focusableIn(root)[0] ?? root).focus();
+    if (!root.contains(document.activeElement)) {
+      // Not an info icon: focus arriving on one opens its tip over the dialog (Tab still reaches it).
+      const items = focusableIn(root);
+      (items.find((el) => !el.hasAttribute("data-infotip")) ?? items[0] ?? root).focus();
+    }
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
