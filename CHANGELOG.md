@@ -6,6 +6,24 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.72.0] - 2026-11-12
+
+Unified View explains itself: hover a tab, label, heading or column to see what it does, when to use it and how to read it.
+
+### Added
+- Plain-language tips across the whole Unified View (184 catalog entries plus the existing explanations): every tab,
+  toolbar control, card heading, non-obvious field, column header and plot says what it does, when it is useful and
+  how to read it. Hover the thing itself for a moment (or focus its field from the keyboard); there are no info
+  icons. Written for biologists new to single-cell analysis; defaults and numbers in them are checked against the code.
+- The tip texts live in one catalog (`frontend/src/lib/help/`), so the same wording appears wherever a thing is
+  shown; a test checks every tip used exists, every entry is used, and every Unified View tab has one.
+
+### Changed
+- Tips are larger (12 px) and drawn above everything, so a scrolling panel or card edge no longer cuts them off;
+  they open above or below, whichever has room, and stay inside the window. The remaining info icons outside
+  Unified View use the same tip.
+- Opening a dialog no longer puts keyboard focus on an info icon (which opened its tip over the dialog).
+
 ## [0.71.1] - 2026-11-12
 
 Data Assessment no longer runs out of memory on a dense-ish 10k-cell dataset; split Seurat v5 objects convert.
