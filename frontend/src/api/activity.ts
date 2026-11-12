@@ -1,4 +1,5 @@
 import { apiFetch } from "./client";
+import { announceSavedScore } from "@/lib/savedScores";
 
 /** CollecTRI (TFs) or PROGENy (pathways): backend core/activity_nets.py. */
 export type ActivityNetwork = "collectri" | "progeny";
@@ -49,6 +50,9 @@ export interface ActivityCells {
   source: string;
   n_targets: number;
   scores: number[];
+  /** Asked to save: the obs column (activity_<source>), or null with save_note saying why */
+  saved_column?: string | null;
+  save_note?: string | null;
 }
 
 export interface DEActivityResult {
@@ -88,14 +92,19 @@ export async function getActivitySummary(
   return apiFetch<ActivitySummary>(`/datasets/${datasetId}/activity/${network}${q}`);
 }
 
+/** One source's activity per cell. `save` (the default: the user drew it) also keeps it as
+ *  an obs column (backend core/saved_scores.py); a session drawing it again passes false. */
 export async function getActivityCells(
   datasetId: string,
   network: ActivityNetwork,
   source: string,
+  save = true,
 ): Promise<ActivityCells> {
-  return apiFetch<ActivityCells>(
-    `/datasets/${datasetId}/activity/${network}/cells?source=${encodeURIComponent(source)}`,
+  const res = await apiFetch<ActivityCells>(
+    `/datasets/${datasetId}/activity/${network}/cells?source=${encodeURIComponent(source)}${save ? "&save=true" : ""}`,
   );
+  if (res.saved_column) announceSavedScore(datasetId, res.saved_column);
+  return res;
 }
 
 export async function getDEActivity(

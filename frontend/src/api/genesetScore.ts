@@ -1,4 +1,5 @@
 import { apiFetch } from "./client";
+import { announceSavedScore } from "@/lib/savedScores";
 
 /** How a gene set is scored per cell (backend api/v1/genesets.py, core/aucell.py,
  *  core/ssgsea.py, core/gsva.py). */
@@ -49,19 +50,27 @@ export interface GeneSetScoreResponse {
   share_below_max_rank: number | null;
   /** ssGSEA / GSVA: how the score was computed, in one line */
   note?: string | null;
+  /** Asked to save: the obs column the score went into (score_<set>), or null with save_note saying why */
+  saved_column?: string | null;
+  save_note?: string | null;
 }
 
-/** Score a gene set on every cell. */
-export function scoreGeneSet(
+/** Score a gene set on every cell. `save` (the default: the user drew it) also keeps the
+ *  score as an obs column named after the set (backend core/saved_scores.py); a session
+ *  drawing it again passes false. */
+export async function scoreGeneSet(
   datasetId: string,
   genes: string[],
   name: string,
   method: ScoreMethod = "score_genes",
+  save = true,
 ): Promise<GeneSetScoreResponse> {
-  return apiFetch<GeneSetScoreResponse>(`/datasets/${datasetId}/genesets/score`, {
+  const res = await apiFetch<GeneSetScoreResponse>(`/datasets/${datasetId}/genesets/score`, {
     method: "POST",
-    body: JSON.stringify({ gene_set: genes, score_name: name, method }),
+    body: JSON.stringify({ gene_set: genes, score_name: name, method, save }),
   });
+  if (res.saved_column) announceSavedScore(datasetId, res.saved_column);
+  return res;
 }
 
 /** Spearman's rho over all cells and the median within groups (null: none to compute). */

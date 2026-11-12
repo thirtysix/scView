@@ -63,6 +63,7 @@ import { useSplitViewStore } from "@/stores/splitViewStore";
 import type { ScatterLegend } from "@/lib/scatterExport";
 import { mapCategoryToColor } from "@/lib/colors";
 import { defaultGroupBy, isCategoricalDtype } from "@/lib/obsColumns";
+import { isScoreColumn, scoreDetail, scoreTitle } from "@/lib/savedScores";
 import { colorByLine, type HoverLine } from "@/lib/hoverInfo";
 import { HoverLineRow } from "@/components/plots/HoverLineRow";
 import { useCategoryColors } from "@/hooks/useCategoryColors";
@@ -823,14 +824,14 @@ export function UnifiedViewPanel() {
     }
     if (o.type === "activity") {
       const ref = { network: o.network, source: o.source };
-      getActivityCells(datasetId, o.network, o.source)
+      getActivityCells(datasetId, o.network, o.source, false)
         .then((res) => handleScoreComplete(new Float32Array(res.scores), activityLabel(o.network, o.source), undefined, ref))
         .catch((err) => console.error("Failed to restore the activity overlay:", err));
       return;
     }
     // A session from before the method choice scored with score_genes.
     const method = o.method ?? "score_genes";
-    scoreGeneSet(datasetId, o.genes, o.name, method)
+    scoreGeneSet(datasetId, o.genes, o.name, method, false)
       .then((res) => handleScoreComplete(new Float32Array(res.scores), o.name, o.genes, undefined, method))
       .catch((err) => console.error("Failed to restore the gene-set overlay:", err));
   }, [pendingOverlay, datasetId, handleGeneClick, handleProteinClick, handleScoreComplete, setPendingOverlay,
@@ -930,6 +931,24 @@ export function UnifiedViewPanel() {
     [dataset, colorColumnName],
   );
   const colorOfCategory = useCategoryColors(colorColumnName);
+
+  // A score column picked in Colour by (a saved gene-set score or activity, S_score): its
+  // violin by the group-by column, as a score drawn from its tab has. From the values the
+  // plot already holds; declared after the group-by effect above, so it redoes the violin
+  // that effect clears.
+  const colorScore = !scatterOverlay && colorColumnInfo && colorColumnName === colorBy && isScoreColumn(colorColumnInfo)
+    ? colorColumnInfo
+    : null;
+  useEffect(() => {
+    if (!colorScore || !groupByColumn || !(colors instanceof Float32Array) || colors.length === 0) return;
+    scoresByGroup(colors, groupByColumn)
+      .then((groups) => {
+        if (!groups) return;
+        setViolinData(groups);
+        setViolinTitle(`${scoreTitle(colorScore)} (${scoreDetail(colorScore)})`);
+      })
+      .catch((err) => console.error("Failed to split the score by group:", err));
+  }, [colorScore?.name, colors, groupByColumn]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Group labels at their centroids, for a categorical colouring (no overlay):
   // on by default up to 40 groups, else as toggled in the toolbar.

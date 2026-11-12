@@ -9,6 +9,7 @@
  */
 import type { ObsColumnInfo } from "@/api/types";
 import { rankGroupingColumns } from "@/lib/obsColumns";
+import { isScoreColumn, scoreDetail, scoreTitle } from "@/lib/savedScores";
 import {
   mapCategoryToColor,
   mapValueToColor,
@@ -83,11 +84,19 @@ export const COMPARE_MAX_COLUMNS = 12;
 export interface CompareColumnOption {
   name: string;
   nValues: number;
+  /** "score": a per-cell score, drawn with a colour bar (lib/savedScores.ts) */
+  group: "grouping" | "score";
+  /** A score's panel title (the set or source) and what it is ("Gene-set score (AUCell)") */
+  title?: string;
+  detail?: string;
+  /** A score the app saved: the control offers to remove it */
+  removable?: boolean;
 }
 
 /**
  * Columns the "Compare colourings" control offers: every grouping a dataset
- * can be coloured by (2–100 groups, no ids), best first (lib/obsColumns.ts).
+ * can be coloured by (2–100 groups, no ids), best first (lib/obsColumns.ts),
+ * then the per-cell scores (saved ones in column order, then the pipeline's).
  */
 export function compareColumnOptions(
   columns: readonly ObsColumnInfo[],
@@ -96,10 +105,23 @@ export function compareColumnOptions(
   userColumns?: readonly string[],
 ): CompareColumnOption[] {
   const byName = new Map(columns.map((c) => [c.name, c]));
-  return rankGroupingColumns(columns, { nCells, activeClustering, userColumns }).map(({ name }) => ({
+  const groupings = rankGroupingColumns(columns, { nCells, activeClustering, userColumns }).map(({ name }) => ({
     name,
     nValues: byName.get(name)!.n_unique,
+    group: "grouping" as const,
   }));
+  const scores = columns
+    .filter(isScoreColumn)
+    .sort((a, b) => Number(!a.saved_score) - Number(!b.saved_score))
+    .map((c) => ({
+      name: c.name,
+      nValues: c.n_unique,
+      group: "score" as const,
+      title: scoreTitle(c),
+      detail: scoreDetail(c),
+      removable: !!c.saved_score,
+    }));
+  return [...groupings, ...scores];
 }
 
 /**

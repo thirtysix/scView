@@ -317,6 +317,28 @@ describe("save then open on the same dataset", () => {
     expect(useSplitViewStore.getState().splitBy).toBeNull();
   });
 
+  it("keeps a comparison with a saved score, and says so when the score is gone", async () => {
+    const score = {
+      name: "score_HALLMARK_TNFA", dtype: "float32", n_unique: 100,
+      saved_score: { kind: "geneset" as const, name: "HALLMARK_TNFA", method: "score_genes" },
+    };
+    const withScore = kang({ obs_columns: [...kang().obs_columns, score] });
+    useDatasetStore.getState().setCurrentDataset(withScore);
+    useSplitViewStore.getState().setCompareColumns(["cell_type", "score_HALLMARK_TNFA"]);
+    const session = parseSession(JSON.parse(sessionJson(captureSession())));
+    expect(session.view?.compare_columns).toEqual(["cell_type", "score_HALLMARK_TNFA"]);
+    resetStores();
+    api.getDataset.mockResolvedValue(withScore);
+    await restoreSession(session);
+    expect(useSplitViewStore.getState().compareColumns).toEqual(["cell_type", "score_HALLMARK_TNFA"]);
+
+    resetStores();
+    api.getDataset.mockResolvedValue(kang()); // the score was removed since
+    const report = await restoreSession(session);
+    expect(useSplitViewStore.getState().compareColumns).toBeNull();
+    expect(report.notes.join(" ")).toContain("score_HALLMARK_TNFA");
+  });
+
   it("opens an older session without paging as six panels a page, page 1", async () => {
     buildWorkspace("lasso");
     const session = saveAndReset();

@@ -4,6 +4,7 @@ const client = vi.hoisted(() => ({ apiFetch: vi.fn() }));
 vi.mock("./client", () => client);
 
 import { checkScoreDepth, isScoreMethod, methodLabel, scoreGeneSet, scoreLabel } from "./genesetScore";
+import { onSavedScore } from "@/lib/savedScores";
 
 beforeEach(() => {
   client.apiFetch.mockReset().mockResolvedValue({});
@@ -21,15 +22,27 @@ describe("gene-set score API", () => {
     expect(methodLabel(undefined)).toBe("score_genes");
   });
 
-  it("sends the method, score_genes unless told otherwise", async () => {
+  it("sends the method, score_genes unless told otherwise, and saves unless told not to", async () => {
     await scoreGeneSet("ds1", ["ISG15"], "IFN");
     await scoreGeneSet("ds1", ["ISG15"], "IFN", "aucell");
+    await scoreGeneSet("ds1", ["ISG15"], "IFN", "aucell", false);
     const bodies = client.apiFetch.mock.calls.map(([, init]) => JSON.parse(init.body));
     expect(client.apiFetch.mock.calls[0]![0]).toBe("/datasets/ds1/genesets/score");
     expect(bodies).toEqual([
-      { gene_set: ["ISG15"], score_name: "IFN", method: "score_genes" },
-      { gene_set: ["ISG15"], score_name: "IFN", method: "aucell" },
+      { gene_set: ["ISG15"], score_name: "IFN", method: "score_genes", save: true },
+      { gene_set: ["ISG15"], score_name: "IFN", method: "aucell", save: true },
+      { gene_set: ["ISG15"], score_name: "IFN", method: "aucell", save: false },
     ]);
+  });
+
+  it("announces a saved column, so the dataset's columns are read again", async () => {
+    const heard: [string, string | null][] = [];
+    const off = onSavedScore((d, c) => heard.push([d, c]));
+    client.apiFetch.mockResolvedValueOnce({ saved_column: "score_IFN" }).mockResolvedValueOnce({ saved_column: null });
+    await scoreGeneSet("ds1", ["ISG15"], "IFN");
+    await scoreGeneSet("ds1", ["ISG15"], "IFN");
+    off();
+    expect(heard).toEqual([["ds1", "score_IFN"]]);
   });
 
   it("asks for the depth check, with a grouping only when given", async () => {

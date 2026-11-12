@@ -312,10 +312,30 @@ describe("compare colourings", () => {
 
   it("offers every grouping column, best first, without numbers or ids", () => {
     expect(compareColumnOptions(cols, 1000)).toEqual([
-      { name: "cell_type", nValues: 13 },
-      { name: "leiden", nValues: 12 },
-      { name: "stim", nValues: 2 },
+      { name: "cell_type", nValues: 13, group: "grouping" },
+      { name: "leiden", nValues: 12, group: "grouping" },
+      { name: "stim", nValues: 2, group: "grouping" },
     ]);
+  });
+
+  it("offers per-cell scores after the groupings: saved ones (removable), then the pipeline's", () => {
+    const withScores = [
+      col("S_score", undefined, "float64"),
+      ...cols,
+      { ...col("score_HALLMARK_TNFA", undefined, "float32"),
+        saved_score: { kind: "geneset" as const, name: "HALLMARK_TNFA", method: "aucell" } },
+      { ...col("activity_STAT1", undefined, "float32"),
+        saved_score: { kind: "activity" as const, name: "STAT1", method: "ulm", network: "collectri" } },
+      col("dissociation_stress_score", ["a", "b"]), // categorical: a grouping, not a score
+    ];
+    const opts = compareColumnOptions(withScores, 1000);
+    expect(opts.filter((o) => o.group === "grouping").map((o) => o.name)).toEqual(["cell_type", "leiden", "stim", "dissociation_stress_score"]);
+    expect(opts.filter((o) => o.group === "score").map((o) => [o.name, o.title, o.detail, o.removable])).toEqual([
+      ["score_HALLMARK_TNFA", "HALLMARK_TNFA", "Gene-set score (AUCell)", true],
+      ["activity_STAT1", "STAT1", "TF activity", true],
+      ["S_score", "S_score", "Cell-cycle S score", false],
+    ]);
+    expect(opts.slice(0, 4).every((o) => o.group === "grouping")).toBe(true);
   });
 
   it("offers the dataset's hand-label columns first", () => {
