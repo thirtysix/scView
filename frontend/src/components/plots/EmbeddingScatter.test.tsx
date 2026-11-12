@@ -210,6 +210,64 @@ describe("EmbeddingScatter restored camera", () => {
   });
 });
 
+describe("EmbeddingScatter camera on a resize", () => {
+  // A plot whose size the test changes (the toolbar wrapping onto a second row).
+  let resize: (width: number, height: number) => void = () => {};
+  class ResizableObserver {
+    constructor(private cb: ResizeObserverCallback) {}
+    observe() {
+      resize = (width, height) =>
+        act(() => this.cb([{ contentRect: { width, height } } as ResizeObserverEntry], this as never));
+      resize(400, 300);
+    }
+    disconnect() {}
+    unobserve() {}
+  }
+  beforeEach(() => vi.stubGlobal("ResizeObserver", ResizableObserver));
+  const viewState = () => deckProps.current!.viewState as Record<string, unknown>;
+  const userMoves = (vs: Record<string, unknown>) =>
+    act(() => (deckProps.current!.onViewStateChange as (e: unknown) => void)({ viewState: vs }));
+  const props = { colorValues: null, colorType: "continuous" as const };
+
+  it("refits while the camera is the fit", async () => {
+    render(<EmbeddingScatter positions={positions} {...props} />);
+    await screen.findByTestId("deck");
+    const before = viewState().zoom as number;
+    resize(400, 200);
+    expect(viewState().zoom).toBeLessThan(before);
+  });
+
+  it("keeps a camera the user moved, and calls it not fitted", async () => {
+    const onCamera = vi.fn();
+    render(<EmbeddingScatter positions={positions} onCameraChange={onCamera} {...props} />);
+    await screen.findByTestId("deck");
+    const moved = { ...viewState(), target: [1.7, 0.3, 0], zoom: 7 };
+    userMoves(moved);
+    resize(400, 260);
+    resize(380, 260);
+    expect(viewState()).toMatchObject({ target: [1.7, 0.3, 0], zoom: 7 });
+    expect(onCamera).toHaveBeenLastCalledWith(expect.objectContaining({ zoom: 7 }), false);
+  });
+
+  it("still fits new data, and another embedding, after the user moved", async () => {
+    const { rerender } = render(<EmbeddingScatter positions={positions} cameraKey="kang:X_umap" {...props} />);
+    await screen.findByTestId("deck");
+    userMoves({ ...viewState(), target: [1.7, 0.3, 0], zoom: 7 });
+    rerender(<EmbeddingScatter positions={Float32Array.from([10, 10, 30, 30])} cameraKey="kang:X_tsne" {...props} />);
+    expect(viewState().zoom).not.toBe(7);
+    expect(viewState().target).toEqual([20, 20, 0]);
+  });
+
+  it("follows a linked camera's pan through a resize (the cluster map keeps its own zoom)", async () => {
+    const { rerender } = render(<EmbeddingScatter positions={positions} externalViewState={null} {...props} />);
+    await screen.findByTestId("deck");
+    const zoom = viewState().zoom;
+    rerender(<EmbeddingScatter positions={positions} externalViewState={{ target: [0.4, 0.4, 0], zoom: 9 }} {...props} />);
+    resize(300, 300);
+    expect(viewState()).toMatchObject({ target: [0.4, 0.4, 0], zoom });
+  });
+});
+
 describe("EmbeddingScatter draw order", () => {
   // 60 cells on a line (cell i at x = i), stored cluster by cluster: 50 of A, then 10 of B.
   const n = 60;
