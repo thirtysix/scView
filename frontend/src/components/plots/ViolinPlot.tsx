@@ -107,8 +107,10 @@ export function ViolinPlot({
         if (v > max) max = v;
       }
     }
-    return pseudoLogTicks(min, max);
-  }, [data, log]);
+    // The value axis is about the plot's height less its top and bottom margins
+    // (the layout's own), so a short violin gets fewer ticks.
+    return pseudoLogTicks(min, max, height - (title ? 40 : 20) - (xLabel ? 50 : 30));
+  }, [data, log, height, title, xLabel]);
 
   const layout = useMemo(
     () => ({

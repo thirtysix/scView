@@ -22,16 +22,27 @@ export function tickLabel(v: number): string {
   return `${sign}${trim(a)}`;
 }
 
-/** Ticks closer than this share of the axis are dropped (the larger one stays). */
-const MIN_GAP = 0.06;
+/** Ticks closer than this share of the axis are dropped. */
+const MIN_GAP = 0.1;
+/** ...or closer than this many pixels, when the axis length is known. */
+export const MIN_TICK_PX = 22;
 
 /**
  * Ticks for a pseudo-log axis showing values from `min` to `max` (original
  * units): 0 when in range, then 1-2-5 steps per decade over a short range or
  * powers of ten over a long one, mirrored for negatives. `tickvals` are on the
  * plotted (pseudo-log) scale, `ticktext` in the original units.
+ *
+ * Neighbouring ticks stay at least a tenth of the axis apart, and `MIN_TICK_PX`
+ * apart on an axis `axisPx` long, so the small values near 0 do not crowd
+ * (0 / 0.1 / 0.2 / 0.5 on log-normalised expression). 0 and the outermost tick
+ * on each side always stay.
  */
-export function pseudoLogTicks(min: number, max: number): { tickvals: number[]; ticktext: string[] } {
+export function pseudoLogTicks(
+  min: number,
+  max: number,
+  axisPx?: number,
+): { tickvals: number[]; ticktext: string[] } {
   if (!Number.isFinite(min) || !Number.isFinite(max)) return { tickvals: [], ticktext: [] };
   const hi = Math.max(Math.abs(min), Math.abs(max));
   if (hi === 0) return { tickvals: [0], ticktext: ["0"] };
@@ -46,16 +57,25 @@ export function pseudoLogTicks(min: number, max: number): { tickvals: number[]; 
   const values = [...magnitudes.map((m) => -m), 0, ...magnitudes].filter(inRange).sort((a, b) => a - b);
 
   // Thin out crowded ticks (the small magnitudes bunch up near 0), keeping 0
-  // and, outwards from it, the next tick far enough from the last one kept.
+  // and, outwards from it, the next tick far enough from the last one kept;
+  // the outermost tick then replaces any kept one too close to it.
   const span = pseudoLog(max) - pseudoLog(min) || 1;
+  const share = axisPx && axisPx > 0 ? Math.max(MIN_GAP, MIN_TICK_PX / axisPx) : MIN_GAP;
+  const gap = share * span;
+  const far = (a: number, b: number) => Math.abs(pseudoLog(a) - pseudoLog(b)) >= gap;
   const keepFrom = (side: number[]) => {
     const kept: number[] = [];
     let last = 0;
     for (const v of side) {
-      if (Math.abs(pseudoLog(v) - last) >= MIN_GAP * span) {
+      if (far(v, last)) {
         kept.push(v);
-        last = pseudoLog(v);
+        last = v;
       }
+    }
+    const outer = side[side.length - 1];
+    if (outer !== undefined && kept[kept.length - 1] !== outer) {
+      while (kept.length && !far(kept[kept.length - 1]!, outer)) kept.pop();
+      if (far(outer, 0)) kept.push(outer);
     }
     return kept;
   };
