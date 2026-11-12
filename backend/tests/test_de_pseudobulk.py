@@ -213,3 +213,18 @@ async def test_pseudobulk_carries_the_composition_check():
     # No clustering column and none asked for: a note, not an error.
     res = await differential_expression_compare("x", _req(replicate_key="donor"), _DM(a))
     assert res.composition.column is None and "No clustering" in res.composition.note
+
+
+@pytest.mark.asyncio
+async def test_pseudobulk_warns_about_a_donor_with_few_cells():
+    a = _donor_counts(DONORS, DONORS)
+    # d4 keeps 12 of its 60 cells (6 a side): a fifth of a typical donor's
+    d4 = np.flatnonzero((a.obs["donor"] == "d4").to_numpy())
+    keep = np.ones(a.n_obs, bool)
+    keep[d4] = False
+    keep[d4[:6]] = keep[d4[30:36]] = True
+    res = await differential_expression_compare("x", _req(replicate_key="donor"), _DM(a[keep].copy()))
+    hit = [w for w in res.replicate_warnings if "under a third of the median donor" in w]
+    assert len(hit) == 1 and "d4 (12 cells)" in hit[0]
+    res = await differential_expression_compare("x", _req(replicate_key="donor"), _DM(a))
+    assert not any("under a third" in w for w in res.replicate_warnings)

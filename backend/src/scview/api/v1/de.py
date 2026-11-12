@@ -32,7 +32,7 @@ from scview.core import de_composition, de_methods, de_prefilter, de_results, tr
 from scview.core import large_mode, memory_budget, preflight, selection_facts, working_copy
 from scview.core.confounding import for_comparison, recorded_batch_key
 from scview.core.replicates import (
-    donor_candidates, few_donors, on_both_sides, partly_paired, pick_donor, repeated_donors,
+    donor_candidates, few_cell_donors, few_donors, on_both_sides, partly_paired, pick_donor, repeated_donors,
 )
 from scview.core.dataset_manager import DatasetManager, DatasetMemoryError
 
@@ -966,6 +966,10 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
     few = few_donors(people, f"'{rep['donor_key']}' values" if rep else "donors")
     if few:
         rep_warnings.append(few)
+    sizes = obs[key][keep].astype(str).value_counts()
+    small = few_cell_donors({str(k): int(v) for k, v in sizes.items() if v > 0}, "donor")
+    if small:
+        rep_warnings.append(small)
     caution = pseudobulk.method_caution(res.method, res.n_samples_a, res.n_samples_b)
     if caution:
         rep_warnings.append(caution)
