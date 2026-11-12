@@ -192,7 +192,9 @@ class PipelineParams:
     annotation_target: str = ""
     annotation_overwrite: bool = False           # allow writing over a column scView did not write
     annotation_llm_model: str = ""               # chat model id for method="llm" (provider's name)
-    annotation_tissue: str = ""                  # optional tissue hint for method="llm"
+    # optional tissue hint for method llm, and for marker_score on the databases (types of other
+    # tissues left out; without it the data's own obs 'tissue' column is read)
+    annotation_tissue: str = ""
     annotation_marker_sets: str = "databases"    # marker_score: databases (core/marker_db.py) | builtin (14 immune sets)
 
     # Large-dataset mode (core/large_run.py): "auto" runs the steps with the matrices on
@@ -2103,7 +2105,9 @@ def _annotate_marker_score(
     With the marker databases (PanglaoDB + CellMarker 3.0 curated rows, or 2.0 + ACT; see
     core/marker_db.py) each cluster gets the database type its top 25 markers
     over-represent most (hypergeometric against the full database set), "Unknown"
-    when no type shares a marker. Without them, the 14 curated sets above are
+    when no type shares a marker; when the tissue is known (``annotation_tissue``, else
+    the data's obs 'tissue') only types of that tissue or found in every tissue compete
+    (``core/marker_tissues.py``). Without them, the 14 curated sets above are
     scored per cell and each cluster gets the highest mean. Which one ran is
     recorded in ``uns[f"{target}_markerscore_source"]`` and returned for the
     provenance."""
@@ -2125,7 +2129,7 @@ def _annotate_marker_score(
         if temporary:
             _wilcoxon(adata, groupby, key_added=key)
         try:
-            mapping, info = marker_db.annotate(adata, groupby, db=db)
+            mapping, info = marker_db.annotate(adata, groupby, db=db, tissue=params.annotation_tissue)
         finally:
             if temporary:
                 adata.uns.pop(key, None)

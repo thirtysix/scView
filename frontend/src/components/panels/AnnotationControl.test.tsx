@@ -207,6 +207,22 @@ describe("AnnotationControl (CellTypist)", () => {
     expect(screen.getByText(/runs CellTypist instead/)).toBeTruthy();
   });
 
+  it("sends a tissue with the database marker scores, so types of other tissues are left out", async () => {
+    getLlmStatus.mockResolvedValue({ available: false });
+    const onAnnotate = vi.fn().mockResolvedValue(undefined);
+    render(<AnnotationControl onAnnotate={onAnnotate} running={false} species="human" />);
+    expect(await screen.findByLabelText("Marker sets")).toBeTruthy();
+    fireEvent.click(screen.getByText("Annotate cell types"));
+    await waitFor(() => expect(onAnnotate).toHaveBeenCalledTimes(1));
+    expect(onAnnotate.mock.calls[0]![0]).not.toHaveProperty("annotation_tissue"); // empty: the data's own
+    fireEvent.change(screen.getByLabelText("Tissue (optional)"), { target: { value: "kidney" } });
+    fireEvent.click(screen.getByText("Annotate cell types"));
+    await waitFor(() => expect(onAnnotate).toHaveBeenCalledTimes(2));
+    expect(onAnnotate.mock.calls[1]![0]).toMatchObject({ annotation_method: "marker_score", annotation_tissue: "kidney" });
+    fireEvent.change(screen.getByLabelText("Marker sets"), { target: { value: "builtin" } });
+    expect(screen.queryByLabelText("Tissue (optional)")).toBeNull();
+  });
+
   it("names the provider the AI tab sends the marker lists to", async () => {
     getLlmStatus.mockResolvedValue({ available: true, provider: "Privatemode", model: "glm-5.3-flash" });
     render(<AnnotationControl onAnnotate={vi.fn()} running={false} species="human" />);

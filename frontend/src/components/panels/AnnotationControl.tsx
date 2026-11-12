@@ -175,7 +175,10 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
     };
     if (method === "llm") params.annotation_tissue = tissue.trim();
     else if (method === "celltypist") params.celltypist_model = model;
-    else params.annotation_marker_sets = markerSets;
+    else {
+      params.annotation_marker_sets = markerSets;
+      if (markerSets === "databases" && tissue.trim()) params.annotation_tissue = tissue.trim();
+    }
     setAnnotating(true);
     setLastWritten(null);
     setReplyCut(null);
@@ -283,9 +286,28 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
           </select>
           <p className="mt-1 text-[11px] text-slate-400">
             {markerSets === "databases"
-              ? "Names each cluster after the database cell type its top markers match best, any tissue, human or mouse. Downloaded on first use; the built-in sets are used if they are unavailable."
+              ? "Names each cluster after the database cell type its top markers match best, human or mouse. Downloaded on first use; the built-in sets are used if they are unavailable."
               : "Scores 14 curated immune sets per cluster. Better than the databases on PBMC subtypes (CD4/CD8 T, monocytes), no use outside blood."}
           </p>
+          {markerSets === "databases" && (
+            <>
+              <label htmlFor="marker-tissue" className="mb-1 mt-2 block text-xs font-medium text-slate-600">
+                Tissue (optional)
+              </label>
+              <input
+                id="marker-tissue"
+                type="text"
+                value={tissue}
+                onChange={(e) => setTissue(e.target.value)}
+                placeholder="e.g. kidney, lung, brain"
+                className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:border-primary focus:outline-none"
+              />
+              <p className="mt-1 text-[11px] text-slate-400">
+                Leaves out database types of other tissues; blood, immune, vessel and stromal types stay. Empty: the
+                data&apos;s own tissue column is used when it has one.
+              </p>
+            </>
+          )}
         </div>
       ) : method === "llm" ? (
         <div className="mb-3">

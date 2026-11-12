@@ -63,8 +63,8 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
      "groupings only), and the label scView gave itself ('Low-quality cells') or the note the AI got; any grouping"),
     ("Data Assessment > PCA", "", "elbow, variance explained, loadings"),
     ("Data Assessment > Cell-type annotation", "",
-     "name clusters by an LLM from their markers, a CellTypist model or marker-database scores, into an obs "
-     "column; with Cell Ontology ids; <column>_qualified adds the genes that set a cluster apart where clusters "
+     "name clusters by an LLM from their markers, a CellTypist model or marker-database scores (types of other "
+     "tissues left out when the tissue is given or in the data), into an obs column; with Cell Ontology ids; <column>_qualified adds the genes that set a cluster apart where clusters "
      "share a label or a label is a mixture or no cell type, e.g. 'Monocytes (CCL8+ RSAD2+)'; with the LLM, "
      "scView itself labels clusters cluster QC flags as damaged 'Low-quality cells', and the LLM names the "
      "rest, told when a cluster's markers do not beat 9 of 10 random gene lists of the same size"),
