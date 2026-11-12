@@ -1,7 +1,7 @@
 import { prettyObsLabel } from "@/lib/formatting";
 import { useEffect, useMemo, useState } from "react";
 import { Download, Loader2 } from "lucide-react";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { Caption, CapNote } from "@/components/common/Caption";
 import { RequestError } from "@/components/common/RequestError";
 import { useDatasetStore } from "@/stores/datasetStore";
@@ -164,15 +164,21 @@ export function TfMotifCandidates({ groupByColumn, setGroupByColumn, onScore, on
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-1.5">
-        <h3 className="text-xs font-medium text-slate-700">Upstream TF candidates (promoter motifs)</h3>
-        <InfoTip label="About upstream TF candidates" width={320}>
-          For each group, the transcription factor motifs (JASPAR 2024) found in more of its
-          marker genes&apos; promoters (1 kb upstream of the start) than in the other measured
-          genes&apos; promoters. A motif counts in a promoter when one site scores at p &lt; 1e-4
-          on either strand. Each row is a candidate to check, not a proven regulator.
-        </InfoTip>
-      </div>
+      <h3 className="text-xs font-medium text-slate-700">
+        <HoverTip
+          width={320}
+          tip={
+            <>
+              For each group, the transcription factor motifs (JASPAR 2024) found in more of its
+              marker genes&apos; promoters (1 kb upstream of the start) than in the other measured
+              genes&apos; promoters. A motif counts in a promoter when one site scores at p &lt; 1e-4
+              on either strand. Each row is a candidate to check, not a proven regulator.
+            </>
+          }
+        >
+          Upstream TF candidates (promoter motifs)
+        </HoverTip>
+      </h3>
 
       {hasPeaks && <p className="text-[11px] leading-snug text-slate-500">This dataset has ATAC peaks: Accessibility &gt; Motifs in peaks scans every peak, distal sites included.</p>}
 

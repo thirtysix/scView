@@ -219,7 +219,7 @@ export function GeneFeatureGrid({
       errorText={failed}
       header={
         <>
-          {blend ? "Blend" : "Genes"}{" "}
+          {blend ? <Help id="expression.blend">Blend</Help> : <Help id="expression.feature-grid">Genes</Help>}{" "}
           <span className="font-semibold text-slate-700">{legendGenes.join(" · ")}</span>
           {missing.length > 0 && ready && (
             <span className="ml-1 text-amber-600">· not in this layer: {missing.join(", ")}</span>
@@ -316,11 +316,6 @@ export function GeneFeatureGrid({
               ))
             )}
             {blend && <BlendLegend geneA={legendGenes[0]!} geneB={legendGenes[1]!} scheme={scheme} />}
-            {blend ? (
-              <Help id="expression.blend" label="How to read the blend" width={190} />
-            ) : (
-              <Help id="expression.feature-grid" label="How to read the feature grid" width={190} />
-            )}
           </div>
         ) : null
       }

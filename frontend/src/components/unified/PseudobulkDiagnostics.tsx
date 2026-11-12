@@ -1,5 +1,5 @@
 import Plot from "@/components/plots/Plot";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { Caption } from "@/components/common/Caption";
 import { plotConfig } from "@/lib/plotConfig";
 import { formatR, PB_METHODS, RUV_CHOICES } from "@/lib/pseudobulk";
@@ -23,7 +23,19 @@ export function PseudobulkModelRows({
     <>
       <div className="flex items-center gap-1.5">
         <label htmlFor="pb-model" className="w-12 font-medium text-slate-500">
-          Model
+          <HoverTip
+            tip={
+              <span className="block space-y-1">
+                {PB_METHODS.map((m) => (
+                  <span key={m.value} className="block">
+                    <strong>{m.label}</strong>: {m.when}
+                  </span>
+                ))}
+              </span>
+            }
+          >
+            Model
+          </HoverTip>
         </label>
         <select
           id="pb-model"
@@ -37,19 +49,20 @@ export function PseudobulkModelRows({
             </option>
           ))}
         </select>
-        <InfoTip label="Which model to use" width={300} align="right">
-          <span className="block space-y-1">
-            {PB_METHODS.map((m) => (
-              <span key={m.value} className="block">
-                <strong>{m.label}</strong>: {m.when}
-              </span>
-            ))}
-          </span>
-        </InfoTip>
       </div>
       <div className="flex items-center gap-1.5">
         <label htmlFor="pb-ruv" className="w-12 font-medium text-slate-500">
-          RUV
+          <HoverTip
+            tip={
+              <>
+                Remove Unwanted Variation: adds k factors, learned from genes that do not respond to the
+                condition, to the design. Use 1 when samples differ for technical reasons (depth, batch,
+                handling); each factor costs a degree of freedom, so keep k small with few donors.
+              </>
+            }
+          >
+            RUV
+          </HoverTip>
         </label>
         <select
           id="pb-ruv"
@@ -63,11 +76,6 @@ export function PseudobulkModelRows({
             </option>
           ))}
         </select>
-        <InfoTip label="About RUV factors" width={300} align="right">
-          Remove Unwanted Variation: adds k factors, learned from genes that do not respond to the
-          condition, to the design. Use 1 when samples differ for technical reasons (depth, batch,
-          handling); each factor costs a degree of freedom, so keep k small with few donors.
-        </InfoTip>
       </div>
     </>
   );
@@ -90,13 +98,19 @@ function VarianceCheck({ h }: { h: PseudobulkHetero }) {
           h.flag ? "rounded border border-amber-200 bg-amber-50 px-1.5 py-1 text-amber-800" : "text-slate-600"
         }`}
       >
-        <span>{h.message}</span>
-        <InfoTip label="About the variance check" width={280}>
-          voom fits how a gene&apos;s variability falls as its count rises (the trend), and weights each
-          value by it. Here each group is fitted on its own samples. When one group&apos;s donors vary
-          about {h.threshold}x as much as the other&apos;s or more, one shared trend understates that
-          group&apos;s noise and overstates the other&apos;s; voomByGroup gives each group its own.
-        </InfoTip>
+        <HoverTip
+          width={280}
+          tip={
+            <>
+              voom fits how a gene&apos;s variability falls as its count rises (the trend), and weights each
+              value by it. Here each group is fitted on its own samples. When one group&apos;s donors vary
+              about {h.threshold}x as much as the other&apos;s or more, one shared trend understates that
+              group&apos;s noise and overstates the other&apos;s; voomByGroup gives each group its own.
+            </>
+          }
+        >
+          {h.message}
+        </HoverTip>
       </p>
       <div className="h-[170px]">
         <Plot
@@ -127,16 +141,20 @@ function RuvFactors({ ruv }: { ruv: PseudobulkRuv }) {
   return (
     <div className="space-y-1" data-testid="pb-ruv">
       <p className="flex items-start gap-1 text-[11px] leading-snug text-slate-600">
-        <span>
+        <HoverTip
+          width={280}
+          tip={
+            <>
+              Remove Unwanted Variation (RUVg): genes that should not respond to the condition still vary
+              between samples; their shared pattern (a factor per sample) is treated as technical and
+              adjusted for. A factor that tracks depth or cell count is the usual, harmless case; one that
+              tracks the condition removes real signal.
+            </>
+          }
+        >
           RUV: {ruv.k} unwanted factor{ruv.k === 1 ? "" : "s"} from {ruv.control_source}, added to the
           design.
-        </span>
-        <InfoTip label="About RUV" width={280}>
-          Remove Unwanted Variation (RUVg): genes that should not respond to the condition still vary
-          between samples; their shared pattern (a factor per sample) is treated as technical and
-          adjusted for. A factor that tracks depth or cell count is the usual, harmless case; one that
-          tracks the condition removes real signal.
-        </InfoTip>
+        </HoverTip>
       </p>
       {ruv.warning && (
         <p className="rounded border border-amber-200 bg-amber-50 px-1.5 py-1 text-[11px] text-amber-800">

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import type { ActivitySummary } from "@/api/activity";
 import type { DatasetInfo } from "@/api/types";
+import { hoverTip } from "@/test/hoverTip";
 
 const { getActivitySummary, getActivityCells } = vi.hoisted(() => ({
   getActivitySummary: vi.fn(),
@@ -93,7 +94,7 @@ describe("UnifiedActivitySubtab", () => {
     render(<UnifiedActivitySubtab onScore={vi.fn()} groupByColumn="" setGroupByColumn={() => {}} />);
     await waitFor(() => screen.getByText("JAK-STAT"));
     expect(screen.getByText(/mapped to mouse through/).textContent).toContain("16,306 of 17,610 target genes mapped");
-    expect(screen.getByRole("button", { name: "About the ortholog mapping" })).toBeTruthy();
+    expect(await hoverTip(screen.getByText("orthologs"))).toBe("HCOP orthologs (pairs backed by 3+ orthology resources).");
   });
 
   it("shows no ortholog note for a human dataset", async () => {

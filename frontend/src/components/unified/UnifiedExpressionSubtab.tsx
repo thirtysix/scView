@@ -56,10 +56,9 @@ export function UnifiedExpressionSubtab({
     <div className="space-y-3">
       {/* Gene search */}
       <div>
-        <div className="mb-1 flex items-center gap-1">
-          <label className="block text-[11px] font-medium text-slate-500">Search gene</label>
-          <Help id="expression.search" label="About the gene search" />
-        </div>
+        <label className="mb-1 block text-[11px] font-medium text-slate-500">
+          <Help id="expression.search">Search gene</Help>
+        </label>
         <GeneSearch
           datasetId={datasetId}
           onSelect={onGeneSelect}
@@ -100,12 +99,9 @@ export function UnifiedExpressionSubtab({
       {/* Layer selector */}
       {expressionLayers.length > 1 && (
         <div>
-          <div className="mb-1 flex items-center gap-1">
-            <label className="block text-[11px] font-medium text-slate-500">
-              Expression layer
-            </label>
-            <Help id="expression.layer" label="About expression layers" />
-          </div>
+          <label className="mb-1 block text-[11px] font-medium text-slate-500">
+            <Help id="expression.layer">Expression layer</Help>
+          </label>
           {/* The same setting as the toolbar's Layer menu. */}
           <select
             value={expressionLayer}
@@ -121,12 +117,9 @@ export function UnifiedExpressionSubtab({
 
       {/* Group by */}
       <div>
-        <div className="mb-1 flex items-center gap-1">
-          <label className="block text-[11px] font-medium text-slate-500">
-            Group by (violin)
-          </label>
-          <Help id="expression.group-by" label="About the violin's groups" />
-        </div>
+        <label className="mb-1 block text-[11px] font-medium text-slate-500">
+          <Help id="expression.group-by">Group by (violin)</Help>
+        </label>
         <select
           aria-label="Group by (violin)"
           value={groupByColumn}

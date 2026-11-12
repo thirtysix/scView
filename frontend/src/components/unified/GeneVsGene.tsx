@@ -18,7 +18,6 @@ import {
 } from "@/lib/geneCoexpression";
 import { plotConfig } from "@/lib/plotConfig";
 import { SelectionChip } from "@/components/common/SelectionChip";
-import { Help } from "@/components/common/Help";
 import { useLinkedSelection } from "@/hooks/useLinkedSelection";
 import { SELECTION_COLOR, cellsInPlotlySelection, type PlotlySelection } from "@/lib/linkedSelection";
 import { selectedPoints, selectionName } from "@/lib/linkedTraces";
@@ -196,7 +195,6 @@ export function GeneVsGene({ datasetId, geneA, geneB, groupColumn }: GeneVsGeneP
       <div className="flex flex-wrap items-center gap-1.5">
         <SelectionChip note="orange, over the faded rest" />
         <span className="text-[10px] text-slate-400">Box or lasso select (plot toolbar) to select cells.</span>
-        <Help id="expression.gene-vs-gene" label="How to read gene vs gene" />
       </div>
       <p className="text-[11px] leading-snug text-slate-500" data-testid="gene-vs-gene-stats">
         All {all.n.toLocaleString()} cells: Pearson r {fmtR(all.pearson)}, Spearman ρ {fmtR(all.spearman)}

@@ -210,8 +210,10 @@ export function VolcanoPlot({ genes, fcThreshold, pThreshold, onGeneClick, yMode
 
   return (
     <div>
-      <div className="flex items-center justify-end gap-2 px-2 pt-1.5 text-[11px] text-slate-500">
-        <Help id="de.volcano" label="How to read the volcano plot" align="right" width={300} />
+      <div className="flex items-center justify-between gap-2 px-2 pt-1.5 text-[11px] text-slate-500">
+        <span className="font-medium text-slate-600">
+          <Help id="de.volcano">Volcano plot</Help>
+        </span>
         <label className="flex items-center gap-1" title="Write the names of the most significant up and down genes on the plot">
           Name genes
           <select

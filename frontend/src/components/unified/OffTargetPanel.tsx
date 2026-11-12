@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ExternalLink, Loader2 } from "lucide-react";
 import Plot from "@/components/plots/Plot";
 import { Caption } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { getOffTarget, type OffTargetResult, type TissueLevel } from "@/api/offtarget";
 import { plotConfig } from "@/lib/plotConfig";
 import { TISSUE_LEVELS, VERDICT_STYLE, categoryTitle, heatmapHeight, summaryText, topText } from "@/lib/offtarget";
@@ -75,18 +75,26 @@ export function OffTargetPanel({
   return (
     <section aria-label="Elsewhere in the body" className="space-y-1.5 rounded-lg border border-slate-200 p-2">
       <div className="flex items-center gap-1">
-        <span className="text-[11px] font-medium text-slate-600">Elsewhere in the body</span>
-        <InfoTip label="About the HPA lookup" width={320}>
-          Each marker of the group is looked up in the Human Protein Atlas: RNA across human tissues (HPA + GTEx
-          consensus, nTPM) and across HPA&rsquo;s single-cell types (nCPM). The category follows HPA&rsquo;s rules:
-          enriched = at least 4x the next tissue; group enriched = a group of 2&ndash;5 tissues (2&ndash;10 cell types)
-          at least 4x every other; enhanced = at least 4x the mean of the others; low specificity = detected but none of
-          these. Tissues can be read with the nine brain regions as one brain (default), with every region
-          separate, or merged into HPA&rsquo;s organ groups (a gene shared by stomach and colon is then one organ);
-          the categories follow the chosen level. <b>Restricted</b> means enriched or group enriched across tissues, or across cell types with cell-type tau of at least 0.6; <b>broad</b> means low tissue
-          specificity. Tau is 0 for even expression and 1 for one tissue only. A marker is flagged when it is specific
-          among these groups (tau &ge; 0.5 here) but broad in the body.
-        </InfoTip>
+        <span className="text-[11px] font-medium text-slate-600">
+          <HoverTip
+            width={320}
+            tip={
+              <>
+                Each marker of the group is looked up in the Human Protein Atlas: RNA across human tissues (HPA + GTEx
+                consensus, nTPM) and across HPA&rsquo;s single-cell types (nCPM). The category follows HPA&rsquo;s rules:
+                enriched = at least 4x the next tissue; group enriched = a group of 2&ndash;5 tissues (2&ndash;10 cell types)
+                at least 4x every other; enhanced = at least 4x the mean of the others; low specificity = detected but none of
+                these. Tissues can be read with the nine brain regions as one brain (default), with every region
+                separate, or merged into HPA&rsquo;s organ groups (a gene shared by stomach and colon is then one organ);
+                the categories follow the chosen level. <b>Restricted</b> means enriched or group enriched across tissues, or across cell types with cell-type tau of at least 0.6; <b>broad</b> means low tissue
+                specificity. Tau is 0 for even expression and 1 for one tissue only. A marker is flagged when it is specific
+                among these groups (tau &ge; 0.5 here) but broad in the body.
+              </>
+            }
+          >
+            Elsewhere in the body
+          </HoverTip>
+        </span>
         <span className="ml-auto" />
         {on && (
           <select

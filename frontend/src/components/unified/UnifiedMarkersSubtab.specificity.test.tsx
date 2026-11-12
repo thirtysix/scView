@@ -4,6 +4,8 @@ import type { DatasetInfo } from "@/api/types";
 import type { MarkersResponse } from "@/api/markers";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useGeneListsStore } from "@/stores/geneListsStore";
+import { GENES_HELP } from "@/lib/help/genes";
+import { hoverTip, unhover } from "@/test/hoverTip";
 
 const { apiFetch, plotProps } = vi.hoisted(() => ({
   apiFetch: vi.fn(),
@@ -93,6 +95,17 @@ describe("UnifiedMarkersSubtab specificity", () => {
     fireEvent.click(screen.getByText("Specificity vs fold change"));
     expect(screen.getByTestId("specificity-plot")).toBeInTheDocument();
     expect((plotProps.current!.markers as unknown[]).length).toBe(3);
+  });
+
+  it("explains the table, the |FC| filter and the plot when their labels are hovered", async () => {
+    renderTab();
+    await screen.findByText("TSPAN13");
+    const gene = within(screen.getByRole("columnheader", { name: /^Gene/ })).getByText("Gene");
+    expect(await hoverTip(gene)).toBe(GENES_HELP["markers.table"]);
+    unhover(gene);
+    expect(await hoverTip(screen.getByText("|FC| ≥"))).toBe(GENES_HELP["markers.min-fc"]);
+    unhover(screen.getByText("|FC| ≥"));
+    expect(await hoverTip(screen.getByText("Specificity vs fold change"))).toBe(GENES_HELP["markers.specificity-plot"]);
   });
 
   it("leaves the columns out for markers without specificity", async () => {

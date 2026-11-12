@@ -4,7 +4,7 @@ import { Loader2 } from "lucide-react";
 import type { PlotMouseEvent } from "plotly.js";
 import Plot from "@/components/plots/Plot";
 import { Caption } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { Help } from "@/components/common/Help";
 import {
   enrichProgram,
@@ -146,16 +146,21 @@ export function ProgramsSubtab({ onUsage, activeIndex, groupByColumn, setGroupBy
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-1.5 text-xs font-medium text-slate-700">
-        Gene programs (NMF)
-        <InfoTip label="About gene programs" width={300}>
-          Clusters put each cell in one group; an interferon response, the cell cycle or stress run across
-          groups. NMF writes each cell&apos;s variable-gene expression as a weighted sum of k non-negative
-          programs: a program is a set of gene weights, and each cell gets a usage of each. Usage share: the
-          part of the cell&apos;s modelled expression a program accounts for (a cell&apos;s shares sum to 1).
-          Repeating NMF from several random starts shows which programs come back every time (stable).
-          A program can be a cell type as well as a process, and k is a choice, not a fact.
-        </InfoTip>
+      <div className="text-xs font-medium text-slate-700">
+        <HoverTip
+          tip={
+            <>
+              Clusters put each cell in one group; an interferon response, the cell cycle or stress run across
+              groups. NMF writes each cell&apos;s variable-gene expression as a weighted sum of k non-negative
+              programs: a program is a set of gene weights, and each cell gets a usage of each. Usage share: the
+              part of the cell&apos;s modelled expression a program accounts for (a cell&apos;s shares sum to 1).
+              Repeating NMF from several random starts shows which programs come back every time (stable).
+              A program can be a cell type as well as a process, and k is a choice, not a fact.
+            </>
+          }
+        >
+          Gene programs (NMF)
+        </HoverTip>
       </div>
 
       {summary && (
@@ -176,9 +181,8 @@ export function ProgramsSubtab({ onUsage, activeIndex, groupByColumn, setGroupBy
 
       {sweep.length > 1 && (
         <div data-testid="programs-sweep">
-          <div className="mb-0.5 flex items-center gap-1 text-[11px] font-medium text-slate-600">
-            Compare k
-            <Help id="programs.sweep" label="How to read the k comparison" width={300} />
+          <div className="mb-0.5 text-[11px] font-medium text-slate-600">
+            <Help id="programs.sweep">Compare k</Help>
           </div>
           <div style={{ height: 170 }}>
             <Plot
@@ -208,10 +212,12 @@ export function ProgramsSubtab({ onUsage, activeIndex, groupByColumn, setGroupBy
       {summary?.available && (
         <>
           <Caption n={{ value: summary.n_cells ?? 0, unit: "cells" }}>
-            <Help id="programs.table" label="How to read the programs table" width={300} /> {summary.k} programs from {nSeeds} NMF run{nSeeds === 1 ? "" : "s"} on{" "}
-            {summary.n_genes?.toLocaleString()} variable genes ({summary.source});{" "}
-            {programs.filter((p) => p.stable).length} stable (found in every run, spectra correlating ≥{" "}
-            {summary.defaults.stable_correlation}). Click a program to colour the cells by its usage share.
+            <Help id="programs.table">
+              {summary.k} programs from {nSeeds} NMF run{nSeeds === 1 ? "" : "s"} on{" "}
+              {summary.n_genes?.toLocaleString()} variable genes ({summary.source});{" "}
+              {programs.filter((p) => p.stable).length} stable (found in every run, spectra correlating ≥{" "}
+              {summary.defaults.stable_correlation}). Click a program to colour the cells by its usage share.
+            </Help>
           </Caption>
           {summary.notes?.map((n) => (
             <p key={n} className="text-[11px] text-slate-500">
@@ -325,10 +331,9 @@ export function ProgramsSubtab({ onUsage, activeIndex, groupByColumn, setGroupBy
           )}
 
           <div>
-            <div className="mb-1 flex items-center gap-1">
-              <label className="block text-[11px] font-medium text-slate-500">Group by (heatmap)</label>
-              <Help id="programs.heatmap" label="How to read the programs heatmap" />
-            </div>
+            <label className="mb-1 block text-[11px] font-medium text-slate-500">
+              <Help id="programs.heatmap">Group by (heatmap)</Help>
+            </label>
             <select
               aria-label="Group by (heatmap)"
               value={groupby}

@@ -6,6 +6,8 @@ import { DE_DEFAULTS, useDESettingsStore } from "@/stores/deSettingsStore";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useGeneListsStore } from "@/stores/geneListsStore";
+import { GENES_HELP } from "@/lib/help/genes";
+import { hoverTip, unhover } from "@/test/hoverTip";
 
 const { computeDE, computeDECompare, computeDEMethods, computeDECompareMethods, fetchDEComposition } = vi.hoisted(() => ({
   computeDE: vi.fn(),
@@ -215,9 +217,9 @@ describe("UnifiedDESubtab transcriptome-size caution", () => {
     computeDECompare.mockResolvedValue({ ...RESULT, label: "NK", transcriptome_size: SIZE });
     renderDE();
     fireEvent.click(screen.getByRole("button", { name: /compute de/i }));
-    const alert = await screen.findByText(/Transcriptome size differs/);
-    expect(alert.parentElement!.textContent).toContain("NK cells hold 2.76x the RNA of T cells");
-    expect(alert.parentElement!.textContent).toContain("reads as log2FC -1.46 here");
+    const alert = (await screen.findByText(/Transcriptome size differs/)).closest("p")!;
+    expect(alert.textContent).toContain("NK cells hold 2.76x the RNA of T cells");
+    expect(alert.textContent).toContain("reads as log2FC -1.46 here");
     const violin = plots.props.find((p) => (p.data as { type?: string }[])[0]?.type === "violin")!;
     const traces = violin.data as unknown as { name: string; y: number[] }[];
     expect(traces.map((t) => [t.name, t.y])).toEqual([
@@ -488,6 +490,24 @@ describe("UnifiedDESubtab table headers", () => {
       "title",
       "Wilcoxon rank-sum p-value, Benjamini-Hochberg adjusted over the 1 tested genes",
     );
+  });
+
+  it("explains the table, the cut-off and the comparison when their labels are hovered", async () => {
+    computeDECompare.mockReset().mockResolvedValue({ ...RESULT, label: "STIM", method: "wilcoxon" });
+    useDESettingsStore.getState().update({ mode: "groups", splitBy: "stim", groupA: "STIM", groupB: "CTRL" });
+    renderDE();
+    expect(await hoverTip(screen.getByText("Between groups"))).toBe(GENES_HELP["de.mode"]);
+    unhover(screen.getByText("Between groups"));
+    expect(await hoverTip(screen.getByText("Within"))).toBe(GENES_HELP["de.within"]);
+    unhover(screen.getByText("Within"));
+    fireEvent.click(screen.getByRole("button", { name: /compute de/i }));
+    await screen.findByText("CD14");
+    const gene = within(screen.getByRole("columnheader", { name: "Gene" })).getByText("Gene");
+    expect(await hoverTip(gene)).toBe(GENES_HELP["de.table"]);
+    unhover(gene);
+    expect(await hoverTip(screen.getByText("|log2FC| ≥"))).toBe(GENES_HELP["de.min-fc"]);
+    // The cut-off still names its slider.
+    expect(screen.getByLabelText("Minimum |log2FC|")).toBeTruthy();
   });
 });
 

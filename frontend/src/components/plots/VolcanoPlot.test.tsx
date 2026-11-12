@@ -17,6 +17,7 @@ import { labelSpots, VolcanoPlot, volcanoLabelGenes } from "./VolcanoPlot";
 import { useThemeStore } from "@/lib/theme";
 import type { DEGene } from "@/api/de";
 import { GENES_HELP } from "@/lib/help/genes";
+import { hoverTip } from "@/test/hoverTip";
 
 const gene = (name: string, lfc: number, padj: number): DEGene =>
   ({ gene: name, logfoldchange: lfc, pval_adj: padj }) as DEGene;
@@ -90,10 +91,9 @@ describe("VolcanoPlot", () => {
     expect(names()).toHaveLength(20);
   });
 
-  it("has a help tip whose colours match the plot's (red up, blue down)", () => {
+  it("has a help tip whose colours match the plot's (red up, blue down)", async () => {
     render(<VolcanoPlot genes={genes} fcThreshold={1} pThreshold={0.05} />);
-    fireEvent.click(screen.getByRole("button", { name: "How to read the volcano plot" }));
-    const tip = screen.getByRole("tooltip").textContent ?? "";
+    const tip = await hoverTip(screen.getByText("Volcano plot"));
     expect(tip).toBe(GENES_HELP["de.volcano"]);
     expect(tip).toContain("Red: up, blue: down");
     const colour = (name: string) =>

@@ -76,10 +76,9 @@ export function MultiGenePanel({ datasetId, groupByColumn }: MultiGenePanelProps
   return (
     <div className="space-y-2 rounded-lg border border-slate-200 p-2">
       <div className="flex items-baseline justify-between gap-2">
-        <span className="flex items-center gap-1">
-          <h4 className="text-xs font-semibold text-slate-600">Several genes</h4>
-          <Help id="expression.several-genes" label="About several genes" />
-        </span>
+        <h4 className="text-xs font-semibold text-slate-600">
+          <Help id="expression.several-genes">Several genes</Help>
+        </h4>
         <span className="text-[10px] text-slate-400">
           {genes.length}/{MAX_GRID_GENES}
         </span>
@@ -154,9 +153,8 @@ export function MultiGenePanel({ datasetId, groupByColumn }: MultiGenePanelProps
       {pair && (
         <div className="space-y-1.5 border-t border-slate-100 pt-2">
           <div className="flex flex-wrap items-center gap-1.5 text-xs">
-            <span className="flex items-center gap-1 text-[11px] font-medium text-slate-500">
-              Two genes
-              <Help id="expression.two-genes" label="About blend and gene vs gene" />
+            <span className="text-[11px] font-medium text-slate-500">
+              <Help id="expression.two-genes">Two genes</Help>
             </span>
             <PairSelect label="Gene A" value={pair[0]} other={pair[1]} genes={genes} onChange={(g) => choosePair(0, g)} />
             <span className="text-slate-400">vs</span>
@@ -190,7 +188,7 @@ export function MultiGenePanel({ datasetId, groupByColumn }: MultiGenePanelProps
             </button>
           </div>
           {showScatter && groupByColumn && (
-            <Panel title={`${pair[0]} vs ${pair[1]}`} bodyClassName="p-2">
+            <Panel title={<Help id="expression.gene-vs-gene">{`${pair[0]} vs ${pair[1]}`}</Help>} bodyClassName="p-2">
               <GeneVsGene datasetId={datasetId} geneA={pair[0]} geneB={pair[1]} groupColumn={groupByColumn} />
             </Panel>
           )}
@@ -267,7 +265,7 @@ function StackedViolinSection({ datasetId, genes, groupByColumn }: { datasetId: 
           exportName={`stacked_violin_${groupByColumn}`}
         />
         <p className="px-1 text-[10px] text-slate-400">
-          <Help id="expression.stacked-violin" label="How to read the stacked violin" /> Each gene on its own scale.
+          <Help id="expression.stacked-violin">Each gene on its own scale.</Help>
           {cells
             ? ` ${cells.length.toLocaleString()} of ${codes.length.toLocaleString()} cells, sampled evenly.`
             : ` All ${codes.length.toLocaleString()} cells.`}
