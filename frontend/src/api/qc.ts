@@ -36,6 +36,8 @@ export interface ClusterQc {
   ambient_markers?: string[];
   /** doublet_like: the two clusters it looks like doublets of. */
   doublet_like_of?: string[];
+  /** doublet_like: its top markers among the first's, the second's, either's, and its marker count. */
+  doublet_like_shared?: number[];
   flags: ClusterFlag[];
   reasons: string[]; // one plain-language sentence per flag, with the numbers
   /** Not a problem, but worth saying (an erythroid cluster's haemoglobin is real). */
@@ -101,6 +103,42 @@ export interface ClusterQcReport {
 export async function getClusterQc(datasetId: string, groupby?: string): Promise<ClusterQcReport> {
   const q = groupby ? `?groupby=${encodeURIComponent(groupby)}` : "";
   return apiFetch<ClusterQcReport>(`/datasets/${datasetId}/cluster-qc${q}`);
+}
+
+/** One evidence sentence (backend core/cluster_evidence.py); `fired`: why a rule fired. */
+export interface EvidenceLine {
+  kind: "markers" | "qc" | "doublet" | "typing" | "decision";
+  text: string;
+  fired: boolean;
+}
+
+/** Why one cluster was labelled or flagged, in words; never a probability. */
+export interface ClusterEvidence {
+  group: string;
+  n_cells: number;
+  /** The label scView gave (or would give) itself, without the AI. */
+  label: string | null;
+  /** True: from a recorded AI annotation run; false: what the rules would decide. */
+  decided: boolean;
+  flags: ClusterFlag[];
+  lines: EvidenceLine[];
+}
+
+export interface ClusterEvidenceReport {
+  column: string;
+  n_groups: number;
+  markers: boolean;
+  /** Database types shown as shares of the evidence (named groupings only). */
+  typing: boolean;
+  /** Output column of the recorded AI annotation the decisions come from. */
+  annotation: string | null;
+  notes: string[];
+  clusters: ClusterEvidence[];
+}
+
+export async function getClusterEvidence(datasetId: string, column?: string): Promise<ClusterEvidenceReport> {
+  const q = column ? `?column=${encodeURIComponent(column)}` : "";
+  return apiFetch<ClusterEvidenceReport>(`/datasets/${datasetId}/clusters/evidence${q}`);
 }
 
 /** QC distributions per group of one obs column (backend core/qc_groups.py). */
