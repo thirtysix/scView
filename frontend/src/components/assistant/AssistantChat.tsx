@@ -210,6 +210,7 @@ export function AssistantChat({ surface = "drawer" }: { surface?: "drawer" | "pa
         grounded: res.grounded,
         route: ["provenance"],
         model: res.model ?? undefined,
+        claims: res.claims,
       }));
     } catch (e) {
       patchLast((t) => ({

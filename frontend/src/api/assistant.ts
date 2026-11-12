@@ -18,6 +18,8 @@ export interface Claim {
   reason: string;
   evidence: string;
   checked_by: "rules" | "model";
+  /** The sentence as the answer wrote it, citations included: marked inline. */
+  span?: string;
 }
 
 export interface ChatMessage {
@@ -165,6 +167,7 @@ export interface MethodsResponse {
   methods: string;
   grounded: boolean;
   model?: string | null;
+  claims?: Claim[]; // each sentence checked against the recorded recipe
 }
 
 export async function getMethods(

@@ -295,7 +295,8 @@ async def _methods_events(adaptor, body: ChatRequest, settings: Settings):
     res = await write_methods(adaptor, body.history, settings.llm_api_key, settings.chat_model)
     yield {"type": "sources", "sources": [], "route": list(METHODS_ROUTE), "grounded": res.grounded}
     yield {"type": "delta", "text": res.methods}
-    yield {"type": "done", "followups": [], "model": res.model, "claims": []}
+    yield {"type": "done", "followups": [], "model": res.model,
+           "claims": [c.model_dump() for c in res.claims]}
 
 
 def _has_results(adaptor) -> bool:
@@ -352,7 +353,8 @@ async def assistant_chat(
         if wants_methods(query):  # the recipe, as the drawer's "Write methods" button
             res = await write_methods(adaptor, body.history, settings.llm_api_key, settings.chat_model)
             return ChatResponse(answer=res.methods, sources=[], grounded=res.grounded,
-                                raw_response=res.methods, route=list(METHODS_ROUTE), model=res.model)
+                                raw_response=res.methods, route=list(METHODS_ROUTE), model=res.model,
+                                claims=res.claims)
         kwargs = await _prepare(query, body, dm, settings, adaptor=adaptor)
         await _warm_cluster_qc(adaptor, kwargs)
         return await answer_query(query, adaptor, settings.llm_api_key, **kwargs)
