@@ -1,8 +1,24 @@
 import type { SpatialInfo } from "@/api/types";
 import { Help } from "@/components/common/Help";
-import { InfoTip } from "@/components/common/InfoTip";
 import { activeLibrary, unitWord } from "@/lib/spatial";
 import { useTissueViewStore, type TissueDraw } from "@/stores/tissueViewStore";
+
+/** What the tissue plot shows (the toolbar's Embedding label carries it while the tissue is shown). */
+export function TissuePlotTip({ spatial }: { spatial: SpatialInfo }) {
+  const outlines = spatial.outlines ?? [];
+  return (
+    <>
+      {spatial.unit === "spot"
+        ? "Each dot is a Visium spot (55 µm), drawn at its real size on the H&E image; one spot holds several cells. Size 2 is the real spot size."
+        : spatial.unit === "bin"
+          ? `Each dot is a Visium HD bin${spatial.bin_size_um ? ` (${spatial.bin_size_um} µm square)` : ""}, as wide as the real bin on the H&E image; a bin is a square of the capture grid, not a segmented cell. Size 2 is the real bin width.`
+          : "Each dot is a cell at its position in the section."}{" "}
+      Colours, overlays, lasso and labels work as on the UMAP. Zooming in loads the sharper image.
+      {outlines.length > 0 && " Draw: the whole section stays points; the segmented shapes are drawn once few enough cells are in view."}
+      {outlines.length === 0 && spatial.outlines_note && ` ${spatial.outlines_note}`}
+    </>
+  );
+}
 
 /**
  * Toolbar controls of the tissue plot (Embedding "Tissue"): which section is
@@ -95,16 +111,6 @@ export function TissueControls({ spatial }: { spatial: SpatialInfo }) {
           ))}
         </div>
       )}
-      <InfoTip label="About the tissue plot">
-        {spatial.unit === "spot"
-          ? "Each dot is a Visium spot (55 µm), drawn at its real size on the H&E image; one spot holds several cells. Size 2 is the real spot size."
-          : spatial.unit === "bin"
-            ? `Each dot is a Visium HD bin${spatial.bin_size_um ? ` (${spatial.bin_size_um} µm square)` : ""}, as wide as the real bin on the H&E image; a bin is a square of the capture grid, not a segmented cell. Size 2 is the real bin width.`
-            : "Each dot is a cell at its position in the section."}{" "}
-        Colours, overlays, lasso and labels work as on the UMAP. Zooming in loads the sharper image.
-        {outlines.length > 0 && " Draw: the whole section stays points; the segmented shapes are drawn once few enough cells are in view."}
-        {outlines.length === 0 && spatial.outlines_note && ` ${spatial.outlines_note}`}
-      </InfoTip>
     </div>
   );
 }

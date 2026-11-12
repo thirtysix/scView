@@ -22,8 +22,9 @@ import { PcPairChooser } from "@/components/unified/PcPairChooser";
 import { EmbeddingReliabilityControl } from "@/components/unified/EmbeddingReliability";
 import { LayoutStabilityControl } from "@/components/unified/LayoutStability";
 import { SelectByGroupControl, type GroupSelectSource } from "@/components/unified/SelectByGroup";
-import { TissueControls } from "@/components/unified/TissueControls";
+import { TissueControls, TissuePlotTip } from "@/components/unified/TissueControls";
 import { Help } from "@/components/common/Help";
+import { HoverTip } from "@/components/common/InfoTip";
 import { listedEmbeddings, TISSUE_GRID_REASON, tissueSpatial, unitWord } from "@/lib/spatial";
 
 interface UnifiedToolbarProps {
@@ -99,7 +100,13 @@ export function UnifiedToolbar({ onResetView, numCells, groupSelect = null }: Un
       {/* Embedding selector */}
       <div className="flex items-center gap-1.5">
         <label className="text-[11px] font-medium text-slate-500">
-          <Help id="plot.embedding" side="below">Embedding</Help>
+          {tissue ? (
+            <HoverTip tip={<TissuePlotTip spatial={tissue} />} side="below">
+              Embedding
+            </HoverTip>
+          ) : (
+            <Help id="plot.embedding" side="below">Embedding</Help>
+          )}
         </label>
         <select
           value={embedding}

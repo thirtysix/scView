@@ -4,13 +4,19 @@ import type { SpatialInfo } from "@/api/types";
 import { useTissueViewStore } from "@/stores/tissueViewStore";
 import { SPATIAL_HELP } from "@/lib/help/spatial";
 import { hoverTip, unhover } from "@/test/hoverTip";
-import { TissueControls } from "./TissueControls";
+import { TissueControls, TissuePlotTip } from "./TissueControls";
 
 const library = { id: "a", n_obs: 3, images: { lowres: { width: 2, height: 2, scalef: 1 } }, spot_diameter_fullres: 29.2, bounds: [0, 0, 1, 1] as [number, number, number, number] };
 
-function renderFor(spatial: Partial<SpatialInfo>, openPlotTip = true) {
-  render(<TissueControls spatial={{ technology: "visium", unit: "spot", library_column: "library_id", libraries: [library], ...spatial } as SpatialInfo} />);
-  if (openPlotTip) fireEvent.click(screen.getByRole("button", { name: "About the tissue plot" }));
+/** The controls, and (as the toolbar's Embedding label shows it on hover) the tissue-plot text. */
+function renderFor(spatial: Partial<SpatialInfo>, withPlotTip = true) {
+  const full = { technology: "visium", unit: "spot", library_column: "library_id", libraries: [library], ...spatial } as SpatialInfo;
+  render(
+    <>
+      <TissueControls spatial={full} />
+      {withPlotTip && <TissuePlotTip spatial={full} />}
+    </>,
+  );
 }
 
 describe("TissueControls", () => {
