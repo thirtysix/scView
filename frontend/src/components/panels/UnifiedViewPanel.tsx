@@ -939,13 +939,18 @@ export function UnifiedViewPanel() {
   const colorScore = !scatterOverlay && colorColumnInfo && colorColumnName === colorBy && isScoreColumn(colorColumnInfo)
     ? colorColumnInfo
     : null;
+  // Picked now (not the colouring a page opened with): the panel under the plot opens.
+  const shownScoreRef = useRef<string | null>(colorBy);
   useEffect(() => {
     if (!colorScore || !groupByColumn || !(colors instanceof Float32Array) || colors.length === 0) return;
+    const picked = shownScoreRef.current !== colorScore.name;
+    shownScoreRef.current = colorScore.name;
     scoresByGroup(colors, groupByColumn)
       .then((groups) => {
         if (!groups) return;
         setViolinData(groups);
         setViolinTitle(`${scoreTitle(colorScore)} (${scoreDetail(colorScore)})`);
+        if (picked) openBottomPanel();
       })
       .catch((err) => console.error("Failed to split the score by group:", err));
   }, [colorScore?.name, colors, groupByColumn]); // eslint-disable-line react-hooks/exhaustive-deps

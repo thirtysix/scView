@@ -113,8 +113,10 @@ export function CompareColoringsControl({ disabledReason = null }: { disabledRea
             className="h-3 w-3 flex-shrink-0 accent-blue-500"
           />
           {score ? (
-            <span className="min-w-0 truncate text-slate-700">
-              {o.title} <span className="text-slate-400">{o.detail}</span>
+            // Set names run long: the name on one line, what the score is under it.
+            <span className="flex min-w-0 flex-col leading-tight">
+              <span className="truncate text-slate-700">{o.title}</span>
+              <span className="truncate text-[10px] text-slate-400">{o.detail}</span>
             </span>
           ) : (
             <>

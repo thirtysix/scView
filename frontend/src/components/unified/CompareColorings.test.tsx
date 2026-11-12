@@ -374,7 +374,7 @@ describe("Saved scores in the Compare control", () => {
     render(<CompareColoringsControl />);
     fireEvent.click(screen.getByRole("button", { name: /Compare/ }));
     const labels = screen.getAllByRole("checkbox").map((c) => c.closest("label")!.textContent);
-    expect(labels).toEqual(["cell_type3", "stim2", "HALLMARK_TNFA Gene-set score (AUCell)", "S_score Cell-cycle S score"]);
+    expect(labels).toEqual(["cell_type3", "stim2", "HALLMARK_TNFAGene-set score (AUCell)", "S_scoreCell-cycle S score"]);
     expect(screen.getByText("Scores")).toBeInTheDocument();
     // Only the saved score can be removed (not the pipeline's S_score).
     expect(screen.getAllByRole("button", { name: /Remove saved score/ })).toHaveLength(1);
