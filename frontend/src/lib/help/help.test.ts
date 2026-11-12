@@ -47,6 +47,11 @@ describe("help catalog", () => {
     expect(missing).toEqual([]);
   });
 
+  it("draws no info icons: tips go on the thing itself (<Help> or HoverTip)", () => {
+    const icons = sources.filter(({ p, code }) => !p.endsWith("common/InfoTip.tsx") && /<InfoTip\b/.test(code)).map((s) => s.p);
+    expect(icons).toEqual([]);
+  });
+
   it("has no entry nobody shows", () => {
     const unused = Object.keys(HELP).filter(
       (id) => !(id.startsWith("tab.") && subtabIds.includes(id.slice(4))) && !allCode.includes(`"${id}"`),

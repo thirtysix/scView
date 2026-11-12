@@ -13,15 +13,16 @@ Unified View explains itself: hover a tab, label, heading or column to see what 
 ### Added
 - Plain-language tips across the whole Unified View (184 catalog entries plus the existing explanations): every tab,
   toolbar control, card heading, non-obvious field, column header and plot says what it does, when it is useful and
-  how to read it. Hover the thing itself for a moment (or focus its field from the keyboard); there are no info
-  icons. Written for biologists new to single-cell analysis; defaults and numbers in them are checked against the code.
+  how to read it. Hover the thing itself for a moment (or focus its field from the keyboard). Written for biologists
+  new to single-cell analysis; defaults and numbers in them are checked against the code.
 - The tip texts live in one catalog (`frontend/src/lib/help/`), so the same wording appears wherever a thing is
   shown; a test checks every tip used exists, every entry is used, and every Unified View tab has one.
 
 ### Changed
 - Tips are larger (12 px) and drawn above everything, so a scrolling panel or card edge no longer cuts them off;
-  they open above or below, whichever has room, and stay inside the window. The remaining info icons outside
-  Unified View use the same tip.
+  they open above or below, whichever has room, and stay inside the window.
+- No more (i) info icons anywhere: every existing explanation (Data Assessment and QC cards, Gene Sets, import and
+  export dialogs, Compare, annotation) now opens on hovering the heading, label or sentence it explains.
 - Opening a dialog no longer puts keyboard focus on an info icon (which opened its tip over the dialog).
 
 ## [0.71.1] - 2026-11-12
