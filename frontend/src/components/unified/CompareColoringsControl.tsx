@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DialogBox } from "@/components/common/DialogBox";
+import { Help } from "@/components/common/Help";
 import { Columns2 } from "lucide-react";
 import { prettyObsLabel } from "@/lib/formatting";
 import {
@@ -123,6 +124,10 @@ export function CompareColoringsControl({ disabledReason = null }: { disabledRea
             })}
           </div>
           <div className="mt-3 flex items-center justify-end gap-2">
+            {/* After the checkboxes in the DOM: the dialog's first focus stays on the first column */}
+            <span className="mr-auto flex items-center">
+              <Help id="plot.compare" label="About comparing colourings" />
+            </span>
             {active && (
               <button
                 onClick={() => {

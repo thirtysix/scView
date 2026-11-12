@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertCircle, AlertTriangle, Loader2 } from "lucide-react";
 import { getPerDonorExpression, type DonorMethod, type PerDonorExpression as Result } from "@/api/donors";
 import { DonorBoxPlot } from "@/components/plots/DonorBoxPlot";
+import { Help } from "@/components/common/Help";
 import { useCategoryColors } from "@/hooks/useCategoryColors";
 import { rgbCss } from "@/lib/categoryColors";
 import { conditionColumns, suggestConditionColumn } from "@/lib/composition";
@@ -117,6 +118,7 @@ export function PerDonorExpression({ datasetId, gene, noGeneReason, groupColumn,
   return (
     <div className="space-y-1">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
+        <Help id="plot.per-donor" label="About per-donor values" side="below" />
         <label className="flex items-center gap-1">
           Split by
           <select

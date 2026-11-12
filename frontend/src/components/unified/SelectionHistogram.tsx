@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import Plot from "@/components/plots/Plot";
+import { Help } from "@/components/common/Help";
 import { useObsCodes } from "@/hooks/useObsCodes";
 import { useObsValues } from "@/hooks/useObsValues";
 import { pseudoLogTicks } from "@/lib/logAxis";
@@ -186,6 +187,7 @@ export function SelectionHistogram({ datasetId, groupColumn }: SelectionHistogra
   return (
     <div className="space-y-1">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-600">
+        <Help id="plot.histogram" label="About the histogram" side="below" />
         <label className="flex items-center gap-1">
           Values
           <select aria-label="Values" className={select} value={effectiveSource} onChange={(e) => setSource(e.target.value)}>

@@ -1,6 +1,7 @@
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { isPcaEmbedding } from "@/hooks/useEmbedding";
+import { Help } from "@/components/common/Help";
 
 /**
  * "PCs: x [ ] y [ ]" next to the embedding selector, only while a PCA with more
@@ -41,6 +42,7 @@ export function PcPairChooser() {
       {select(0)}
       <label className="text-[11px] font-medium text-slate-500">y</label>
       {select(1)}
+      <Help id="plot.pc-pair" label="About the principal components shown" side="below" />
     </span>
   );
 }

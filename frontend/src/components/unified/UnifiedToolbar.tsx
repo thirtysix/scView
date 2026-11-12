@@ -23,6 +23,7 @@ import { EmbeddingReliabilityControl } from "@/components/unified/EmbeddingRelia
 import { LayoutStabilityControl } from "@/components/unified/LayoutStability";
 import { SelectByGroupControl, type GroupSelectSource } from "@/components/unified/SelectByGroup";
 import { TissueControls } from "@/components/unified/TissueControls";
+import { Help } from "@/components/common/Help";
 import { listedEmbeddings, TISSUE_GRID_REASON, tissueSpatial, unitWord } from "@/lib/spatial";
 
 interface UnifiedToolbarProps {
@@ -98,6 +99,7 @@ export function UnifiedToolbar({ onResetView, numCells, groupSelect = null }: Un
       {/* Embedding selector */}
       <div className="flex items-center gap-1.5">
         <label className="text-[11px] font-medium text-slate-500">Embedding</label>
+        <Help id="plot.embedding" label="About the embedding" side="below" />
         <select
           value={embedding}
           onChange={(e) => setEmbedding(e.target.value)}
@@ -123,6 +125,7 @@ export function UnifiedToolbar({ onResetView, numCells, groupSelect = null }: Un
       {/* Color by */}
       <div className="flex items-center gap-1.5">
         <label className="text-[11px] font-medium text-slate-500">Color</label>
+        <Help id="plot.colour-by" label="About colouring the plot" side="below" />
         <select
           value={colorBy}
           onChange={(e) => setColorBy(e.target.value)}
@@ -155,6 +158,7 @@ export function UnifiedToolbar({ onResetView, numCells, groupSelect = null }: Un
           <div className="h-4 w-px bg-slate-200" />
           <div className="flex items-center gap-1.5">
             <label className="text-[11px] font-medium text-slate-500">Layer</label>
+            <Help id="plot.layer" label="About the expression layer" side="below" />
             <select
               value={expressionLayer}
               onChange={(e) => setExpressionLayer(e.target.value)}
@@ -193,6 +197,7 @@ export function UnifiedToolbar({ onResetView, numCells, groupSelect = null }: Un
       {/* Opacity */}
       <div className="flex items-center gap-1.5">
         <label className="text-[11px] font-medium text-slate-500">Opacity</label>
+        <Help id="plot.opacity" label="About opacity" side="below" />
         <input
           type="range"
           min={0.1}
@@ -230,6 +235,7 @@ export function UnifiedToolbar({ onResetView, numCells, groupSelect = null }: Un
       {/* Colour schemes */}
       <div className="flex flex-wrap items-center gap-1.5">
         <label className="text-[11px] font-medium text-slate-500">Colours</label>
+        <Help id="plot.colours" label="About the colour schemes" side="below" />
         <label htmlFor="palette-categorical" className="text-[10px] text-slate-500">
           Categories
         </label>
@@ -303,6 +309,7 @@ export function UnifiedToolbar({ onResetView, numCells, groupSelect = null }: Un
         >
           Clip
         </label>
+        <Help id="plot.clip" label="About clipping the colour range" side="below" align="right" />
         <select
           id="colour-clip-default"
           aria-label="Default colour range clipping"
@@ -324,6 +331,7 @@ export function UnifiedToolbar({ onResetView, numCells, groupSelect = null }: Un
         <label className="text-[11px] font-medium text-slate-500" title="Larger datasets are downsampled for rendering">
           Max
         </label>
+        <Help id="plot.max-cells" label="About the most cells drawn" side="below" align="right" />
         <select
           value={maxRenderedCells}
           onChange={(e) => setMaxRenderedCells(parseInt(e.target.value))}
@@ -363,6 +371,7 @@ export function UnifiedToolbar({ onResetView, numCells, groupSelect = null }: Un
       <SelectByGroupControl source={groupSelect} />
       <CellFilterControl />
       <GatesControl />
+      <Help id="plot.select" label="About selecting cells" side="below" />
 
       {/* Selection info; a filter's selection says which filter */}
       {selectedIndices && selectedIndices.size > 0 && (

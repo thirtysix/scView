@@ -3,7 +3,7 @@ import { Combine, Download, Eye, Library, Loader2, Pencil, Plus, Sparkles, Tags,
 import { obsColumnValues } from "@/api/gates";
 import type { DatasetInfo } from "@/api/types";
 import { Caption } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
 import { GatesCombineForm } from "@/components/unified/GatesCombineForm";
 import { GatesLabelColumn } from "@/components/unified/GatesLabelColumn";
 import { GatesSaveForm } from "@/components/unified/GatesSaveForm";
@@ -106,13 +106,7 @@ export function GatesPanel({ dataset, onClose }: { dataset: DatasetInfo; onClose
       <div className="flex flex-wrap items-center gap-1.5">
         <span className="flex items-center gap-1 text-[11px] font-semibold text-slate-700">
           Gates
-          <InfoTip label="About gates" width={300}>
-            A gate is a named set of cells: a lasso or legend selection (saved by cell position), a Filter (asked again
-            each time, so it follows label changes), or an AND / OR / NOT of other gates. A gate drawn inside another
-            keeps only the cells that are also in its parent, so % of parent is always a share of the parent&rsquo;s
-            cells. Click a gate to make it the selection: DE &ldquo;selection vs rest&rdquo;, &ldquo;Label
-            selection&hellip;&rdquo; and the histogram then use it, and new gates go inside it.
-          </InfoTip>
+          <Help id="gates.about" label="About gates" width={300} side="below" />
         </span>
         <button
           className={btn}
