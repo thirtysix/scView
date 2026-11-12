@@ -119,3 +119,64 @@ def test_seurat_qc_columns_are_named_but_the_step_still_runs():
 def test_no_qc_columns_says_so():
     q = assess_preprocessing(_counts()).qc_metrics
     assert q.done is False and q.details == "No standard QC metric columns found in obs"
+
+
+def test_mito_columns_under_other_tools_names_are_found():
+    from scview.core.assessor import mito_columns
+
+    names = ["pct_counts_mt", "percent.mt", "mitochondrial_percent", "subsets_Mito_percent", "mito_frac",
+             "pct_counts_mito", "percent_mito", "pct_mt", "n_genes", "mt_genes", "pct_counts_in_top_50_genes"]
+    assert mito_columns(names) == sorted(names[:8])
+    a = _counts()
+    a.obs["n_genes"] = 5
+    a.obs["mitochondrial_percent"] = 0.5  # CELLxGENE (Emont 2022 mouse fat)
+    q = assess_preprocessing(a).qc_metrics
+    assert q.done and "mitochondrial_percent" in q.details and "no MT%" not in q.details
+
+
+def test_cellxgene_cell_cycle_columns_named_and_step_still_runs():
+    a = _counts()
+    a.obs["cell_cycle_s_score"] = 0.2
+    a.obs["cell_cycle_g2m_score"] = -0.1
+    a.obs["cell_cycle_phase"] = "S"
+    c = assess_preprocessing(a).cell_cycle
+    assert c.done is False  # regress-out reads S_score / G2M_score, which the step adds
+    assert "cell_cycle_g2m_score, cell_cycle_phase, cell_cycle_s_score" in c.details
+    assert "No cell cycle scores" not in c.details
+    # Seurat's names too; scanpy's own columns still mean done
+    b = _counts()
+    b.obs["S.Score"], b.obs["G2M.Score"], b.obs["Phase"] = 0.1, 0.1, "G1"
+    assert "S.Score" in assess_preprocessing(b).cell_cycle.details
+    b.obs["S_score"], b.obs["G2M_score"] = 0.1, 0.1
+    assert assess_preprocessing(b).cell_cycle.done is True
+
+
+def test_cellxgene_cell_cycle_scores_feed_the_cycling_check():
+    from scview.core import cell_cycle
+
+    a = _counts()
+    a.obs["cell_cycle_s_score"] = np.linspace(-0.2, 0.4, a.n_obs)
+    a.obs["cell_cycle_g2m_score"] = 0.0
+    calls = cell_cycle.cycling_cells(a.obs)
+    assert calls is not None and calls.sum() == int((a.obs["cell_cycle_s_score"] >= 0.1).sum())
+
+
+def test_author_harmony_embedding_counts_as_batch_correction():
+    a = _counts()
+    a.obsm["X_harmony"] = _RNG.standard_normal((a.n_obs, 5))
+    b = assess_preprocessing(a).batch_correction
+    assert b.done is True and b.confidence == "medium" and "X_harmony with 5 dimensions" in b.details
+    assert assess_preprocessing(_counts()).batch_correction.done is False
+
+
+def test_doublet_id_column_is_read_as_doublet_calls():
+    from scview.core import doublet_source
+
+    a = _counts()
+    a.obs["doublet_id"] = ["Singlet"] * a.n_obs  # Wilson 2022 kidney: doublets removed upstream
+    d = assess_preprocessing(a).doublet_detection
+    assert d.done is True and "'doublet_id' (0 of 60 cells" in d.details and "removed" in d.details
+    a.obs["doublet_id"] = ["Doublet"] * 3 + ["Singlet"] * (a.n_obs - 3)
+    assert "(3 of 60 cells called doublets)" in assess_preprocessing(a).doublet_detection.details
+    used = doublet_source.resolve(a.obs)
+    assert used is not None and used.n == 3 and used.source == "doublet_id"
