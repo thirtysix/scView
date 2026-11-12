@@ -39,7 +39,9 @@ logger = logging.getLogger(__name__)
 # v4: the query is marker_selection.ora_query_genes (genes in >= 20% of the group,
 # by fold change), not the top of the wilcoxon score order.
 # v5: the query also needs adjusted p < 0.05 (marker_selection.MAX_PADJ).
-ORA_VERSION = 5
+# v6: genes with an id but no name (Ensembl ids, AC012345.1 clone ids) leave the query
+# (gene_filters.is_unnamed).
+ORA_VERSION = 6
 
 META_PREFIX = uns_keys.META_PREFIX
 

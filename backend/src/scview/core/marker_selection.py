@@ -19,6 +19,13 @@ cells: on paul15 the database lookup went 11/19 -> 13/19 and the LLM annotator
 11 -> 12, with nothing lost on Kang (research/marker-db-assessment/padj); 0.01 was
 no better.
 
+Genes with an id but no name (``gene_filters.is_unnamed``: ENSG00000289963, AC012345.1,
+RP11-34P13.7) are dropped too (``skip_unnamed``). On a full GENCODE gene set they crowd
+the lists: Tabula Sapiens liver Leiden clusters had 13.8% of their top 25 unnamed (one
+group 68%), the author cell types 6.3% (hepatocytes 28%), kidney 6%; 10x PBMC sets 0-2%
+(research/unnamed-markers). LINC/-AS1 names stay. A dataset whose genes are mostly ids
+(Ensembl ids as var names) keeps them all, or nothing would be left.
+
 The order is a choice (``order``):
 
 - ``logfc``: log fold change, highest first (the default);
@@ -40,7 +47,7 @@ import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 
-from scview.core.gene_filters import is_ribo_mito
+from scview.core.gene_filters import is_ribo_mito, is_unnamed
 from scview.core.ora_background import resolve_markers_key
 
 logger = logging.getLogger(__name__)
@@ -65,6 +72,7 @@ def group_markers(
     order: Order = "logfc",
     exclude_ribo_mito: bool = True,
     max_padj: float | None = MAX_PADJ,
+    skip_unnamed: bool = True,
 ) -> dict[str, list[str]]:
     """Per group of ``groupby`` (by label, in the stored group order): up to ``n``
     marker genes, best first.
@@ -76,7 +84,9 @@ def group_markers(
     result without fold changes is not filtered or ordered by them. Empty when
     the column has no stored markers. A gene must also have an adjusted p-value
     under ``max_padj`` (None turns that off); a result without p-values (logreg)
-    is not filtered by them.
+    is not filtered by them. ``skip_unnamed`` drops genes with an id but no name
+    (``gene_filters.is_unnamed``), unless most of the ranked genes are ids (a dataset
+    named by Ensembl id keeps them all).
     """
     if order not in ORDERS:
         raise ValueError(f"Unknown marker order '{order}' (expected one of {', '.join(ORDERS)}).")
@@ -96,12 +106,15 @@ def group_markers(
 
     has_lfc = "logfoldchanges" in rgg and rgg["logfoldchanges"] is not None
     has_padj = max_padj is not None and _stored(rgg, "pvals_adj") is not None
+    skip_unnamed = skip_unnamed and bool(groups) and not _named_by_id(np.asarray(names[groups[0]]).astype(str))
     out: dict[str, list[str]] = {}
     for group in groups:
         genes = np.asarray(names[group]).astype(str)
         keep = np.ones(genes.size, dtype=bool)
         if exclude_ribo_mito:
             keep &= np.fromiter((not is_ribo_mito(g) for g in genes), dtype=bool, count=genes.size)
+        if skip_unnamed:
+            keep &= np.fromiter((not is_unnamed(g) for g in genes), dtype=bool, count=genes.size)
         frac = _lookup(pts, group, genes)
         if frac is not None:
             keep &= frac >= min_pts  # NaN compares False
@@ -142,6 +155,12 @@ def ora_query_genes(
     return group_markers(
         adata, groupby, n=n, key=key, exclude_ribo_mito=exclude_ribo_mito,
     ).get(str(group), [])
+
+
+def _named_by_id(genes: np.ndarray) -> bool:
+    """Most of the ranked genes are ids (a dataset whose genes are Ensembl ids)."""
+    sample = genes[:5000]
+    return bool(sample.size) and sum(is_unnamed(g) for g in sample) > sample.size / 2
 
 
 def _stored(rgg, field: str):
