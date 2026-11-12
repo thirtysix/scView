@@ -47,6 +47,9 @@ interface ScoreSummary {
   shareBelow: number | null;
   note: string | null;
   panelCaution?: string | null;
+  /** The obs column the score was saved as (lib/savedScores.ts), or why it was not */
+  saved?: string | null;
+  saveNote?: string | null;
 }
 
 interface UnifiedGeneSetsSubtabProps {
@@ -178,6 +181,8 @@ export function UnifiedGeneSetsSubtab({
         shareBelow: response.share_below_max_rank,
         note: response.note ?? null,
         panelCaution: response.panel_caution ?? null,
+        saved: response.saved_column ?? null,
+        saveNote: response.save_note ?? null,
       };
       scoreCache.current.set(cacheKey(selectedGeneSet, method), { ...summary, scores });
       setScoreResult(summary);
@@ -329,6 +334,16 @@ export function UnifiedGeneSetsSubtab({
               </span>
             )}
           </div>
+          {scoreResult?.saved && (
+            <p className="mt-1 text-[10px] leading-snug text-slate-500" data-testid="score-saved">
+              Saved as column {scoreResult.saved}: Compare and Color offer it.
+            </p>
+          )}
+          {scoreResult?.saveNote && (
+            <p className="mt-1 text-[10px] leading-snug text-amber-600" data-testid="score-saved">
+              {scoreResult.saveNote}
+            </p>
+          )}
           {scoreResult?.panelCaution && (
             <Caption className="mt-1" testId="panel-caution">{scoreResult.panelCaution}</Caption>
           )}

@@ -44,7 +44,11 @@ export const PLOT_HELP: Record<string, string> = {
 
   // Toolbar dialogs
   "plot.compare":
-    "The same plot coloured by 2 to 12 columns side by side, one camera for all. Use it to set two clusterings, or a clustering and cell-type labels, against each other: where the same cells form one group in every panel, the columns agree.",
+    "The same plot coloured by 2 to 12 columns side by side, one camera for all. Use it to set two clusterings, or a clustering and cell-type labels, against each other: where the same cells form one group in every panel, the columns agree. Scores can join them, each with its own colour bar.",
+  "plot.compare-scores":
+    "Per-cell scores. Every gene set you score and every TF or pathway activity you draw is saved here as a column, so it can sit next to the groupings. Scoring the same set again, by any method, replaces it. Cell-cycle and stress scores from the pipeline are listed too.",
+  "plot.compare-remove-score":
+    "Remove this saved score from the dataset. Only scores scView saved can be removed; score the set again to bring it back.",
   "plot.select-by-group":
     "Tick groups, then Select to make their cells the selection, as a lasso would. Useful for groups that are scattered on the plot or hard to draw around.",
   "plot.label-selection":

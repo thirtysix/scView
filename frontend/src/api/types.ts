@@ -133,6 +133,17 @@ export interface ObsColumnInfo {
   values?: string[];
   /** Palette slot per value, once a saved order pinned colours to labels (core/category_order.py). */
   color_slots?: number[];
+  /** A per-cell score the app saved as this column (core/saved_scores.py): what it holds. */
+  saved_score?: SavedScoreInfo;
+}
+
+/** A saved score's kind and name: a gene set (method score_genes | aucell | ssgsea | gsva)
+ *  or one TF / pathway's activity (network collectri | progeny, method ulm). */
+export interface SavedScoreInfo {
+  kind: "geneset" | "activity";
+  name: string;
+  method?: string | null;
+  network?: string | null;
 }
 
 export interface EmbeddingInfo {

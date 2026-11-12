@@ -7,10 +7,12 @@ import { ShareLinkBanner } from "@/components/common/ShareLinkBanner";
 import { SelectionAnnouncer } from "./SelectionAnnouncer";
 import { useViewStore } from "@/stores/viewStore";
 import { useSessionRestore } from "@/hooks/useSessionRestore";
+import { useSavedScoreRefresh } from "@/hooks/useSavedScoreRefresh";
 
 export function AppLayout() {
   const sidebarCollapsed = useViewStore((s) => s.sidebarCollapsed);
   useSessionRestore();
+  useSavedScoreRefresh();
 
   return (
     <div className="flex h-screen overflow-hidden">

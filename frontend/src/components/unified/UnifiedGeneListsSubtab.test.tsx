@@ -129,7 +129,7 @@ describe("UnifiedGeneListsSubtab", () => {
     await waitFor(() => expect(onScoreGeneSet).toHaveBeenCalled());
     const [path, init] = apiFetch.mock.calls.find((c) => String(c[0]).endsWith("/genesets/score"))!;
     expect(path).toBe("/datasets/ds1/genesets/score");
-    expect(JSON.parse(init.body)).toEqual({ gene_set: ["Lyz2", "Klf1", "Gata1"], score_name: "Mixed", method: "score_genes" });
+    expect(JSON.parse(init.body)).toEqual({ gene_set: ["Lyz2", "Klf1", "Gata1"], score_name: "Mixed", method: "score_genes", save: true });
     expect(onScoreGeneSet).toHaveBeenCalledWith(
       new Float32Array([0.1, 0.2]), "Mixed", ["Lyz2", "Klf1", "Gata1"], undefined, "score_genes");
   });

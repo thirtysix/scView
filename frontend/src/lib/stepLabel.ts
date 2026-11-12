@@ -79,6 +79,8 @@ export const STEP_LABELS: Record<string, string> = {
   bulk_deconvolution: "Bulk deconvolution",
   learned_gate_train: "Learned gate trained",
   learned_gate_apply: "Learned gate applied",
+  save_score: "Score saved as a column",
+  remove_score: "Saved score removed",
   // Spatial
   spatial_autocorr: "Spatially variable genes (Moran's I)",
   spot_deconvolution: "Spot composition (cell types per spot)",

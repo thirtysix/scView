@@ -63,7 +63,7 @@ describe("UnifiedGeneSetsSubtab scoring method", () => {
     score_name: "SET_0", n_cells: 3, scores: method === "aucell" ? [0.1, 0.2, 0.3] : [1, 2, 3],
     min_score: 0, max_score: 1, genes_found: ["A"], genes_missing: [], method,
     max_rank: method === "aucell" ? 703 : null, source: "log-normalised .raw", genes_undetected: [],
-    share_below_max_rank: method === "aucell" ? 0.64 : null,
+    share_below_max_rank: method === "aucell" ? 0.64 : null, saved_column: "score_SET_0", save_note: null,
   });
   function respondScoring() {
     client.apiFetch.mockImplementation((url: string, init?: { body?: string }) => {
@@ -85,7 +85,9 @@ describe("UnifiedGeneSetsSubtab scoring method", () => {
     fireEvent.change(screen.getByRole("combobox", { name: "Gene-set scoring method" }), { target: { value: "aucell" } });
     fireEvent.click(screen.getByRole("button", { name: "Score" }));
     await waitFor(() => expect(onScore).toHaveBeenCalledTimes(1));
-    expect(JSON.parse(scoreCalls()[0]![1].body)).toEqual({ gene_set: ["A"], score_name: "SET_0", method: "aucell" });
+    expect(JSON.parse(scoreCalls()[0]![1].body)).toEqual({ gene_set: ["A"], score_name: "SET_0", method: "aucell", save: true });
+    // Saved as a column, and it says so.
+    expect(screen.getByTestId("score-saved")).toHaveTextContent("Saved as column score_SET_0: Compare and Color offer it.");
     expect(onScore.mock.calls[0]!.slice(1)).toEqual(["SET_0", ["A"], undefined, "aucell"]);
     expect(screen.getByTestId("aucell-note")).toHaveTextContent(
       "AUCell over each cell's top 703 genes (5% of those detected); 64% of cells detect fewer",

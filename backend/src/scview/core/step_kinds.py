@@ -84,6 +84,8 @@ RECORDED_STEPS: tuple[str, ...] = (
     "bulk_deconvolution",
     "learned_gate_train",
     "learned_gate_apply",
+    "save_score",
+    "remove_score",
     # Spatial
     "spatial_autocorr",
     "spot_deconvolution",

@@ -12,9 +12,10 @@ import { useUnifiedViewStore } from "@/stores/unifiedViewStore";
 import { compareLabelKey } from "@/lib/centroidLabels";
 
 // jsdom has no WebGL: capture what the grid hands deck.gl instead.
-const { deckProps, fetchEmbeddingBinary } = vi.hoisted(() => ({
+const { deckProps, fetchEmbeddingBinary, removeSavedScore } = vi.hoisted(() => ({
   deckProps: { current: null as Record<string, unknown> | null },
   fetchEmbeddingBinary: vi.fn(),
+  removeSavedScore: vi.fn(),
 }));
 vi.mock("@deck.gl/react", async () => {
   const { forwardRef } = await import("react");
@@ -26,6 +27,7 @@ vi.mock("@deck.gl/react", async () => {
   };
 });
 vi.mock("@/api/embeddings", () => ({ fetchEmbeddingBinary }));
+vi.mock("@/api/savedScores", () => ({ removeSavedScore }));
 
 import { CompareColoringsControl } from "./CompareColoringsControl";
 import { CompareColoringsGrid } from "./CompareColoringsGrid";
@@ -295,5 +297,109 @@ describe("CompareColoringsGrid", () => {
     await screen.findByTestId("deck");
     fireEvent.click(screen.getByRole("button", { name: "Stop comparing" }));
     expect(useSplitViewStore.getState().compareColumns).toBeNull();
+  });
+
+  it("mixes a saved score with a grouping: a colour bar, its values on hover, no group labels", async () => {
+    const values = Float32Array.from([-2, -1, 0, 0.5, 1, 2]);
+    useDatasetStore.setState({ currentDataset: dataset([CELL_TYPE, TNF]), currentDatasetId: "ds1" });
+    useSettingsStore.setState({ signedColormapMode: "auto", divergingColormap: "RdBu" });
+    fetchEmbeddingBinary.mockImplementation(async (_ds: string, _emb: string, column: string) => {
+      const table = tableFromArrays({
+        x: Float32Array.from([0, 1, 2, 3, 4, 5]),
+        y: Float32Array.from([0, 1, 2, 3, 4, 5]),
+        [column]: column === TNF.name ? values : codes.cell_type!,
+      });
+      return tableToIPC(table).slice().buffer;
+    });
+    const onHover = vi.fn();
+    render(
+      withQuery(
+        <CompareColoringsGrid
+          datasetId="ds1"
+          embedding="X_umap"
+          columns={["cell_type", TNF.name]}
+          positions={positions}
+          dimensions={2}
+          onHover={onHover}
+        />,
+      ),
+    );
+    await screen.findByTestId("deck");
+    // The score panel is titled by its set, says what it is, and has a colour bar
+    // centred on 0 (a signed score: the diverging map) with the clip control.
+    expect(screen.getAllByText("HALLMARK_TNFA").length).toBeGreaterThanOrEqual(2); // title + legend
+    expect(screen.getByText("Gene-set score (AUCell)")).toBeInTheDocument();
+    expect(screen.getByTitle("The centre of the diverging scale")).toHaveTextContent("0");
+    expect(screen.getByTestId("colour-scale-caption")).toBeInTheDocument();
+    expect(screen.getByText("NK")).toBeInTheDocument(); // the grouping's legend stays
+    type L = { id: string; props: { data: { length: number; attributes: Record<string, { value: Uint8Array | Float32Array }> } } };
+    const layers = deckProps.current!.layers as L[];
+    expect(layers.map((l) => l.id)).toEqual(["split-fg-0", "split-fg-1", "split-label-0"]);
+    // The lowest and highest scores take the two ends of the map, not one category colour.
+    const fg = layers.find((l) => l.id === "split-fg-1")!.props.data.attributes;
+    const pos = fg.getPosition!.value as Float32Array;
+    const rgba = fg.getFillColor!.value as Uint8Array;
+    const colourOf = (cell: number) => {
+      const s = Array.from({ length: 6 }, (_, k) => k).find((k) => pos[k * 2] === cell)!;
+      return Array.from(rgba.slice(s * 4, s * 4 + 3));
+    };
+    expect(colourOf(0)).not.toEqual(colourOf(5));
+    // Hover: the cell's group and its score.
+    const slot = Array.from({ length: 6 }, (_, s) => s).find((s) => pos[s * 2] === 5)!;
+    onHover.mockClear();
+    (deckProps.current!.onHover as (i: unknown) => void)({ picked: true, index: slot, x: 1, y: 1, layer: { id: "split-fg-1" } });
+    const lines = onHover.mock.calls[0]![0].lines.map((l: { label: string; value: string }) => `${l.label}=${l.value}`);
+    expect(lines[0]).toBe("cell_type=T");
+    expect(lines[1]).toMatch(/^HALLMARK_TNFA=2/);
+  });
+});
+
+const TNF = {
+  name: "score_HALLMARK_TNFA",
+  dtype: "float32",
+  n_unique: 6,
+  saved_score: { kind: "geneset" as const, name: "HALLMARK_TNFA", method: "aucell" },
+};
+
+describe("Saved scores in the Compare control", () => {
+  beforeEach(() => {
+    removeSavedScore.mockReset().mockResolvedValue({ removed: TNF.name, kind: "geneset", name: "HALLMARK_TNFA" });
+    useDatasetStore.setState({
+      currentDataset: { ...dataset([STIM, CELL_TYPE, TNF, { name: "S_score", dtype: "float64", n_unique: 6 }]), active_clustering: "cell_type" },
+      currentDatasetId: "ds1",
+    });
+  });
+
+  it("lists scores under their own heading, after the groupings, and picks them like any column", () => {
+    render(<CompareColoringsControl />);
+    fireEvent.click(screen.getByRole("button", { name: /Compare/ }));
+    const labels = screen.getAllByRole("checkbox").map((c) => c.closest("label")!.textContent);
+    expect(labels).toEqual(["cell_type3", "stim2", "HALLMARK_TNFAGene-set score (AUCell)", "S_scoreCell-cycle S score"]);
+    expect(screen.getByText("Scores")).toBeInTheDocument();
+    // Only the saved score can be removed (not the pipeline's S_score).
+    expect(screen.getAllByRole("button", { name: /Remove saved score/ })).toHaveLength(1);
+    fireEvent.click(screen.getByRole("checkbox", { name: /HALLMARK_TNFA/ }));
+    fireEvent.click(screen.getByRole("button", { name: /side by side/ }));
+    expect(useSplitViewStore.getState().compareColumns).toEqual(["stim", "cell_type", TNF.name]);
+  });
+
+  it("removes a saved score and stops colouring by it", async () => {
+    useSettingsStore.setState({ colorBy: TNF.name });
+    render(<CompareColoringsControl />);
+    fireEvent.click(screen.getByRole("button", { name: /Compare/ }));
+    expect((screen.getByRole("checkbox", { name: /HALLMARK_TNFA/ }) as HTMLInputElement).checked).toBe(true);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Remove saved score HALLMARK_TNFA" })));
+    expect(removeSavedScore).toHaveBeenCalledWith("ds1", TNF.name);
+    expect((screen.getByRole("checkbox", { name: /HALLMARK_TNFA/ }) as HTMLInputElement).checked).toBe(false);
+    expect(useSettingsStore.getState().colorBy).toBe("cell_type");
+  });
+
+  it("says why a removal failed", async () => {
+    removeSavedScore.mockRejectedValueOnce(new Error('API error 404: {"detail":"\'x\' is not a saved score."}'));
+    render(<CompareColoringsControl />);
+    fireEvent.click(screen.getByRole("button", { name: /Compare/ }));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Remove saved score HALLMARK_TNFA" })));
+    expect(screen.getByText(/is not a saved score\.$/)).toBeInTheDocument();
+    expect(screen.queryByText(/detail/)).toBeNull();
   });
 });

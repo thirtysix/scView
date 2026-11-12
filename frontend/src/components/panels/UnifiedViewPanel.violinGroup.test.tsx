@@ -6,10 +6,11 @@ import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useUnifiedViewStore } from "@/stores/unifiedViewStore";
 import { useSplitViewStore } from "@/stores/splitViewStore";
+import { tableFromArrays, tableToIPC } from "apache-arrow";
 
 // The panel's scatter, data hook and side panels are stubbed, as in the reliability
 // tests: these check that changing "Group by (violin)" splits the violin on screen again.
-const { embedding, scatterProps, compareProps, bottomProps, lassoProps, apiFetch, stub } = vi.hoisted(() => ({
+const { embedding, scatterProps, compareProps, bottomProps, lassoProps, apiFetch, apiFetchBinary, stub } = vi.hoisted(() => ({
   stub: (name: string) => () => ({ [name]: () => null }),
   embedding: {
     current: {
@@ -27,6 +28,7 @@ const { embedding, scatterProps, compareProps, bottomProps, lassoProps, apiFetch
   bottomProps: { current: null as Record<string, unknown> | null },
   lassoProps: { current: null as Record<string, unknown> | null },
   apiFetch: vi.fn(),
+  apiFetchBinary: vi.fn(),
 }));
 vi.mock("@/hooks/useEmbedding", () => ({ useEmbedding: () => embedding.current }));
 vi.mock("@/components/plots/EmbeddingScatter", () => ({
@@ -35,7 +37,7 @@ vi.mock("@/components/plots/EmbeddingScatter", () => ({
     return <div data-testid="scatter" />;
   },
 }));
-vi.mock("@/api/client", () => ({ apiFetch, apiFetchBinary: vi.fn() }));
+vi.mock("@/api/client", () => ({ apiFetch, apiFetchBinary }));
 vi.mock("@/components/unified/UnifiedToolbar", stub("UnifiedToolbar"));
 vi.mock("@/components/unified/UnifiedBottomPanel", () => ({
   UnifiedBottomPanel: (props: Record<string, unknown>) => {
@@ -175,6 +177,25 @@ describe('Unified View "Group by (violin)"', () => {
     await vi.waitFor(() => expect(useUnifiedViewStore.getState().violinData).toEqual(BY_SAMPLE));
     expect(violinCalls()[0]).toContain("gene=FOXO3&groupby=sample");
     expect(useUnifiedViewStore.getState().violinGene).toEqual({ gene: "FOXO3" });
+  });
+
+  it("splits a saved score picked in Colour by, and again by a new column", async () => {
+    const score = { name: "score_IFN", dtype: "float32", n_unique: 3,
+      saved_score: { kind: "geneset" as const, name: "IFN", method: "aucell" } };
+    useDatasetStore.setState({ currentDataset: { ...DATASET, obs_columns: [...DATASET.obs_columns, score] } });
+    useSettingsStore.setState({ colorBy: "score_IFN" });
+    useUnifiedViewStore.setState({ scatterOverlay: null, violinData: {}, violinTitle: "" });
+    embedding.current = { ...embedding.current, colors: Float32Array.from([0.25, 0.5, 0.75]), colorColumnName: "score_IFN" };
+    const codes: Record<string, Int32Array> = { cell_type: Int32Array.from([0, 1, 1]), sample: Int32Array.from([0, 1, 2]) };
+    apiFetchBinary.mockImplementation(async (path: string) => {
+      const column = new URLSearchParams(path.split("?")[1]).get("color_by")!;
+      return tableToIPC(tableFromArrays({ x: Float32Array.from([0, 1, 2]), [column]: codes[column]! })).slice().buffer;
+    });
+    renderPanel();
+    await vi.waitFor(() => expect(useUnifiedViewStore.getState().violinData).toEqual({ B: [0.25], NK: [0.5, 0.75] }));
+    expect(useUnifiedViewStore.getState().violinTitle).toBe("IFN (Gene-set score (AUCell))");
+    act(() => useUnifiedViewStore.getState().setGroupByColumn("sample"));
+    await vi.waitFor(() => expect(useUnifiedViewStore.getState().violinData).toEqual({ s1: [0.25], s2: [0.5], s3: [0.75] }));
   });
 
   it("clears a violin left over from an overlay that is gone", async () => {
