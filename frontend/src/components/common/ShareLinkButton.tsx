@@ -4,6 +4,7 @@ import { buildShareUrl, describeSharedView, readShareHash } from "@/lib/shareUrl
 import { captureSession } from "@/lib/sessionRestore";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { errorMessage } from "@/lib/errorMessage";
+import { DialogBox } from "@/components/common/DialogBox";
 
 interface Made {
   url: string;
@@ -93,8 +94,10 @@ export function ShareLinkButton() {
     <div ref={ref} className="relative inline-block">
       <span className="inline-flex" title={dataset ? "Copy a link that reopens this view" : "Open a dataset first"}>
         <button
-          onClick={() => (open ? close() : void make())}
-          disabled={!dataset || busy}
+          onClick={() => (busy ? undefined : open ? close() : void make())}
+          // Not disabled while busy: a disabled button drops its focus, and the dialog gives focus back to it.
+          disabled={!dataset}
+          aria-busy={busy}
           aria-haspopup="dialog"
           aria-expanded={open}
           className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
@@ -105,9 +108,9 @@ export function ShareLinkButton() {
       </span>
 
       {open && (
-        <div
-          role="dialog"
-          aria-label="Share link"
+        <DialogBox
+          label="Share link"
+          onClose={close}
           className="absolute right-0 z-50 mt-1 w-[26rem] space-y-2 rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-700 shadow-lg"
         >
           <div className="flex items-start gap-2">
@@ -161,7 +164,7 @@ export function ShareLinkButton() {
               </p>
             </>
           )}
-        </div>
+        </DialogBox>
       )}
     </div>
   );

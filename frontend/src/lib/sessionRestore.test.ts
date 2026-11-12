@@ -407,7 +407,7 @@ describe("when the dataset differs or is missing", () => {
     useDatasetStore.getState().setCurrentDataset(kang({ id: "other", name: "Other" }));
     await expect(
       restoreSession(parseSession({ format: "scview-session", version: 1, dataset: { id: "kang", name: "Kang" } })),
-    ).rejects.toThrow(/dataset “Kang” could not be opened \(503/);
+    ).rejects.toThrow(/dataset “Kang” could not be opened \(busy\)/);
     expect(useDatasetStore.getState().currentDatasetId).toBe("other");
   });
 

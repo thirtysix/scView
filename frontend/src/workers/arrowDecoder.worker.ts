@@ -1,4 +1,5 @@
 import { tableFromIPC } from "apache-arrow";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface DecodeRequest {
   buffer: ArrayBuffer;
@@ -69,7 +70,7 @@ self.onmessage = (event: MessageEvent<DecodeRequest>) => {
   } catch (error) {
     self.postMessage({
       type: "error",
-      error: error instanceof Error ? error.message : String(error),
+      error: errorMessage(error),
     });
   }
 };

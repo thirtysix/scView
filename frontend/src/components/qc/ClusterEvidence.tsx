@@ -35,6 +35,11 @@ function LabelChip({ c }: { c: ClusterEvidence }) {
   );
 }
 
+/** A request still pending after this long is a first (uncached) call: say what it is doing. */
+const EVIDENCE_SLOW_MS = 1000;
+const EVIDENCE_SLOW_TEXT =
+  "Comparing each cluster's markers with random genes. The first time takes about 10 to 15 seconds.";
+
 function Cluster({ c, open }: { c: ClusterEvidence; open: boolean }) {
   const fired = c.lines.some((l) => l.fired);
   return (
@@ -75,33 +80,39 @@ export function ClusterEvidenceList({
 }) {
   const [data, setData] = useState<ClusterEvidenceReport | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  // Only a slow (first, uncached) answer says so; a cached one comes back at once.
+  const [slow, setSlow] = useState(false);
 
   useEffect(() => {
     let live = true;
-    setLoading(true);
+    setSlow(false);
     setError(null);
+    const timer = setTimeout(() => live && setSlow(true), EVIDENCE_SLOW_MS);
     getClusterEvidence(datasetId, column || undefined)
       .then((d) => live && setData(d))
       .catch((e) => live && setError(errorMessage(e)))
-      .finally(() => live && setLoading(false));
+      .finally(() => {
+        clearTimeout(timer);
+        if (live) setSlow(false);
+      });
     return () => {
       live = false;
+      clearTimeout(timer);
     };
   }, [datasetId, column, refreshKey]);
 
+  const working = slow && (
+    <p className="flex items-start gap-1 text-[11px] text-slate-500" role="status" data-testid="evidence-slow">
+      <Loader2 className="mt-0.5 h-3 w-3 shrink-0 animate-spin" /> {EVIDENCE_SLOW_TEXT}
+    </p>
+  );
   if (error) return <p className="text-[11px] text-slate-400">Evidence unavailable: {error}</p>;
-  if (!data) {
-    return loading ? (
-      <p className="flex items-center gap-1 text-[11px] text-slate-400">
-        <Loader2 className="h-3 w-3 animate-spin" /> Comparing markers with random genes…
-      </p>
-    ) : null;
-  }
+  if (!data) return working || null;
   const keep = only ? new Set(only) : null;
   const clusters = keep ? data.clusters.filter((c) => keep.has(c.group)) : data.clusters;
   return (
     <div className="space-y-1" data-testid="cluster-evidence">
+      {working}
       {clusters.map((c) => (
         <Cluster key={c.group} c={c} open={!!keep || c.lines.some((l) => l.fired)} />
       ))}

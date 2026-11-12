@@ -13,12 +13,9 @@ import { rgbCss } from "@/lib/categoryColors";
 import { plotConfig } from "@/lib/plotConfig";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { errorMessage } from "@/lib/errorMessage";
 
 const MAX_GROUPS_SHOWN = 24;
-
-function errorMessage(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
-}
 
 /** A locus of the peak-gene links in the shape the coverage figure draws: no tracks. */
 function locusAsCoverage(locus: LinksLocus): Coverage {

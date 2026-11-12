@@ -1,4 +1,5 @@
 import { apiFetch } from "./client";
+import { errorMessage, errorStatus } from "@/lib/errorMessage";
 
 /** Cells that had `value` before a labelling (null: no value). */
 export interface PreviousValues {
@@ -36,15 +37,7 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     return await apiFetch<T>(path, init);
   } catch (e) {
-    const raw = e instanceof Error ? e.message : String(e);
-    const m = raw.match(/^API error (\d+): ([\s\S]*)$/);
-    let detail = "";
-    try {
-      detail = String(JSON.parse(m?.[2] ?? "").detail ?? "");
-    } catch {
-      /* not JSON: keep the original message */
-    }
-    throw new ApiDetailError(detail || raw, m ? Number(m[1]) : null);
+    throw new ApiDetailError(errorMessage(e), errorStatus(e));
   }
 }
 

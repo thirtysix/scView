@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { watchdogMessage, type WatchdogEvent } from "@/api/pipelineRun";
 import type { RunHandlers, RunProgress, RunStage, StabilityCurve } from "@/api/spatialDomains";
+import { errorMessage } from "@/lib/errorMessage";
 
 export type RunKind = "domains" | "enrichment" | "niches" | "cooccurrence";
 
@@ -74,7 +75,7 @@ export const useSpatialDomainsRunStore = create<SpatialDomainsRunState>((set, ge
       return result;
     } catch (e) {
       const aborted = signal.aborted;
-      set({ running: false, error: aborted ? "Cancelled: nothing was saved." : e instanceof Error ? e.message : String(e) });
+      set({ running: false, error: aborted ? "Cancelled: nothing was saved." : errorMessage(e) });
       return null;
     } finally {
       if (controller?.signal === signal) controller = null;

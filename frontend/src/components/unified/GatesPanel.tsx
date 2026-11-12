@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Combine, Download, Eye, Library, Loader2, Pencil, Plus, Sparkles, Tags, Trash2, X } from "lucide-react";
 import { obsColumnValues } from "@/api/gates";
 import type { DatasetInfo } from "@/api/types";
@@ -10,6 +10,7 @@ import { GatesSaveForm } from "@/components/unified/GatesSaveForm";
 import { LearnedGateForm } from "@/components/unified/LearnedGateForm";
 import { LearnedGatesLibrary } from "@/components/unified/LearnedGatesLibrary";
 import { useGates, useResolveFilterGates } from "@/hooks/useGates";
+import { useDialogFocus } from "@/hooks/useDialogFocus";
 import { getPalette } from "@/lib/colors";
 import { downloadCsv } from "@/lib/csv";
 import { replicateColumns, suggestReplicateColumn } from "@/lib/de";
@@ -520,8 +521,11 @@ function DeleteConfirm({
   const users = dependents(gates, gate.id);
   const below = subtree(gates, gate.id).length - 1;
   const where = parentName ? `“${parentName}”` : "the top level";
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  useDialogFocus(dialogRef, onCancel, { initial: cancelRef });
   return (
-    <div role="dialog" aria-label={`Delete ${gate.name}`} className="space-y-1 rounded border border-red-200 bg-red-50 px-2 py-1 text-[11px] text-red-800">
+    <div ref={dialogRef} role="dialog" aria-label={`Delete ${gate.name}`} className="space-y-1 rounded border border-red-200 bg-red-50 px-2 py-1 text-[11px] text-red-800">
       {children.length > 0 && (
         <p>
           &ldquo;{gate.name}&rdquo; has {children.length} gate{children.length === 1 ? "" : "s"} directly inside it.
@@ -544,7 +548,7 @@ function DeleteConfirm({
         <button onClick={() => onDelete("subtree")} className="rounded border border-red-300 bg-white px-1.5 py-0.5 hover:bg-red-100">
           {below > 0 ? `Delete it and the ${below} gate${below === 1 ? "" : "s"} inside` : "Delete it"}
         </button>
-        <button onClick={onCancel} className="rounded px-1.5 py-0.5 text-slate-600 hover:bg-white">
+        <button ref={cancelRef} onClick={onCancel} className="rounded px-1.5 py-0.5 text-slate-600 hover:bg-white">
           Cancel
         </button>
       </div>

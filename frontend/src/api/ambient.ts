@@ -60,8 +60,9 @@ export interface AmbientResponse {
     groups: Record<string, AmbientMarker[]>;
     n_flagged: number;
   };
-  /** A targeted panel: no empty droplets to measure a soup in; `notes` says so. */
+  /** The estimate cannot apply (a targeted panel, or no raw counts); `notes` says why. */
   not_applicable?: boolean;
+  reason?: "targeted_panel" | "no_counts";
   hb_note: string | null;
   notes: string[];
   /** The last correction's record when the counts were corrected, else null. */

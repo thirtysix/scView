@@ -33,14 +33,11 @@ import { aboutGb } from "@/lib/labelTransfer";
 import { plotConfig } from "@/lib/plotConfig";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { errorMessage } from "@/lib/errorMessage";
 
 // Common cut-offs, from Signac's PBMC vignette (https://stuartlab.org/signac/articles/pbmc_vignette).
 const TSS_LOW = 3;
 const NUCLEOSOME_HIGH = 4;
-
-function errorMessage(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
-}
 
 const fmt = (v: number | null | undefined, digits = 2) => (v == null ? "n/a" : v.toLocaleString(undefined, { maximumFractionDigits: digits }));
 
