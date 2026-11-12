@@ -153,7 +153,10 @@ _RESULT_FACET_HINTS = {
     "qc": ("targeted panel", "gene panel", "panel genes", "the panel", "xenium", "control counts",
            "control probe", "tss enrichment", "nucleosome", "fragment qc", "fragment length", "atac qc",
            "fragments per cell", "transcripts", "transcript dots", "outlines", "cell boundaries",
-           "nucleus boundaries", "segmentation"),
+           "nucleus boundaries", "segmentation",
+           # each cluster's evidence (core/cluster_evidence.py): why scView labelled or flagged it
+           "low quality", "low-quality", "unidentified", "random genes", "random-like", "doublet-like",
+           "mix of two", "why is cluster", "why was cluster", "why did scview", "evidence"),
 }
 
 

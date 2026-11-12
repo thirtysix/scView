@@ -18,7 +18,7 @@ from scview.dependencies import get_dataset_manager, get_settings_dep
 from scview.core.dataset_manager import DatasetManager, DatasetMemoryError
 from scview.core.assessor import assess_preprocessing, recorded_normalization_method
 from scview.core import (
-    cluster_qc, doublets, qc_filter, qc_groups, qc_report, sample_pseudobulk, sex_check,
+    cluster_evidence, cluster_qc, doublets, qc_filter, qc_groups, qc_report, sample_pseudobulk, sex_check,
 )
 from scview.core import large_mode, large_run, leiden, working_copy
 from scview.core import batch_methods, qc_states, scaling, spatial, targeted_panel
@@ -130,6 +130,36 @@ async def get_cluster_qc(
     except Exception as e:
         logger.error("Cluster QC failed for %s: %s", dataset_id, e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Cluster QC failed: {e}")
+    return report.model_dump()
+
+
+# ---------------------------------------------------------------------------
+# GET /datasets/{dataset_id}/clusters/evidence
+# ---------------------------------------------------------------------------
+
+
+@router.get("/datasets/{dataset_id}/clusters/evidence")
+async def get_cluster_evidence(
+    dataset_id: str,
+    column: str | None = None,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Each cluster's evidence in plain words (core/cluster_evidence.py): markers against
+    random genes, QC against the typical cluster, doublet-like parents, database types as
+    shares of the evidence (named groupings only) and the label scView gave or would give
+    itself. From stored results, never a probability. ``column`` defaults to the active
+    clustering."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
+    try:
+        # The random-marker null and per-cell QC: off the loop (cached afterwards).
+        report = await asyncio.to_thread(cluster_evidence.for_adaptor, adaptor, column or None)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Cluster evidence failed for %s: %s", dataset_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Cluster evidence failed: {e}")
     return report.model_dump()
 
 

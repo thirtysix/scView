@@ -156,6 +156,8 @@ class ClusterQC(BaseModel):
     erythroid_markers: list[str] = []  # haemoglobin / erythroid genes among its top markers
     cycling_fraction: float | None = None  # share of cells with a clear S or G2M score
     doublet_like_of: list[str] = []  # doublet_like: the two clusters it looks like a mix of
+    # doublet_like: [its top markers among the first's, among the second's, among either's, its markers]
+    doublet_like_shared: list[int] = []
     median_pct_malat1: float | None = None  # % of a cell's counts from MALAT1
     median_pct_intronic: float | None = None  # the author's intronic/unspliced share, %
     # Top markers whose signal outside the cluster looks like ambient RNA (core/ambient.py)
@@ -544,6 +546,7 @@ def _flag_doublet_like(adata, column: str, rows: list["ClusterQC"]) -> bool:
         k = len(markers[row.group])
         row.flags.append("doublet_like")
         row.doublet_like_of = [a, b]
+        row.doublet_like_shared = [in_a, in_b, either, k]
         row.reasons.append(
             f"Looks like doublets of {a} + {b}: {either} of its top {k} markers are theirs "
             f"({in_a} of {a}'s, {in_b} of {b}'s), and its cells carry more RNA, median "

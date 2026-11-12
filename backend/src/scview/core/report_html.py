@@ -299,7 +299,13 @@ def _qc(d: dict) -> str:
                f"cells of this group ({fpct(part.get('fraction_lost'))} of it)" + (f": {crit}" if crit else "") + ".")
         return f"<p>{e(txt)}</p>"
 
+    def evidence(part: dict) -> str:
+        items = "".join(f"<li>{e(ln['text'])}</li>" for ln in part.get("lines") or [])
+        notes = "".join(f'<p class="cap">{e(n)}</p>' for n in part.get("notes") or [])
+        return f"<ul>{items}</ul>{notes}"
+
     out += _sub("Cluster QC flags", d.get("flags"), flags)
+    out += _sub("Evidence", d.get("evidence"), evidence)
     out += _sub("Doublets", d.get("doublets"), doublets)
     out += _sub("QC states", d.get("states"), states)
     out += _sub("Removed by filtering", d.get("removed"), removed)

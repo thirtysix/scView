@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, ChevronDown, ChevronRight, Info, Loader2, Sparkles } from "lucide-react";
 import { getClusterQc, type ClusterFlag, type ClusterQc, type ClusterQcReport, type QcDriver } from "@/api/qc";
+import { Help } from "@/components/common/Help";
+import { ClusterEvidenceList } from "@/components/qc/ClusterEvidence";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -103,6 +105,8 @@ export function ClusterQcTable({ datasetId, refreshKey = 0 }: { datasetId: strin
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<boolean | null>(null); // null = follow the flags
+  // Each cluster's evidence in words: fetched only when opened (it compares markers with random genes).
+  const [evidenceOpen, setEvidenceOpen] = useState(false);
 
   useEffect(() => {
     setGroupby("");
@@ -169,7 +173,7 @@ export function ClusterQcTable({ datasetId, refreshKey = 0 }: { datasetId: strin
           className="flex items-center gap-1 text-sm font-semibold text-slate-700"
         >
           {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-          Cluster QC
+          <span>Cluster QC</span>
         </button>
         {loading ? (
           <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-400" />
@@ -374,6 +378,22 @@ export function ClusterQcTable({ datasetId, refreshKey = 0 }: { datasetId: strin
             </ul>
           )}
           <DriversNote report={data} />
+          <div className="border-t border-slate-100 pt-1.5">
+            <button
+              type="button"
+              onClick={() => setEvidenceOpen(!evidenceOpen)}
+              aria-expanded={evidenceOpen}
+              className="flex items-center gap-1 text-[11px] font-medium text-slate-600"
+            >
+              {evidenceOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+              <Help id="evidence.section">Evidence per cluster</Help>
+            </button>
+            {evidenceOpen && (
+              <div className="mt-1.5">
+                <ClusterEvidenceList datasetId={datasetId} column={data.column} refreshKey={refreshKey} />
+              </div>
+            )}
+          </div>
           {kinds.length > 0 && (
             <dl className="space-y-0.5 border-t border-slate-100 pt-1.5 text-[11px] text-slate-500">
               {kinds.map((k) => (

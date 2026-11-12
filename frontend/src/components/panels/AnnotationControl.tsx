@@ -4,6 +4,7 @@ import { getCellTypistModels, getCellTypistSummary, type CellTypistModel } from 
 import { getLlmStatus } from "@/api/assistant";
 import { getProvenance } from "@/api/provenance";
 import { CellTypistSummary } from "@/components/panels/CellTypistSummary";
+import { ClusterEvidenceList } from "@/components/qc/ClusterEvidence";
 import { AnnotationOntologyIds } from "@/components/annotation/AnnotationOntologyIds";
 import { defaultModel, orderModels, speciesMismatch, type DatasetSpecies } from "@/lib/celltypistModels";
 import { prettyObsLabel, isRedundantClusterCol } from "@/lib/formatting";
@@ -184,7 +185,7 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
       if (method === "llm" && datasetId) {
         const notes = await lastLlmNotes(datasetId, tgt);
         setReplyCut(notes.cut);
-        setDecided(notes.decided);
+        setDecided(notes.decided && { ...notes.decided, column: groupby });
       }
     } finally {
       setAnnotating(false);
@@ -391,7 +392,7 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
           </span>
         </p>
       )}
-      {lastWritten && !busy && decided && <DecidedNote decided={decided} />}
+      {lastWritten && !busy && decided && datasetId && <DecidedNote decided={decided} datasetId={datasetId} />}
       {lastWritten && !busy && hasColumn(`${lastWritten}_qualified`) && (
         <p className="text-[11px] text-slate-500">
           Also wrote{" "}
@@ -414,6 +415,8 @@ interface Decided {
   lowQuality: string[];
   unidentified: string[];
   toAi: string[];
+  /** The clustering the annotation was based on (its clusters' evidence). */
+  column?: string;
 }
 
 const ids = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : []);
@@ -439,8 +442,10 @@ async function lastLlmNotes(datasetId: string, target: string): Promise<{ cut: s
   }
 }
 
-/** Which clusters scView labelled without the AI, and why. */
-function DecidedNote({ decided }: { decided: Decided }) {
+/** Which clusters scView labelled without the AI, and why: the rule, then each cluster's evidence. */
+function DecidedNote({ decided, datasetId }: { decided: Decided; datasetId: string }) {
+  const [showEvidence, setShowEvidence] = useState(false);
+  const groups = [...decided.lowQuality, ...decided.unidentified, ...decided.toAi];
   return (
     <div className="mt-2 space-y-0.5 rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs text-slate-600" data-testid="annotation-decided">
       {decided.lowQuality.length > 0 && (
@@ -464,6 +469,19 @@ function DecidedNote({ decided }: { decided: Decided }) {
         </p>
       )}
       <p>The AI named the other clusters.</p>
+      <button
+        type="button"
+        onClick={() => setShowEvidence(!showEvidence)}
+        aria-expanded={showEvidence}
+        className="font-medium text-primary hover:underline"
+      >
+        {showEvidence ? "Hide the evidence" : "Show the evidence"}
+      </button>
+      {showEvidence && (
+        <div className="pt-1">
+          <ClusterEvidenceList datasetId={datasetId} column={decided.column} only={groups} />
+        </div>
+      )}
     </div>
   );
 }
