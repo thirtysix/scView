@@ -24,6 +24,7 @@ import { LayoutStabilityControl } from "@/components/unified/LayoutStability";
 import { SelectByGroupControl, type GroupSelectSource } from "@/components/unified/SelectByGroup";
 import { TissueControls, TissuePlotTip } from "@/components/unified/TissueControls";
 import { Help } from "@/components/common/Help";
+import { helpText } from "@/lib/help";
 import { HoverTip } from "@/components/common/InfoTip";
 import { listedEmbeddings, TISSUE_GRID_REASON, tissueSpatial, unitWord } from "@/lib/spatial";
 
@@ -357,26 +358,27 @@ export function UnifiedToolbar({ onResetView, numCells, groupSelect = null }: Un
 
       <div className="h-4 w-px bg-slate-200" />
 
-      {/* Lasso */}
-      <button
-        onClick={() => setSelectionMode(selectionMode === "lasso" ? "none" : "lasso")}
-        aria-pressed={selectionMode === "lasso"}
-        title={
-          tissue
-            ? `Lasso selection (L): the ${unitWord(tissue)} inside the outline, in this section`
-            : gridActive
-              ? "Lasso selection (L): draw in any panel; every panel shows the selection"
-              : "Lasso selection (L). On a 3D embedding it selects every cell under the outline, at any depth; turn the lasso off to rotate"
-        }
-        className={`flex items-center gap-1 rounded px-2 py-1 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
-          selectionMode === "lasso"
-            ? "bg-orange-50 text-orange-700 ring-1 ring-orange-300"
-            : "text-slate-600 hover:bg-slate-100"
-        }`}
+      {/* Lasso: one styled tip on the whole button, naming the L shortcut (no native title) */}
+      <HoverTip
+        tip={helpText(tissue ? "plot.lasso-tissue" : gridActive ? "plot.lasso-grid" : "plot.lasso")}
+        side="below"
+        className="inline-flex"
       >
-        <Lasso className="h-3.5 w-3.5" />
-        <Help id="plot.select" side="below">Lasso</Help>
-      </button>
+        <button
+          onClick={() => setSelectionMode(selectionMode === "lasso" ? "none" : "lasso")}
+          aria-pressed={selectionMode === "lasso"}
+          aria-label="Lasso selection"
+          aria-keyshortcuts="L"
+          className={`flex items-center gap-1 rounded px-2 py-1 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+            selectionMode === "lasso"
+              ? "bg-orange-50 text-orange-700 ring-1 ring-orange-300"
+              : "text-slate-600 hover:bg-slate-100"
+          }`}
+        >
+          <Lasso className="h-3.5 w-3.5" />
+          Lasso
+        </button>
+      </HoverTip>
       <SelectByGroupControl source={groupSelect} />
       <CellFilterControl />
       <GatesControl />

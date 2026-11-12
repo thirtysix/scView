@@ -49,7 +49,7 @@ describe("plot and toolbar help", () => {
       ["Colours", "plot.colours"],
       ["Clip", "plot.clip"],
       ["Max", "plot.max-cells"],
-      ["Lasso", "plot.select"],
+      ["Lasso", "plot.lasso"],
     ];
     expect(document.querySelector("[data-infotip]")).toBeNull(); // no icons
     for (const [text, id] of tips) {
@@ -57,11 +57,29 @@ describe("plot and toolbar help", () => {
       expect(await hoverTip(target)).toBe(PLOT_HELP[id]);
       // the toolbar is the top of the page: the tip opens below it
       expect(screen.getByRole("tooltip")).toHaveAttribute("data-side", "below");
+      // one tip only: no native title on the label or anything around it
+      expect(target.closest("[title]"), text).toBeNull();
       unhover(target);
     }
     // the labels still name their controls
     expect(screen.getByLabelText("Clip")).toHaveAttribute("id", "colour-clip-default");
     expect(screen.getByLabelText("Split")).toHaveAttribute("id", "split-by");
+  });
+
+  it("gives the lasso one styled tip that names its L shortcut, and no native title", async () => {
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <UnifiedToolbar numCells={12} />
+      </QueryClientProvider>,
+    );
+    const lasso = screen.getByRole("button", { name: "Lasso selection" });
+    expect(lasso).toHaveAttribute("aria-keyshortcuts", "L");
+    expect(lasso.closest("[title]")).toBeNull();
+    expect(lasso.querySelector("[title]")).toBeNull();
+    // the icon opens it too, not only the word
+    expect(await hoverTip(lasso.querySelector("svg")!)).toBe(PLOT_HELP["plot.lasso"]);
+    expect(screen.getAllByRole("tooltip")).toHaveLength(1);
+    for (const id of ["plot.lasso", "plot.lasso-grid", "plot.lasso-tissue"]) expect(PLOT_HELP[id], id).toMatch(/Press L/);
   });
 
   it("keeps the dialogs' first focus on their first choice; the tip is on the heading", async () => {
