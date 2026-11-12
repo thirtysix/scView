@@ -6,6 +6,13 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Known limits
+- AI annotation with DeepSeek-V4-Pro as the annotator model (not the default): since 0.71.0 some doublet clusters
+  come back as "Doublet" or "Low-quality cells" instead of naming both cell types. In the annotation benchmark
+  V4-Pro named both types for 37 of 96 visible doublet clusters, against 47 with 0.70.0; the default model
+  (DeepSeek-V4.1-Flash) and the other models checked held. The replies are the model's own answers, not a reading
+  error.
+
 ## [0.71.0] - 2026-11-11
 
 AI annotation: scView decides which clusters are damaged cells or name no cell type; the AI names the cell types.
