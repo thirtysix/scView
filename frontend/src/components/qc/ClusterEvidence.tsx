@@ -102,8 +102,8 @@ export function ClusterEvidenceList({
   }, [datasetId, column, refreshKey]);
 
   const working = slow && (
-    <p className="flex items-center gap-1 text-[11px] text-slate-500" role="status" data-testid="evidence-slow">
-      <Loader2 className="h-3 w-3 shrink-0 animate-spin" /> {EVIDENCE_SLOW_TEXT}
+    <p className="flex items-start gap-1 text-[11px] text-slate-500" role="status" data-testid="evidence-slow">
+      <Loader2 className="mt-0.5 h-3 w-3 shrink-0 animate-spin" /> {EVIDENCE_SLOW_TEXT}
     </p>
   );
   if (error) return <p className="text-[11px] text-slate-400">Evidence unavailable: {error}</p>;
