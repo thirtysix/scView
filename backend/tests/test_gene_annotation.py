@@ -45,7 +45,9 @@ def test_genome_names(name, expected):
 
 
 def test_other_genome_says_which():
-    with pytest.raises(ga.AnnotationError, match="not 'hg19'"):
+    with pytest.raises(ga.AnnotationError, match="not 'danRer11'"):
+        ga.canonical_genome("danRer11")
+    with pytest.raises(ga.AnnotationError, match=r"on hg19 \(GRCh37\)"):  # core/genome_build.py
         ga.canonical_genome("hg19")
 
 

@@ -40,3 +40,27 @@ export function noMarkersReason(data: MarkersResponse | null | undefined): strin
   if (!data || !Array.isArray(data.groups)) return NO_MARKERS_REASON;
   return data.groups.length === 0 ? (data.reason ?? NO_MARKERS_REASON) : null;
 }
+
+/** Why a grouping column has no markers to ask for (one group: the backend's 400), or
+ *  null when it has two or more groups or is not a known column. */
+export function oneGroupReason(col: { name: string; n_unique: number } | undefined | null): string | null {
+  if (!col || col.n_unique >= 2) return null;
+  return `${col.name} has only one group, and markers compare groups. Pick a column with two or more.`;
+}
+
+/** Shown when no categorical column has two groups (an import before any clustering). */
+export const NO_GROUPING_REASON =
+  "Markers compare groups of cells, and no column here has two or more groups yet. Run clustering first, " +
+  "or add a column that splits the cells.";
+
+/** Why the Markers tab asks for nothing: the chosen column has one group, or no column
+ *  could be chosen because none has two groups. null when the request can go. */
+export function markersBlockedReason(
+  columns: readonly { name: string; dtype: string; n_unique: number }[],
+  groupByColumn: string,
+): string | null {
+  if (groupByColumn) return oneGroupReason(columns.find((c) => c.name === groupByColumn));
+  if (!columns.length) return null; // not described yet
+  const categorical = (c: { dtype: string }) => c.dtype === "category" || c.dtype === "object" || c.dtype === "bool";
+  return columns.some((c) => categorical(c) && c.n_unique >= 2) ? null : NO_GROUPING_REASON;
+}

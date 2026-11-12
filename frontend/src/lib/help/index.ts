@@ -12,9 +12,16 @@
 import { GENES_HELP } from "./genes";
 import { MODALITIES_HELP } from "./modalities";
 import { PLOT_HELP } from "./plot";
+import { QC_HELP } from "./qc";
 import { SPATIAL_HELP } from "./spatial";
 
-export const HELP_GROUPS = { plot: PLOT_HELP, genes: GENES_HELP, modalities: MODALITIES_HELP, spatial: SPATIAL_HELP };
+export const HELP_GROUPS = {
+  plot: PLOT_HELP,
+  genes: GENES_HELP,
+  modalities: MODALITIES_HELP,
+  spatial: SPATIAL_HELP,
+  qc: QC_HELP,
+};
 
 export const HELP: Readonly<Record<string, string>> = Object.assign({}, ...Object.values(HELP_GROUPS));
 

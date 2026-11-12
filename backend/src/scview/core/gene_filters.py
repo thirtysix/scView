@@ -37,6 +37,22 @@ def is_ribo_mito(gene: str) -> bool:
     return bool(_RIBO.match(gene) or _MITO.match(gene))
 
 
+# Genes with no name, only an identifier: a bare Ensembl id (ENSG00000289963, a gene
+# GENCODE has not named), a clone-based id (AC012345.1, AL..., AP..., the GenBank
+# accession of the clone the gene was found on) or an old GENCODE clone name
+# (RP11-34P13.7, CTD-2245F17.3). They tell a reader, a database lookup or a model
+# nothing. LINC01857 and ADAM7-AS1 are names (HGNC's) and stay.
+_ENSEMBL = re.compile(r"^ENS[A-Z]*G\d{6,}(\.\d+)?$")
+_CLONE = re.compile(r"^[A-Z]{1,2}\d{5,6}\.\d+$")
+_OLD_CLONE = re.compile(r"^(RP\d{1,2}|CT[ABCD]|XXbac|XXyac|KB|CH\d{2}|LA16c|WI2|GS1)-[\w.-]+$")
+
+
+def is_unnamed(gene: str) -> bool:
+    """True if the gene has an identifier but no name (see ``_ENSEMBL``/``_CLONE``)."""
+    g = str(gene)
+    return bool(_ENSEMBL.match(g) or _CLONE.match(g) or _OLD_CLONE.match(g))
+
+
 def select_query_genes(
     ranked_genes: list[str], n: int, *, exclude_ribo_mito: bool = True
 ) -> list[str]:

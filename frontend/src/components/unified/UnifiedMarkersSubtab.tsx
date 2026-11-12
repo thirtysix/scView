@@ -15,7 +15,7 @@ import { MarkerSpecificityPlot } from "@/components/plots/MarkerSpecificityPlot"
 import { CountSplitCheck } from "@/components/unified/CountSplitCheck";
 import type { SplitMarkersResult } from "@/api/splitMarkers";
 import { splitPValueMap } from "@/lib/splitMarkers";
-import { MARKERS_PER_GROUP, NO_MARKERS_REASON, noMarkersReason } from "@/api/markers";
+import { MARKERS_PER_GROUP, NO_MARKERS_REASON, markersBlockedReason, noMarkersReason } from "@/api/markers";
 import { AddToGeneListMenu } from "@/components/common/AddToGeneListMenu";
 import { Help } from "@/components/common/Help";
 import { GeneReportButton } from "@/components/report/ReportButtons";
@@ -24,6 +24,7 @@ import { OffTargetPanel } from "@/components/unified/OffTargetPanel";
 import { ProteinNetwork } from "@/components/unified/ProteinNetwork";
 import { formatFoldChange, formatPValue } from "@/lib/formatting";
 import { downloadCsv } from "@/lib/csv";
+import { errorMessage } from "@/lib/errorMessage";
 import {
   MARKER_CSV_HEADERS,
   SPECIFICITY_HELP,
@@ -111,9 +112,24 @@ export function UnifiedMarkersSubtab({
     });
   }, [dataset]);
 
+  // A grouping with one group (chosen on another tab, say), or a dataset with no
+  // grouping at all yet, has no markers: the backend refuses one group, so say so
+  // here instead of asking.
+  const oneGroup = useMemo(
+    () => markersBlockedReason(dataset?.obs_columns ?? [], groupByColumn),
+    [dataset, groupByColumn],
+  );
+
   // Fetch markers
   useEffect(() => {
     if (!datasetId) return;
+    if (oneGroup) {
+      setMarkersData(null);
+      setIsLoading(false);
+      setError(null);
+      setNoMarkers(null);
+      return;
+    }
     // Cancellation guard: when groupByColumn auto-selects, this effect re-runs.
     // Without it, a stale first run (empty column → 404 → "no markers") can
     // resolve *after* the second run succeeds and clobber it.
@@ -148,14 +164,14 @@ export function UnifiedMarkersSubtab({
         if (cancelled) return;
         const msg = err instanceof Error ? err.message : String(err);
         if (msg.includes("404")) setNoMarkers(NO_MARKERS_REASON);
-        else setError(msg);
+        else setError(errorMessage(err));
         setIsLoading(false);
       });
 
     return () => {
       cancelled = true;
     };
-  }, [datasetId, groupByColumn, revision]);
+  }, [datasetId, groupByColumn, revision, oneGroup]);
 
   const { flags: ambientFlags, approximate: ambientApprox } = useAmbientFlags(datasetId, groupByColumn, markersData, dataset?.large);
 
@@ -254,6 +270,31 @@ export function UnifiedMarkersSubtab({
             ? "Computing marker genes… this can take ~30 s on a large dataset"
             : "Loading markers..."}
         </span>
+      </div>
+    );
+  }
+
+  if (oneGroup) {
+    return (
+      <div className="flex flex-col gap-2">
+        {groupbyColumns.length > 0 && (
+          <select
+            aria-label="Group markers by"
+            value=""
+            onChange={(e) => { setGroupByColumn(e.target.value); setFilterQuery(""); }}
+            className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700"
+          >
+            <option value="" disabled>{groupByColumn} (1)</option>
+            {groupbyColumns.map((col) => (
+              <option key={col.name} value={col.name}>
+                {col.name} ({col.n_unique})
+              </option>
+            ))}
+          </select>
+        )}
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-center text-xs text-amber-700" data-testid="one-group">
+          {oneGroup}
+        </div>
       </div>
     );
   }

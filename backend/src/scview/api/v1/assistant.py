@@ -31,7 +31,7 @@ from scview.core.assistant import (
 )
 from scview.core.guards import enforce_query_limits
 from scview.core.rag.retrieve import retrieve_context
-from scview.core import results_store, selection_facts
+from scview.core import cluster_evidence, results_store, selection_facts
 from scview.core.rag.router import RouteState, classify_intent, mentions_app_ui, wants_methods
 
 logger = logging.getLogger(__name__)
@@ -295,7 +295,8 @@ async def _methods_events(adaptor, body: ChatRequest, settings: Settings):
     res = await write_methods(adaptor, body.history, settings.llm_api_key, settings.chat_model)
     yield {"type": "sources", "sources": [], "route": list(METHODS_ROUTE), "grounded": res.grounded}
     yield {"type": "delta", "text": res.methods}
-    yield {"type": "done", "followups": [], "model": res.model, "claims": []}
+    yield {"type": "done", "followups": [], "model": res.model,
+           "claims": [c.model_dump() for c in res.claims]}
 
 
 def _has_results(adaptor) -> bool:
@@ -324,6 +325,10 @@ async def _warm_cluster_qc(adaptor, kwargs: dict) -> None:
         await asyncio.to_thread(adaptor.qc_per_cell, True)
     except Exception as exc:  # grounding skips QC on its own if this fails
         logger.debug("cluster QC warm-up failed: %s", exc)
+    try:  # each cluster's evidence (random-marker null, cached): the facts read the cache only
+        await asyncio.to_thread(cluster_evidence.for_adaptor, adaptor)
+    except Exception as exc:  # no clustering, a bad column: no evidence facts
+        logger.debug("cluster evidence warm-up failed: %s", exc)
 
 
 @router.post("/datasets/{dataset_id}/assistant/chat", response_model=ChatResponse)
@@ -352,7 +357,8 @@ async def assistant_chat(
         if wants_methods(query):  # the recipe, as the drawer's "Write methods" button
             res = await write_methods(adaptor, body.history, settings.llm_api_key, settings.chat_model)
             return ChatResponse(answer=res.methods, sources=[], grounded=res.grounded,
-                                raw_response=res.methods, route=list(METHODS_ROUTE), model=res.model)
+                                raw_response=res.methods, route=list(METHODS_ROUTE), model=res.model,
+                                claims=res.claims)
         kwargs = await _prepare(query, body, dm, settings, adaptor=adaptor)
         await _warm_cluster_qc(adaptor, kwargs)
         return await answer_query(query, adaptor, settings.llm_api_key, **kwargs)

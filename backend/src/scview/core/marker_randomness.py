@@ -44,6 +44,9 @@ class RandomCheck:
     too_few_named: list[str] = field(default_factory=list)
     skipped: str | None = None  # why nothing was checked
     best: dict[str, str] = field(default_factory=dict)  # group -> best database type (any named gene)
+    # group -> {named, best_type, best_log10p, null_cut (judged lists only)}: every list with a named
+    # gene, flagged or not (core/cluster_evidence.py says it in words)
+    scores: dict[str, dict] = field(default_factory=dict)
 
     def record(self) -> dict:
         return {"flagged": sorted(self.flagged), "checked": self.checked,
@@ -134,8 +137,10 @@ def check(adata, marker_map: dict[str, list[str]], db=None) -> RandomCheck:
     out.too_few_named = sorted(g for g in queries if g not in judged)
     named = [g for g, q in queries.items() if q]
     if named:
-        _, b_all = idx.best(_rows([queries[g] for g in named], idx.U))
+        s_all, b_all = idx.best(_rows([queries[g] for g in named], idx.U))
         out.best = {g: idx.types[b] for g, b in zip(named, b_all)}
+        out.scores = {g: {"named": len(queries[g]), "best_type": idx.types[b], "best_log10p": round(float(sc), 2)}
+                      for g, sc, b in zip(named, s_all, b_all)}
     if not judged:
         return out
     groups = list(judged)
@@ -150,6 +155,7 @@ def check(adata, marker_map: dict[str, list[str]], db=None) -> RandomCheck:
             draws = [list(rng.choice(pool, n, replace=False)) for _ in range(N_NULL)]
             cut[n] = float(np.quantile(idx.best(_rows(draws, idx.U))[0], NULL_QUANTILE))
         out.checked += 1
+        out.scores[g]["null_cut"] = round(cut[n], 2)
         if score <= cut[n]:
             out.flagged[g] = {"named": n, "best_type": idx.types[b], "best_log10p": round(float(score), 2),
                               "null_cut": round(cut[n], 2)}

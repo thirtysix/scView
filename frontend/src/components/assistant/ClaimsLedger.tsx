@@ -38,6 +38,15 @@ export function mergeVerdicts(
   });
 }
 
+/** Mirrors claims.METHODS_REF: a Write methods sentence, checked against the recipe. */
+export const RECIPE_REF = "provenance:recipe";
+
+/** What a claim was checked against, as the ledger names it. */
+export function checkedAgainst(c: Claim): string {
+  if (c.cites.length) return c.cites.map((t) => `[${t}]`).join(" ");
+  return c.refs.includes(RECIPE_REF) ? "the recorded recipe" : "no citation";
+}
+
 function ClaimRow({ c }: { c: Claim }) {
   const v = VERDICT[c.verdict];
   const Icon = v.icon;
@@ -55,7 +64,7 @@ function ClaimRow({ c }: { c: Claim }) {
         {(c.evidence || c.cites.length > 0) && (
           <details className="mt-0.5">
             <summary className="cursor-pointer text-[10px] text-muted-foreground hover:text-foreground">
-              {c.cites.length ? c.cites.map((t) => `[${t}]`).join(" ") : "no citation"}
+              {checkedAgainst(c)}
             </summary>
             {c.evidence ? (
               <pre className="mt-0.5 whitespace-pre-wrap break-words rounded bg-muted px-1.5 py-1 font-sans text-[10px] text-muted-foreground">
@@ -103,7 +112,7 @@ export function ClaimsLedger({
           type="button"
           onClick={() => setOpen((o) => !o)}
           aria-expanded={open}
-          title="Each sentence with a number, a gene or a citation, checked against the fact it cites"
+          title="Each sentence with a number, a gene, a tool or a citation, checked against the facts it was written from"
           className="flex items-center gap-1 text-muted-foreground hover:text-foreground"
         >
           {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}

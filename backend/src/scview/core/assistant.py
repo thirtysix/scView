@@ -50,7 +50,7 @@ from scview.core import study_planner
 from scview.core import layout_stability
 from scview.core import seq_metrics
 from scview.core import feature_guide, methods_guard, screen_facts
-from scview.core.claims import Claim, check_answer, vocab_for
+from scview.core.claims import Claim, check_answer, check_methods, vocab_for
 from scview.core.llm import async_client, chat_extra, reply_room
 from scview.core.marker_selection import MAX_PADJ, MIN_PTS, group_markers
 from scview.core.species import detect_species
@@ -240,6 +240,27 @@ def _add_qc_states(adaptor, lines: list[str], sources: list[ChatSource]) -> None
         lines.extend(st_lines)
         sources.append(ChatSource(kind="result", ref=qc_states.TAG, detail=st_detail,
                                   evidence="\n".join(st_lines[1:])))
+
+
+def _add_cluster_evidence(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """Why each cluster was labelled or flagged (core/cluster_evidence.py), so "why is cluster 5
+    low quality?" is answered from the rule's own numbers. Cached only: the chat route warms it
+    in a thread (api/v1/assistant._warm_cluster_qc); never computed on the loop."""
+    from scview.core import cluster_evidence
+
+    try:
+        report = cluster_evidence.cached(adaptor)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("assistant: cluster evidence failed: %s", exc)
+        return
+    if report is None:
+        return
+    ev_lines, cites = cluster_evidence.grounding_block(report)
+    lines.extend(ev_lines)
+    head = cites[0][0] if cites else ""
+    for t, d in cites:
+        ev = [ln.strip() for ln in ev_lines if f"[{t}]" in ln]
+        sources.append(ChatSource(kind="result", ref=t, detail=d, evidence="\n".join(ev if t != head else ev_lines[1:])))
 
 
 def _add_embedding_reliability(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
@@ -1076,6 +1097,7 @@ def build_grounding_context(
                 sources.append(ChatSource(kind="result", ref=t, detail=d, evidence="\n".join(ev)))
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("assistant: cluster QC failed: %s", exc)
+        _add_cluster_evidence(adaptor, lines, sources)
         # % mito by cell type: does the global ceiling cut one type hard (advisory).
         try:
             mito_lines, mito_detail = mito_by_type.grounding_lines(adaptor)
@@ -1513,6 +1535,7 @@ class MethodsResponse(BaseModel):
     methods: str
     grounded: bool  # True if an LLM wrote the prose; False = deterministic template
     model: str | None = None
+    claims: list[Claim] = []  # the model's sentences checked against the recipe (claims.check_methods)
 
 
 def _param_text(key: str, value) -> str:
@@ -1654,10 +1677,20 @@ async def write_methods(
         if dropped:
             logger.info("write_methods: dropped sentences claiming unrecorded steps: %s", dropped)
         if text:
-            return MethodsResponse(methods=text, grounded=True, model=model)
+            return MethodsResponse(methods=text, grounded=True, model=model,
+                                   claims=_methods_ledger(text, skeleton))
     except Exception as exc:
         logger.warning("write_methods LLM call failed (%s); using deterministic digest", exc)
     return MethodsResponse(methods=_deterministic_methods(skeleton), grounded=False)
+
+
+def _methods_ledger(text: str, skeleton: str) -> list[Claim]:
+    """The methods text's claims ledger; never breaks the methods."""
+    try:
+        return check_methods(text, skeleton)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("write_methods: claims check failed: %s", exc)
+        return []
 
 
 def _build_user_message(query: str, context: str) -> str:

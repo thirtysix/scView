@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { EvidenceLine } from "@/api/qc";
 import type { ClusterReport, ReportPart, ReportSection } from "@/api/report";
 import { CapNote } from "@/components/common/Caption";
 import { Bar, DotStrip, GeneLink, Part, ReportTable } from "./ReportCard";
@@ -67,6 +68,8 @@ interface Qc {
   states: ReportPart & { column?: string; states?: { state: string; n_cells: number; fraction: number }[] };
   removed: ReportPart & { n_removed?: number; fraction_lost?: number | null; by_criterion?: Record<string, number>;
     truncated?: boolean };
+  /** Why the group was labelled or flagged, in words (backend core/cluster_evidence.py). */
+  evidence?: ReportPart & { lines?: EvidenceLine[]; notes?: string[] };
 }
 
 interface Composition {
@@ -288,6 +291,20 @@ function QcBody({ d }: { d: Qc }) {
         )}
         {(d.flags?.notes ?? []).map((n) => <p key={n} className="text-[11px] text-slate-600">{n}</p>)}
         {typeof d.flags?.note === "string" && <p className="text-[10px] text-slate-400">{d.flags.note}</p>}
+      </Part>
+      <Part title="Evidence" part={d.evidence}>
+        <ul className="list-disc space-y-0.5 pl-4 text-[11px] text-slate-700" data-testid="report-evidence">
+          {(d.evidence?.lines ?? []).map((l, i) => (
+            <li key={i} className={l.fired ? "text-amber-800" : undefined}>
+              {l.text}
+            </li>
+          ))}
+        </ul>
+        {(d.evidence?.notes ?? []).map((n) => (
+          <p key={n} className="text-[10px] text-slate-400">
+            {n}
+          </p>
+        ))}
       </Part>
       <Part title="Doublets" part={d.doublets}>
         <p className="text-[11px] text-slate-700">

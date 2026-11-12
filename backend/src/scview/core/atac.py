@@ -1738,6 +1738,8 @@ def grounding_lines(adata, data_dir: str | Path | None = None) -> tuple[list[str
     lines = ["\n## Chromatin accessibility (10x Multiome ATAC)",
              f"- ATAC import: {detail}; {info.get('nnz', 0):,} non-zero values on disk; computed: "
              f"{', '.join(info.get('computed') or []) or 'nothing yet'} [{TAG}]"]
+    if info.get("genome_note"):
+        lines.append(f"- {info['genome_note']} [{TAG}]")
     for key, label in ((atac_import.OBS_TOTAL, "median peak counts per cell"),
                        (atac_import.OBS_FRIP, "median fraction of fragments in peaks"),
                        (atac_import.OBS_TSS, "median fraction of fragments at TSS")):

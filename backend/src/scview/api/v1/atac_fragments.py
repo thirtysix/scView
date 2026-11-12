@@ -27,7 +27,7 @@ from starlette.requests import ClientDisconnect
 from scview.config import Settings
 from scview.core import atac_fragments as af
 from scview.core import fragment_file as ff
-from scview.core import gene_annotation
+from scview.core import gene_annotation, genome_build
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import dataset_edit, edit_room, editable, save_edit, uns_snapshot
 from scview.core.run_watchdog import RunControl, RunWatchdog
@@ -226,7 +226,7 @@ async def qc_stream(dataset_id: str, settings: Settings = Depends(get_settings_d
     try:
         tss = await asyncio.to_thread(af.tss_table, genome, settings.DATA_DIR, settings.ANNOTATION_AUTO_DOWNLOAD)
     except gene_annotation.AnnotationError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        raise HTTPException(status_code=422 if genome_build.names_hg19(genome) else 503, detail=str(e))
     est = state["estimate"]
     await dm.reserve(dataset_id, est["peak_bytes"], what=_WHAT)
     fingerprint = await asyncio.to_thread(adaptor.cells_fingerprint)

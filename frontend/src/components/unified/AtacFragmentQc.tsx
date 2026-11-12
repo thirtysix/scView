@@ -246,6 +246,11 @@ export function AtacFragmentQc({ datasetId }: { datasetId: string }) {
           </button>
         </p>
       )}
+      {status?.attached && status.genome_note && (
+        <p role="note" className="rounded border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-800" data-testid="atac-fragments-genome-note">
+          {status.genome_note}
+        </p>
+      )}
 
       {status?.attached && (
         <div className="flex flex-wrap items-center gap-2">

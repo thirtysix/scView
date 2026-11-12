@@ -447,6 +447,7 @@ def _qc(ctx: dict) -> dict:
 
     states = _qc_states(adata, mask)
     removed = _removed(adata, column, value, int(mask.sum()))
+    evidence = _evidence(adaptor, column, value)
     n = int(mask.sum())
     flag_names = [f["flag"] for f in flags["flags"]]
     caption = (f"Median QC values of the {n:,} cells of {value} against the other {int(rest.sum()):,} cells"
@@ -458,7 +459,24 @@ def _qc(ctx: dict) -> dict:
                                     else "."))
     return R.section("qc", "Quality control", caption=caption, method=method,
                      data={"medians": medians, "has_mt": has_mt, "flags": flags, "doublets": doublets,
-                           "states": states, "removed": removed})
+                           "states": states, "removed": removed, "evidence": evidence})
+
+
+def _evidence(adaptor, column: str, value: str) -> dict:
+    """The group's evidence lines (core/cluster_evidence.py: markers vs random genes, QC vs the
+    typical group, doublet-like parents, database types, scView's own label). Reads the marker
+    databases on disk only; without stored markers it holds the QC line alone."""
+    from scview.core import cluster_evidence
+
+    try:
+        rep = cluster_evidence.for_adaptor(adaptor, column)
+    except ValueError as exc:
+        return {"status": R.NOT_APPLICABLE, "note": str(exc)}
+    row = next((c for c in rep.clusters if c.group == value), None)
+    if row is None:
+        return {"status": R.NOT_APPLICABLE, "note": f"'{value}' is not a group cluster QC compares."}
+    return {"status": R.OK, "lines": [ln.model_dump() for ln in row.lines], "label": row.label,
+            "decided": row.decided, "notes": list(rep.notes)}
 
 
 def _qc_states(adata, mask: np.ndarray) -> dict:

@@ -14,6 +14,8 @@ const { getLabelMatches } = vi.hoisted(() => ({ getLabelMatches: vi.fn() }));
 vi.mock("@/api/ontology", () => ({ getLabelMatches }));
 const { getProvenance } = vi.hoisted(() => ({ getProvenance: vi.fn() }));
 vi.mock("@/api/provenance", () => ({ getProvenance }));
+const { getClusterEvidence } = vi.hoisted(() => ({ getClusterEvidence: vi.fn() }));
+vi.mock("@/api/qc", () => ({ getClusterEvidence }));
 
 import { AnnotationControl } from "./AnnotationControl";
 import { useDatasetStore } from "@/stores/datasetStore";
@@ -246,5 +248,20 @@ describe("AnnotationControl (CellTypist)", () => {
     expect(note.textContent).toContain("cluster 7 Unidentified itself");
     expect(note.textContent).toContain("Cluster 4 also has high mitochondrial RNA");
     expect(screen.queryByRole("alert")).toBeNull();
+
+    // Each decided cluster's evidence, for the clustering the annotation used, on request.
+    const line = (group: string, text: string) => ({
+      group, n_cells: 50, label: null, decided: true, flags: [], lines: [{ kind: "qc", fired: true, text }],
+    });
+    getClusterEvidence.mockResolvedValue({
+      column: "paul15_clusters", n_groups: 19, markers: true, typing: false, annotation: "x", notes: [],
+      clusters: [line("1", "fine"), line("2", "few genes two"), line("3", "few genes three"),
+        line("4", "high mito four"), line("7", "random seven")],
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Show the evidence" }));
+    expect(await screen.findByText("random seven")).toBeInTheDocument();
+    expect(getClusterEvidence).toHaveBeenCalledWith("d1", "paul15_clusters");
+    expect(screen.getByText("high mito four")).toBeInTheDocument();
+    expect(screen.queryByText("fine")).toBeNull();
   });
 });

@@ -32,7 +32,7 @@ from pydantic import BaseModel, Field
 
 from scview.api.v1 import atac as atac_api
 from scview.config import Settings
-from scview.core import atac, atac_chromvar as cv, atac_motifs as am, genome_seq, modality_store, results_store, tf_motifs, wnn
+from scview.core import atac, atac_chromvar as cv, atac_motifs as am, genome_build, genome_seq, modality_store, results_store, tf_motifs, wnn
 from scview.core.dataset_manager import DatasetManager
 from scview.core.gene_annotation import AnnotationError, canonical_genome
 from scview.core.sse import keepalive
@@ -101,7 +101,9 @@ def _peak_set(path: Path) -> _Peaks:
 def _genome(name: str | None) -> str:
     try:
         return canonical_genome(name)
-    except AnnotationError:
+    except AnnotationError as e:
+        if genome_build.names_hg19(name):
+            raise atac.AtacError(str(e), 422) from None
         raise atac.AtacError(f"scView has genome sequence for GRCh38 and mm10, not {name!r}: motifs cannot be read from peaks "
                              "on another reference.", 422) from None
 

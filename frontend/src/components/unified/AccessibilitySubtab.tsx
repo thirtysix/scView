@@ -110,6 +110,11 @@ export function AccessibilitySubtab({
           {info.genome ?? "an unnamed genome"}
           {info.genome_assumed ? " (read from the gene ids; the file does not name one)" : ""}, from {info.source ?? "the upload"}.
         </Caption>
+        {info.genome_note && (
+          <p role="note" className="rounded border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-800" data-testid="atac-genome-note">
+            {info.genome_note}
+          </p>
+        )}
         {groupColumns.length > 0 && (
           <label className="flex items-center gap-1.5 text-[11px] text-slate-600">
             <Help id="atac.group-by">Group by</Help>

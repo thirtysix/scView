@@ -56,6 +56,11 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Data Assessment > QC Distributions", "doublets, sample QC, sex check",
      "per-cell QC plots, per-sample QC, doublet calls, pseudobulk sample QC, sex check"),
     ("Data Assessment > QC states: RP share vs mito", "", "damaged or stressed cells per type"),
+    ("Data Assessment > Cluster QC > Evidence per cluster", "",
+     "why each cluster was labelled or flagged, in words, never a probability: its markers against random genes "
+     "(best database p vs what 1 in 10 random lists reach), genes and % mito vs the typical cluster with the flags "
+     "that fired, a doublet-like cluster's two parents and RNA, database types as shares of the evidence (named "
+     "groupings only), and the label scView gave itself ('Low-quality cells', 'Unidentified'); any grouping"),
     ("Data Assessment > PCA", "", "elbow, variance explained, loadings"),
     ("Data Assessment > Cell-type annotation", "",
      "name clusters by an LLM from their markers, a CellTypist model or marker-database scores, into an obs "
@@ -178,7 +183,9 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("History > Stored results", "", "every stored result, newest first; download or delete"),
     ("Download", "CELLxGENE, Vitessce, .rds",
      "h5ad, for CELLxGENE, for Vitessce, Seurat or SingleCellExperiment .rds, metadata, replay script"),
-    ("AI Co-pilot", "", "this assistant; checks each claim against the fact it cites"),
+    ("AI Co-pilot", "", "this assistant; checks each claim against the fact it cites (underlined in the "
+     "answer, hover for the verdict); Write methods drafts a methods paragraph and checks its numbers, "
+     "tools and versions against the recorded recipe"),
 )
 
 CLOSING = "These are all of scView's tabs and tools; name a feature only by its path here."
@@ -186,7 +193,7 @@ CLOSING = "These are all of scView's tabs and tools; name a feature only by its 
 # In the full guide only: the compact block is at its cap (tests/test_feature_guide.py). The tab stays in it.
 FULL_ONLY = ("Unified View > Accessibility >", "Unified View > Embedding > Tissue > Draw", "Unified View > Transcripts",
              "Unified View > Domains > Co-occurrence", "Unified View > Spot composition > Reference labels",
-             "Data Assessment > Cell-type annotation")
+             "Data Assessment > Cell-type annotation", "Data Assessment > Cluster QC")
 
 
 def compact_guide() -> str:
