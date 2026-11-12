@@ -12,7 +12,7 @@ import {
 import { FAST_LEIDEN, FULL_LEIDEN } from "@/lib/fastLeiden";
 import type { Umap3dSetting } from "@/lib/umap3d";
 import { FastLeidenInfo } from "./FastLeidenInfo";
-import { InfoTip } from "./InfoTip";
+import { HoverTip } from "./InfoTip";
 
 const GB = 1024 ** 3;
 const gb = (bytes: number) => (bytes / GB >= 10 ? (bytes / GB).toFixed(0) : (bytes / GB).toFixed(1));
@@ -88,10 +88,9 @@ export function PreflightNote({ verdict, label }: { verdict: PreflightVerdict; l
         <Icon className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden />
         <span>
           {label && <span className="font-medium">{label}: </span>}
-          {verdict.sentence}{" "}
-          <InfoTip width={320} align="right" label="How this estimate is made">
-            <Breakdown verdict={verdict} />
-          </InfoTip>
+          <HoverTip width={320} align="right" tip={<Breakdown verdict={verdict} />}>
+            {verdict.sentence}
+          </HoverTip>
         </span>
       </p>
       {verdict.level === "wont_fit" && verdict.suggestions.length > 0 && (
@@ -125,17 +124,20 @@ export function FastLeidenOffer({
     >
       <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
         <Timer className="h-3.5 w-3.5 shrink-0" aria-hidden />
-        {fast ? (
-          <span>
-            Clustering {cells} cells with fast Leiden: {choice.fast_text} (the full optimisation:{" "}
-            {choice.full_text}).
-          </span>
-        ) : (
-          <span>
-            Clustering {cells} cells with Leiden&apos;s full optimisation may take {choice.full_text}. Fast Leiden:{" "}
-            {choice.fast_text}.
-          </span>
-        )}
+        {/* Opens rightwards: the sentence starts near the card's left edge, beside the sidebar */}
+        <FastLeidenInfo>
+          {fast ? (
+            <>
+              Clustering {cells} cells with fast Leiden: {choice.fast_text} (the full optimisation:{" "}
+              {choice.full_text}).
+            </>
+          ) : (
+            <>
+              Clustering {cells} cells with Leiden&apos;s full optimisation may take {choice.full_text}. Fast Leiden:{" "}
+              {choice.fast_text}.
+            </>
+          )}
+        </FastLeidenInfo>
         {onChange && (
           <button
             type="button"
@@ -149,8 +151,6 @@ export function FastLeidenOffer({
             {fast ? "Use the full optimisation" : "Use fast Leiden"}
           </button>
         )}
-        {/* Opens rightwards: the icon sits near the card's left edge, beside the sidebar */}
-        <FastLeidenInfo />
       </p>
     </div>
   );

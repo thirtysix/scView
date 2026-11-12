@@ -12,7 +12,7 @@ import {
   type RExportJob,
   type RFormat,
 } from "@/api/rdsExport";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { useDialogFocus } from "@/hooks/useDialogFocus";
 import { formatBytes } from "@/lib/formatting";
 import { errorMessage } from "@/lib/errorMessage";
@@ -118,13 +118,14 @@ export function RExportDialog({ datasetId, format, onClose, pollMs = 1500 }: Pro
       >
         <div className="mb-3 flex items-start justify-between gap-3">
           <div>
-            <h2 className="flex items-center gap-1 text-base font-semibold text-slate-800">
-              {TITLES[format]}
-              <InfoTip label="How to open it in R">
+            <h2 className="text-base font-semibold text-slate-800">
+              <HoverTip side="below" tip={<>
                 For R: readRDS(). It needs {format === "seurat" ? "SeuratObject 5 or later (Seurat 5)" : "the SingleCellExperiment package (Bioconductor)"}.
                 The file is built by scView&apos;s R converter and keeps the counts and log-normalised values
                 sparse.
-              </InfoTip>
+              </>}>
+                {TITLES[format]}
+              </HoverTip>
             </h2>
             <p className="text-xs text-slate-500">
               {format === "seurat"

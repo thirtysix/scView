@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
+import { hoverTip } from "@/test/hoverTip";
 import { useScoringMethodStore } from "@/stores/scoringMethodStore";
 import { ScoringMethodChoice } from "./ScoringMethodChoice";
 
@@ -18,9 +19,9 @@ describe("ScoringMethodChoice", () => {
     expect(screen.getByText("Score with")).toBeInTheDocument();
   });
 
-  it("explains both methods in its tooltip", () => {
+  it("explains the methods on hovering its label", async () => {
     render(<ScoringMethodChoice />);
-    fireEvent.mouseEnter(screen.getByRole("button", { name: "How gene sets are scored" }));
+    await hoverTip(screen.getByText("Score with"));
     const tip = screen.getByRole("tooltip");
     expect(tip).toHaveTextContent("score_genes (scanpy): the set's mean log expression");
     expect(tip).toHaveTextContent("AUCell (Aibar et al. 2017): genes are ranked within each cell");

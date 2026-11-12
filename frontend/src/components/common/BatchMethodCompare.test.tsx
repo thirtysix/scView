@@ -11,6 +11,7 @@ vi.mock("@/api/batchCompare", async (orig) => ({
 }));
 
 import { BatchMethodCompare } from "./BatchMethodCompare";
+import { hoverTip, unhover } from "@/test/hoverTip";
 
 const INFO: CompareInfo = {
   available: true,
@@ -89,6 +90,14 @@ describe("BatchMethodCompare", () => {
     expect(screen.getByText(/1,000 cells scored/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /Set the step to: Harmony/ }));
     expect(onApply).toHaveBeenCalledWith("harmony");
+  });
+
+  it("explains the comparison and the benchmark on hover", async () => {
+    render(<BatchMethodCompare datasetId="d" batchKey="batch" />);
+    const background = await screen.findByText(/Luecken et al. 2022/);
+    expect(await hoverTip(background)).toBe(INFO.background_tip);
+    unhover(background);
+    expect(await hoverTip(screen.getByText("Compare methods"))).toContain("15 nearest neighbours come from (iLISI)");
   });
 
   it("says why it cannot run", async () => {

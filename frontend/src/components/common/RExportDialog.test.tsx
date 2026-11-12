@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { hoverTip, unhover } from "@/test/hoverTip";
 
 const api = vi.hoisted(() => ({
   getRExportInfo: vi.fn(),
@@ -62,7 +63,9 @@ describe("RExportDialog", () => {
       "13,836 cells × 14,053 genes · raw counts from layers['counts'] · log-normalised values from X · layouts: X_pca, X_umap · Idents: leiden",
     );
     expect(screen.getByText(/obsp: connectivities, distances/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "How to open it in R" })).toBeInTheDocument();
+    const title = screen.getByText("Seurat object (.rds)");
+    expect(await hoverTip(title)).toContain("readRDS(). It needs SeuratObject 5 or later");
+    unhover(title);
 
     fireEvent.click(screen.getByRole("button", { name: "Download" }));
     expect(await screen.findByText("Building the Seurat object")).toBeInTheDocument();

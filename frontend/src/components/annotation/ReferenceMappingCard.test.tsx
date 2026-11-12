@@ -12,6 +12,7 @@ vi.mock("@/api/labelTransfer", () => ({ getLabelTransfer, checkReference, runLab
 vi.mock("@/hooks/useDatasetRefresh", () => ({ useDatasetRefresh: () => refresh }));
 
 import { ReferenceMappingCard } from "./ReferenceMappingCard";
+import { hoverTip, unhover } from "@/test/hoverTip";
 import { unmappedLevel, referenceChoices, aboutGb } from "@/lib/labelTransfer";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -71,6 +72,12 @@ describe("ReferenceMappingCard", () => {
     expect(runLabelTransfer.mock.calls[0]?.[1]).toEqual({ reference_id: "r", label_column: "cell_type", method: "projection", k: 15 });
     expect(refresh).toHaveBeenCalledWith("q", "kang_transfer");
     expect(screen.getByText("absent from reference?")).toBeTruthy();
+    const summary = screen.getByText(/median score/);
+    expect(await hoverTip(summary)).toBe("not in reference note");
+    unhover(summary);
+    const method = screen.getByText("Method");
+    expect(await hoverTip(method)).toContain("Project onto reference (like scanpy's ingest)");
+    unhover(method);
     fireEvent.click(screen.getByText("Colour by kang_unmapped"));
     expect(useSettingsStore.getState().colorBy).toBe("kang_unmapped");
     fireEvent.click(screen.getByText("Cross-check against clusters"));

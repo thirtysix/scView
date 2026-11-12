@@ -1612,8 +1612,7 @@ export function DataAssessmentPanel() {
                                 return (
                                   <div key={pc.param} className={`flex flex-col gap-0.5 ${pc.type === "checkbox_list" || pc.type === "msigdb_tree" || pc.type === "regress_out" || pc.help ? "col-span-2" : ""}`}>
                                     <label className="flex items-center gap-1 text-[10px] font-medium text-slate-500">
-                                      {pc.label}
-                                      {pc.param === "leiden_iterations" && <FastLeidenInfo />}
+                                      {pc.param === "leiden_iterations" ? <FastLeidenInfo>{pc.label}</FastLeidenInfo> : pc.label}
                                       {pc.param === "doublet_method" && <DoubletMethodInfo />}
                                     </label>
                                     {pc.type === "regress_out" ? (
