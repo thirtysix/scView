@@ -288,3 +288,17 @@ async def test_mcp_tool(client, dataset_manager, monkeypatch):
     assert r["column"] == "leiden" and len(r["clusters"]) == 7
     five = next(c for c in r["clusters"] if c["group"] == "5")
     assert any("low quality" in t for t in five["evidence"])
+
+
+def test_the_cluster_report_carries_the_groups_evidence(monkeypatch):
+    from scview.core import report, report_html
+    from tests.test_report import _Adaptor, _sec
+    from tests.test_report import _adata as report_adata
+
+    monkeypatch.setattr(CE, "_on_disk", lambda: (None, None))
+    rep = report.cluster_report(_Adaptor(report_adata()), "cell_type", "A")
+    ev = _sec(rep, "qc")["data"]["evidence"]
+    assert ev["status"] == "ok" and any(ln["kind"] == "qc" for ln in ev["lines"])
+    page = report_html.render(rep)
+    assert "<h3>Evidence</h3>" in page
+    assert next(ln["text"] for ln in ev["lines"] if ln["kind"] == "qc").split(".")[0] in page
