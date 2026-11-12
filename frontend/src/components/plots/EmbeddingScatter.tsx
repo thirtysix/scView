@@ -41,7 +41,8 @@ import type { SpatialLibrary } from "@/api/types";
 import { spatialImageUrl } from "@/api/spatial";
 import { imageBounds, imageResFor, spotRadius, wantsHires } from "@/lib/spatial";
 import {
-  MIN_EDGE_PIXELS,
+  EDGE_RGBA,
+  drawsEdges,
   hideCovered,
   meshColors,
   outlineNote,
@@ -50,6 +51,7 @@ import {
   type CellOutlines,
   type WorldRect,
 } from "@/lib/cellOutlines";
+import { figureOutlines, omittedOutlinesNote } from "@/lib/outlineSvg";
 
 /** After this long without a camera change the view counts as settled (outlines, transcripts). */
 const SETTLE_MS = 120;
@@ -735,7 +737,7 @@ export function EmbeddingScatter({
       autoHighlight: true,
       highlightColor: [255, 255, 0, 180],
     });
-    if (mesh.meanSize * (settled?.scale ?? 0) < MIN_EDGE_PIXELS) return [fill];
+    if (!drawsEdges(mesh, settled?.scale ?? 0)) return [fill];
     const stride = 16;
     return [
       fill,
@@ -748,7 +750,7 @@ export function EmbeddingScatter({
             getTargetPosition: { value: mesh.edges, size: 2, stride, offset: 8 },
           },
         },
-        getColor: background === "dark" ? [255, 255, 255, 110] : [30, 41, 59, 130],
+        getColor: [...EDGE_RGBA[background === "dark" ? "dark" : "light"]],
         getWidth: 1,
         widthUnits: "pixels" as const,
         pickable: false,
@@ -848,7 +850,10 @@ export function EmbeddingScatter({
       const view = labelViewOf(views, containerSize.width, containerSize.height, viewState);
       if (!view) return;
       await nextFrame();
-      const projected = projectPoints(view.project, renderPositions, stride, renderColors);
+      // The outlines drawn on screen, over points with their cells hidden; too many: points only.
+      const figOutlines = mesh ? figureOutlines(mesh, colorArray, view.project, view, 2 ** Number(viewState.zoom ?? 0)) : null;
+      const drawnColors = figOutlines?.outlines && pointColors ? pointColors : renderColors;
+      const projected = projectPoints(view.project, renderPositions, stride, drawnColors);
       const legendTitle = exportLegend?.title;
       const plotName = embedding ? prettyEmbeddingLabel(embedding) : "";
       const figure = buildScatterSvg({
@@ -865,24 +870,32 @@ export function EmbeddingScatter({
               },
             ],
             labels: placedLabels ? svgLabels(placedLabels, view.project, highlightCategory) : [],
+            outlines: figOutlines?.outlines ?? null,
           },
         ],
         legend: exportLegend,
         colormap: continuousColormap,
         title: exportTitle ?? [plotName, legendTitle].filter(Boolean).join(", coloured by "),
         axes: dimensions === 3 ? null : (axisLabels ?? embeddingAxisLabels(embedding)),
-        notes: isSampled
-          ? [`Showing ${renderCount.toLocaleString()} of ${totalCells.toLocaleString()} ${unit}s (sampled)`]
-          : [],
+        notes: figOutlines?.omitted
+          ? [omittedOutlinesNote(figOutlines, outlineKind)]
+          : mesh && outlinePlan
+            ? [outlineNote(outlinePlan, outlineKind)]
+            : isSampled
+              ? [`Showing ${renderCount.toLocaleString()} of ${totalCells.toLocaleString()} ${unit}s (sampled)`]
+              : [],
         mode,
         rasterize: canvasRasterizer,
       });
       await saveFigure(format, figure, exportFilename(useDatasetStore.getState().currentDataset?.name, exportName));
+      // Saved, but say so in the menu: the outlines on screen are not in the file.
+      if (figOutlines?.omitted) throw new Error(`Saved. ${omittedOutlinesNote(figOutlines, outlineKind)}`);
     },
     [
       viewState, renderPositions, renderColors, views, containerSize.width, containerSize.height, stride,
       pointSize, placedLabels, highlightCategory, exportLegend, continuousColormap, exportTitle, embedding,
       dimensions, axisLabels, isSampled, renderCount, totalCells, exportName, spotR, unit,
+      mesh, colorArray, pointColors, outlinePlan, outlineKind,
     ],
   );
 
@@ -986,8 +999,6 @@ export function EmbeddingScatter({
           figureNote={
             overlayLayers?.length
               ? (overlayFigureNote ?? "Without the graph drawn over the points (the PNG has it).")
-              : mesh
-                ? "Points, without the outlines (the PNG has them)."
               : imageLayers.length
                 ? "Without the tissue image (the PNG has it)."
                 : undefined
