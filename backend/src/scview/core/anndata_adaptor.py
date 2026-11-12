@@ -93,14 +93,37 @@ def _counts_matrix(adata):
 NOT_EMBEDDINGS = ("X_nmf_usage", "X_nmf_usage_raw", "X_cnv", "X_spatial", "X_lsi")
 
 
+# Values per row block of an in-memory matrix in ``_row_sums``: each block is copied (and
+# compared, and column-sliced), so a whole 10k x 33k matrix at 19% density read as one
+# block took ~1.3 GB on top of the matrix itself.
+ROW_BLOCK_VALUES = 8_000_000
+
+
+def _row_spans(M, chunk: int) -> list[tuple[int, int]]:
+    """Row ranges of at most ``chunk`` rows and about ``ROW_BLOCK_VALUES`` stored values."""
+    n = M.shape[0]
+    indptr = getattr(M, "indptr", None)
+    if indptr is not None and getattr(M, "format", "") == "csr":
+        spans, start = [], 0
+        while start < n:
+            stop = int(np.searchsorted(indptr, indptr[start] + ROW_BLOCK_VALUES, side="right")) - 1
+            stop = min(max(stop, start + 1), start + chunk, n)
+            spans.append((start, stop))
+            start = stop
+        return spans
+    step = max(1, min(chunk, ROW_BLOCK_VALUES // max(1, M.shape[1])))
+    return [(i, min(i + step, n)) for i in range(0, n, step)]
+
+
 def _row_sums(M, masks: list[np.ndarray], chunk: int = 20000):
     """Per-cell totals, detected genes and one sum per gene mask, read in row
-    chunks so a backed (on-disk) matrix, which has no .sum, works too."""
+    blocks so a backed (on-disk) matrix, which has no .sum, works too, and an
+    in-memory one is never copied whole."""
     tc, ng = [], []
     sums: list[list[np.ndarray]] = [[] for _ in masks]
     # A large dataset's on-disk matrix: blocks of a bounded number of values.
     blocks = (M.row_blocks() if hasattr(M, "row_blocks")
-              else ((i, M[i:i + chunk]) for i in range(0, M.shape[0], chunk)))
+              else ((a, M[a:b]) for a, b in _row_spans(M, chunk)))
     for _i, block in blocks:
         if not hasattr(block, "toarray"):
             block = np.asarray(block)
@@ -272,6 +295,7 @@ class AnnDataAdaptor:
         self._retired: list[ad.AnnData] = []
         self._qc_cache: dict | None = None
         self._qc_cells: dict | None = None
+        self._qc_lock = threading.Lock()  # ``qc_per_cell``: one pass, the others wait for it
         self._fingerprint: tuple[pd.Index, str] | None = None  # (obs_names hashed, hash)
         self._ranges: dict[tuple, tuple[float, float]] = {}  # (layer, id, shape) -> colour range
         self._large = _LargeFiles()  # a large dataset's sidecars (core/large_mode.py)
@@ -521,14 +545,17 @@ class AnnDataAdaptor:
         """Per-cell QC arrays (see ``per_cell_qc``), cached for the dataset's
         lifetime in memory; shared by the QC plots and the per-cluster flags.
         ``ribo`` also works out % ribosomal when obs lacks it (an extra pass)."""
-        cells = self._qc_cells
-        if cells is None or (ribo and not cells["ribo_checked"]):
-            counts = None
-            if self.is_large:  # X holds log values: counts come from their sidecar
-                counts = (self.counts_matrix(what="Per-cell QC metrics not stored in obs"),
-                          self.adata.var_names) if _qc_missing(self.adata.obs) else None
-            self._qc_cells = per_cell_qc(self.adata, ribo=ribo, counts=counts)
-        return self._qc_cells
+        # One pass at a time: Data Assessment asks for it from several panels at once, and
+        # each first call used to make its own pass over the counts (OOM at 4 GB, 10k cells).
+        with self._qc_lock:
+            cells = self._qc_cells
+            if cells is None or (ribo and not cells["ribo_checked"]):
+                counts = None
+                if self.is_large:  # X holds log values: counts come from their sidecar
+                    counts = (self.counts_matrix(what="Per-cell QC metrics not stored in obs"),
+                              self.adata.var_names) if _qc_missing(self.adata.obs) else None
+                self._qc_cells = per_cell_qc(self.adata, ribo=ribo, counts=counts)
+            return self._qc_cells
 
     def qc_distributions(self, n_scatter: int = 5000, n_bins: int = 40) -> dict:
         """Per-cell QC distributions for the Data Assessment tab.

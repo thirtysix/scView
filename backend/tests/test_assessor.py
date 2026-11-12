@@ -104,3 +104,18 @@ def test_sample_totals_in_chunks_equal_the_whole_sample():
     logged, totals = assessor._sample_totals(counts * 50, 600)
     assert not logged and np.allclose(totals, (counts * 50).sum(axis=1))
     assert assessor._sample_totals(logx - 1.0, 600) is None  # scaled: negative values
+
+
+def test_seurat_qc_columns_are_named_but_the_step_still_runs():
+    a = _counts()
+    a.obs["nCount_RNA"] = np.asarray(a.X.sum(axis=1)).ravel()
+    a.obs["nFeature_RNA"] = np.asarray((a.X > 0).sum(axis=1)).ravel()
+    a.obs["percent.mt"] = 1.0
+    q = assess_preprocessing(a).qc_metrics
+    assert q.done is False  # scanpy's own columns are what other steps read
+    assert "nCount_RNA, nFeature_RNA, percent.mt" in q.details and "Seurat" in q.details
+
+
+def test_no_qc_columns_says_so():
+    q = assess_preprocessing(_counts()).qc_metrics
+    assert q.done is False and q.details == "No standard QC metric columns found in obs"

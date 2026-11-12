@@ -282,6 +282,24 @@ if (requireNamespace("SeuratObject", quietly = TRUE)) {
   )
 }
 
+# ---- 11b. a Seurat v5 object split by sample (counts.a, counts.b) -----------
+# The samples alternate, so the joined layers (a's cells, then b's) are not in the object's
+# cell order: X must still line up with the metadata row by row.
+if (requireNamespace("SeuratObject", quietly = TRUE)) {
+  m11b <- sparse_counts(25, 30, 1); dimnames(m11b) <- list(paste0("g", 1:25), paste0("s", 1:30))
+  sp <- suppressWarnings(SeuratObject::CreateSeuratObject(counts = m11b))
+  sp$sample <- rep(c("a", "b"), 15)
+  sp[["RNA"]] <- split(sp[["RNA"]], f = sp$sample)
+  stopifnot(length(SeuratObject::Layers(sp[["RNA"]])) == 2)
+  rds(sp, "seurat_split")
+  expected$seurat_split <- list(
+    n_obs = 30, n_vars = 25, x_sum = sum(m11b), x_format = "csc_matrix",
+    layers = structure(list(), names = character(0)),
+    obs_names_head = colnames(m11b)[1:4], x_rows_match_obs = "nCount_RNA",
+    source_class = "Seurat"
+  )
+}
+
 # ---- 12. Seurat Visium objects (VisiumV1, VisiumV2) -------------------------
 # Made with Seurat 5.1.0 (not in this image) by backend/tests/fixtures/h5seurat/
 # make_fixtures.R: 60 spots of 10x's V1_Human_Lymph_Node, the low-res image at every

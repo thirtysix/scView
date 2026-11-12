@@ -6,6 +6,22 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.71.1] - 2026-11-12
+
+Data Assessment no longer runs out of memory on a dense-ish 10k-cell dataset; split Seurat v5 objects convert.
+
+### Fixed
+- Opening Data Assessment on a 10k-cell dataset with dense-ish counts (65M values) could stop a 4 GB scView
+  (seen on a hosted instance). The panels ask for the per-cell QC numbers at once, and each first request made
+  its own pass, reading the counts as one block: three passes at ~1.3 GB each. Now one pass runs and the others
+  wait for it, and the counts are read in blocks of at most 8M values. Same dataset, all panels at once: peak
+  5.7 -> 2.5 GiB, per-cell QC 1.3 -> 0.3 GiB.
+- Seurat v5 objects whose layers are split by sample (`counts.1`, `counts.2`, ... after `split()` or `merge()`)
+  now convert: the converter joins the layers first and keeps the object's cell order. Before, the conversion
+  stopped with "data, indices, and indptr should be 1-D".
+- Data Assessment names Seurat's own QC columns (`nCount_RNA`, `nFeature_RNA`, `percent.mt`, ...) instead of
+  saying none were found. The QC metrics step still runs, since other steps read scanpy's columns.
+
 ### Known limits
 - AI annotation with DeepSeek-V4-Pro as the annotator model (not the default): since 0.71.0 some doublet clusters
   come back as "Doublet" or "Low-quality cells" instead of naming both cell types. In the annotation benchmark
