@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { Download, Loader2, Share2 } from "lucide-react";
 import { getDatasetPpi, type PpiDirection, type PpiResult, type PpiScore } from "@/api/ppi";
 import { Caption, capText } from "@/components/common/Caption";
+import { Help } from "@/components/common/Help";
 import { InfoTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
 import { SortableTh, ariaSort } from "@/components/common/SortableTh";
@@ -60,6 +61,7 @@ export function ProteinNetwork({ datasetId, sources, showDirection = false, onGe
   const [error, setError] = useState<string | null>(null);
   const [sortField, setSortField] = useState<HubSortField>("degree");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const uid = useId();
 
   // A different list (new DE result, other group) makes the old network stale.
   const sourceKey = sources.map((s) => s.value).join("|");
@@ -150,20 +152,26 @@ export function ProteinNetwork({ datasetId, sources, showDirection = false, onGe
             </select>
           </label>
         )}
-        <label className="flex flex-col gap-0.5 text-[11px] text-slate-500">
-          Top genes
-          <select value={n} onChange={(e) => setN(Number(e.target.value))}
+        <div className="flex flex-col gap-0.5 text-[11px] text-slate-500">
+          <span className="flex items-center gap-1">
+            <label htmlFor={`${uid}-n`}>Top genes</label>
+            <Help id="ppi.top_genes" label="About the number of genes" />
+          </span>
+          <select id={`${uid}-n`} value={n} onChange={(e) => setN(Number(e.target.value))}
             className="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-700">
             {SIZES.map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
-        </label>
-        <label className="flex flex-col gap-0.5 text-[11px] text-slate-500">
-          Minimum score
-          <select value={score} onChange={(e) => setScore(Number(e.target.value) as PpiScore)}
+        </div>
+        <div className="flex flex-col gap-0.5 text-[11px] text-slate-500">
+          <span className="flex items-center gap-1">
+            <label htmlFor={`${uid}-score`}>Minimum score</label>
+            <Help id="ppi.score" label="About the STRING score" />
+          </span>
+          <select id={`${uid}-score`} value={score} onChange={(e) => setScore(Number(e.target.value) as PpiScore)}
             className="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-700">
             {SCORES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
           </select>
-        </label>
+        </div>
         {result && (
           <fieldset className="flex items-center gap-2 text-[11px] text-slate-500">
             <legend className="sr-only">Colour proteins by</legend>
@@ -175,6 +183,7 @@ export function ProteinNetwork({ datasetId, sources, showDirection = false, onGe
               <input type="radio" name={`ppi-colour-${title}`} checked={colourBy === "logfc"} disabled={!hasLfc} onChange={() => setColourBy("logfc")} />
               log2FC
             </label>
+            <Help id="ppi.colour" label="About the network colours" align="right" />
           </fieldset>
         )}
       </div>

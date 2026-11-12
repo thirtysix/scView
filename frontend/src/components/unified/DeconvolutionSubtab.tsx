@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { Download, Loader2 } from "lucide-react";
 import Plot from "@/components/plots/Plot";
 import { Caption } from "@/components/common/Caption";
+import { Help } from "@/components/common/Help";
 import { InfoTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
 import { DeconvolutionCheck } from "@/components/unified/DeconvolutionCheck";
@@ -40,6 +41,9 @@ export function DeconvolutionSubtab() {
   const datasetId = useDatasetStore((s) => s.currentDatasetId);
   const palette = useSettingsStore((s) => s.categoricalPalette);
   const methodId = useId();
+  const typesId = useId();
+  const donorsId = useId();
+  const cellsId = useId();
   const [defaults, setDefaults] = useState<DeconvDefaults | null>(null);
   const [result, setResult] = useState<DeconvResult | null>(null);
   const [celltype, setCelltype] = useState("");
@@ -120,18 +124,16 @@ export function DeconvolutionSubtab() {
     <div className="space-y-3">
       <div className="flex items-center gap-1.5 text-xs font-medium text-slate-700">
         Bulk deconvolution
-        <InfoTip label="About bulk deconvolution" width={300}>
-          A bulk RNA-seq sample is a mixture of cells. With this dataset&apos;s cell types as the reference, each
-          bulk sample&apos;s counts are split into the share of cells of each type that best explains them. These
-          are estimates: a cell type missing from this dataset cannot be found, and the reference should come
-          from the same tissue and condition as the bulk samples.
-        </InfoTip>
+        <Help id="deconvolution.about" label="About bulk deconvolution" width={300} />
       </div>
 
       <div className="flex flex-wrap items-end gap-2 text-xs">
-        <label className="flex flex-col gap-0.5 text-[11px] text-slate-500">
-          Cell types
-          <select value={celltype} onChange={(e) => setCelltype(e.target.value)} className={SELECT}>
+        <div className="flex flex-col gap-0.5 text-[11px] text-slate-500">
+          <span className="flex items-center gap-1">
+            <label htmlFor={typesId}>Cell types</label>
+            <Help id="deconvolution.celltypes" label="About the cell types" />
+          </span>
+          <select id={typesId} value={celltype} onChange={(e) => setCelltype(e.target.value)} className={SELECT}>
             {!celltype && <option value="">(choose)</option>}
             {columns.map((c) => (
               <option key={c.name} value={c.name}>
@@ -139,10 +141,13 @@ export function DeconvolutionSubtab() {
               </option>
             ))}
           </select>
-        </label>
-        <label className="flex flex-col gap-0.5 text-[11px] text-slate-500">
-          Donors
-          <select value={donor} onChange={(e) => setDonor(e.target.value)} className={SELECT}>
+        </div>
+        <div className="flex flex-col gap-0.5 text-[11px] text-slate-500">
+          <span className="flex items-center gap-1">
+            <label htmlFor={donorsId}>Donors</label>
+            <Help id="deconvolution.donors" label="About the donor column" />
+          </span>
+          <select id={donorsId} value={donor} onChange={(e) => setDonor(e.target.value)} className={SELECT}>
             <option value={AUTO_DONOR}>
               Auto{defaults?.donor_column ? ` (${prettyObsLabel(defaults.donor_column)})` : " (none found)"}
             </option>
@@ -155,7 +160,7 @@ export function DeconvolutionSubtab() {
                 </option>
               ))}
           </select>
-        </label>
+        </div>
         <div className="flex flex-col gap-0.5 text-[11px] text-slate-500">
           <span className="flex items-center gap-1">
             <label htmlFor={methodId}>Method</label>
@@ -177,9 +182,12 @@ export function DeconvolutionSubtab() {
           </select>
         </div>
         {refColumns.length > 0 && (
-          <label className="flex flex-col gap-0.5 text-[11px] text-slate-500">
-            Reference cells
-            <select value={cells} onChange={(e) => setCells(e.target.value)} className={SELECT}>
+          <div className="flex flex-col gap-0.5 text-[11px] text-slate-500">
+            <span className="flex items-center gap-1">
+              <label htmlFor={cellsId}>Reference cells</label>
+              <Help id="deconvolution.reference_cells" label="About the reference cells" />
+            </span>
+            <select id={cellsId} value={cells} onChange={(e) => setCells(e.target.value)} className={SELECT}>
               <option value="">All cells</option>
               {refColumns.map((c) => (
                 <optgroup key={c.column} label={prettyObsLabel(c.column)}>
@@ -191,7 +199,7 @@ export function DeconvolutionSubtab() {
                 </optgroup>
               ))}
             </select>
-          </label>
+          </div>
         )}
       </div>
       {refColumns.length > 0 && (
@@ -237,7 +245,7 @@ export function DeconvolutionSubtab() {
       {result && (
         <div className="space-y-2" data-testid="deconv-result">
           <Caption n={[{ value: result.n_samples, unit: "bulk samples" }, { value: result.types.length, unit: "cell types" }]}>
-            {result.filename}: {result.method_name}, reference {prettyObsLabel(result.celltype_column)} (
+            <Help id="deconvolution.result" label="How to read the fractions" /> {result.filename}: {result.method_name}, reference {prettyObsLabel(result.celltype_column)} (
             {result.n_reference_cells.toLocaleString()} cells
             {result.n_reference_donors ? `, ${result.n_reference_donors} donors in ${prettyObsLabel(result.donor_column)}` : ""}
             {result.reference_cells
@@ -274,10 +282,7 @@ export function DeconvolutionSubtab() {
                 {k === "cell" ? "Cell fractions" : "RNA fractions"}
               </button>
             ))}
-            <InfoTip label="Cell or RNA fractions" width={260}>
-              Cell fractions: the share of cells. RNA fractions: the share of the sample&apos;s RNA, which is larger
-              for types with more RNA per cell (cell size from this dataset).
-            </InfoTip>
+            <Help id="deconvolution.fractions" label="Cell or RNA fractions" width={260} />
             <a
               href={deconvolutionCsvUrl(datasetId, result.result_id)}
               download

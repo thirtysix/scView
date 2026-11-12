@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import type { Data, Layout } from "plotly.js";
 import {
@@ -15,7 +15,7 @@ import {
   type VelocityStatus,
 } from "@/api/velocity";
 import { Caption, capText } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
 import Plot from "@/components/plots/Plot";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
 import { useEmbedding } from "@/hooks/useEmbedding";
@@ -119,6 +119,7 @@ export function VelocitySubtab() {
   const [phase, setPhase] = useState<VelocityPhase | null>(null);
   const [phaseError, setPhaseError] = useState<string | null>(null);
   const abort = useRef<AbortController | null>(null);
+  const uid = useId();
 
   const load = async (id: string) => {
     const s = await getVelocity(id);
@@ -308,6 +309,7 @@ export function VelocitySubtab() {
             }}
           />
         </label>
+        <Help id="velocity.attach" label="About spliced and unspliced counts" />
         {attaching && (
           <span className="flex items-center gap-1 text-slate-500">
             <Loader2 className="h-3 w-3 animate-spin" /> Matching cells and genes
@@ -318,9 +320,13 @@ export function VelocitySubtab() {
       {status.attached && (
         <div className="space-y-2 rounded-md border border-slate-200 p-2">
           <div className="grid grid-cols-2 gap-2">
-            <label className="flex flex-col gap-0.5">
-              <span className="text-slate-500">Model</span>
+            <div className="flex flex-col gap-0.5">
+              <span className="flex items-center gap-1 text-slate-500">
+                <label htmlFor={`${uid}-model`}>Model</label>
+                <Help id="velocity.model" label="About the velocity models" />
+              </span>
               <select
+                id={`${uid}-model`}
                 value={method}
                 onChange={(e) => setMethod(e.target.value as VelocityMethod)}
                 className="rounded border border-slate-300 bg-white px-1 py-0.5"
@@ -329,10 +335,14 @@ export function VelocitySubtab() {
                   <option key={m} value={m}>{status.method_names[m]}</option>
                 ))}
               </select>
-            </label>
-            <label className="flex flex-col gap-0.5">
-              <span className="text-slate-500">Table by</span>
+            </div>
+            <div className="flex flex-col gap-0.5">
+              <span className="flex items-center gap-1 text-slate-500">
+                <label htmlFor={`${uid}-table-by`}>Table by</label>
+                <Help id="velocity.table_by" label="About the table grouping" align="right" />
+              </span>
               <select
+                id={`${uid}-table-by`}
                 value={groupBy}
                 onChange={(e) => setGroupBy(e.target.value)}
                 className="rounded border border-slate-300 bg-white px-1 py-0.5"
@@ -342,10 +352,14 @@ export function VelocitySubtab() {
                   <option key={c.name} value={c.name}>{c.name}</option>
                 ))}
               </select>
-            </label>
-            <label className="flex flex-col gap-0.5">
-              <span className="text-slate-500">Top genes</span>
+            </div>
+            <div className="flex flex-col gap-0.5">
+              <span className="flex items-center gap-1 text-slate-500">
+                <label htmlFor={`${uid}-n-top`}>Top genes</label>
+                <Help id="velocity.n_top" label="About the number of genes" />
+              </span>
               <input
+                id={`${uid}-n-top`}
                 type="number"
                 min={100}
                 max={20000}
@@ -354,10 +368,14 @@ export function VelocitySubtab() {
                 onChange={(e) => setNTop(Number(e.target.value))}
                 className="rounded border border-slate-300 bg-white px-1 py-0.5"
               />
-            </label>
-            <label className="flex flex-col gap-0.5">
-              <span className="text-slate-500">Neighbours</span>
+            </div>
+            <div className="flex flex-col gap-0.5">
+              <span className="flex items-center gap-1 text-slate-500">
+                <label htmlFor={`${uid}-neighbours`}>Neighbours</label>
+                <Help id="velocity.neighbors" label="About the neighbours" align="right" />
+              </span>
               <input
+                id={`${uid}-neighbours`}
                 type="number"
                 min={5}
                 max={100}
@@ -365,7 +383,7 @@ export function VelocitySubtab() {
                 onChange={(e) => setNNeighbors(Number(e.target.value))}
                 className="rounded border border-slate-300 bg-white px-1 py-0.5"
               />
-            </label>
+            </div>
           </div>
           {est && (
             <p className="text-slate-500">
@@ -440,6 +458,7 @@ export function VelocitySubtab() {
                   onChange={(e) => setArrows({ density: Number(e.target.value) })}
                 />
               </label>
+              <Help id="velocity.arrows" label="About the arrows" />
               <button
                 type="button"
                 onClick={colourByConfidence}
@@ -447,6 +466,7 @@ export function VelocitySubtab() {
               >
                 Colour by confidence
               </button>
+              <Help id="velocity.confidence" label="About velocity confidence" align="right" />
             </div>
             {blocked && <p className="text-amber-700">{blocked}</p>}
             {gridNote && !blocked && <p className="text-red-600">{errorMessage(new Error(gridNote))}</p>}
@@ -458,7 +478,7 @@ export function VelocitySubtab() {
           ))}
 
           <Caption n={[{ value: run.n_cells, unit: "cells", of: run.n_dataset_cells }, { value: run.n_velocity_genes, unit: "velocity genes", of: run.n_genes_fit }]}>
-            {run.method_name}. Median confidence {run.median_confidence.toFixed(2)}, unspliced {(run.unspliced_fraction * 100).toFixed(1)}%.{" "}
+            <Help id="velocity.summary" label="How to read the velocity summary" /> {run.method_name}. Median confidence {run.median_confidence.toFixed(2)}, unspliced {(run.unspliced_fraction * 100).toFixed(1)}%.{" "}
             {run.neighbours_note} {run.pca_note ? `${run.pca_note}.` : ""}
           </Caption>
 
@@ -498,11 +518,7 @@ export function VelocitySubtab() {
           <div>
             <div className="mb-1 flex items-center gap-2">
               <span className="font-medium">Phase portrait</span>
-              <InfoTip label="What a phase portrait shows">
-                Each dot is a cell's spliced and unspliced first moments for this gene, the mean over the cell and its
-                neighbours. The red line is the fitted steady-state ratio gamma. Cells above it are read as inducing the gene, cells
-                below as repressing it. A gene with no clear almond shape gives little to fit.
-              </InfoTip>
+              <Help id="velocity.phase" label="What a phase portrait shows" />
               <select
                 aria-label="Gene"
                 value={gene ?? ""}

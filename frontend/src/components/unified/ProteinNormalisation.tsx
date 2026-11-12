@@ -5,23 +5,9 @@ import { getDsbStatus, runDsb, type DsbStatus } from "@/api/dsb";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
 import { dropletsInWindow, dsbNote, type ProteinNorm } from "@/lib/dsb";
 import { plotConfig } from "@/lib/plotConfig";
-import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
 import { Caption } from "@/components/common/Caption";
 import Plot from "@/components/plots/Plot";
-
-const CLR_HELP =
-  "CLR: each protein's count relative to the cell's other proteins (centred log-ratio). Needs no empty " +
-  "droplets; the antibody background is not removed.";
-const DSB_HELP =
-  "DSB: each protein relative to its background in empty droplets (how many background SDs above them " +
-  "a cell is), with each cell's technical noise taken out using the isotype controls. Around 0 is " +
-  "background; clearly positive is staining (Mulè et al. 2022).";
-const WINDOW_HELP =
-  "The empty droplets used as background: droplets that are not cells, with RNA and protein UMI totals " +
-  "inside these log10 ranges. The defaults are the dsb vignette's (protein 1.5 to 3, RNA up to 2.5).";
-const NEG_HELP =
-  "Without empty droplets the background is estimated from the cells (dsb's ModelNegativeADTnorm): the " +
-  "lower of two groups of each protein's values. A protein every cell expresses can then sit near 0.";
 
 /** The error's own sentence: the backend's detail, without "API error 400:". */
 function message(err: unknown): string {
@@ -58,7 +44,7 @@ export function ProteinNormalisation({ datasetId, protein, norm, onNormChange }:
         <label className="flex items-center gap-1">
           <input type="radio" name="protein-norm" checked={shown === "clr"} onChange={() => onNormChange("clr")} />
           CLR
-          <InfoTip label="About CLR">{CLR_HELP}</InfoTip>
+          <Help id="protein.clr" label="About CLR" />
         </label>
         <label className={`flex items-center gap-1 ${hasDsb ? "" : "text-slate-400"}`}>
           <input
@@ -69,7 +55,7 @@ export function ProteinNormalisation({ datasetId, protein, norm, onNormChange }:
             onChange={() => onNormChange("dsb")}
           />
           DSB
-          <InfoTip label="About DSB">{DSB_HELP}</InfoTip>
+          <Help id="protein.dsb" label="About DSB" />
         </label>
         <button
           type="button"
@@ -194,7 +180,7 @@ function DsbSettings({ datasetId, onDone }: { datasetId: string; onDone: () => v
       {empty ? (
         <>
           <div className="flex items-center gap-1 text-[11px] font-medium text-slate-500">
-            Empty droplets (log10 UMIs) <InfoTip label="About the empty-droplet window">{WINDOW_HELP}</InfoTip>
+            Empty droplets (log10 UMIs) <Help id="protein.dsb_window" label="About the empty-droplet window" />
           </div>
           <div className="flex flex-wrap gap-x-3 gap-y-1">
             {bound("RNA from", rna[0], status.defaults?.rna_max ?? 4, (v) => setRna([v, rna[1]]))}
@@ -217,11 +203,14 @@ function DsbSettings({ datasetId, onDone }: { datasetId: string; onDone: () => v
         </>
       ) : (
         <p className="text-slate-600" data-testid="dsb-no-empty">
-          {status.empty_droplets_reason} <InfoTip label="About DSB without empty droplets">{NEG_HELP}</InfoTip>
+          {status.empty_droplets_reason} <Help id="protein.dsb_no_empty" label="About DSB without empty droplets" />
         </p>
       )}
       <fieldset className="space-y-0.5">
-        <legend className="text-[11px] font-medium text-slate-500">Isotype controls (per-cell noise)</legend>
+        <legend className="flex items-center gap-1 text-[11px] font-medium text-slate-500">
+          Isotype controls (per-cell noise)
+          <Help id="protein.isotypes" label="About isotype controls" />
+        </legend>
         {(status.proteins ?? []).length === 0 && <p className="text-slate-400">No proteins.</p>}
         <div className="flex flex-wrap gap-x-3">
           {(status.proteins ?? []).map((p) => (

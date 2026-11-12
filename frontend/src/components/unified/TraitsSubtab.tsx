@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { Download, Loader2 } from "lucide-react";
 import { Caption, CapNote } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
 import { RequestError } from "@/components/common/RequestError";
 import { SortableTh, ariaSort } from "@/components/common/SortableTh";
 import { GeneLinkOuts } from "@/components/unified/GeneLinkOuts";
@@ -88,9 +88,12 @@ function Citation({ release, attribution }: { release: string; attribution?: str
 function GeneTraitsCard({ gene, data, loading }: { gene: string; data: GeneTraits | null; loading: boolean }) {
   return (
     <div className="space-y-1.5 rounded-lg border border-slate-200 p-2" data-testid="gene-traits">
-      <div className="text-xs font-medium text-slate-700">
-        GWAS traits mapped to {gene}
-        {data?.via_ortholog && data.query !== data.gene ? ` (human ${data.gene})` : ""}
+      <div className="flex items-center gap-1 text-xs font-medium text-slate-700">
+        <span>
+          GWAS traits mapped to {gene}
+          {data?.via_ortholog && data.query !== data.gene ? ` (human ${data.gene})` : ""}
+        </span>
+        <Help id="traits.gene_traits" label="About a gene's GWAS traits" />
       </div>
       <GeneLinkOuts gene={data?.gene ?? gene} ensembl={data?.ensembl} />
       {loading && <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-400" />}
@@ -173,6 +176,7 @@ export function TraitsSubtab({
   const [geneData, setGeneData] = useState<GeneTraits | null>(null);
   const [geneLoading, setGeneLoading] = useState(false);
   const [sort, setSort] = useState<{ key: SortKey; dir: "asc" | "desc" }>({ key: "p", dir: "asc" });
+  const groupById = useId();
 
   const groupColumns = useMemo(() => {
     if (!dataset) return [];
@@ -275,11 +279,7 @@ export function TraitsSubtab({
     <div className="space-y-3">
       <div className="flex items-center gap-1.5 text-xs font-medium text-slate-700">
         GWAS trait links
-        <InfoTip label="About GWAS trait links" width={320}>
-          For each group, its marker genes are compared with the genes the GWAS Catalog maps near variants associated
-          with each trait. A trait is listed when the overlap covers at least 3 separate loci. The empirical p compares
-          with random gene sets that match the markers on how many traits each gene is linked to.
-        </InfoTip>
+        <Help id="traits.about" label="About GWAS trait links" width={320} />
       </div>
 
       {caveat && (
@@ -320,9 +320,13 @@ export function TraitsSubtab({
       {status?.downloaded && (
         <div className="space-y-1.5">
           <div className="flex flex-wrap items-end gap-2 text-xs">
-            <label className="flex flex-col gap-0.5 text-[11px] text-slate-500">
-              Group by
+            <div className="flex flex-col gap-0.5 text-[11px] text-slate-500">
+              <span className="flex items-center gap-1">
+                <label htmlFor={groupById}>Group by</label>
+                <Help id="traits.group_by" label="About the grouping" />
+              </span>
               <select
+                id={groupById}
                 value={column}
                 onChange={(e) => setGroupByColumn(e.target.value)}
                 className="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-700"
@@ -333,7 +337,7 @@ export function TraitsSubtab({
                   </option>
                 ))}
               </select>
-            </label>
+            </div>
             <label className="flex items-center gap-1 pb-1 text-[11px] text-slate-600">
               <input
                 type="checkbox"
@@ -341,10 +345,7 @@ export function TraitsSubtab({
                 onChange={(e) => setIncludeMeasurements(e.target.checked)}
               />
               Include measurement traits
-              <InfoTip label="About measurement traits" width={260}>
-                Traits under &ldquo;Other measurement&rdquo; are mostly protein and metabolite levels, where a gene is
-                often found next to its own product. They are left out unless you include them.
-              </InfoTip>
+              <Help id="traits.measurements" label="About measurement traits" width={260} />
             </label>
             <button
               type="button"
@@ -394,6 +395,7 @@ export function TraitsSubtab({
                 </option>
               ))}
             </select>
+            <Help id="traits.group" label="How to read the trait table" />
           </label>
           <p className="text-[11px] text-slate-500">
             {current.n_query.toLocaleString()} of {current.n_markers.toLocaleString()} markers are in the background;{" "}

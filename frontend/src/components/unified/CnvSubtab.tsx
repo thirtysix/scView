@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { Loader2 } from "lucide-react";
 import Plot from "@/components/plots/Plot";
 import { Caption } from "@/components/common/Caption";
+import { Help } from "@/components/common/Help";
 import { InfoTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
 import { getCnv, getCnvHeatmap, type CnvHeatmap, type CnvSummary } from "@/api/cnv";
@@ -47,6 +48,7 @@ export function CnvSubtab() {
   const [loading, setLoading] = useState(false);
   const [heatLoading, setHeatLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const rowsId = useId();
 
   const nCells = dataset?.n_cells ?? 0;
   const groupColumns = useMemo(() => (dataset ? referenceColumns(dataset.obs_columns, nCells) : []), [dataset, nCells]);
@@ -163,11 +165,16 @@ export function CnvSubtab() {
                 {c === "cnv_score" ? "CNV score" : "CNV cluster"}
               </button>
             ))}
+            <Help id="cnv.colour_by" label="About CNV score and CNV cluster" />
           </div>
 
-          <label className="block text-[11px] font-medium text-slate-500">
-            Group the rows by
+          <div className="block text-[11px] font-medium text-slate-500">
+            <span className="flex items-center gap-1">
+              <label htmlFor={rowsId}>Group the rows by</label>
+              <Help id="cnv.rows_by" label="About grouping the rows" />
+            </span>
             <select
+              id={rowsId}
               aria-label="Group the rows by"
               value={groupby}
               onChange={(e) => setRowsBy(e.target.value)}
@@ -182,7 +189,7 @@ export function CnvSubtab() {
                   </option>
                 ))}
             </select>
-          </label>
+          </div>
 
           {heatLoading && !heat && (
             <div className="flex items-center gap-2 text-xs text-slate-500">
@@ -223,7 +230,7 @@ export function CnvSubtab() {
                   { value: heat.groups.length, unit: "groups" },
                 ]}
               >
-                Each row a cell, each column a stretch of the genome (chromosomes 1 to X, left to right). Red: higher
+                <Help id="cnv.heatmap" label="How to read the copy-number heatmap" /> Each row a cell, each column a stretch of the genome (chromosomes 1 to X, left to right). Red: higher
                 than the reference (a gain), blue: lower (a loss). Cells sampled per {prettyObsLabel(heat.column)} group
                 in proportion to its size, ordered by CNV cluster.
               </Caption>
@@ -249,7 +256,7 @@ export function CnvSubtab() {
                 />
               </div>
               <Caption n={{ value: summary.by_group.groups.length, unit: "groups" }}>
-                CNV score (a cell&apos;s mean absolute value over the genome) per{" "}
+                <Help id="cnv.score_box" label="How to read the CNV score boxes" /> CNV score (a cell&apos;s mean absolute value over the genome) per{" "}
                 {prettyObsLabel(summary.by_group.column)} group; grey boxes are reference groups. Malignant cells
                 score well above the reference.
               </Caption>

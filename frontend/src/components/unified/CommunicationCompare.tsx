@@ -4,6 +4,7 @@ import type { PlotMouseEvent } from "plotly.js";
 import Plot from "@/components/plots/Plot";
 import { DonorBoxPlot } from "@/components/plots/DonorBoxPlot";
 import { Caption, CapNote } from "@/components/common/Caption";
+import { Help } from "@/components/common/Help";
 import { InfoTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
 import {
@@ -183,9 +184,10 @@ export function CommunicationCompare({ datasetId, datasetName, groupby, options 
     <div className="space-y-3">
       <div className="grid grid-cols-3 gap-2">
         <div>
-          <label htmlFor="ccc-cmp-column" className="mb-1 block text-[11px] font-medium text-slate-500">
-            Condition
-          </label>
+          <div className="mb-1 flex items-center gap-1 text-[11px] font-medium text-slate-500">
+            <label htmlFor="ccc-cmp-column">Condition</label>
+            <Help id="communication.compare_conditions" label="About the conditions compared" />
+          </div>
           <select
             id="ccc-cmp-column"
             value={condition?.column ?? ""}
@@ -243,6 +245,7 @@ export function CommunicationCompare({ datasetId, datasetName, groupby, options 
           ))}
         </select>
         <span className="text-[11px] text-slate-500">of a group&apos;s cells</span>
+        <Help id="communication.expr_prop" label="About the detection threshold" />
         <div className="ml-auto">
           {running ? (
             <button
@@ -328,7 +331,10 @@ export function CommunicationCompare({ datasetId, datasetName, groupby, options 
 
           <div>
             <div className="mb-1 flex items-center gap-2">
-              <span className="text-[11px] font-medium text-slate-600">Change between groups ({result.b} − {result.a})</span>
+              <span className="flex items-center gap-1 text-[11px] font-medium text-slate-600">
+                Change between groups ({result.b} − {result.a})
+                <Help id="communication.diff_heatmap" label="How to read the change heatmap" />
+              </span>
               <select
                 aria-label="Heatmap value"
                 value={weight}
@@ -377,18 +383,21 @@ export function CommunicationCompare({ datasetId, datasetName, groupby, options 
           </div>
 
           <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
-            <select
-              aria-label="Call"
-              value={filter.call}
-              onChange={(e) => setFilter((f) => ({ ...f, call: e.target.value as CallFilter }))}
-              className={sel}
-            >
-              {CALL_FILTERS.map((c) => (
-                <option key={c.value} value={c.value}>
-                  {c.label}
-                </option>
-              ))}
-            </select>
+            <div className="flex items-center gap-1">
+              <select
+                aria-label="Call"
+                value={filter.call}
+                onChange={(e) => setFilter((f) => ({ ...f, call: e.target.value as CallFilter }))}
+                className={sel}
+              >
+                {CALL_FILTERS.map((c) => (
+                  <option key={c.value} value={c.value}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+              <Help id="communication.call" label="About the calls" />
+            </div>
             <select aria-label="Sender" value={filter.source} onChange={(e) => setFilter((f) => ({ ...f, source: e.target.value }))} className={sel}>
               <option value="">Any sender</option>
               {result.groups.map((g) => (
@@ -424,6 +433,7 @@ export function CommunicationCompare({ datasetId, datasetName, groupby, options 
               onChange={(e) => setFilter((f) => ({ ...f, maxPadj: e.target.checked ? 0.05 : null }))}
             />
             Only adjusted p &lt; 0.05{!result.replicates.test && " (no donor test here)"}
+            <Help id="communication.padj_filter" label="About the donor test filter" />
           </label>
 
           <div>

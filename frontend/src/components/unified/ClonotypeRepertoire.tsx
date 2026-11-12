@@ -4,6 +4,7 @@ import { Loader2 } from "lucide-react";
 import Plot from "@/components/plots/Plot";
 import { getDiversity, getOverlap, getUsage, type DiversityMetric, type Overlap, type Usage } from "@/api/vdj";
 import { Caption, capText } from "@/components/common/Caption";
+import { Help } from "@/components/common/Help";
 import { InfoTip } from "@/components/common/InfoTip";
 import { plotlyColorscale } from "@/lib/colors";
 import { prettyObsLabel } from "@/lib/formatting";
@@ -65,6 +66,7 @@ export function ClonotypeRepertoire({
             </option>
           ))}
         </select>
+        <Help id="clonotypes.repertoire_by" label="About the repertoire grouping" />
       </div>
       {options.length === 0 && (
         <p className="rounded-md bg-slate-50 px-2 py-1.5 text-slate-600">
@@ -125,6 +127,7 @@ function DiversityChart({ datasetId, column }: { datasetId: string; column: stri
           <input type="checkbox" checked={rarefy} onChange={(e) => setRarefy(e.target.checked)} />
           rarefy
         </label>
+        <Help id="clonotypes.rarefy" label="About rarefying" />
         <label className="flex items-center gap-1" title="Groups with fewer cells with a clonotype get no value (and do not set the rarefaction depth)">
           min
           <select
@@ -291,7 +294,10 @@ function UsageHeatmap({ datasetId, column }: { datasetId: string; column: string
   return (
     <div className="space-y-1" data-testid="vdj-usage">
       <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-600">
-        <span className="font-medium">Gene usage</span>
+        <span className="flex items-center gap-1 font-medium">
+          Gene usage
+          <Help id="clonotypes.usage" label="How to read gene usage" />
+        </span>
         <select
           aria-label="Chain"
           value={data?.chain ?? chain}
