@@ -95,8 +95,9 @@ reviewer can audit. scView closes both gaps:
   (CellCharter's method), neighbourhood enrichment, co-occurrence and composition niches, with the QC rules
   adapted: no % mito cut on spots and bins, panel settings on targeted panels.
 - **Unified, linked, server-backed exploration.** A Kana-style single screen: scatter plus tabbed
-  Markers/Expression/Gene Sets/Enrichment/DE plus violin, scaling to ~200k cells via a FastAPI
-  backend, Apache Arrow, and deck.gl. Lasso (or click) a population for a **volcano of differential
+  Markers/Expression/Gene Sets/Enrichment/DE plus violin, served by a FastAPI backend over Apache
+  Arrow and drawn with deck.gl. Datasets too big for memory run and open with their matrices on disk
+  (a 1.3M-cell mouse brain ran end to end, peaking at about 17 GB). Lasso (or click) a population for a **volcano of differential
   expression**, and export any table to CSV. **Compare two datasets'** cell-type composition side by
   side, gauge **batch-integration quality**, and your workspace is **restored across reloads**.
   **Split the plot by a condition** into linked panels that share one camera and one expression
@@ -563,9 +564,10 @@ ruff check backend/src
 
 ## Status
 
-Active development (Phase 6: polish and testing). The AI co-pilot, dual-corpus RAG, provenance, and
-multi-format ingestion are implemented; see [`docs/AI_ASSISTANT.md`](docs/AI_ASSISTANT.md) and
-[`docs/FUTURE.md`](docs/FUTURE.md) for the roadmap.
+Under active development, with frequent releases: see [`CHANGELOG.md`](CHANGELOG.md)
+for what changed in each version and [GitHub releases](https://github.com/thirtysix/scView/releases)
+for downloads. Methods checked against a reference tool are listed in
+[`docs/validation/`](docs/validation/).
 
 ## License
 
