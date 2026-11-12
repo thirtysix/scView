@@ -1495,7 +1495,7 @@ async def list_results(
     id, kind, label, and whether computed on an earlier version of the data (stale)."""
     d = await _get(f"{_ds(dataset_id)}/results", kind=kind)
     res = d.get("results") or []
-    return dumps({"dataset_id": dataset_id, **rows(res, ["id", "kind", "label", "created_at", "stale", "status"],
+    return dumps({"dataset_id": dataset_id, **rows(res, ["id", "kind", "label", "created_at", "stale", "stale_reason", "status"],
                                                    clamp(limit))}, _max_chars(limit))
 
 
@@ -1510,7 +1510,7 @@ async def get_result(
     """A stored result's parameters and its table's rows (from offset, limit of them)."""
     meta = await _get(f"{_ds(dataset_id)}/results/{result_id}")
     out: dict[str, Any] = {"dataset_id": dataset_id, **pick(meta, "id", "kind", "label", "created_at",
-                                                            "stale", "params")}
+                                                            "stale", "stale_reason", "params")}
     try:
         df = await _de_table(dataset_id, result_id)
     except ToolError as e:

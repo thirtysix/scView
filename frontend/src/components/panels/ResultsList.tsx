@@ -192,6 +192,11 @@ export function ResultsList({ datasetId }: { datasetId: string }) {
                       <div className="mt-0.5 text-slate-500">
                         {fmtTime(r.created_at)} · scView {r.version} · {formatBytes(r.bytes)}
                       </div>
+                      {r.stale && r.stale_reason && (
+                        <div className="mt-0.5 text-amber-800" data-testid="stale-reason">
+                          Earlier data: {r.stale_reason}.
+                        </div>
+                      )}
                     </div>
                     <div className="flex shrink-0 items-center gap-0.5">
                       {RESTORABLE_KINDS.has(r.kind) && (
