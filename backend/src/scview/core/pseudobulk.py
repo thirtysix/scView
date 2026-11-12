@@ -30,7 +30,8 @@ design, ``~sex + batch + condition`` (as Milo takes them): a column must hold on
 value per pseudobulk sample, and one that cannot be separated from the condition
 (every level on one side) is refused. Text, boolean and categorical columns, and
 numbers with at most ``MAX_NUMERIC_LEVELS`` distinct values, are factors; other
-numbers enter as one centred and scaled slope. A covariate the paired design
+numbers enter as one centred and scaled slope, as does a column named in
+``numeric_covariates`` (``numeric_values`` reads text such as "54-year-old stage" as 54). A covariate the paired design
 already holds (constant within each donor, as sex is) is left out with a note.
 """
 
@@ -133,9 +134,24 @@ def _rank(M: np.ndarray) -> int:
     return int(np.linalg.matrix_rank(M)) if M.size else 0
 
 
+def numeric_values(values: pd.Series, name: str) -> pd.Series:
+    """A covariate column as numbers: numbers as they are, text by its first number
+    ("54-year-old stage" -> 54, CELLxGENE's development_stage); refuses a value with none."""
+    if pd.api.types.is_numeric_dtype(values) and not pd.api.types.is_bool_dtype(values):
+        return values.astype(np.float64)
+    text = values.astype(str).where(values.notna())
+    got = text.str.extract(r"(-?\d+(?:\.\d+)?)", expand=False)
+    bad = text.notna() & got.isna()
+    if bad.any():
+        raise PseudobulkError(
+            f"Covariate '{name}' value '{text[bad].iloc[0]}' holds no number: a numeric covariate "
+            "needs one in every value.")
+    return got.astype(np.float64)
+
+
 def _covariate_design(cov: dict[str, np.ndarray], nuisance: np.ndarray, is_a: np.ndarray,
                       sample_cond: np.ndarray, names: dict[str, str],
-                      sample_names: list[str] | None = None,
+                      sample_names: list[str] | None = None, numeric_names: frozenset = frozenset(),
                       ) -> tuple[np.ndarray, dict[str, pd.Series], list[str], list[str]]:
     """(the covariates' design columns, each used covariate's per-sample values for
     DESeq2's formula, the covariates used, notes on those left out). Refuses one that
@@ -148,7 +164,7 @@ def _covariate_design(cov: dict[str, np.ndarray], nuisance: np.ndarray, is_a: np
     for j, (name, raw) in enumerate(cov.items()):
         s = pd.Series(raw)
         numeric = (pd.api.types.is_numeric_dtype(s) and not pd.api.types.is_bool_dtype(s)
-                   and s.nunique() > MAX_NUMERIC_LEVELS)
+                   and (s.nunique() > MAX_NUMERIC_LEVELS or name in numeric_names))
         if s.nunique() < 2:
             notes.append(f"'{name}' has one value in these samples: left out.")
             continue
@@ -162,6 +178,9 @@ def _covariate_design(cov: dict[str, np.ndarray], nuisance: np.ndarray, is_a: np
             codes = pd.Categorical(s.astype(str), categories=levels).codes
             block = (codes[:, None] == np.arange(1, len(levels))[None, :]).astype(np.float64)
             meta[f"c{j}"] = pd.Series([f"v{c}" for c in codes])
+        hint = (f" '{name}' enters as {s.nunique()} levels: if it is a number (an age), pass it in "
+                "numeric_covariates to fit one slope." if not numeric and s.nunique() > MAX_NUMERIC_LEVELS
+                else "")
         r0 = _rank(base)
         gain = _rank(np.column_stack([base, block])) - r0
         if gain == 0:
@@ -174,14 +193,14 @@ def _covariate_design(cov: dict[str, np.ndarray], nuisance: np.ndarray, is_a: np
             raise PseudobulkError(
                 f"Covariate '{name}' is partly collinear with the donors or the other covariates "
                 "(some of its values occur with one donor or one level only): leave it out or "
-                "merge its rare values.")
+                "merge its rare values." + hint)
         with_cond = np.column_stack([base, block, is_a])
         if _rank(with_cond) < _rank(np.column_stack([base, block])) + 1:
             side = {names[k]: sorted(set(s.astype(str)[sample_cond == k]))[:4] for k in ("a", "b")}
             shown = "; ".join(f"{k}: {', '.join(v)}" for k, v in side.items())
             raise PseudobulkError(
                 f"Covariate '{name}' is confounded with the condition ({shown}): the two cannot "
-                "be separated, so it cannot be in the design.")
+                "be separated, so it cannot be in the design." + hint)
         base = np.column_stack([base, block])
         cols.append(block)
         used.append(name)
@@ -290,6 +309,7 @@ def pseudobulk_de(
     method: str = "voom",
     ruv_k: int = 0,
     covariates: pd.DataFrame | None = None,
+    numeric_covariates: list[str] | None = None,
 ) -> PseudobulkResult:
     """Condition A vs B on per-donor pseudobulk sums: limma-voom / voomByGroup's
     moderated t, edgeR QL's F-test, or DESeq2's Wald test (``method``), with ``ruv_k`` RUVg
@@ -300,7 +320,8 @@ def pseudobulk_de(
     dataset is passed whole, its other cells without a donor, and its counts file is
     read in blocks of cells).
     ``covariates``: per-sample obs columns of those cells (one column each) to
-    put in the design before the condition.
+    put in the design before the condition; those in ``numeric_covariates`` are read as
+    numbers (``numeric_values``) and enter as one slope.
     """
     if method not in METHODS:
         raise PseudobulkError(f"Unknown pseudobulk method '{method}' ({', '.join(METHODS)}).")
@@ -329,6 +350,8 @@ def pseudobulk_de(
     cov_values = {}
     for name in (covariates.columns if covariates is not None else []):
         col = covariates[name].iloc[rows].reset_index(drop=True)
+        if numeric_covariates and name in numeric_covariates:
+            col = numeric_values(col, str(name))
         cov_values[str(name)] = _sample_values(col, codes, len(samples), str(name), sample_names)
     dropped = [f"{sample_donor[i]} ({names[sample_cond[i]]}, {n_cells[i]} cells)"
                for i in np.flatnonzero(~ok)]
@@ -383,7 +406,8 @@ def pseudobulk_de(
         nuisance = np.column_stack([nuisance, dummies.astype(np.float64)])
     cov_cols, cov_meta, cov_used, cov_notes = _covariate_design(
         cov_values, nuisance, is_a, sample_cond, names,
-        [f"{d} ({names[c]})" for d, c in zip(sample_donor, sample_cond)])
+        [f"{d} ({names[c]})" for d, c in zip(sample_donor, sample_cond)],
+        frozenset(map(str, numeric_covariates or ())))
     nuisance = np.column_stack([nuisance, cov_cols])
     lib = C.sum(axis=1)
     try:
@@ -407,9 +431,14 @@ def pseudobulk_de(
     X = np.column_stack([nuisance, W, is_a])
     if len(vm.full_rank_columns(X)) < X.shape[1] or X.shape[0] - X.shape[1] < 1:
         n_w = W.shape[1]
+        many = [n for n, v in cov_values.items() if n in cov_used and n not in (numeric_covariates or ())
+                and pd.Series(v).nunique() > MAX_NUMERIC_LEVELS]
+        hint = (f" '{many[0]}' enters as {pd.Series(cov_values[many[0]]).nunique()} levels: if it is a "
+                "number (an age), pass it in numeric_covariates to fit one slope." if many else "")
         raise PseudobulkError(
             f"{len(C)} pseudobulk samples leave no residual degrees of freedom for this design"
             + (f" with {n_w} RUV factor{'s' if n_w != 1 else ''}; use a smaller k." if n_w else ".")
+            + hint
         )
     w_names = [f"W{j + 1}" for j in range(W.shape[1])]
     # Neutral names in the formula (c0, c1 ...); the reported design uses the columns'.

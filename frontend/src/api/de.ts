@@ -50,6 +50,8 @@ export interface DEResponse {
   replicate_warnings?: string[];
   /** /de/compare: the two sides are also different batches (datasets, runs). */
   confounding?: DEConfounding | null;
+  /** Cell-level: genes whose |log2FC| of 20+ comes from scanpy's 1e-9 pseudocount (absent from older servers). */
+  fold_change_note?: string | null;
   /** Pseudobulk: how far the run got; `note` only when no gene is significant (absent from older servers). */
   significance?: {
     n_tested: number;

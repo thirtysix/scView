@@ -898,6 +898,9 @@ async def differential_expression(
     covariates: Annotated[list[str] | None, Field(max_length=4, description=(
         "Pseudobulk: per-sample obs columns in the design before the condition (sex, batch, age); "
         "refused when one varies within a sample or is confounded with the condition."))] = None,
+    numeric_covariates: Annotated[list[str] | None, Field(max_length=4, description=(
+        "Pseudobulk: covariates read as numbers, one slope each (an age; text such as "
+        "'54-year-old stage' is read as 54). Added to covariates."))] = None,
     donor_key: Annotated[str | None, Field(description=(
         "Pseudobulk: the person column the replicate column's samples nest in, for the "
         "repeated-donor warning (default: detected)."))] = None,
@@ -919,10 +922,11 @@ async def differential_expression(
                                 "replicate_key": replicate_key, "method": method, "pb_method": pb_method}
         if min_pct is not None:
             body["min_pct"] = min_pct
-        if covariates or donor_key:
+        if covariates or donor_key or numeric_covariates:
             if method != "pseudobulk":
-                raise ToolError("covariates and donor_key are for method='pseudobulk'.")
-            body.update({"covariates": covariates, "donor_key": donor_key})
+                raise ToolError("covariates, numeric_covariates and donor_key are for method='pseudobulk'.")
+            body.update({"covariates": covariates, "donor_key": donor_key,
+                         "numeric_covariates": numeric_covariates})
         r = await _post(f"{_ds(dataset_id)}/de/compare", body)
     else:
         if method == "pseudobulk":
@@ -969,6 +973,8 @@ async def differential_expression(
     }
     if not out.get("covariates"):
         out.pop("covariates", None)
+    if r.get("fold_change_note"):
+        out["fold_change_note"] = r["fold_change_note"]
     sig_note = (r.get("significance") or {}).get("note")
     if sig_note and not up and not down:
         out["none_significant"] = sig_note
@@ -995,13 +1001,17 @@ async def compare_de_results(
     result_b: Annotated[str, Field(description="Another result_id (e.g. pseudobulk on the same comparison).")],
     padj_max: Annotated[float, Field(gt=0, le=1, description="Significant at adjusted p at most this.")] = 0.05,
     lfc_min: Annotated[float, Field(ge=0, le=20, description="And |log2FC| at least this.")] = 0.25,
+    common_tested_only: Annotated[bool, Field(description=(
+        "Count only the genes both results tested (the cell-level detection cut-off and the "
+        "pseudobulk count filter keep different genes)."))] = False,
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
     """Compare two DE results' significant genes (the DE overlap the UI draws): how many each
     calls, how many both call, their sign agreement, and the top genes only one of them calls
     (largest |log2FC| first). Use case: cell-level Wilcoxon vs donor-level pseudobulk."""
     d = await _post(f"{_ds(dataset_id)}/de/overlap", {
-        "result_ids": [result_a, result_b], "direction": "both", "padj_max": padj_max, "lfc_min": lfc_min})
+        "result_ids": [result_a, result_b], "direction": "both", "padj_max": padj_max, "lfc_min": lfc_min,
+        "restrict_to_common_tested": common_tested_only})
     n = clamp(limit)
     sets = d.get("sets") or []
     pair = (d.get("pairs") or [{}])[0]
@@ -1025,7 +1035,7 @@ async def compare_de_results(
         "only_a": genes((0,)), "only_b": genes((1,)),
         "note": "lfc_* is null where that result did not test the gene (under its detection "
                 "cut-off or the pseudobulk count filter).",
-        "notes": d.get("notes") or [],
+        "notes": [_api_words(x) for x in d.get("notes") or []],
     }
     if disc:
         out["discordant_genes"] = [g["gene"] for g in (d.get("discordant") or {}).get("genes", [])[:n]]
@@ -1110,6 +1120,12 @@ async def composition_test(
     cols = list(dict.fromkeys(k for g in groups for k in g))
     out = {"dataset_id": dataset_id, **d, "groups": table(groups, cols, clamp(limit))}
     return dumps(out, _max_chars(limit))
+
+
+def _api_words(note: str) -> str:
+    """A DE overlap note in this tool's terms: the UI's checkbox is an argument here."""
+    return note.replace('tick "only genes tested in all" to count only those',
+                        "pass common_tested_only=true to count only those")
 
 
 def _flat(d: dict[str, Any], prefix: str = "") -> dict[str, Any]:

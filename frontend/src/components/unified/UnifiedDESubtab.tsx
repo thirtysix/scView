@@ -758,6 +758,9 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
             {result.method !== "pseudobulk" && describePrefilter(result) && (
               <span className="mt-0.5 block">{describePrefilter(result)}</span>
             )}
+            {result.fold_change_note && (
+              <span className="mt-0.5 block" data-testid="de-fold-change-note">{result.fold_change_note}</span>
+            )}
             {result.transcriptome_size && !result.transcriptome_size.caution && (
               <span className="mt-0.5 block">
                 {describeSize(result.transcriptome_size, labelA, labelB)}

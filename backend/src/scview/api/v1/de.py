@@ -91,6 +91,8 @@ class DECompareRequest(_CompareScope):
     # Pseudobulk only: per-sample obs columns in the design (sex, batch, age), and the
     # person column the replicates nest in, for the repeated-donor warning (None: detected).
     covariates: list[str] | None = Field(default=None, max_length=4)
+    # Of those (or added to them): read as numbers, one slope each ("54-year-old stage" -> 54).
+    numeric_covariates: list[str] | None = Field(default=None, max_length=4)
     donor_key: str | None = None
     # The cell-level test only: pseudobulk filters genes on their summed counts.
     min_pct: float = _MinPct
@@ -205,6 +207,8 @@ class DEResponse(BaseModel):
     replicate_warnings: list[str] = []
     # /de/compare: the two sides are also different batches (core/confounding.py).
     confounding: dict | None = None
+    # Cell-level: genes whose |log2FC| comes from scanpy's 1e-9 pseudocount (absent on a side).
+    fold_change_note: str | None = None
     # Pseudobulk: genes at adjusted p < 0.05, the smallest adjusted p, nominal hits vs
     # chance, and a note when none is significant (core/pseudobulk.py significance).
     significance: dict | None = None
@@ -403,7 +407,8 @@ class _CellTest:
         pre = self.prefilter
         return {"min_pct": pre.min_pct, "n_genes_tested": pre.n_tested,
                 "n_genes_skipped": pre.n_skipped, "detection": pre.histogram or None,
-                "method": self.method}
+                "method": self.method,
+                "fold_change_note": de_methods.one_sided_note(g.logfoldchange for g in self.genes)}
 
 
 def _uses_raw(adata) -> bool:
@@ -910,7 +915,9 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
         raise HTTPException(
             status_code=400, detail="The donor column must differ from the column being compared."
         )
-    covs = list(dict.fromkeys(body.covariates or []))
+    covs = list(dict.fromkeys([*(body.covariates or []), *(body.numeric_covariates or [])]))
+    if len(covs) > pseudobulk.MAX_COVARIATES:
+        raise HTTPException(status_code=400, detail=f"At most {pseudobulk.MAX_COVARIATES} covariates.")
     for col in [*covs, body.donor_key]:
         if col and col not in adata.obs.columns:
             raise HTTPException(status_code=400, detail=f"Column '{col}' not found.")
@@ -931,7 +938,7 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
             adata, mask_a, donors,
             label_a=body.group_a, label_b=body.group_b, donor_key=key,
             method=body.pb_method, ruv_k=body.ruv_k,
-            covariates=adata.obs[covs] if covs else None,
+            covariates=adata.obs[covs] if covs else None, numeric_covariates=body.numeric_covariates,
         )
         try:  # obs total_counts (the QC step's); never a pass over the matrix here
             size = transcriptome_size.check(adata, mask_a, mask_b)
@@ -947,7 +954,7 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
             sub, mask_a[keep], sub.obs[key],
             label_a=body.group_a, label_b=body.group_b, donor_key=key,
             method=body.pb_method, ruv_k=body.ruv_k,
-            covariates=sub.obs[covs] if covs else None,
+            covariates=sub.obs[covs] if covs else None, numeric_covariates=body.numeric_covariates,
         )
         # DESeq2's size factors and voom's TMM factors normalise library size too.
         return res, transcriptome_size.check(sub, mask_a[keep], mask_b[keep])
