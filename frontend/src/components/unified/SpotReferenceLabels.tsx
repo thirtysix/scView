@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Help } from "@/components/common/Help";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import {
   CUT_LABELS,
   type CutAt,
@@ -82,15 +82,19 @@ export function SpotReferenceLabels({
           aria-expanded={open}
           onClick={() => setOpened(!open)}
         >
-          Reference labels
+          <HoverTip
+            width={320}
+            tip={<>
+              Left out: those cells are not used, as if they had no label, so no {"spot's"} RNA can go to them. Merged: their
+              cells make one type under the name you give (an existing label&apos;s name joins it); merging comes before the
+              minimum of {minCells} cells and the limit of {maxTypes} types. A label both left out and merged is left out. A
+              catch-all label can take signal from the real types, so look at those marked; nothing is left out unless you
+              tick it.
+            </>}
+          >
+            Reference labels
+          </HoverTip>
         </button>
-        <InfoTip label="About reference labels" width={320}>
-          Left out: those cells are not used, as if they had no label, so no {"spot's"} RNA can go to them. Merged: their
-          cells make one type under the name you give (an existing label&apos;s name joins it); merging comes before the
-          minimum of {minCells} cells and the limit of {maxTypes} types. A label both left out and merged is left out. A
-          catch-all label can take signal from the real types, so look at those marked; nothing is left out unless you
-          tick it.
-        </InfoTip>
         <span className={problem ? "text-amber-700" : "text-slate-500"} data-testid="spot-labels-count">
           {plan.types.length} {plan.types.length === 1 ? "type" : "types"}, at most {maxTypes}
         </span>
@@ -184,7 +188,9 @@ export function SpotReferenceLabels({
             </datalist>
           </div>
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-slate-600" data-testid="spot-labels-coarsen">
-            <span>Merge by shared name: cut at</span>
+            <span>
+              <Help id="spotcomp.merge-names">Merge by shared name</Help>: cut at
+            </span>
             <select
               className="rounded border px-1 py-0.5"
               value={cut}
@@ -225,7 +231,6 @@ export function SpotReferenceLabels({
             >
               {previewing ? "Hide preview" : "Preview"}
             </button>
-            <Help id="spotcomp.merge-names" label="About merging by shared name" />
           </div>
           {previewing && (
             <div className="space-y-1 rounded bg-slate-50 p-1.5" data-testid="spot-labels-preview">

@@ -4,6 +4,8 @@ import type { CoOccurrenceInfo } from "@/api/spatialDomains";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useSpatialDomainsRunStore } from "@/stores/spatialDomainsRunStore";
+import { SPATIAL_HELP } from "@/lib/help/spatial";
+import { hoverTip, unhover } from "@/test/hoverTip";
 import { CoOccurrenceCard } from "./CoOccurrenceCard";
 
 const getCoOccurrence = vi.fn();
@@ -164,6 +166,23 @@ describe("CoOccurrenceCard", () => {
     render(<CoOccurrenceCard columns={columns} labelDefault="clusters" />);
     fireEvent.click(await screen.findByRole("checkbox"));
     await waitFor(() => expect(getCoOccurrence.mock.lastCall?.[1].combine).toBe("squidpy_splits"));
+  });
+
+  it("explains the card and its fields on hover of their labels, with no info icons", async () => {
+    getCoOccurrence.mockResolvedValue(info({ result: saved as CoOccurrenceInfo["result"] }));
+    render(<CoOccurrenceCard columns={columns} labelDefault="clusters" />);
+    await screen.findByTestId("cooccurrence-results");
+    const title = screen.getByText("Co-occurrence");
+    expect(await hoverTip(title)).toMatch(/P\(b \| a\) \/ P\(b\)/);
+    unhover(title);
+    for (const [text, id] of [["Labels", "domains.cooccur-labels"], ["Distances", "domains.cooccur-distances"],
+      ["Near which label", "domains.cooccur-near"]] as const) {
+      const el = screen.getByText(text);
+      expect(await hoverTip(el)).toBe(SPATIAL_HELP[id]);
+      unhover(el);
+    }
+    expect(screen.getByRole("spinbutton", { name: "Distances" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^About/ })).toBeNull();
   });
 
   it("draws score against distance with a line at 1, and a heatmap with category axes", async () => {

@@ -57,9 +57,8 @@ export function AtacQcCard({
   const cells = Math.min(qc?.n_cells ?? 0, QC_MAX_CELLS);
   return (
     <section className="space-y-2 rounded-lg border border-slate-200 p-2" aria-label="ATAC quality">
-      <h4 className="flex items-center gap-1 text-xs font-semibold text-slate-600">
-        <span>ATAC quality</span>
-        <Help id="atac.qc" label="About ATAC quality" />
+      <h4 className="text-xs font-semibold text-slate-600">
+        <Help id="atac.qc">ATAC quality</Help>
       </h4>
       <RequestError message={error} />
       {qc?.columns.map((col) => (

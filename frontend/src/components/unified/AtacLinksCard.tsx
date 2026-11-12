@@ -14,7 +14,7 @@ import {
 import type { AtacState } from "@/api/atac";
 import { CapNote, Caption } from "@/components/common/Caption";
 import { Help } from "@/components/common/Help";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
 import { formatDistance, formatP } from "@/lib/atac";
 import { cellsText, countsText, estimateText, linksBody, parseGeneList } from "@/lib/atacLinks";
@@ -187,29 +187,32 @@ export function AtacLinksCard({
 
   return (
     <section className="space-y-2 rounded-lg border border-slate-200 p-2" aria-label="Peak-gene links">
-      <h4 className="flex items-center gap-1 text-xs font-semibold text-slate-600">
-        <span>Peak-gene links</span>
-        <InfoTip label="About peak-gene links" width={340}>
-          Signac&rsquo;s LinkPeaks. A peak within 500 kb of a gene&rsquo;s TSS whose counts rise and fall with the gene&rsquo;s
-          expression across the same cells is a candidate regulatory element for it. Score: Pearson r of the two. z: how far
-          that r is from the r of 200 peaks on other chromosomes with the same GC, count and width, which cannot be regulating
-          this gene in cis, in their standard deviations. Kept at one-sided p &lt; 0.05 as Signac does; BH across every tested
-          pair is added. A link is a correlation: across all cells it mostly says which cell types open the peak and express
-          the gene.
-        </InfoTip>
+      <h4 className="text-xs font-semibold text-slate-600">
+        <HoverTip
+          width={340}
+          tip={<>
+            Signac&rsquo;s LinkPeaks. A peak within 500 kb of a gene&rsquo;s TSS whose counts rise and fall with the gene&rsquo;s
+            expression across the same cells is a candidate regulatory element for it. Score: Pearson r of the two. z: how far
+            that r is from the r of 200 peaks on other chromosomes with the same GC, count and width, which cannot be regulating
+            this gene in cis, in their standard deviations. Kept at one-sided p &lt; 0.05 as Signac does; BH across every tested
+            pair is added. A link is a correlation: across all cells it mostly says which cell types open the peak and express
+            the gene.
+          </>}
+        >
+          Peak-gene links
+        </HoverTip>
       </h4>
       <div className="flex flex-wrap items-center gap-1.5">
         <label className="flex items-center gap-1.5 text-[11px] text-slate-600">
-          Genes
+          <Help id="atac.links-genes">Genes</Help>
           <select aria-label="Genes" value={genes} onChange={(e) => setGenes(e.target.value as LinksGenes)} className={SELECT}>
             <option value="variable">Variable genes</option>
             <option value="all">All genes</option>
             <option value="list">A list</option>
           </select>
-          <Help id="atac.links-genes" label="About the gene choice" />
         </label>
         <label className="flex items-center gap-1.5 text-[11px] text-slate-600">
-          Cells
+          <Help id="atac.links-cells">Cells</Help>
           <select
             aria-label="Cells from"
             value={column}
@@ -222,7 +225,6 @@ export function AtacLinksCard({
             <option value="">All cells</option>
             {columns.map((c) => <option key={c} value={c}>{prettyObsLabel(c)}</option>)}
           </select>
-          <Help id="atac.links-cells" label="About the cell choice" />
         </label>
         {!live && (
           <button type="button" disabled={run.running || elsewhere || listEmpty || noCells || !!estimateError} onClick={start}
@@ -266,7 +268,7 @@ export function AtacLinksCard({
       <RequestError message={error} />
       {runs.length > 1 && (
         <label className="flex items-center gap-1.5 text-[11px] text-slate-600">
-          Kept runs
+          <Help id="atac.links-runs">Kept runs</Help>
           <select aria-label="Kept runs" value={linksId ?? ""} onChange={(e) => void openRun(e.target.value)} className={SELECT}>
             {!linksId && <option value="">Choose a run</option>}
             {runs.map((r) => (
@@ -275,7 +277,6 @@ export function AtacLinksCard({
               </option>
             ))}
           </select>
-          <Help id="atac.links-runs" label="About kept runs" />
         </label>
       )}
       {links && (

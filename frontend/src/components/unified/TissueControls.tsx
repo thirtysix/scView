@@ -32,7 +32,7 @@ export function TissueControls({ spatial }: { spatial: SpatialInfo }) {
       {spatial.libraries.length > 1 && (
         <>
           <label htmlFor="tissue-section" className="text-[11px] font-medium text-slate-500">
-            Section
+            <Help id="tissue.section" side="below">Section</Help>
           </label>
           <select
             id="tissue-section"
@@ -47,21 +47,21 @@ export function TissueControls({ spatial }: { spatial: SpatialInfo }) {
               </option>
             ))}
           </select>
-          <Help id="tissue.section" label="About the section choice" />
         </>
       )}
       <label
         className={`flex items-center gap-1 text-[11px] font-medium ${hasImage ? "text-slate-500" : "text-slate-400"}`}
-        title={hasImage ? "Show the tissue image under the " + units : "This section has no tissue image"}
+        title={hasImage ? undefined : "This section has no tissue image"}
       >
         <input
           type="checkbox"
           checked={hasImage && showImage}
           disabled={!hasImage}
           onChange={(e) => setShowImage(e.target.checked)}
+          title={hasImage ? "Show the tissue image under the " + units : undefined}
           className="accent-blue-500"
         />
-        Image
+        {hasImage ? <Help id="tissue.image" side="below">Image</Help> : "Image"}
       </label>
       {hasImage && showImage && (
         <input
@@ -76,10 +76,11 @@ export function TissueControls({ spatial }: { spatial: SpatialInfo }) {
           className="w-14 accent-blue-500"
         />
       )}
-      {hasImage && <Help id="tissue.image" label="About the tissue image" />}
       {outlines.length > 0 && (
         <div className="flex items-center gap-1" role="group" aria-labelledby="tissue-draw">
-          <span id="tissue-draw" className="text-[11px] font-medium text-slate-500">Draw</span>
+          <span id="tissue-draw" className="text-[11px] font-medium text-slate-500">
+            <Help id="tissue.draw" side="below">Draw</Help>
+          </span>
           {drawChoices.map(([value, label]) => (
             <button
               key={value}
@@ -92,7 +93,6 @@ export function TissueControls({ spatial }: { spatial: SpatialInfo }) {
               {label}
             </button>
           ))}
-          <Help id="tissue.draw" label="About drawing cells or points" />
         </div>
       )}
       <InfoTip label="About the tissue plot">
