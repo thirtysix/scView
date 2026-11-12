@@ -7,6 +7,7 @@ have already been applied, returning a structured report with confidence levels.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 import numpy as np
@@ -82,6 +83,14 @@ class PreprocessingState(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+_SEURAT_QC = re.compile(r"^(nCount_|nFeature_)\w+$|^percent[._](mt|mito|rb|ribo|hb)$", re.IGNORECASE)
+
+
+def _seurat_qc_columns(obs_cols: set[str]) -> list[str]:
+    """Seurat's per-cell QC columns (nCount_RNA, nFeature_RNA, percent.mt, ...), sorted."""
+    return sorted(c for c in obs_cols if _SEURAT_QC.match(str(c)))
+
+
 def _check_qc_metrics(adata: Any) -> StepStatus:
     """Check if QC metrics (n_genes_by_counts, total_counts, etc.) are present."""
     try:
@@ -110,12 +119,20 @@ def _check_qc_metrics(adata: Any) -> StepStatus:
                 confidence="medium",
                 details=f"Found MT% columns only: {', '.join(mt_cols)}",
             )
-        else:
+        seurat = _seurat_qc_columns(obs_cols)
+        if seurat:
+            # Not done: other steps read scanpy's own columns, so the QC metrics step still runs.
             return StepStatus(
                 done=False,
                 confidence="high",
-                details="No standard QC metric columns found in obs",
+                details=(f"Found Seurat QC columns: {', '.join(seurat)}. QC plots and filtering read them; "
+                         "the QC metrics step adds scanpy's own columns, which other steps use"),
             )
+        return StepStatus(
+            done=False,
+            confidence="high",
+            details="No standard QC metric columns found in obs",
+        )
     except Exception as exc:
         logger.warning("Error checking QC metrics: %s", exc)
         return StepStatus(done=False, confidence="low", details=f"Check failed: {exc}")

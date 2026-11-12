@@ -6,6 +6,13 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+- Seurat v5 objects whose layers are split by sample (`counts.1`, `counts.2`, ... after `split()` or `merge()`)
+  now convert: the converter joins the layers first and keeps the object's cell order. Before, the conversion
+  stopped with "data, indices, and indptr should be 1-D".
+- Data Assessment names Seurat's own QC columns (`nCount_RNA`, `nFeature_RNA`, `percent.mt`, ...) instead of
+  saying none were found. The QC metrics step still runs, since other steps read scanpy's columns.
+
 ### Known limits
 - AI annotation with DeepSeek-V4-Pro as the annotator model (not the default): since 0.71.0 some doublet clusters
   come back as "Doublet" or "Low-quality cells" instead of naming both cell types. In the annotation benchmark
