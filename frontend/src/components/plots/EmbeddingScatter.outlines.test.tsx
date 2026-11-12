@@ -233,7 +233,7 @@ describe("EmbeddingScatter outlines in the SVG / PDF", () => {
     expect(g.getAttribute("stroke")).toBe("#1e293b"); // 16 px a cell: edged, as on screen
     expect(doc.querySelectorAll("g.points circle")).toHaveLength(0); // cell 1's dot is hidden under it
     const texts = [...doc.querySelectorAll("text")].map((t) => t.textContent);
-    expect(texts.join(" ")).toContain("Drawing the cell outlines in view (1).");
+    expect(texts.join(" ")).not.toContain("Drawing the"); // the on-screen status is not a caption
   });
 
   it("zoomed out, every outline in view and no edge (cells under 4 px)", async () => {

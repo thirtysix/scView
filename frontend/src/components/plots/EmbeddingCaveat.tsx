@@ -30,6 +30,7 @@ export function EmbeddingCaveat({
       <HoverTip
         align="right"
         width={280}
+        className="min-w-0 truncate"
         tip={
           <>
             {method} keeps each cell&apos;s nearest neighbours, not the distances between clusters: how
@@ -41,7 +42,7 @@ export function EmbeddingCaveat({
       >
         {method}: gaps between clusters aren&apos;t distances
       </HoverTip>
-      <button type="button" onClick={showDistances} className="font-medium text-primary hover:underline">
+      <button type="button" onClick={showDistances} className="flex-shrink-0 font-medium text-primary hover:underline">
         Cluster distances
       </button>
     </div>

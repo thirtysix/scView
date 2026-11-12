@@ -64,6 +64,28 @@ describe("DatasetLibrary", () => {
     expect(useDatasetStore.getState().availableDatasets[1]!.name).toBe("kang");
   });
 
+  it("says a dataset is opening, counts the seconds, and holds the other rows until it is open", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let finish: (d: DatasetInfo) => void = () => {};
+    api.getDataset.mockReturnValue(new Promise<DatasetInfo>((res) => (finish = res)));
+    render(<DatasetLibrary />);
+    fireEvent.click(screen.getByText("kang"));
+    const status = await screen.findByRole("status");
+    expect(status.textContent).toContain("Opening 1.2K cells…");
+    expect(status.textContent).not.toMatch(/\d+ s$/); // no counter in the first 2 s
+    await vi.advanceTimersByTimeAsync(3100);
+    expect(screen.getByRole("status").textContent).toMatch(/3 s$/);
+    const other = screen.getByText("pbmc_3k").closest("button")!;
+    expect(other).toBeDisabled();
+    fireEvent.click(other);
+    expect(api.getDataset).toHaveBeenCalledTimes(1);
+    finish(ds("b", "kang"));
+    await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
+    expect(useDatasetStore.getState().currentDataset?.id).toBe("b");
+    expect(other).not.toBeDisabled();
+    vi.useRealTimers();
+  });
+
   it("an open the server refuses shows its sentence, not a generic line", async () => {
     const detail =
       "A run on HD 8 um needs about 3.2 GB more at its peak and scView has 1.1 GB free of its 8.0 GB limit: " +

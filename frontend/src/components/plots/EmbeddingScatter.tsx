@@ -835,17 +835,14 @@ export function EmbeddingScatter({
       filename: exportFilename(useDatasetStore.getState().currentDataset?.name, exportName),
       note:
         [
-          mesh && outlinePlan
-            ? outlineNote(outlinePlan, outlineKind)
-            : isSampled
-              ? `Showing ${renderCount.toLocaleString()} of ${totalCells.toLocaleString()} ${unit}s (sampled)`
-              : null,
+          // The on-screen outline status is a hint for the viewer, not a figure caption.
+          isSampled ? `Showing ${renderCount.toLocaleString()} of ${totalCells.toLocaleString()} ${unit}s (sampled)` : null,
           exportNote,
         ]
           .filter(Boolean)
           .join(" ") || undefined,
     });
-  }, [exportLegend, continuousColormap, exportName, isSampled, renderCount, totalCells, unit, mesh, outlinePlan, outlineKind, exportNote, exportOverlayLegend]);
+  }, [exportLegend, continuousColormap, exportName, isSampled, renderCount, totalCells, unit, exportNote, exportOverlayLegend]);
 
   // SVG / PDF: the drawn points projected with the camera shown, in their draw
   // order and colours, the labels where they are on screen (lib/scatterSvg.ts).
@@ -884,11 +881,9 @@ export function EmbeddingScatter({
         axes: dimensions === 3 ? null : (axisLabels ?? embeddingAxisLabels(embedding)),
         notes: figOutlines?.omitted
           ? [omittedOutlinesNote(figOutlines, outlineKind)]
-          : mesh && outlinePlan
-            ? [outlineNote(outlinePlan, outlineKind)]
-            : isSampled
-              ? [`Showing ${renderCount.toLocaleString()} of ${totalCells.toLocaleString()} ${unit}s (sampled)`]
-              : [],
+          : isSampled
+            ? [`Showing ${renderCount.toLocaleString()} of ${totalCells.toLocaleString()} ${unit}s (sampled)`]
+            : [],
         mode,
         rasterize: canvasRasterizer,
       });
@@ -900,7 +895,7 @@ export function EmbeddingScatter({
       viewState, renderPositions, renderColors, views, containerSize.width, containerSize.height, stride,
       pointSize, placedLabels, highlightCategory, exportLegend, continuousColormap, exportTitle, embedding,
       dimensions, axisLabels, isSampled, renderCount, totalCells, exportName, spotR, unit,
-      mesh, colorArray, pointColors, outlinePlan, outlineKind,
+      mesh, colorArray, pointColors, outlineKind,
     ],
   );
 

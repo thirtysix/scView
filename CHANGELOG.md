@@ -21,7 +21,13 @@ Bigger, paged small-multiple grids that export as figures; steadier lasso and ca
   export menu say so (zoom in to include them).
 
 ### Changed
+- Opening a dataset from the library says so on its row ("Opening 73.3K cells…", with a seconds count after 2 s)
+  while the server reads it (often 5-10 s); the other rows wait until it is open. Before, nothing showed it was busy.
 - The lasso button has one tip, which gives the L shortcut (it showed a second, plain tooltip as well).
+- A grid's header keeps what it shows ("Split by Sample · 23 panels"); the UMAP distance caveat beside it shortens
+  first.
+- Exported figures no longer carry the on-screen outline status ("Drawing the cell outlines in view (43).") as a
+  caption; the note that outlines were left out stays.
 
 ### Fixed
 - Resizing the plot (a window resize, full-page toggle, dragging the split pane, or the toolbar wrapping) no longer

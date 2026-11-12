@@ -551,10 +551,11 @@ export function MultiPanelScatter({
     >
       {/* Header: what is shown, extra controls, camera + export + close */}
       <div className="flex h-8 flex-shrink-0 items-center gap-2 border-b border-slate-200 bg-white px-3 text-[11px] text-slate-500">
-        <span className="truncate">{header}</span>
+        {/* What is shown keeps its room; the caveat gives way first (it truncates, its tip keeps the text) */}
+        <span className="max-w-[50%] flex-shrink-0 truncate">{header}</span>
         {sampledBadge && <span className="flex-shrink-0 text-[10px] text-slate-400">{sampledBadge}</span>}
         <div className="flex-1" />
-        <EmbeddingCaveat embedding={embedding} className="flex-shrink-0" />
+        <EmbeddingCaveat embedding={embedding} className="min-w-0 shrink" />
         {headerControls}
         <GridPager
           n={nPanels}
