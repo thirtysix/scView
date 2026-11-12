@@ -37,7 +37,7 @@ import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 
-from scview.core import modality_store
+from scview.core import genome_build, modality_store
 
 if TYPE_CHECKING:
     from scview.core.ingestion.bundling import IngestUnit
@@ -232,6 +232,7 @@ class UnitPeaks:
     genome: str | None
     genome_assumed: bool = False
     note: str | None = None
+    genome_note: str | None = None  # why genome-dependent steps are off (hg19)
 
 
 def infer_genome(gene_ids) -> str | None:
@@ -447,14 +448,28 @@ def plan_unit(unit: IngestUnit, workdir: str | Path | None = None) -> UnitPeaks 
     if not unit.files:
         return None
     if unit.format == UnitFormat.tenx_h5:
-        return _plan_tenx_h5(unit)
+        return check_build(_plan_tenx_h5(unit))
     if unit.format == UnitFormat.tenx_mex:
-        return _plan_mex(unit, Path(workdir or Path(unit.files[0].path).parent))
+        return check_build(_plan_mex(unit, Path(workdir or Path(unit.files[0].path).parent)))
     if unit.format == UnitFormat.anndata:
-        return _plan_h5ad(unit)
+        return check_build(_plan_h5ad(unit))
     if unit.format == UnitFormat.h5mu:
-        return _plan_h5mu(unit)
+        return check_build(_plan_h5mu(unit))
     return None
+
+
+def check_build(plan: UnitPeaks | None) -> UnitPeaks | None:
+    """hg19 input recorded as ``hg19`` (``core/genome_build.py``): a file that names hg19 /
+    GRCh37, or, when the genome was only assumed (GRCh38 from Ensembl ids, or none), peaks past
+    GRCh38's chromosome ends. Genome-dependent steps then refuse it; the rest works."""
+    if plan is None or plan.rows is None:
+        return plan
+    hg19 = genome_build.names_hg19(plan.genome)
+    if not hg19 and (plan.genome is None or (plan.genome_assumed and plan.genome == "GRCh38")):
+        hg19 = genome_build.from_intervals(parse_interval(s) for s in plan.intervals) == genome_build.HG19
+    if hg19:
+        plan.genome, plan.genome_assumed, plan.genome_note = genome_build.HG19, False, genome_build.HG19_REFUSAL
+    return plan
 
 
 # ---------------------------------------------------------------------------
@@ -496,7 +511,8 @@ def write_store(plans: list[UnitPeaks], part: str | Path, *, merged: bool = Fals
         barcodes.append(idx + f":{p.label}" if merged else idx)
     all_barcodes = barcodes[0] if len(barcodes) == 1 else barcodes[0].append(barcodes[1:])
     meta = {"genome": first.genome, "genome_assumed": bool(first.genome_assumed),
-            "source": ", ".join(p.file for p in plans), "format": first.fmt, "version": VERSION}
+            "source": ", ".join(p.file for p in plans), "format": first.fmt, "version": VERSION,
+            **({"genome_note": first.genome_note} if first.genome_note else {})}
     while True:
         totals: list[np.ndarray] = []
         peaks: list[np.ndarray] = []
@@ -509,7 +525,8 @@ def write_store(plans: list[UnitPeaks], part: str | Path, *, merged: bool = Fals
             logger.info("matrix.mtx is not sorted by cell: writing the peaks again by cell buckets")
     return Written(Path(part), all_barcodes, np.concatenate(totals), np.concatenate(peaks), {
         "n_peaks": len(names), "n_cells": len(all_barcodes), "nnz": int(nnz), "genome": first.genome,
-        "genome_assumed": bool(first.genome_assumed), "source": meta["source"], "format": first.fmt})
+        "genome_assumed": bool(first.genome_assumed), "source": meta["source"], "format": first.fmt,
+        **({"genome_note": first.genome_note} if first.genome_note else {})})
 
 
 def _write_unit(p: UnitPeaks, writer: modality_store.StoreWriter, totals: list, peaks: list) -> int:
@@ -549,6 +566,9 @@ def attach_obs(adata, written: Written) -> dict[str, Any]:
     info = dict(written.info)
     info["n_cells_matched"] = int(joined[OBS_TOTAL].notna().sum())
     adata.uns[UNS_KEY] = info_json(info)
+    if info.get("genome_note"):  # into the ingest history with any other ATAC note
+        prior = adata.uns.get(LEFT_OUT_KEY)
+        adata.uns[LEFT_OUT_KEY] = " ".join(str(n) for n in (prior, info["genome_note"]) if n)
     return info
 
 
@@ -576,12 +596,14 @@ def dataset_state(adata, data_dir: str | Path, dataset_id: str) -> dict[str, Any
     if UNS_KEY not in adata.uns or not modality_store.store_path(data_dir, dataset_id, STORE).exists():
         return None
     info = read_info(adata) or {}
-    return {"n_peaks": info.get("n_peaks"), "genome": info.get("genome"), "computed": info.get("computed") or []}
+    return {"n_peaks": info.get("n_peaks"), "genome": info.get("genome"), "computed": info.get("computed") or [],
+            **({"genome_note": info["genome_note"]} if info.get("genome_note") else {})}
 
 
 def provenance_params(info: dict[str, Any]) -> dict[str, Any]:
     keys = ("n_peaks", "nnz", "genome", "genome_assumed", "source", "format", "n_cells")
-    return {"atac": {**{k: info.get(k) for k in keys}, "location": f"{modality_store.SUBDIR}/<id>/{STORE}.h5"}}
+    note = {"genome_note": info["genome_note"]} if info.get("genome_note") else {}
+    return {"atac": {**{k: info.get(k) for k in keys}, **note, "location": f"{modality_store.SUBDIR}/<id>/{STORE}.h5"}}
 
 
 # ---------------------------------------------------------------------------

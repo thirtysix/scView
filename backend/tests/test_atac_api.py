@@ -229,7 +229,7 @@ async def test_run_says_when_positions_are_missing_and_still_saves_lsi(client, d
                          table["name"].tolist(), atac_import.feature_attrs(table["name"].tolist()), {"genome": "hg19"})
     r = await client.post(f"{API}/datasets/{did}/atac/run-stream", json={"n_lsi": 6, "dims_to": 5})
     result = next(d for e, d in _events(r.text) if e == "result")
-    assert result["lsi"] and result["activity"]["available"] is False and "not 'hg19'" in result["activity"]["reason"]
+    assert result["lsi"] and result["activity"]["available"] is False and "on hg19 (GRCh37)" in result["activity"]["reason"]
 
 
 async def test_metrics_attached_afterwards(client, dataset_manager):
