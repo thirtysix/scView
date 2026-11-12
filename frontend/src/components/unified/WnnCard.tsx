@@ -129,9 +129,8 @@ export function WnnCard({ datasetId, groupByColumn }: { datasetId: string; group
 
   return (
     <section className="space-y-2 rounded-lg border border-slate-200 p-2" aria-label="Joint RNA + protein (WNN)">
-      <h4 className="flex items-center gap-1 text-xs font-semibold text-slate-600">
-        <span>Joint RNA + protein (WNN)</span>
-        <Help id="protein.wnn" label="About WNN" width={300} />
+      <h4 className="text-xs font-semibold text-slate-600">
+        <Help id="protein.wnn">Joint RNA + protein (WNN)</Help>
       </h4>
 
       {loading && !info && (
@@ -215,7 +214,7 @@ export function WnnCard({ datasetId, groupByColumn }: { datasetId: string; group
               disabled={busy}
               className="rounded border border-slate-300 px-2 py-0.5 text-[11px] text-slate-700 hover:border-primary hover:text-primary disabled:opacity-50"
             >
-              Colour by RNA weight
+              <Help id="protein.rna_weight">Colour by RNA weight</Help>
             </button>
             <button
               type="button"
@@ -226,15 +225,13 @@ export function WnnCard({ datasetId, groupByColumn }: { datasetId: string; group
             >
               Colour by WNN clusters
             </button>
-            <Help id="protein.rna_weight" label="About the RNA weight" />
           </div>
           {weights?.violin && Object.keys(weights.violin).length > 0 && (
             <WeightBoxes violin={weights.violin} column={groupby} />
           )}
           {groupby && rows.length > 0 && (
             <Caption n={{ value: rows.reduce((a, r) => a + r.n_cells, 0), unit: "cells" }}>
-              <Help id="protein.weight_by_group" label="How to read the RNA weight by group" />{" "}
-              RNA weight by {prettyObsLabel(groupby)}
+              <Help id="protein.weight_by_group">RNA weight by {prettyObsLabel(groupby)}</Help>
               {ends ? `: highest in ${ends.rna}, lowest (protein counts most) in ${ends.protein}` : ""}.
             </Caption>
           )}

@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import type { Data, Layout } from "plotly.js";
 import {
@@ -119,7 +119,6 @@ export function VelocitySubtab() {
   const [phase, setPhase] = useState<VelocityPhase | null>(null);
   const [phaseError, setPhaseError] = useState<string | null>(null);
   const abort = useRef<AbortController | null>(null);
-  const uid = useId();
 
   const load = async (id: string) => {
     const s = await getVelocity(id);
@@ -282,7 +281,9 @@ export function VelocitySubtab() {
 
       <div className="flex flex-wrap items-center gap-2">
         <label className="cursor-pointer rounded-md border border-slate-300 bg-white px-2 py-1 hover:bg-slate-50">
-          {status.attached ? "Attach other counts" : "Attach a file"} (.loom, .h5ad)
+          <Help id="velocity.attach">
+            {status.attached ? "Attach other counts" : "Attach a file"} (.loom, .h5ad)
+          </Help>
           <input
             type="file"
             accept=".loom,.h5ad"
@@ -295,7 +296,7 @@ export function VelocitySubtab() {
           />
         </label>
         <label className="cursor-pointer rounded-md border border-slate-300 bg-white px-2 py-1 hover:bg-slate-50">
-          STARsolo files
+          <Help id="velocity.attach">STARsolo files</Help>
           <input
             type="file"
             multiple
@@ -309,7 +310,6 @@ export function VelocitySubtab() {
             }}
           />
         </label>
-        <Help id="velocity.attach" label="About spliced and unspliced counts" />
         {attaching && (
           <span className="flex items-center gap-1 text-slate-500">
             <Loader2 className="h-3 w-3 animate-spin" /> Matching cells and genes
@@ -320,13 +320,11 @@ export function VelocitySubtab() {
       {status.attached && (
         <div className="space-y-2 rounded-md border border-slate-200 p-2">
           <div className="grid grid-cols-2 gap-2">
-            <div className="flex flex-col gap-0.5">
-              <span className="flex items-center gap-1 text-slate-500">
-                <label htmlFor={`${uid}-model`}>Model</label>
-                <Help id="velocity.model" label="About the velocity models" />
+            <label className="flex flex-col gap-0.5">
+              <span className="text-slate-500">
+                <Help id="velocity.model">Model</Help>
               </span>
               <select
-                id={`${uid}-model`}
                 value={method}
                 onChange={(e) => setMethod(e.target.value as VelocityMethod)}
                 className="rounded border border-slate-300 bg-white px-1 py-0.5"
@@ -335,14 +333,12 @@ export function VelocitySubtab() {
                   <option key={m} value={m}>{status.method_names[m]}</option>
                 ))}
               </select>
-            </div>
-            <div className="flex flex-col gap-0.5">
-              <span className="flex items-center gap-1 text-slate-500">
-                <label htmlFor={`${uid}-table-by`}>Table by</label>
-                <Help id="velocity.table_by" label="About the table grouping" align="right" />
+            </label>
+            <label className="flex flex-col gap-0.5">
+              <span className="text-slate-500">
+                <Help id="velocity.table_by" align="right">Table by</Help>
               </span>
               <select
-                id={`${uid}-table-by`}
                 value={groupBy}
                 onChange={(e) => setGroupBy(e.target.value)}
                 className="rounded border border-slate-300 bg-white px-1 py-0.5"
@@ -352,14 +348,12 @@ export function VelocitySubtab() {
                   <option key={c.name} value={c.name}>{c.name}</option>
                 ))}
               </select>
-            </div>
-            <div className="flex flex-col gap-0.5">
-              <span className="flex items-center gap-1 text-slate-500">
-                <label htmlFor={`${uid}-n-top`}>Top genes</label>
-                <Help id="velocity.n_top" label="About the number of genes" />
+            </label>
+            <label className="flex flex-col gap-0.5">
+              <span className="text-slate-500">
+                <Help id="velocity.n_top">Top genes</Help>
               </span>
               <input
-                id={`${uid}-n-top`}
                 type="number"
                 min={100}
                 max={20000}
@@ -368,14 +362,12 @@ export function VelocitySubtab() {
                 onChange={(e) => setNTop(Number(e.target.value))}
                 className="rounded border border-slate-300 bg-white px-1 py-0.5"
               />
-            </div>
-            <div className="flex flex-col gap-0.5">
-              <span className="flex items-center gap-1 text-slate-500">
-                <label htmlFor={`${uid}-neighbours`}>Neighbours</label>
-                <Help id="velocity.neighbors" label="About the neighbours" align="right" />
+            </label>
+            <label className="flex flex-col gap-0.5">
+              <span className="text-slate-500">
+                <Help id="velocity.neighbors" align="right">Neighbours</Help>
               </span>
               <input
-                id={`${uid}-neighbours`}
                 type="number"
                 min={5}
                 max={100}
@@ -383,7 +375,7 @@ export function VelocitySubtab() {
                 onChange={(e) => setNNeighbors(Number(e.target.value))}
                 className="rounded border border-slate-300 bg-white px-1 py-0.5"
               />
-            </div>
+            </label>
           </div>
           {est && (
             <p className="text-slate-500">
@@ -432,7 +424,7 @@ export function VelocitySubtab() {
             <div className="flex flex-wrap items-center gap-3">
               <label className="flex items-center gap-1">
                 <input type="checkbox" checked={arrows.on} onChange={(e) => setArrows({ on: e.target.checked })} />
-                Arrows on the plot
+                <Help id="velocity.arrows">Arrows on the plot</Help>
               </label>
               <label className="flex items-center gap-1">
                 Scale
@@ -458,15 +450,13 @@ export function VelocitySubtab() {
                   onChange={(e) => setArrows({ density: Number(e.target.value) })}
                 />
               </label>
-              <Help id="velocity.arrows" label="About the arrows" />
               <button
                 type="button"
                 onClick={colourByConfidence}
                 className="rounded-md border border-slate-300 px-2 py-0.5 hover:bg-slate-50"
               >
-                Colour by confidence
+                <Help id="velocity.confidence">Colour by confidence</Help>
               </button>
-              <Help id="velocity.confidence" label="About velocity confidence" align="right" />
             </div>
             {blocked && <p className="text-amber-700">{blocked}</p>}
             {gridNote && !blocked && <p className="text-red-600">{errorMessage(new Error(gridNote))}</p>}
@@ -478,7 +468,10 @@ export function VelocitySubtab() {
           ))}
 
           <Caption n={[{ value: run.n_cells, unit: "cells", of: run.n_dataset_cells }, { value: run.n_velocity_genes, unit: "velocity genes", of: run.n_genes_fit }]}>
-            <Help id="velocity.summary" label="How to read the velocity summary" /> {run.method_name}. Median confidence {run.median_confidence.toFixed(2)}, unspliced {(run.unspliced_fraction * 100).toFixed(1)}%.{" "}
+            <Help id="velocity.summary">
+              {run.method_name}. Median confidence {run.median_confidence.toFixed(2)}, unspliced{" "}
+              {(run.unspliced_fraction * 100).toFixed(1)}%.
+            </Help>{" "}
             {run.neighbours_note} {run.pca_note ? `${run.pca_note}.` : ""}
           </Caption>
 
@@ -517,8 +510,9 @@ export function VelocitySubtab() {
 
           <div>
             <div className="mb-1 flex items-center gap-2">
-              <span className="font-medium">Phase portrait</span>
-              <Help id="velocity.phase" label="What a phase portrait shows" />
+              <span className="font-medium">
+                <Help id="velocity.phase">Phase portrait</Help>
+              </span>
               <select
                 aria-label="Gene"
                 value={gene ?? ""}

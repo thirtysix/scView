@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Download, Loader2 } from "lucide-react";
 import { Caption, CapNote } from "@/components/common/Caption";
 import { Help } from "@/components/common/Help";
@@ -88,12 +88,11 @@ function Citation({ release, attribution }: { release: string; attribution?: str
 function GeneTraitsCard({ gene, data, loading }: { gene: string; data: GeneTraits | null; loading: boolean }) {
   return (
     <div className="space-y-1.5 rounded-lg border border-slate-200 p-2" data-testid="gene-traits">
-      <div className="flex items-center gap-1 text-xs font-medium text-slate-700">
-        <span>
+      <div className="text-xs font-medium text-slate-700">
+        <Help id="traits.gene_traits">
           GWAS traits mapped to {gene}
           {data?.via_ortholog && data.query !== data.gene ? ` (human ${data.gene})` : ""}
-        </span>
-        <Help id="traits.gene_traits" label="About a gene's GWAS traits" />
+        </Help>
       </div>
       <GeneLinkOuts gene={data?.gene ?? gene} ensembl={data?.ensembl} />
       {loading && <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-400" />}
@@ -176,7 +175,6 @@ export function TraitsSubtab({
   const [geneData, setGeneData] = useState<GeneTraits | null>(null);
   const [geneLoading, setGeneLoading] = useState(false);
   const [sort, setSort] = useState<{ key: SortKey; dir: "asc" | "desc" }>({ key: "p", dir: "asc" });
-  const groupById = useId();
 
   const groupColumns = useMemo(() => {
     if (!dataset) return [];
@@ -278,8 +276,9 @@ export function TraitsSubtab({
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-1.5 text-xs font-medium text-slate-700">
-        GWAS trait links
-        <Help id="traits.about" label="About GWAS trait links" width={320} />
+        <Help id="traits.about" width={320}>
+          GWAS trait links
+        </Help>
       </div>
 
       {caveat && (
@@ -320,13 +319,9 @@ export function TraitsSubtab({
       {status?.downloaded && (
         <div className="space-y-1.5">
           <div className="flex flex-wrap items-end gap-2 text-xs">
-            <div className="flex flex-col gap-0.5 text-[11px] text-slate-500">
-              <span className="flex items-center gap-1">
-                <label htmlFor={groupById}>Group by</label>
-                <Help id="traits.group_by" label="About the grouping" />
-              </span>
+            <label className="flex flex-col gap-0.5 text-[11px] text-slate-500">
+              <Help id="traits.group_by">Group by</Help>
               <select
-                id={groupById}
                 value={column}
                 onChange={(e) => setGroupByColumn(e.target.value)}
                 className="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-700"
@@ -337,15 +332,16 @@ export function TraitsSubtab({
                   </option>
                 ))}
               </select>
-            </div>
+            </label>
             <label className="flex items-center gap-1 pb-1 text-[11px] text-slate-600">
               <input
                 type="checkbox"
                 checked={includeMeasurements}
                 onChange={(e) => setIncludeMeasurements(e.target.checked)}
               />
-              Include measurement traits
-              <Help id="traits.measurements" label="About measurement traits" width={260} />
+              <Help id="traits.measurements" width={260}>
+                Include measurement traits
+              </Help>
             </label>
             <button
               type="button"
@@ -380,7 +376,7 @@ export function TraitsSubtab({
             </p>
           )}
           <label className="flex items-center gap-1.5 text-[11px] text-slate-500">
-            Group
+            <Help id="traits.group">Group</Help>
             <select
               value={current.group}
               onChange={(e) => {
@@ -395,7 +391,6 @@ export function TraitsSubtab({
                 </option>
               ))}
             </select>
-            <Help id="traits.group" label="How to read the trait table" />
           </label>
           <p className="text-[11px] text-slate-500">
             {current.n_query.toLocaleString()} of {current.n_markers.toLocaleString()} markers are in the background;{" "}

@@ -4,7 +4,7 @@ import { Loader2 } from "lucide-react";
 import { getVdj, redefineClonotypes, removeVdj, type VdjSummary } from "@/api/vdj";
 import { Caption } from "@/components/common/Caption";
 import { Help } from "@/components/common/Help";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { ClonotypeAttach } from "@/components/unified/ClonotypeAttach";
 import { ClonotypeRepertoire } from "@/components/unified/ClonotypeRepertoire";
 import { ClonotypeTable } from "@/components/unified/ClonotypeTable";
@@ -62,15 +62,19 @@ export function ClonotypeSubtab({ groupByColumn }: { groupByColumn: string }) {
   return (
     <div className="space-y-3 text-xs">
       <div className="flex items-center gap-1.5 font-medium text-slate-700">
-        TCR / BCR clonotypes
-        <InfoTip label="About clonotypes" width={320}>
-          10x 5&apos; immune profiling reads each cell&apos;s T- or B-cell receptor chains beside its expression.
-          The contig table is joined to the cells by barcode. Per cell, productive high-confidence chains with a
-          CDR3 are kept, the top two of each arm by UMIs. A clonotype is the cells with identical CDR3 amino
-          acids on the primary VJ and VDJ chains (scirpy&apos;s definition, Sturm et al. 2020): cells of one
-          clone, descended from one T or B cell. Clone sizes count the cells in this dataset, a small sample of
-          the person&apos;s repertoire.
-        </InfoTip>
+        <HoverTip
+          width={320}
+          tip={<>
+            10x 5&apos; immune profiling reads each cell&apos;s T- or B-cell receptor chains beside its expression.
+            The contig table is joined to the cells by barcode. Per cell, productive high-confidence chains with a
+            CDR3 are kept, the top two of each arm by UMIs. A clonotype is the cells with identical CDR3 amino
+            acids on the primary VJ and VDJ chains (scirpy&apos;s definition, Sturm et al. 2020): cells of one
+            clone, descended from one T or B cell. Clone sizes count the cells in this dataset, a small sample of
+            the person&apos;s repertoire.
+          </>}
+        >
+          TCR / BCR clonotypes
+        </HoverTip>
         {isLoading && <Loader2 className="h-3 w-3 animate-spin text-slate-400" />}
       </div>
       {error && (
@@ -164,7 +168,9 @@ function VdjSummaryCard({
         .
       </p>
       <div className="flex flex-wrap items-center gap-1">
-        <span className="text-[11px] text-slate-500">Colour by</span>
+        <span className="text-[11px] text-slate-500">
+          <Help id="clonotypes.colour_by">Colour by</Help>
+        </span>
         {COLOUR_BY.map((c) => (
           <button
             key={c.column}
@@ -178,7 +184,6 @@ function VdjSummaryCard({
             {c.label}
           </button>
         ))}
-        <Help id="clonotypes.colour_by" label="About the clonotype colourings" />
       </div>
       {summary.stale && (
         <div role="status" className="rounded-md bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800">
@@ -193,18 +198,22 @@ function VdjSummaryCard({
         </div>
       )}
       <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-600">
-        <label className="flex items-center gap-1" title="Also require the same V genes on both chains (scirpy's same_v_gene)">
+        <label className="flex items-center gap-1">
           <input
             type="checkbox"
             checked={!!summary.same_v_gene}
             disabled={busy !== null}
             onChange={(e) => run("define", () => redefineClonotypes(datasetId, e.target.checked))}
           />
-          Same V genes too
+          <HoverTip
+            tip={<>
+              <span className="block">Also require the same V genes on both chains (scirpy&apos;s same_v_gene)</span>
+              <span className="mt-1 block">{summary.definition}</span>
+            </>}
+          >
+            Same V genes too
+          </HoverTip>
         </label>
-        <InfoTip label="The clonotype definition" width={300}>
-          {summary.definition}
-        </InfoTip>
         {busy === "define" && <Loader2 className="h-3 w-3 animate-spin text-slate-400" />}
         <span className="ml-auto">
           {confirmRemove ? (

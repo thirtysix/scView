@@ -24,6 +24,7 @@ vi.mock("@/components/plots/Plot", () => ({
 }));
 
 import { ClonotypeSubtab } from "./ClonotypeSubtab";
+import { hoverTip, unhover } from "@/test/hoverTip";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -123,6 +124,9 @@ describe("ClonotypeSubtab", () => {
     expect(await screen.findByTestId("vdj-empty")).toHaveTextContent("filtered_contig_annotations.csv");
     expect(screen.getByText(/come from several libraries/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Attach/ })).toBeDisabled();
+    expect(await hoverTip(screen.getByText("Contig table"))).toMatch(/per-cell receptor chains from 10x V\(D\)J/);
+    unhover(screen.getByText("Contig table"));
+    expect(await hoverTip(screen.getByText("Sample"))).toMatch(/Name the sample this contig table came from/);
   });
 
   it("attaches a file for the picked sample and refreshes the dataset", async () => {
@@ -170,6 +174,25 @@ describe("ClonotypeSubtab", () => {
     expect(screen.getByTestId("vdj-diversity-caption")).toHaveTextContent("n = 12 cells in d1.");
     fireEvent.click(screen.getByRole("button", { name: "Jaccard" }));
     await waitFor(() => expect(api.getOverlap).toHaveBeenCalledWith("d1", "donor", "jaccard"));
+  });
+
+  it("explains the headings and settings on hover, with no info icons", async () => {
+    api.getVdj.mockResolvedValue(FULL);
+    renderTab();
+    await screen.findByTestId("vdj-overlap");
+    expect(document.querySelector("[data-infotip]")).toBeNull();
+    const tip = async (text: string) => {
+      const el = screen.getByText(text);
+      const t = await hoverTip(el);
+      unhover(el);
+      return t;
+    };
+    expect(await tip("TCR / BCR clonotypes")).toMatch(/10x 5' immune profiling reads/);
+    expect(await tip("Same V genes too")).toMatch(/same_v_gene.*Clonotype = identical CDR3/s);
+    expect(await tip("Clonotype overlap")).toMatch(/Morisita-Horn \(Horn 1966\) compares clone sizes/);
+    expect(await tip("Largest clonotypes")).toMatch(/The clonotypes with the most cells/);
+    expect(await tip("rarefy")).toMatch(/Rarefy subsamples every group/);
+    expect(screen.getByLabelText("rarefy")).not.toBeChecked();
   });
 
   it("shows no Recompute prompt once the filtering step has recomputed the sizes", async () => {

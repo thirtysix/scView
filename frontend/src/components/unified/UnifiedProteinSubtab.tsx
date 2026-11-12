@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AlertCircle, Loader2, Shield } from "lucide-react";
 import type { ProteinInfo } from "@/api/types";
 import { apiFetchBinary } from "@/api/client";
@@ -59,7 +59,6 @@ export function UnifiedProteinSubtab({
   const layer = proteinLayerFor(protein, proteinNorm) ?? protein.layer;
   const dataset = useDatasetStore((s) => s.currentDataset);
   const expressionLayer = useSettingsStore((s) => s.expressionLayer);
-  const groupById = useId();
   const targets = useMemo(
     () => protein.names.filter((n) => !protein.controls.includes(n)),
     [protein],
@@ -100,7 +99,7 @@ export function UnifiedProteinSubtab({
     <div className="space-y-3">
       <p className="text-[11px] leading-snug text-slate-500">
         {targets.length} antibod{targets.length === 1 ? "y" : "ies"} measured with the RNA (CITE-seq).
-        Click one to colour the cells. <Help id="protein.chips" label="About the protein chips" />
+        <Help id="protein.chips">Click one to colour the cells.</Help>
       </p>
       <ProteinNormalisation
         datasetId={datasetId}
@@ -131,12 +130,10 @@ export function UnifiedProteinSubtab({
       )}
 
       <div>
-        <div className="mb-1 flex items-center gap-1 text-[11px] font-medium text-slate-500">
-          <label htmlFor={groupById}>Group by (violin, heatmap)</label>
-          <Help id="protein.group_by" label="About the protein grouping" />
-        </div>
+        <label className="mb-1 block text-[11px] font-medium text-slate-500">
+          <Help id="protein.group_by">Group by (violin, heatmap)</Help>
+        </label>
         <select
-          id={groupById}
           aria-label="Group by"
           value={groupByColumn}
           onChange={(e) => setGroupByColumn(e.target.value)}
@@ -152,9 +149,8 @@ export function UnifiedProteinSubtab({
 
       {groupByColumn && targets.length > 0 && (
         <div>
-          <h4 className="mb-1 flex items-center gap-1 text-xs font-semibold text-slate-600">
-            Proteins by group
-            <Help id="protein.heatmap" label="How to read the protein heatmap" />
+          <h4 className="mb-1 text-xs font-semibold text-slate-600">
+            <Help id="protein.heatmap">Proteins by group</Help>
           </h4>
           <MarkerPlot
             datasetId={datasetId}
@@ -278,9 +274,8 @@ function ProteinVsRna({
   if (proteins.length === 0) return null;
   return (
     <div className="space-y-2 rounded-lg border border-slate-200 p-2">
-      <h4 className="flex items-center gap-1 text-xs font-semibold text-slate-600">
-        Protein vs RNA
-        <Help id="protein.vs_rna" label="How to read protein vs RNA" />
+      <h4 className="text-xs font-semibold text-slate-600">
+        <Help id="protein.vs_rna">Protein vs RNA</Help>
       </h4>
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <select

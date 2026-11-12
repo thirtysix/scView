@@ -1,9 +1,9 @@
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Download, Loader2, Share2 } from "lucide-react";
 import { getDatasetPpi, type PpiDirection, type PpiResult, type PpiScore } from "@/api/ppi";
 import { Caption, capText } from "@/components/common/Caption";
 import { Help } from "@/components/common/Help";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
 import { SortableTh, ariaSort } from "@/components/common/SortableTh";
 import { PpiNetworkCanvas } from "@/components/unified/PpiNetworkCanvas";
@@ -61,7 +61,6 @@ export function ProteinNetwork({ datasetId, sources, showDirection = false, onGe
   const [error, setError] = useState<string | null>(null);
   const [sortField, setSortField] = useState<HubSortField>("degree");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
-  const uid = useId();
 
   // A different list (new DE result, other group) makes the old network stale.
   const sourceKey = sources.map((s) => s.value).join("|");
@@ -110,15 +109,21 @@ export function ProteinNetwork({ datasetId, sources, showDirection = false, onGe
     <section aria-label={title} className="flex flex-col gap-2 rounded-lg border border-slate-200 p-2.5 text-xs">
       <div className="flex items-center gap-2">
         <Share2 className="h-3.5 w-3.5 flex-shrink-0 text-slate-400" aria-hidden />
-        <h3 className="font-semibold text-slate-700">{title}</h3>
-        <InfoTip width={320}>
-          Which proteins of the list physically interact in STRING, the hubs (most partners) and communities
-          (groups more linked to each other than to the rest, found with Leiden). &ldquo;Expected&rdquo; is the
-          mean number of interactions among 1,000 random protein sets of the same size, each protein matched on
-          how many partners it has in the whole network; p is the share of those sets with at least as many
-          interactions. Score: STRING&apos;s confidence that a link is real (0-1000). Your gene list never
-          leaves this machine.
-        </InfoTip>
+        <h3 className="font-semibold text-slate-700">
+          <HoverTip
+            width={320}
+            tip={<>
+              Which proteins of the list physically interact in STRING, the hubs (most partners) and communities
+              (groups more linked to each other than to the rest, found with Leiden). &ldquo;Expected&rdquo; is the
+              mean number of interactions among 1,000 random protein sets of the same size, each protein matched on
+              how many partners it has in the whole network; p is the share of those sets with at least as many
+              interactions. Score: STRING&apos;s confidence that a link is real (0-1000). Your gene list never
+              leaves this machine.
+            </>}
+          >
+            {title}
+          </HoverTip>
+        </h3>
         <span className="flex-1" />
         <button
           type="button"
@@ -152,38 +157,33 @@ export function ProteinNetwork({ datasetId, sources, showDirection = false, onGe
             </select>
           </label>
         )}
-        <div className="flex flex-col gap-0.5 text-[11px] text-slate-500">
-          <span className="flex items-center gap-1">
-            <label htmlFor={`${uid}-n`}>Top genes</label>
-            <Help id="ppi.top_genes" label="About the number of genes" />
-          </span>
-          <select id={`${uid}-n`} value={n} onChange={(e) => setN(Number(e.target.value))}
+        <label className="flex flex-col gap-0.5 text-[11px] text-slate-500">
+          <Help id="ppi.top_genes">Top genes</Help>
+          <select value={n} onChange={(e) => setN(Number(e.target.value))}
             className="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-700">
             {SIZES.map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
-        </div>
-        <div className="flex flex-col gap-0.5 text-[11px] text-slate-500">
-          <span className="flex items-center gap-1">
-            <label htmlFor={`${uid}-score`}>Minimum score</label>
-            <Help id="ppi.score" label="About the STRING score" />
-          </span>
-          <select id={`${uid}-score`} value={score} onChange={(e) => setScore(Number(e.target.value) as PpiScore)}
+        </label>
+        <label className="flex flex-col gap-0.5 text-[11px] text-slate-500">
+          <Help id="ppi.score">Minimum score</Help>
+          <select value={score} onChange={(e) => setScore(Number(e.target.value) as PpiScore)}
             className="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-700">
             {SCORES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
           </select>
-        </div>
+        </label>
         {result && (
           <fieldset className="flex items-center gap-2 text-[11px] text-slate-500">
             <legend className="sr-only">Colour proteins by</legend>
-            <label className="flex items-center gap-1">
-              <input type="radio" name={`ppi-colour-${title}`} checked={colourBy === "community"} onChange={() => setColourBy("community")} />
-              community
-            </label>
-            <label className={`flex items-center gap-1 ${hasLfc ? "" : "opacity-50"}`}>
-              <input type="radio" name={`ppi-colour-${title}`} checked={colourBy === "logfc"} disabled={!hasLfc} onChange={() => setColourBy("logfc")} />
-              log2FC
-            </label>
-            <Help id="ppi.colour" label="About the network colours" align="right" />
+            <Help id="ppi.colour" align="right" className="flex items-center gap-2">
+              <label className="flex items-center gap-1">
+                <input type="radio" name={`ppi-colour-${title}`} checked={colourBy === "community"} onChange={() => setColourBy("community")} />
+                community
+              </label>
+              <label className={`flex items-center gap-1 ${hasLfc ? "" : "opacity-50"}`}>
+                <input type="radio" name={`ppi-colour-${title}`} checked={colourBy === "logfc"} disabled={!hasLfc} onChange={() => setColourBy("logfc")} />
+                log2FC
+              </label>
+            </Help>
           </fieldset>
         )}
       </div>

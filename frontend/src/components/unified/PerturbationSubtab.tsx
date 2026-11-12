@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import Plot from "@/components/plots/Plot";
 import { Caption } from "@/components/common/Caption";
 import { Help } from "@/components/common/Help";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
 import {
   getPerturbation,
@@ -70,7 +70,6 @@ export function PerturbationSubtab() {
   const [sortKey, setSortKey] = useState<TargetSortKey>("ko_fraction");
   const [desc, setDesc] = useState(true);
   const [shown, setShown] = useState<string | null>(null);
-  const uid = useId();
 
   const load = useCallback(async () => {
     if (!datasetId) return;
@@ -205,14 +204,18 @@ export function PerturbationSubtab() {
   return (
     <div className="space-y-3 text-xs">
       <div className="flex items-center gap-1.5 font-medium text-slate-700">
-        Perturbation (CRISPR screen)
-        <InfoTip label="About CRISPR screens" width={320}>
-          In a pooled screen each cell carries a guide RNA that targets one gene. First each cell gets its guide
-          and target. Then Mixscape (Papalexi et al. 2021) asks, per target, which cells really lost the target&apos;s
-          effect: each cell is compared with its 20 most similar non-targeting (control) cells, and the cells whose
-          change looks like the target&apos;s typical change are called KO; the rest are NP (not perturbed, e.g. an
-          in-frame edit).
-        </InfoTip>
+        <HoverTip
+          width={320}
+          tip={<>
+            In a pooled screen each cell carries a guide RNA that targets one gene. First each cell gets its guide
+            and target. Then Mixscape (Papalexi et al. 2021) asks, per target, which cells really lost the target&apos;s
+            effect: each cell is compared with its 20 most similar non-targeting (control) cells, and the cells whose
+            change looks like the target&apos;s typical change are called KO; the rest are NP (not perturbed, e.g. an
+            in-frame edit).
+          </>}
+        >
+          Perturbation (CRISPR screen)
+        </HoverTip>
       </div>
       <RequestError message={error} />
       {!summary && !error && (
@@ -230,18 +233,15 @@ export function PerturbationSubtab() {
 
       {summary && !nothing && (
         <section aria-label="Guide assignment" className="space-y-2">
-          <div className="flex items-center gap-1 font-medium text-slate-600">
-            1. Each cell&apos;s guide
-            <Help id="perturbation.guides" label="About the guide assignment" />
+          <div className="font-medium text-slate-600">
+            <Help id="perturbation.guides">1. Each cell&apos;s guide</Help>
           </div>
           <div className="flex flex-wrap items-end gap-2">
-            <div className="flex flex-col gap-0.5">
-              <span className="flex items-center gap-1 text-[11px] text-slate-500">
-                <label htmlFor={`${uid}-source`}>Source</label>
-                <Help id="perturbation.source" label="About the guide source" />
+            <label className="flex flex-col gap-0.5">
+              <span className="text-[11px] text-slate-500">
+                <Help id="perturbation.source">Source</Help>
               </span>
               <select
-                id={`${uid}-source`}
                 aria-label="Guide source"
                 value={source}
                 onChange={(e) => setSource(e.target.value as GuideSource)}
@@ -251,7 +251,7 @@ export function PerturbationSubtab() {
                 {summary.has_counts && <option value="counts">Guide counts ({summary.guides.length} guides)</option>}
                 <option value="column">An obs column</option>
               </select>
-            </div>
+            </label>
             {source === "column" && (
               <label className="flex flex-col gap-0.5">
                 <span className="text-[11px] text-slate-500">Column</span>
@@ -279,29 +279,23 @@ export function PerturbationSubtab() {
             )}
             {source === "counts" && (
               <>
-                <div className="flex flex-col gap-0.5">
-                  <span className="flex items-center gap-1 text-[11px] text-slate-500">
-                    <label htmlFor={`${uid}-min-umi`}>Min UMIs</label>
-                    <Help id="perturbation.min_umi" label="About the minimum UMIs" />
+                <label className="flex flex-col gap-0.5">
+                  <span className="text-[11px] text-slate-500">
+                    <Help id="perturbation.min_umi">Min UMIs</Help>
                   </span>
                   <input
-                    id={`${uid}-min-umi`}
-                    title="A guide counts in a cell from this many UMIs"
                     type="number"
                     min={1}
                     value={minUmi}
                     onChange={(e) => setMinUmi(Number(e.target.value) || 1)}
                     className="w-16 rounded border border-slate-300 px-1.5 py-1"
                   />
-                </div>
-                <div className="flex flex-col gap-0.5">
-                  <span className="flex items-center gap-1 text-[11px] text-slate-500">
-                    <label htmlFor={`${uid}-min-ratio`}>Top / second ≥</label>
-                    <Help id="perturbation.min_ratio" label="About the top to second guide ratio" />
+                </label>
+                <label className="flex flex-col gap-0.5">
+                  <span className="text-[11px] text-slate-500">
+                    <Help id="perturbation.min_ratio">Top / second ≥</Help>
                   </span>
                   <input
-                    id={`${uid}-min-ratio`}
-                    title="With two or more guides, keep the top one alone when it has at least this many times the UMIs of the second (0: off, every guide counts)"
                     type="number"
                     min={0}
                     step={0.5}
@@ -309,18 +303,15 @@ export function PerturbationSubtab() {
                     onChange={(e) => setMinRatio(Math.max(0, Number(e.target.value) || 0))}
                     className="w-16 rounded border border-slate-300 px-1.5 py-1"
                   />
-                </div>
+                </label>
               </>
             )}
             {preview && (
-              <div className="flex flex-col gap-0.5">
-                <span className="flex items-center gap-1 text-[11px] text-slate-500">
-                  <label htmlFor={`${uid}-control`}>Control (non-targeting)</label>
-                  <Help id="perturbation.control" label="About the control label" />
+              <label className="flex flex-col gap-0.5">
+                <span className="text-[11px] text-slate-500">
+                  <Help id="perturbation.control">Control (non-targeting)</Help>
                 </span>
                 <select
-                  id={`${uid}-control`}
-                  title="The non-targeting guides' target: Mixscape compares every target with these cells"
                   aria-label="Control label"
                   value={control || preview.control || ""}
                   onChange={(e) => setControl(e.target.value)}
@@ -333,7 +324,7 @@ export function PerturbationSubtab() {
                     </option>
                   ))}
                 </select>
-              </div>
+              </label>
             )}
           </div>
           <RequestError message={previewError} />
@@ -411,25 +402,26 @@ export function PerturbationSubtab() {
       {summary?.call && (
         <section aria-label="Mixscape" className="space-y-2 border-t border-slate-200 pt-2">
           <div className="flex items-center gap-1.5 font-medium text-slate-600">
-            2. Mixscape: perturbed or not
-            <InfoTip label="About Mixscape" width={320}>
-              Per target: a Wilcoxon test of its cells against the controls on the variable genes (|log2FC| ≥ 0.25,
-              adjusted p &lt; 0.05). Each cell&apos;s perturbation signature (its expression minus the mean of its 20
-              nearest control cells in PCA) is projected on the target&apos;s mean change, and a two-part Gaussian
-              mixture, the control part fixed, gives each cell a probability of being perturbed (P(KO)); above 0.5 is
-              KO. A target with fewer than 5 such genes is all NP. Checked against pertpy 1.0.3 (same class for 99.6% of
-              Papalexi 2021&apos;s 20,729 cells).
-            </InfoTip>
+            <HoverTip
+              width={320}
+              tip={<>
+                Per target: a Wilcoxon test of its cells against the controls on the variable genes (|log2FC| ≥ 0.25,
+                adjusted p &lt; 0.05). Each cell&apos;s perturbation signature (its expression minus the mean of its 20
+                nearest control cells in PCA) is projected on the target&apos;s mean change, and a two-part Gaussian
+                mixture, the control part fixed, gives each cell a probability of being perturbed (P(KO)); above 0.5 is
+                KO. A target with fewer than 5 such genes is all NP. Checked against pertpy 1.0.3 (same class for 99.6% of
+                Papalexi 2021&apos;s 20,729 cells).
+              </>}
+            >
+              2. Mixscape: perturbed or not
+            </HoverTip>
           </div>
           <div className="flex flex-wrap items-end gap-2">
-            <div className="flex flex-col gap-0.5">
-              <span className="flex items-center gap-1 text-[11px] text-slate-500">
-                <label htmlFor={`${uid}-split-by`}>Within (replicate / batch)</label>
-                <Help id="perturbation.split_by" label="About finding neighbours within a batch" />
+            <label className="flex flex-col gap-0.5">
+              <span className="text-[11px] text-slate-500">
+                <Help id="perturbation.split_by">Within (replicate / batch)</Help>
               </span>
               <select
-                id={`${uid}-split-by`}
-                title="Find each cell's control neighbours only within its own replicate / batch"
                 aria-label="Split by"
                 value={splitBy}
                 onChange={(e) => setSplitBy(e.target.value)}
@@ -442,7 +434,7 @@ export function PerturbationSubtab() {
                   </option>
                 ))}
               </select>
-            </div>
+            </label>
             {running ? (
               <button onClick={() => abort.current?.abort()} className="rounded border border-slate-300 px-2 py-1 text-slate-700">
                 Cancel
@@ -472,15 +464,19 @@ export function PerturbationSubtab() {
             const r = (result ?? saved)!;
             return (
               <Caption n={[{ value: r.n_cells, unit: "cells" }, { value: r.n_targets, unit: "targets" }]}>
-                <Help id="perturbation.result" label="How to read the Mixscape table" /> {r.summary.n_ko.toLocaleString()} of {r.summary.n_target_cells.toLocaleString()} target cells KO (
-                {pctText(r.summary.ko_fraction)}); {r.summary.n_targets_with_ko} targets with KO cells; against{" "}
+                <Help id="perturbation.result">
+                  {r.summary.n_ko.toLocaleString()} of {r.summary.n_target_cells.toLocaleString()} target cells KO (
+                  {pctText(r.summary.ko_fraction)});
+                </Help> {r.summary.n_targets_with_ko} targets with KO cells; against{" "}
                 {r.n_control.toLocaleString()} &apos;{r.control}&apos; cells, on {r.gene_source}
                 {r.split_by ? `, neighbours within ${r.split_by}` : ""}.{r.warnings.length ? ` ${r.warnings.join(" ")}` : ""}
               </Caption>
             );
           })()}
           <div className="flex flex-wrap items-center gap-1">
-            <span className="text-[11px] text-slate-500">Colour by</span>
+            <span className="text-[11px] text-slate-500">
+              <Help id="perturbation.colour_by">Colour by</Help>
+            </span>
             {(
               [
                 [MIXSCAPE_CLASS, "class", "Target KO / NP, or NT (obs mixscape_class)"],
@@ -492,7 +488,6 @@ export function PerturbationSubtab() {
                 {label}
               </button>
             ))}
-            <Help id="perturbation.colour_by" label="About the Mixscape colourings" />
           </div>
           <div className="max-h-80 overflow-auto rounded-lg border border-slate-200">
             <table className="w-full">
@@ -575,7 +570,9 @@ export function PerturbationSubtab() {
                     />
                   </div>
                   <Caption n={{ value: shownRow.n_cells, unit: "cells" }}>
-                    <Help id="perturbation.posterior" label="How to read the P(KO) histogram" /> Probability of being perturbed for each {shownRow.target} cell; above 0.5 is KO.
+                    <Help id="perturbation.posterior">
+                      Probability of being perturbed for each {shownRow.target} cell; above 0.5 is KO.
+                    </Help>
                   </Caption>
                 </>
               )}
@@ -600,7 +597,9 @@ export function PerturbationSubtab() {
                 />
               </div>
               <Caption n={{ value: result.lda.n_shown, unit: "cells shown", of: result.lda.n_cells }}>
-                <Help id="perturbation.lda" label="How to read the LDA view" /> Linear discriminant view of the KO and control cells on their perturbation signature (the DE genes):
+                <Help id="perturbation.lda">
+                  Linear discriminant view of the KO and control cells on their perturbation signature (the DE genes):
+                </Help>{" "}
                 targets with a shared effect sit together.
               </Caption>
             </div>

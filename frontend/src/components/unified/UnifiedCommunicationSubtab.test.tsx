@@ -20,6 +20,7 @@ vi.mock("@/components/plots/Plot", () => ({
 }));
 
 import { UnifiedCommunicationSubtab } from "./UnifiedCommunicationSubtab";
+import { hoverTip, unhover } from "@/test/hoverTip";
 import { useCommunicationStore } from "@/stores/communicationStore";
 import { useDatasetStore } from "@/stores/datasetStore";
 
@@ -93,6 +94,30 @@ describe("UnifiedCommunicationSubtab", () => {
     fireEvent.change(screen.getByLabelText("Sender"), { target: { value: "NK" } });
     expect(screen.getByText("1 rows")).toBeTruthy();
     expect(screen.queryByText("CXCL10")).toBeNull();
+  });
+
+  it("explains the settings and each view on hover, with no info icons", async () => {
+    render(<UnifiedCommunicationSubtab groupByColumn="cell" />);
+    await waitFor(() => screen.getByText(/about 2 s with 1000 permutations/));
+    fireEvent.click(screen.getByRole("button", { name: /Run/ }));
+    await waitFor(() => screen.getByText("CXCL10"));
+    expect(document.querySelector("[data-infotip]")).toBeNull();
+    const tip = async (el: Element) => {
+      const t = await hoverTip(el);
+      unhover(el);
+      return t;
+    };
+    expect(await tip(screen.getByText("Ligand-receptor communication"))).toMatch(/LIANA's consensus/);
+    expect(await tip(screen.getByText("Compare conditions"))).toMatch(/Compare conditions scores two conditions separately/);
+    expect(await tip(screen.getByText("Senders and receivers"))).toMatch(/act as senders/);
+    expect(await tip(screen.getByText("Detected in at least"))).toMatch(/must each be detected in at least this share/);
+    expect(await tip(screen.getByText("Dot plot"))).toMatch(/Columns are sender to receiver pairs/);
+    expect(await tip(screen.getByText("Circle"))).toMatch(/Each node is a group/);
+    fireEvent.click(screen.getByRole("button", { name: "Heatmap" }));
+    expect(await tip(screen.getByLabelText("Weight"))).toMatch(/Count: the number of specific interactions/);
+    // The labels still name their controls.
+    expect(screen.getByLabelText("Senders and receivers")).toHaveValue("cell");
+    expect(screen.getByLabelText("Detected in at least")).toHaveValue("0.1");
   });
 
   it("says why a run failed", async () => {

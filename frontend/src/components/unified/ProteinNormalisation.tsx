@@ -43,8 +43,7 @@ export function ProteinNormalisation({ datasetId, protein, norm, onNormChange }:
         <span className="text-[11px] font-medium text-slate-500">Normalisation</span>
         <label className="flex items-center gap-1">
           <input type="radio" name="protein-norm" checked={shown === "clr"} onChange={() => onNormChange("clr")} />
-          CLR
-          <Help id="protein.clr" label="About CLR" />
+          <Help id="protein.clr">CLR</Help>
         </label>
         <label className={`flex items-center gap-1 ${hasDsb ? "" : "text-slate-400"}`}>
           <input
@@ -54,8 +53,7 @@ export function ProteinNormalisation({ datasetId, protein, norm, onNormChange }:
             disabled={!hasDsb}
             onChange={() => onNormChange("dsb")}
           />
-          DSB
-          <Help id="protein.dsb" label="About DSB" />
+          <Help id="protein.dsb">DSB</Help>
         </label>
         <button
           type="button"
@@ -179,8 +177,8 @@ function DsbSettings({ datasetId, onDone }: { datasetId: string; onDone: () => v
     <div className="space-y-2 border-t border-slate-100 pt-2 text-xs text-slate-700" data-testid="dsb-settings">
       {empty ? (
         <>
-          <div className="flex items-center gap-1 text-[11px] font-medium text-slate-500">
-            Empty droplets (log10 UMIs) <Help id="protein.dsb_window" label="About the empty-droplet window" />
+          <div className="text-[11px] font-medium text-slate-500">
+            <Help id="protein.dsb_window">Empty droplets (log10 UMIs)</Help>
           </div>
           <div className="flex flex-wrap gap-x-3 gap-y-1">
             {bound("RNA from", rna[0], status.defaults?.rna_max ?? 4, (v) => setRna([v, rna[1]]))}
@@ -203,13 +201,12 @@ function DsbSettings({ datasetId, onDone }: { datasetId: string; onDone: () => v
         </>
       ) : (
         <p className="text-slate-600" data-testid="dsb-no-empty">
-          {status.empty_droplets_reason} <Help id="protein.dsb_no_empty" label="About DSB without empty droplets" />
+          <Help id="protein.dsb_no_empty">{status.empty_droplets_reason}</Help>
         </p>
       )}
       <fieldset className="space-y-0.5">
-        <legend className="flex items-center gap-1 text-[11px] font-medium text-slate-500">
-          Isotype controls (per-cell noise)
-          <Help id="protein.isotypes" label="About isotype controls" />
+        <legend className="text-[11px] font-medium text-slate-500">
+          <Help id="protein.isotypes">Isotype controls (per-cell noise)</Help>
         </legend>
         {(status.proteins ?? []).length === 0 && <p className="text-slate-400">No proteins.</p>}
         <div className="flex flex-wrap gap-x-3">

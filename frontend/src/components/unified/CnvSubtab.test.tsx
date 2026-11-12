@@ -20,6 +20,7 @@ vi.mock("@/components/plots/Plot", () => ({
 }));
 
 import { CnvSubtab } from "./CnvSubtab";
+import { hoverTip, unhover } from "@/test/hoverTip";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useCnvRunStore } from "@/stores/cnvRunStore";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -143,6 +144,26 @@ describe("CnvSubtab", () => {
     fireEvent.change(screen.getByLabelText("Group the rows by"), { target: { value: "sample" } });
     await waitFor(() => expect(api.getCnvHeatmap).toHaveBeenLastCalledWith("d1", "sample"));
     expect(api.getCnv).toHaveBeenLastCalledWith("d1", "sample");
+  });
+
+  it("explains the form and the result on hover, with no info icons", async () => {
+    api.getCnv.mockResolvedValue(SAVED);
+    render(<CnvSubtab />);
+    await waitFor(() => screen.getByTestId("cnv-heatmap"));
+    expect(screen.queryByRole("button", { name: /^About/ })).toBeNull();
+    const tip = async (text: string | RegExp) => {
+      const el = screen.getByText(text);
+      const t = await hoverTip(el);
+      unhover(el);
+      return t;
+    };
+    expect(await tip("Copy number (inferred from expression)")).toMatch(/It is inferred from RNA, not measured on DNA/);
+    expect(await tip(/^Tumour cells often gain or lose/)).toMatch(/inferCNV-style \(Tirosh et al\. 2016/);
+    expect(await tip("window")).toMatch(/neighbouring genes on a chromosome are averaged/);
+    expect(await tip("CNV clusters")).toMatch(/Cells clustered on their copy-number profiles/);
+    // The controls keep their labels.
+    expect((screen.getByLabelText("Reference column") as HTMLSelectElement).value).toBe("cell_type");
+    expect(screen.getByLabelText("Window (genes)")).toBeTruthy();
   });
 
   it("says why a dataset cannot run and blocks an all-reference choice", async () => {

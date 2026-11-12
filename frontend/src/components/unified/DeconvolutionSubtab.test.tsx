@@ -24,6 +24,7 @@ vi.mock("@/components/plots/Plot", () => ({
 }));
 
 import { DeconvolutionSubtab } from "./DeconvolutionSubtab";
+import { hoverTip, unhover } from "@/test/hoverTip";
 import { cellsKey, checkScatterTraces, parseCellsKey, stackedBarTraces, topType } from "@/lib/deconvolution";
 import { useDatasetStore } from "@/stores/datasetStore";
 
@@ -188,6 +189,27 @@ describe("DeconvolutionSubtab", () => {
     fireEvent.click(screen.getByRole("button", { name: "RNA fractions" }));
     expect(screen.getByRole("button", { name: "RNA fractions" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByTestId("bars")).toHaveTextContent("B:50,78|T:0,0");
+  });
+
+  it("explains the settings and the result on hover, with no info icons", async () => {
+    setDataset();
+    api.getDeconvolution.mockResolvedValue(RESULT);
+    render(<DeconvolutionSubtab />);
+    await screen.findByTestId("deconv-result");
+    expect(document.querySelector("[data-infotip]")).toBeNull();
+    const tip = async (el: Element) => {
+      const t = await hoverTip(el);
+      unhover(el);
+      return t;
+    };
+    expect(await tip(screen.getByText("Bulk deconvolution"))).toMatch(/A bulk RNA-seq sample is a mixture of cells/);
+    expect(await tip(screen.getByText("Method"))).toMatch(/Weighted \(MuSiC-style, Wang 2019\)/);
+    expect(await tip(screen.getByText("Donors"))).toMatch(/The column naming each cell's donor/);
+    expect(await tip(screen.getByText("RNA fractions"))).toMatch(/RNA fractions: the share of the sample's RNA/);
+    expect(await tip(screen.getByText("Self-check"))).toMatch(/Each donor is held out in turn/);
+    // The labels still name their controls.
+    expect(screen.getByLabelText("Cell types")).toHaveValue("cell_type");
+    expect(screen.getByLabelText("Method")).toHaveValue("auto");
   });
 
   it("shows the server's reason when a file is refused", async () => {

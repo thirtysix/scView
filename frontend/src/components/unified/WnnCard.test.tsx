@@ -25,6 +25,7 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { useUnifiedViewStore } from "@/stores/unifiedViewStore";
 import { useWnnRunStore } from "@/stores/wnnRunStore";
 import { WnnCard } from "./WnnCard";
+import { hoverTip, unhover } from "@/test/hoverTip";
 
 const PLAN: WnnPlan = {
   n_cells: 4, proteins: ["CD3", "CD4", "CD8a", "CD14", "CD19", "CD45RA"], controls: ["IgG1_control"], n_proteins: 6,
@@ -128,6 +129,16 @@ describe("WNN card", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Colour by WNN clusters" }));
     expect(useSettingsStore.getState().colorBy).toBe("wnn_leiden");
+
+    expect(document.querySelector("[data-infotip]")).toBeNull();
+    const tip = async (el: Element) => {
+      const t = await hoverTip(el);
+      unhover(el);
+      return t;
+    };
+    expect(await tip(screen.getByText("Joint RNA + protein (WNN)"))).toMatch(/Weighted nearest neighbours \(Hao et al\. 2021\)/);
+    expect(await tip(screen.getByText("Colour by RNA weight"))).toMatch(/Each cell's RNA weight from WNN/);
+    expect(await tip(screen.getByText(/^RNA weight by/))).toMatch(/Each box is one group's RNA weights/);
   });
 
   it("says why it cannot run, and when a saved run is stale", async () => {

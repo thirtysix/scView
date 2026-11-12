@@ -44,9 +44,8 @@ export function ClonotypeTable({ datasetId, groupColumns }: { datasetId: string;
   return (
     <section aria-label="Top clonotypes" className="space-y-1">
       <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-600">
-        <span className="flex items-center gap-1 font-medium">
-          Largest clonotypes
-          <Help id="clonotypes.largest" label="About the largest clonotypes" />
+        <span className="font-medium">
+          <Help id="clonotypes.largest">Largest clonotypes</Help>
         </span>
         <label className="flex items-center gap-1">
           by

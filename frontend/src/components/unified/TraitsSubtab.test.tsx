@@ -13,6 +13,7 @@ const api = vi.hoisted(() => ({
 vi.mock("@/api/gwas", async (orig) => ({ ...(await orig<typeof import("@/api/gwas")>()), ...api }));
 
 import { TraitsSubtab, sortTraitRows } from "./TraitsSubtab";
+import { hoverTip, unhover } from "@/test/hoverTip";
 import { useDatasetStore } from "@/stores/datasetStore";
 
 const CAVEAT =
@@ -107,6 +108,26 @@ describe("TraitsSubtab", () => {
     expect(await screen.findByText(/Downloading is turned off on this server/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Download GWAS Catalog" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("GWAS_AUTO_DOWNLOAD is off");
+  });
+
+  it("explains the settings and the table on hover, with no info icons", async () => {
+    api.getGwasStatus.mockResolvedValue(status(true));
+    api.runGwasClusters.mockResolvedValue(RESULT);
+    render(<TraitsSubtab onGeneClick={vi.fn()} groupByColumn="cluster" setGroupByColumn={vi.fn()} />);
+    await screen.findByLabelText("Group by");
+    fireEvent.click(screen.getByRole("button", { name: "Find trait links" }));
+    await screen.findByText("multiple sclerosis");
+    expect(document.querySelector("[data-infotip]")).toBeNull();
+    const tip = async (el: Element) => {
+      const t = await hoverTip(el);
+      unhover(el);
+      return t;
+    };
+    expect(await tip(screen.getByText("GWAS trait links"))).toMatch(/its marker genes are compared with the genes/);
+    expect(await tip(screen.getByText("Group by"))).toMatch(/The column whose groups are tested/);
+    expect(await tip(screen.getByText("Include measurement traits"))).toMatch(/mostly protein and metabolite levels/);
+    expect(await tip(screen.getByText("Group"))).toMatch(/Bold traits are leads/);
+    expect(screen.getByLabelText("Group")).toHaveValue("B");
   });
 
   it("runs on the group column, opens the group with leads, and lists traits with p-values", async () => {

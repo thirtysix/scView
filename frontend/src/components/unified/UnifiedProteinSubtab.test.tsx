@@ -43,6 +43,7 @@ vi.mock("./WnnCard", () => ({
 }));
 
 import { UnifiedProteinSubtab } from "./UnifiedProteinSubtab";
+import { hoverTip, unhover } from "@/test/hoverTip";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 
@@ -102,6 +103,22 @@ describe("UnifiedProteinSubtab", () => {
     expect(screen.getByTestId("marker-plot").textContent).toBe("heatmap:protein:CD3,CD19");
     // The WNN card sits on the tab, grouped like the heatmap.
     expect(screen.getByTestId("wnn-card")).toBeTruthy();
+  });
+
+  it("explains the chips, the grouping and the plots on hover, with no info icons", async () => {
+    renderTab();
+    expect(document.querySelector("[data-infotip]")).toBeNull();
+    const tip = async (el: Element) => {
+      const t = await hoverTip(el);
+      unhover(el);
+      return t;
+    };
+    expect(await tip(screen.getByText("Click one to colour the cells."))).toMatch(/Each chip is one antibody/);
+    expect(await tip(screen.getByText("Group by (violin, heatmap)"))).toMatch(/The groups used for the protein violin/);
+    expect(await tip(screen.getByText("Proteins by group"))).toMatch(/Each column is a protein and each row a group/);
+    expect(await tip(screen.getByText("Protein vs RNA"))).toMatch(/Spearman's rho/);
+    expect(await tip(screen.getByText("CLR"))).toMatch(/centred log-ratio/);
+    expect(screen.getByLabelText("Group by")).toBeTruthy();
   });
 
   it("sets the clicked protein against the gene of its target", async () => {
