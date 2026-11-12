@@ -6,6 +6,29 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+Bigger, paged small-multiple grids that export as figures; steadier lasso and camera.
+
+### Added
+- Split by now takes a column with up to 24 values (was 6), the several-genes grid up to 24 genes (was 9) and
+  Compare colourings up to 12 columns (was 4). Choose 4, 6, 9, 12 or all panels per page and step with Prev / Next;
+  every page shares one camera, one colour mapping and one colour scale (taken over all cells), so panels on
+  different pages read the same. A lasso on any page selects that panel's cells.
+- The grids' download menu offers the current page or all panels on one sheet, each as PNG, SVG or PDF, with panel
+  titles ("label  N cells") and the legend.
+- Sessions remember the grid's panels per page and page; older sessions open at 6 per page, page 1.
+- Tissue plots export the cell and nucleus outlines shown on screen (Xenium, Visium HD segmented cells) in SVG and
+  PDF, only those in view. Above 50,000 outlines or 600,000 vertices in view they are left out and the file and the
+  export menu say so (zoom in to include them).
+
+### Changed
+- The lasso button has one tip, which gives the L shortcut (it showed a second, plain tooltip as well).
+
+### Fixed
+- Resizing the plot (a window resize, full-page toggle, dragging the split pane, or the toolbar wrapping) no longer
+  resets a plot you have zoomed or panned; it still fits the cells on first load, an embedding switch and Reset view.
+- Drawing or clearing a selection no longer re-wraps the plot toolbar: the selection chip has its own slot.
+- Violin plots on a log scale: the ticks near 0 no longer crowd (0 / 0.2 / 0.5); ticks keep a minimum gap.
+
 ## [0.72.0] - 2026-11-12
 
 Unified View explains itself: hover a tab, label, heading or column to see what it does, when to use it and how to read it.
