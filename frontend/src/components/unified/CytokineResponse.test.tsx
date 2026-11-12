@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import type { CytokineResult } from "@/api/cytokines";
 import type { DatasetInfo } from "@/api/types";
 import { comparisonText, cytokineHeatmap } from "@/lib/cytokines";
+import { GENES_HELP } from "@/lib/help/genes";
 
 const { getCytokineActivity, getActivitySummary } = vi.hoisted(() => ({
   getCytokineActivity: vi.fn(),
@@ -127,6 +128,13 @@ describe("CytokineResponse", () => {
     expect(caption).toContain("STIM (test) vs CTRL (baseline) within each cell_type group");
     expect(caption).toContain("n = 2 groups; 4,669 of 4,800 signature genes.");
     expect(screen.getByText(/Left out: pDC/)).toBeTruthy();
+  });
+
+  it("keeps 'Compared with' naming its select beside the help icon, whose tip comes from the catalog", () => {
+    render(<CytokineResponse groupByColumn="cell_type" setGroupByColumn={() => {}} />);
+    expect((screen.getByLabelText("Compared with") as HTMLSelectElement).value).toBe("rest");
+    fireEvent.click(screen.getByRole("button", { name: "About the reference" }));
+    expect(screen.getByRole("tooltip").textContent).toBe(GENES_HELP["cytokine.reference"]);
   });
 
   it("labels a tall heatmap's columns on top, where they are in view", async () => {

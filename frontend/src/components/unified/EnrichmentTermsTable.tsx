@@ -99,6 +99,7 @@ export function EnrichmentTermsTable({
                         onAsk(r);
                       }}
                       title="Ask the co-pilot about this pathway"
+                      aria-label={`Ask the co-pilot about ${r.term}`}
                       className="flex-shrink-0 text-slate-300 opacity-0 transition-opacity hover:text-primary group-hover:opacity-100"
                     >
                       <Sparkles className="h-3 w-3" />

@@ -17,6 +17,7 @@ import type { SplitMarkersResult } from "@/api/splitMarkers";
 import { splitPValueMap } from "@/lib/splitMarkers";
 import { MARKERS_PER_GROUP, NO_MARKERS_REASON, noMarkersReason } from "@/api/markers";
 import { AddToGeneListMenu } from "@/components/common/AddToGeneListMenu";
+import { Help } from "@/components/common/Help";
 import { GeneReportButton } from "@/components/report/ReportButtons";
 import { MinimalPanel } from "@/components/unified/MinimalPanel";
 import { OffTargetPanel } from "@/components/unified/OffTargetPanel";
@@ -276,7 +277,7 @@ export function UnifiedMarkersSubtab({
   return (
     <div className="flex flex-col gap-2">
       {/* Groupby + group selectors */}
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         {groupbyColumns.length > 0 && (
           <select
             value={groupByColumn}
@@ -301,6 +302,7 @@ export function UnifiedMarkersSubtab({
             </option>
           ))}
         </select>
+        <Help id="markers.groups" label="About the marker groups" align="right" />
       </div>
 
       {/* Filter + count */}
@@ -318,10 +320,12 @@ export function UnifiedMarkersSubtab({
         <span className="text-[10px] text-slate-400 whitespace-nowrap">
           {sortedMarkers.length}/{currentMarkers.length}
         </span>
+        <Help id="markers.table" label="How to read the marker table" align="right" width={300} />
         <button
           onClick={handleExportCSV}
           disabled={sortedMarkers.length === 0}
           title="Export CSV"
+          aria-label="Export CSV"
           className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 disabled:opacity-50"
         >
           <Download className="h-3 w-3" />
@@ -338,6 +342,7 @@ export function UnifiedMarkersSubtab({
       {/* |FC| threshold filter */}
       <div className="flex items-center gap-2">
         <label className="text-[11px] font-medium text-slate-500 whitespace-nowrap">|FC| &ge;</label>
+        <Help id="markers.min-fc" label="About the fold-change filter" />
         <input
           aria-label="Minimum |FC|"
           type="range"
@@ -356,14 +361,17 @@ export function UnifiedMarkersSubtab({
       {/* Effect size vs specificity for the group's markers */}
       {specificity && (
         <div>
-          <button
-            onClick={() => setShowPlot((v) => !v)}
-            aria-expanded={showPlot}
-            className="flex items-center gap-1 text-[11px] text-slate-500 hover:text-slate-700"
-          >
-            {showPlot ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-            Specificity vs fold change
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setShowPlot((v) => !v)}
+              aria-expanded={showPlot}
+              className="flex items-center gap-1 text-[11px] text-slate-500 hover:text-slate-700"
+            >
+              {showPlot ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+              Specificity vs fold change
+            </button>
+            <Help id="markers.specificity-plot" label="How to read the specificity plot" />
+          </div>
           {showPlot && (
             <div className="mt-1 rounded-lg border border-slate-200 p-1">
               <MarkerSpecificityPlot
@@ -474,6 +482,7 @@ export function UnifiedMarkersSubtab({
                           askAboutGene(marker.gene);
                         }}
                         title="Ask the co-pilot about this gene"
+                        aria-label={`Ask the co-pilot about ${marker.gene}`}
                         className="flex-shrink-0 text-slate-300 opacity-0 transition-opacity hover:text-primary group-hover:opacity-100"
                       >
                         <Sparkles className="h-3 w-3" />

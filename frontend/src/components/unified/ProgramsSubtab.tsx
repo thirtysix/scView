@@ -5,6 +5,7 @@ import type { PlotMouseEvent } from "plotly.js";
 import Plot from "@/components/plots/Plot";
 import { Caption } from "@/components/common/Caption";
 import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
 import {
   enrichProgram,
   getProgramUsage,
@@ -175,7 +176,10 @@ export function ProgramsSubtab({ onUsage, activeIndex, groupByColumn, setGroupBy
 
       {sweep.length > 1 && (
         <div data-testid="programs-sweep">
-          <div className="mb-0.5 text-[11px] font-medium text-slate-600">Compare k</div>
+          <div className="mb-0.5 flex items-center gap-1 text-[11px] font-medium text-slate-600">
+            Compare k
+            <Help id="programs.sweep" label="How to read the k comparison" width={300} />
+          </div>
           <div style={{ height: 170 }}>
             <Plot
               data={sweepTraces(sweep)}
@@ -204,7 +208,7 @@ export function ProgramsSubtab({ onUsage, activeIndex, groupByColumn, setGroupBy
       {summary?.available && (
         <>
           <Caption n={{ value: summary.n_cells ?? 0, unit: "cells" }}>
-            {summary.k} programs from {nSeeds} NMF run{nSeeds === 1 ? "" : "s"} on{" "}
+            <Help id="programs.table" label="How to read the programs table" width={300} /> {summary.k} programs from {nSeeds} NMF run{nSeeds === 1 ? "" : "s"} on{" "}
             {summary.n_genes?.toLocaleString()} variable genes ({summary.source});{" "}
             {programs.filter((p) => p.stable).length} stable (found in every run, spectra correlating ≥{" "}
             {summary.defaults.stable_correlation}). Click a program to colour the cells by its usage share.
@@ -321,7 +325,10 @@ export function ProgramsSubtab({ onUsage, activeIndex, groupByColumn, setGroupBy
           )}
 
           <div>
-            <label className="mb-1 block text-[11px] font-medium text-slate-500">Group by (heatmap)</label>
+            <div className="mb-1 flex items-center gap-1">
+              <label className="block text-[11px] font-medium text-slate-500">Group by (heatmap)</label>
+              <Help id="programs.heatmap" label="How to read the programs heatmap" />
+            </div>
             <select
               aria-label="Group by (heatmap)"
               value={groupby}

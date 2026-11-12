@@ -4,6 +4,7 @@ import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { GeneSearch } from "@/components/common/GeneSearch";
 import { AddToGeneListMenu } from "@/components/common/AddToGeneListMenu";
+import { Help } from "@/components/common/Help";
 import { ColorLegend } from "@/components/plots/ColorLegend";
 import type { ResolvedColorScale } from "@/lib/colorScale";
 import { MultiGenePanel } from "@/components/unified/MultiGenePanel";
@@ -55,7 +56,10 @@ export function UnifiedExpressionSubtab({
     <div className="space-y-3">
       {/* Gene search */}
       <div>
-        <label className="mb-1 block text-[11px] font-medium text-slate-500">Search gene</label>
+        <div className="mb-1 flex items-center gap-1">
+          <label className="block text-[11px] font-medium text-slate-500">Search gene</label>
+          <Help id="expression.search" label="About the gene search" />
+        </div>
         <GeneSearch
           datasetId={datasetId}
           onSelect={onGeneSelect}
@@ -96,9 +100,12 @@ export function UnifiedExpressionSubtab({
       {/* Layer selector */}
       {expressionLayers.length > 1 && (
         <div>
-          <label className="mb-1 block text-[11px] font-medium text-slate-500">
-            Expression layer
-          </label>
+          <div className="mb-1 flex items-center gap-1">
+            <label className="block text-[11px] font-medium text-slate-500">
+              Expression layer
+            </label>
+            <Help id="expression.layer" label="About expression layers" />
+          </div>
           {/* The same setting as the toolbar's Layer menu. */}
           <select
             value={expressionLayer}
@@ -114,9 +121,12 @@ export function UnifiedExpressionSubtab({
 
       {/* Group by */}
       <div>
-        <label className="mb-1 block text-[11px] font-medium text-slate-500">
-          Group by (violin)
-        </label>
+        <div className="mb-1 flex items-center gap-1">
+          <label className="block text-[11px] font-medium text-slate-500">
+            Group by (violin)
+          </label>
+          <Help id="expression.group-by" label="About the violin's groups" />
+        </div>
         <select
           aria-label="Group by (violin)"
           value={groupByColumn}

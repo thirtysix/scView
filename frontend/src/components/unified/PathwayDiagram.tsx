@@ -3,6 +3,7 @@ import { Download, Maximize, Minus, Plus } from "lucide-react";
 import type { DiagramNode, DiagramShape, PathwayDiagramModel, PathwayValues, Segment } from "@/api/pathways";
 import { Caption } from "@/components/common/Caption";
 import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
 import type { ClipSetting, ResolvedColorScale } from "@/lib/colorScale";
 import { ClipControl } from "@/components/plots/ClipControl";
 import { colormapColor } from "@/lib/colors";
@@ -481,7 +482,7 @@ export function PathwayDiagram({ model, values, height = 460, onOpenPathway, dat
       <Legend scale={scale} values={values} palette={palette}
         clip={<ClipControl clip={clip} dataMin={scale?.dataMin} dataMax={scale?.dataMax} onChange={setClipOverride} overridden={clipOverride !== null} />} />
       <p className="text-[10px] leading-snug text-slate-500" data-testid="pathway-attribution">
-        Diagram:{" "}
+        <Help id="pathway.diagram" label="How to read the pathway diagram" width={300} /> Diagram:{" "}
         <a href={model.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
           Reactome
         </a>{" "}

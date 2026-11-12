@@ -33,8 +33,6 @@ export const PLOT_HELP: Record<string, string> = {
     "Each violin is one group's cells: wider where more of its cells have that value. The small box inside spans the middle half of the cells, with lines at the median and the mean. Tick log scale when a few high values squash the rest.",
   "plot.cluster-distances":
     "How different the groups' average expression is, measured in PCA space, which a UMAP's gaps do not show. Similar groups sit next to each other, with their tree on the right. Read each square's value on the colour bar; click a row to highlight its group.",
-  "plot.per-donor":
-    "One value per donor in each group, split by condition. Use it to check that a difference holds across donors rather than coming from many cells of one donor. Donors with too few cells in a group are left out.",
   "plot.histogram":
     "Two overlaid distributions of one value per cell: the selection or a group (blue) against the rest or another group (orange). Each side is scaled to its own number of cells, so groups of different sizes compare fairly. The numbers below describe the difference; they are not a test.",
 
@@ -81,10 +79,4 @@ export const PLOT_HELP: Record<string, string> = {
   // Markers tab checks (owned by this group)
   "countsplit.show-p":
     "Adds each marker's adjusted p on the held-out half to the marker table, so you can see which markers held up on counts the clustering did not use.",
-  "panel.about":
-    "Finds the fewest genes that still tell the groups apart, for planning a small FISH, flow or targeted panel. Genes join one at a time, each the one that best improves a model predicting every cell's group.",
-  "panel.accuracy":
-    "Balanced accuracy: the share of each group's cells the model calls correctly, averaged over groups, so small groups count as much as large ones. 1 is perfect; guessing scores 1 divided by the number of groups.",
-  "panel.confusion":
-    "Rows are the true groups, columns what the panel's model calls them. A strong diagonal means the panel tells the groups apart; colour off the diagonal shows which groups it mixes up.",
 };

@@ -181,21 +181,18 @@ export function MinimalPanel({ datasetId, groupby }: { datasetId: string; groupb
 
   return (
     <section className="rounded-lg border border-slate-200" data-testid="minimal-panel">
-      {/* The info icon sits beside the toggle, not inside it (no button in a button) */}
-      <div className="flex items-center hover:bg-slate-50">
+      <div className="flex items-center gap-1 pr-2">
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
           aria-expanded={open}
-          className="flex min-w-0 flex-1 items-center gap-1 px-2 py-1.5 text-left text-xs font-semibold text-slate-600"
+          className="flex min-w-0 flex-1 items-center gap-1 px-2 py-1.5 text-left text-xs font-semibold text-slate-600 hover:bg-slate-50"
         >
           {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
           Minimal panel
           <span className="font-normal text-slate-500">: fewest genes that tell the groups apart</span>
         </button>
-        <span className="flex px-2">
-          <Help id="panel.about" label="About the minimal panel" align="right" />
-        </span>
+        <Help id="markers.minimal-panel" label="About the minimal panel" align="right" width={300} />
       </div>
       {open && (
         <div className="flex flex-col gap-2 border-t border-slate-200 p-2 text-xs text-slate-600">
@@ -300,8 +297,7 @@ export function MinimalPanel({ datasetId, groupby }: { datasetId: string; groupb
           {result && (
             <p data-testid="panel-summary">
               <span className="font-semibold text-slate-700">{result.panel.length} genes</span> reach balanced
-              accuracy <Help id="panel.accuracy" label="About balanced accuracy" />
-              <span className="ml-1 font-semibold text-slate-700">{result.balanced_accuracy.toFixed(2)}</span>
+              accuracy <span className="font-semibold text-slate-700">{result.balanced_accuracy.toFixed(2)}</span>
               {result.baseline_accuracy != null && (
                 <>
                   {" "}
@@ -329,7 +325,7 @@ export function MinimalPanel({ datasetId, groupby }: { datasetId: string; groupb
           )}
           {start && steps.length > 0 && (
             <Caption n={[{ value: start.n_cells, unit: "cells" }, { value: start.groups.length, unit: "groups" }]}>
-              Balanced accuracy (mean recall over groups) of a multinomial logistic regression, {start.cv}, on
+              <Help id="markers.panel-curve" label="How to read the accuracy curve" /> Balanced accuracy (mean recall over groups) of a multinomial logistic regression, {start.cv}, on
               up to {start.cells_per_group} cells per group drawn with a fixed seed; z-scored log expression. At
               each step the {start.screen} most promising of {start.n_candidates} candidates (score test) are
               cross-validated and the best joins. Dashed: each group&apos;s top marker in turn, no selection.
@@ -422,8 +418,7 @@ export function MinimalPanel({ datasetId, groupby }: { datasetId: string; groupb
                 </Panel>
               )}
               <Caption n={{ value: result.n_cells, unit: "cells" }}>
-                <Help id="panel.confusion" label="How to read the confusion matrix" />{" "}
-                Each row: the share of a group&apos;s sampled cells the panel&apos;s model calls each group, each
+                <Help id="markers.panel-confusion" label="How to read the confusion matrix" /> Each row: the share of a group&apos;s sampled cells the panel&apos;s model calls each group, each
                 cell predicted by the model fitted on the other folds ({result.cv}).
               </Caption>
 

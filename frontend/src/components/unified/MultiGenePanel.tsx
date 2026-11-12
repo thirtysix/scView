@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { BarChart3, Blend, Grid2x2, Loader2, ScatterChart, X } from "lucide-react";
 import { GeneSearch } from "@/components/common/GeneSearch";
 import { Panel } from "@/components/common/Panel";
+import { Help } from "@/components/common/Help";
 import { StackedViolin } from "@/components/plots/StackedViolin";
 import { SelectionChip } from "@/components/common/SelectionChip";
 import { useLinkedSelection } from "@/hooks/useLinkedSelection";
@@ -75,7 +76,10 @@ export function MultiGenePanel({ datasetId, groupByColumn }: MultiGenePanelProps
   return (
     <div className="space-y-2 rounded-lg border border-slate-200 p-2">
       <div className="flex items-baseline justify-between gap-2">
-        <h4 className="text-xs font-semibold text-slate-600">Several genes</h4>
+        <span className="flex items-center gap-1">
+          <h4 className="text-xs font-semibold text-slate-600">Several genes</h4>
+          <Help id="expression.several-genes" label="About several genes" />
+        </span>
         <span className="text-[10px] text-slate-400">
           {genes.length}/{MAX_GRID_GENES}
         </span>
@@ -150,7 +154,10 @@ export function MultiGenePanel({ datasetId, groupByColumn }: MultiGenePanelProps
       {pair && (
         <div className="space-y-1.5 border-t border-slate-100 pt-2">
           <div className="flex flex-wrap items-center gap-1.5 text-xs">
-            <span className="text-[11px] font-medium text-slate-500">Two genes</span>
+            <span className="flex items-center gap-1 text-[11px] font-medium text-slate-500">
+              Two genes
+              <Help id="expression.two-genes" label="About blend and gene vs gene" />
+            </span>
             <PairSelect label="Gene A" value={pair[0]} other={pair[1]} genes={genes} onChange={(g) => choosePair(0, g)} />
             <span className="text-slate-400">vs</span>
             <PairSelect label="Gene B" value={pair[1]} other={pair[0]} genes={genes} onChange={(g) => choosePair(1, g)} />
@@ -260,7 +267,7 @@ function StackedViolinSection({ datasetId, genes, groupByColumn }: { datasetId: 
           exportName={`stacked_violin_${groupByColumn}`}
         />
         <p className="px-1 text-[10px] text-slate-400">
-          Each gene on its own scale.
+          <Help id="expression.stacked-violin" label="How to read the stacked violin" /> Each gene on its own scale.
           {cells
             ? ` ${cells.length.toLocaleString()} of ${codes.length.toLocaleString()} cells, sampled evenly.`
             : ` All ${codes.length.toLocaleString()} cells.`}

@@ -4,6 +4,7 @@ import { BlendLegend } from "@/components/plots/BlendLegend";
 import { MultiPanelScatter, type GridHover, type GridPanel } from "@/components/unified/MultiPanelScatter";
 import { useSameCellsGridLasso } from "@/components/unified/GridLasso";
 import { SelectionChip } from "@/components/common/SelectionChip";
+import { Help } from "@/components/common/Help";
 import { useGeneExpression } from "@/hooks/useGeneExpression";
 import { exportFilename } from "@/lib/exportFilename";
 import { prettyEmbeddingLabel } from "@/lib/formatting";
@@ -315,6 +316,11 @@ export function GeneFeatureGrid({
               ))
             )}
             {blend && <BlendLegend geneA={legendGenes[0]!} geneB={legendGenes[1]!} scheme={scheme} />}
+            {blend ? (
+              <Help id="expression.blend" label="How to read the blend" width={190} />
+            ) : (
+              <Help id="expression.feature-grid" label="How to read the feature grid" width={190} />
+            )}
           </div>
         ) : null
       }

@@ -118,53 +118,61 @@ export function PerDonorExpression({ datasetId, gene, noGeneReason, groupColumn,
   return (
     <div className="space-y-1">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
-        <Help id="plot.per-donor" label="About per-donor values" side="below" />
-        <label className="flex items-center gap-1">
-          Split by
-          <select
-            aria-label="Condition column"
-            value={conditionKey}
-            onChange={(e) => {
-              setCondition(e.target.value);
-              setPick(null);
-            }}
-            className={selCls}
-          >
-            <option value="">None</option>
-            {conditionOptions.map((c) => (
-              <option key={c.name} value={c.name}>
-                {prettyObsLabel(c.name)}
+        <span className="flex items-center gap-1">
+          <label className="flex items-center gap-1">
+            Split by
+            <select
+              aria-label="Condition column"
+              value={conditionKey}
+              onChange={(e) => {
+                setCondition(e.target.value);
+                setPick(null);
+              }}
+              className={selCls}
+            >
+              <option value="">None</option>
+              {conditionOptions.map((c) => (
+                <option key={c.name} value={c.name}>
+                  {prettyObsLabel(c.name)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <Help id="perdonor.split-by" label="About splitting by condition" />
+        </span>
+        <span className="flex items-center gap-1">
+          <label className="flex items-center gap-1">
+            Donor
+            <select aria-label="Donor column" value={sample} onChange={(e) => setSample(e.target.value)} className={selCls}>
+              <option value="">
+                {!sample && result?.sample_key_detected && result.sample_key
+                  ? `Auto (${prettyObsLabel(result.sample_key)})`
+                  : "Auto"}
               </option>
-            ))}
-          </select>
-        </label>
-        <label className="flex items-center gap-1">
-          Donor
-          <select aria-label="Donor column" value={sample} onChange={(e) => setSample(e.target.value)} className={selCls}>
-            <option value="">
-              {!sample && result?.sample_key_detected && result.sample_key
-                ? `Auto (${prettyObsLabel(result.sample_key)})`
-                : "Auto"}
-            </option>
-            {sampleOptions.map((c) => (
-              <option key={c.name} value={c.name}>
-                {prettyObsLabel(c.name)}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="flex items-center gap-1" title={METHOD_HELP[method]}>
-          Value
-          <select
-            aria-label="Pseudobulk value"
-            value={method}
-            onChange={(e) => setMethod(e.target.value as DonorMethod)}
-            className={selCls}
-          >
-            <option value="mean">Mean log-norm (default)</option>
-            <option value="cpm">log2 CPM of summed counts</option>
-          </select>
-        </label>
+              {sampleOptions.map((c) => (
+                <option key={c.name} value={c.name}>
+                  {prettyObsLabel(c.name)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <Help id="perdonor.donor" label="About the donor column" />
+        </span>
+        <span className="flex items-center gap-1">
+          <label className="flex items-center gap-1" title={METHOD_HELP[method]}>
+            Value
+            <select
+              aria-label="Pseudobulk value"
+              value={method}
+              onChange={(e) => setMethod(e.target.value as DonorMethod)}
+              className={selCls}
+            >
+              <option value="mean">Mean log-norm (default)</option>
+              <option value="cpm">log2 CPM of summed counts</option>
+            </select>
+          </label>
+          <Help id="perdonor.value" label="About the per-donor value" />
+        </span>
         {levels.length > 2 && (
           <span className="flex items-center gap-1" title="A donor-level test compares two values of the condition; the others are left out of it.">
             Compare
@@ -192,6 +200,7 @@ export function PerDonorExpression({ datasetId, gene, noGeneReason, groupColumn,
             )}
           </span>
         )}
+        <Help id="perdonor.plot" label="How to read the per-donor plot" align="right" />
         {loading && <Loader2 className="h-3 w-3 animate-spin text-slate-400" />}
       </div>
 

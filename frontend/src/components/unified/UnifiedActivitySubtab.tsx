@@ -3,6 +3,7 @@ import { Loader2, Search } from "lucide-react";
 import type { PlotMouseEvent } from "plotly.js";
 import Plot from "@/components/plots/Plot";
 import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
 import { CapNote, Caption } from "@/components/common/Caption";
 import { useDatasetStore } from "@/stores/datasetStore";
 import {
@@ -198,7 +199,10 @@ export function UnifiedActivitySubtab({ onScore, groupByColumn, setGroupByColumn
       {tabs}
 
       <div>
-        <label className="mb-1 block text-[11px] font-medium text-slate-500">Group by (heatmap)</label>
+        <div className="mb-1 flex items-center gap-1">
+          <label className="block text-[11px] font-medium text-slate-500">Group by (heatmap)</label>
+          <Help id="activity.group-by" label="About the heatmap's groups" />
+        </div>
         <select
           aria-label="Group by (heatmap)"
           value={groupby}
@@ -227,7 +231,10 @@ export function UnifiedActivitySubtab({ onScore, groupByColumn, setGroupByColumn
           {heat && (
             <div>
               <div className="mb-1 flex items-center justify-between text-[11px] text-slate-500">
-                <span>Mean activity per group{network === "collectri" ? ", most variable TFs" : ""}</span>
+                <span className="flex items-center gap-1">
+                  Mean activity per group{network === "collectri" ? ", most variable TFs" : ""}
+                  <Help id="activity.heatmap" label="How to read the activity heatmap" width={300} />
+                </span>
                 {network === "collectri" && (
                   <select
                     aria-label="TFs shown"

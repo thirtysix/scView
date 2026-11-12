@@ -11,6 +11,7 @@ import {
 } from "@/api/enrichment";
 import { collectionLabel } from "@/api/genesets";
 import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
 import { MSigDBCollectionTree, DEFAULT_MSIGDB_COLLECTIONS } from "@/components/panels/MSigDBCollectionTree";
 import { EnrichmentTermsTable } from "@/components/unified/EnrichmentTermsTable";
 import { GseaResults } from "@/components/unified/GseaResults";
@@ -380,6 +381,7 @@ export function DEEnrichment({
         <div className="flex flex-col gap-1.5 border-t border-slate-100 pt-2">
           <div className="flex flex-wrap items-center gap-2">
             <h4 className="text-[11px] font-semibold text-slate-700">GSEA: every tested gene, ranked</h4>
+            <Help id="enrichment.gsea" label="How to read the GSEA table" width={300} />
             <ScoringMethodChoice label="Score terms with" className="ml-auto" />
           </div>
           <GseaResults

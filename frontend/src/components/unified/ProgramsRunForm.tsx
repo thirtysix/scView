@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Loader2, Play, Square } from "lucide-react";
 import type { ProgramsDefaults, ProgramsRunnable } from "@/api/programs";
 import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
 import { formatDuration } from "@/lib/hvgSensitivity";
 import { parseSweep } from "@/lib/programs";
 import { useProgramsRunStore } from "@/stores/programsRunStore";
@@ -56,33 +57,39 @@ export function ProgramsRunForm({
   return (
     <div className="space-y-2 rounded-lg border border-slate-200 p-2.5" data-testid="programs-run-form">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-slate-600">
-        <label className="flex items-center gap-1" title={`Programs to find (${defaults.min_k} to ${defaults.max_k})`}>
-          k
-          <input
-            type="number"
-            aria-label="Number of programs (k)"
-            min={defaults.min_k}
-            max={defaults.max_k}
-            value={k}
-            onChange={(e) => setK(Number(e.target.value))}
-            className={inputClass}
-          />
-        </label>
-        <label
-          className="flex items-center gap-1"
-          title="NMF runs from different random starts (seeds 0, 1, ...); a program is stable when every run finds it"
-        >
-          seeds
-          <input
-            type="number"
-            aria-label="Number of seeds"
-            min={1}
-            max={defaults.max_seeds}
-            value={seeds}
-            onChange={(e) => setSeeds(Number(e.target.value))}
-            className={inputClass}
-          />
-        </label>
+        <span className="flex items-center gap-1">
+          <label className="flex items-center gap-1" title={`Programs to find (${defaults.min_k} to ${defaults.max_k})`}>
+            k
+            <input
+              type="number"
+              aria-label="Number of programs (k)"
+              min={defaults.min_k}
+              max={defaults.max_k}
+              value={k}
+              onChange={(e) => setK(Number(e.target.value))}
+              className={inputClass}
+            />
+          </label>
+          <Help id="programs.k" label="About k" />
+        </span>
+        <span className="flex items-center gap-1">
+          <label
+            className="flex items-center gap-1"
+            title="NMF runs from different random starts (seeds 0, 1, ...); a program is stable when every run finds it"
+          >
+            seeds
+            <input
+              type="number"
+              aria-label="Number of seeds"
+              min={1}
+              max={defaults.max_seeds}
+              value={seeds}
+              onChange={(e) => setSeeds(Number(e.target.value))}
+              className={inputClass}
+            />
+          </label>
+          <Help id="programs.seeds" label="About seeds" />
+        </span>
         <label
           className="flex items-center gap-1"
           title="Also fit these values of k and compare their stability (silhouette) and reconstruction error"
