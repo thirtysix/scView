@@ -1,8 +1,8 @@
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Download, Loader2 } from "lucide-react";
 import { Caption, CapNote } from "@/components/common/Caption";
 import { Help } from "@/components/common/Help";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
 import { SortableTh, ariaSort } from "@/components/common/SortableTh";
 import {
@@ -70,7 +70,6 @@ export function SpatialGenesSubtab({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sort, setSort] = useState<{ key: SortKey; dir: "asc" | "desc" }>({ key: "I", dir: "desc" });
-  const uid = useId();
 
   // The last run, restored on opening the tab.
   useEffect(() => {
@@ -121,24 +120,24 @@ export function SpatialGenesSubtab({
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-1.5 text-xs font-medium text-slate-700">
-        Spatially variable genes
-        <InfoTip label="About Moran's I" width={300}>
-          Moran&apos;s I asks whether neighbouring {units} have similar values of a gene: 1 means neighbours are
-          alike, about 0 means the pattern is random, and below 0 means neighbours differ. Each {spatial.unit}{" "}
-          is compared with its {spatial.unit === "bin" ? "4 nearest bins (those sharing a side)" : `6 nearest ${units}`} in
-          the same section.
-        </InfoTip>
+      <div className="text-xs font-medium text-slate-700">
+        <HoverTip
+          width={300}
+          tip={<>
+            Moran&apos;s I asks whether neighbouring {units} have similar values of a gene: 1 means neighbours are
+            alike, about 0 means the pattern is random, and below 0 means neighbours differ. Each {spatial.unit}{" "}
+            is compared with its {spatial.unit === "bin" ? "4 nearest bins (those sharing a side)" : `6 nearest ${units}`} in
+            the same section.
+          </>}
+        >
+          Spatially variable genes
+        </HoverTip>
       </div>
 
       <div className="flex flex-wrap items-end gap-2 text-xs">
-        <div className="flex flex-col gap-0.5 text-[11px] text-slate-500">
-          <span className="flex items-center gap-1">
-            <label htmlFor={`${uid}-genes`}>Genes</label>
-            <Help id="spatial.genes" label="About the gene choice" />
-          </span>
+        <label className="flex flex-col gap-0.5 text-[11px] text-slate-500">
+          <Help id="spatial.genes">Genes</Help>
           <select
-            id={`${uid}-genes`}
             value={genes}
             onChange={(e) => setGenes(e.target.value as "hvg" | "all")}
             className="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-700"
@@ -146,15 +145,11 @@ export function SpatialGenesSubtab({
             <option value="hvg">Variable genes</option>
             <option value="all">All genes</option>
           </select>
-        </div>
+        </label>
         {libs.length > 1 && (
-          <div className="flex flex-col gap-0.5 text-[11px] text-slate-500">
-            <span className="flex items-center gap-1">
-              <label htmlFor={`${uid}-section`}>Section</label>
-              <Help id="spatial.section" label="About the section choice" />
-            </span>
+          <label className="flex flex-col gap-0.5 text-[11px] text-slate-500">
+            <Help id="spatial.section">Section</Help>
             <select
-              id={`${uid}-section`}
               value={library}
               onChange={(e) => setLibrary(e.target.value)}
               className="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-700"
@@ -166,7 +161,7 @@ export function SpatialGenesSubtab({
                 </option>
               ))}
             </select>
-          </div>
+          </label>
         )}
         <button
           type="button"
@@ -205,7 +200,9 @@ export function SpatialGenesSubtab({
       {result && (
         <div className="space-y-2">
           <Caption n={[{ value: result.n_obs, unit: resultUnits }, { value: result.n_genes, unit: "genes" }]}>
-            Moran&apos;s I of {result.genes === "hvg" ? "the variable genes" : result.genes === "all" ? "every gene" : "the chosen genes"}
+            <Help id="spatial.table">
+              Moran&apos;s I of {result.genes === "hvg" ? "the variable genes" : result.genes === "all" ? "every gene" : "the chosen genes"}
+            </Help>
             {result.libraries.length === 1 && libs.length > 1 ? ` in section ${result.libraries[0]}` : ""};{" "}
             {result.n_significant.toLocaleString()} spatially variable (I &gt; 0, adjusted p &lt; {PADJ}).
           </Caption>
@@ -225,7 +222,6 @@ export function SpatialGenesSubtab({
                   : "the CSV has all"
               }
             />
-            <Help id="spatial.table" label="How to read the table" />
             <a
               href={spatialAutocorrCsvUrl(datasetId, result.result_id)}
               download

@@ -11,7 +11,7 @@ import {
 import type { WatchdogEvent } from "@/api/pipelineRun";
 import { Caption } from "@/components/common/Caption";
 import { Help } from "@/components/common/Help";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
 import { errorMessage } from "@/lib/errorMessage";
@@ -163,12 +163,16 @@ export function TranscriptsSubtab() {
   return (
     <div className="space-y-3 text-xs" data-testid="transcripts-subtab">
       <section className="space-y-2 rounded-lg border border-slate-200 p-2" aria-label="Transcripts">
-        <h4 className="flex items-center gap-1 text-xs font-semibold text-slate-600">
-          <span>Transcripts</span>
-          <InfoTip label="About transcripts" width={320}>
-            Every decoded molecule of the run, by position. Kept: quality q &ge; {status?.min_qv ?? 20} (10x&rsquo;s own default) and
-            genes only, without the control features. The index stays with this dataset; the uploaded file is deleted once indexed.
-          </InfoTip>
+        <h4 className="text-xs font-semibold text-slate-600">
+          <HoverTip
+            width={320}
+            tip={<>
+              Every decoded molecule of the run, by position. Kept: quality q &ge; {status?.min_qv ?? 20} (10x&rsquo;s own default) and
+              genes only, without the control features. The index stays with this dataset; the uploaded file is deleted once indexed.
+            </>}
+          >
+            Transcripts
+          </HoverTip>
         </h4>
 
         {merged && (
@@ -260,12 +264,12 @@ export function TranscriptsSubtab() {
             </Caption>
             {check?.available ? (
               <Caption testId="transcripts-check">
-                Against the count matrix, per gene (q &ge; {summary.min_qv} with a cell id): r = {check.r != null ? check.r.toFixed(4) : "n/a"},
+                <Help id="transcripts.check">Against the count matrix, per gene</Help> (q &ge; {summary.min_qv} with a cell id): r ={" "}
+                {check.r != null ? check.r.toFixed(4) : "n/a"},
                 median difference {fmt(check.median_abs_diff)}, largest {fmt(check.max_abs_diff)}
                 {check.max_abs_diff ? ` (${check.max_diff_gene})` : ""}; {fmt(check.n_equal)} of {fmt(check.n_genes)} genes equal.
                 {check.only_in_transcripts?.length ? ` Only among the transcripts: ${check.only_in_transcripts.join(", ")}.` : ""}
-                {check.only_in_matrix?.length ? ` Only in the matrix: ${check.only_in_matrix.join(", ")}.` : ""}{" "}
-                <Help id="transcripts.check" label="About the check against the count matrix" />
+                {check.only_in_matrix?.length ? ` Only in the matrix: ${check.only_in_matrix.join(", ")}.` : ""}
               </Caption>
             ) : (
               check?.note && <Caption testId="transcripts-check">{check.note}</Caption>
@@ -301,9 +305,8 @@ export function TranscriptsSubtab() {
                 className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50"
                 disabled={genes.length >= max}
               >
-                Add
+                <Help id="transcripts.genes">Add</Help>
               </button>
-              <Help id="transcripts.genes" label="About drawing transcripts" />
             </form>
             {genes.length > 0 && (
               <ul className="flex flex-wrap gap-1" aria-label="Genes drawn">
@@ -319,21 +322,18 @@ export function TranscriptsSubtab() {
                 ))}
               </ul>
             )}
-            <div className="flex items-center gap-1">
-              <label className="flex items-center gap-1 text-[11px] font-medium text-slate-500">
-                Dot size
-                <input
-                  type="range"
-                  min={DOT_SIZE_RANGE[0]}
-                  max={DOT_SIZE_RANGE[1]}
-                  step={0.5}
-                  value={dotSize}
-                  onChange={(e) => setDotSize(parseFloat(e.target.value))}
-                  className="w-20 accent-blue-500"
-                />
-              </label>
-              <Help id="transcripts.dot-size" label="About the dot size" />
-            </div>
+            <label className="flex items-center gap-1 text-[11px] font-medium text-slate-500">
+              <Help id="transcripts.dot-size">Dot size</Help>
+              <input
+                type="range"
+                min={DOT_SIZE_RANGE[0]}
+                max={DOT_SIZE_RANGE[1]}
+                step={0.5}
+                value={dotSize}
+                onChange={(e) => setDotSize(parseFloat(e.target.value))}
+                className="w-20 accent-blue-500"
+              />
+            </label>
             {genes.length > 0 && shown && <Caption testId="transcripts-shown">{shownText(shown.shown, shown.total)}</Caption>}
             {genes.length > 0 && embedding !== "spatial" && (
               <p className="text-[11px] leading-snug text-slate-500">
@@ -353,9 +353,8 @@ export function TranscriptsSubtab() {
 
       {!merged && missingOutlines.length > 0 && (
         <section className="space-y-2 rounded-lg border border-slate-200 p-2" aria-label="Cell outlines">
-          <h4 className="flex items-center gap-1 text-xs font-semibold text-slate-600">
-            <span>Cell outlines</span>
-            <Help id="transcripts.outlines" label="About cell outlines" />
+          <h4 className="text-xs font-semibold text-slate-600">
+            <Help id="transcripts.outlines">Cell outlines</Help>
           </h4>
           <p className="text-[11px] leading-snug text-slate-500">
             Upload {missingOutlines.map((k) => `${k === "cell" ? "cell" : "nucleus"}_boundaries.parquet`).join(" and ")} from the Xenium

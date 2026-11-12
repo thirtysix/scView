@@ -22,6 +22,7 @@ import type { FragmentQc, FragmentStatus } from "@/api/atacFragments";
 import type { DatasetInfo } from "@/api/types";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { hoverTip, unhover } from "@/test/hoverTip";
 import { AtacFragmentQc, uploadOrder } from "./AtacFragmentQc";
 
 const QC: FragmentQc = {
@@ -134,6 +135,19 @@ describe("AtacFragmentQc", () => {
     expect(kinds).toContain("bar");
     expect(kinds).toContain("violin:B");
     expect(kinds).toContain("scatter:T"); // lengths by group
+  });
+
+  it("explains each median on hover of its name, with no info icons", async () => {
+    api.getFragments.mockResolvedValue({ ...attached, qc: QC });
+    render(<AtacFragmentQc datasetId="d" />);
+    await screen.findByTestId("atac-qc");
+    for (const [text, tip] of [["TSS enrichment", /Tn5 cuts per base within 500 bp/], ["Nucleosome signal", /147-294 bp/],
+      ["Fragments per cell", /median number of fragments per cell/], ["Fragment QC", /One pass over it/]] as const) {
+      const el = screen.getByText(text);
+      expect(await hoverTip(el)).toMatch(tip);
+      unhover(el);
+    }
+    expect(screen.queryByRole("button", { name: /^About/ })).toBeNull();
   });
 
   it("Remove detaches", async () => {

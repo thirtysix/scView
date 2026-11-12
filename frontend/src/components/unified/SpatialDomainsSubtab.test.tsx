@@ -24,6 +24,7 @@ vi.mock("@/components/plots/Plot", () => ({
 
 import { SpatialDomainsSubtab } from "./SpatialDomainsSubtab";
 import { SPATIAL_HELP } from "@/lib/help/spatial";
+import { hoverTip, unhover } from "@/test/hoverTip";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useSpatialDomainsRunStore } from "@/stores/spatialDomainsRunStore";
@@ -99,16 +100,17 @@ describe("SpatialDomainsSubtab", () => {
     expect(api.getSpatialDomains).toHaveBeenCalledWith("d1", { k: 7, n_hops: 3, n_pcs: 10, enrichment_column: undefined });
   });
 
-  it("keeps each field's label on its input with the help icon beside it", async () => {
+  it("keeps each field's label on its input, and hovering the label shows its tip", async () => {
     render(<SpatialDomainsSubtab {...groupProps} />);
     await screen.findByTestId("domains-plan");
-    for (const [label, tip] of [["Domains (k)", "About the number of domains"], ["Hops", "About hops"],
-      ["Components", "About the number of components"], ["Save as", "About the column name"]] as const) {
+    for (const [label, id] of [["Domains (k)", "domains.k"], ["Hops", "domains.hops"],
+      ["Components", "domains.components"], ["Save as", "domains.save-as"]] as const) {
       expect(screen.getByLabelText(label).tagName).toBe("INPUT");
-      expect(screen.getByRole("button", { name: tip })).toBeInTheDocument();
+      const text = screen.getByText(label);
+      expect(await hoverTip(text)).toBe(SPATIAL_HELP[id]);
+      unhover(text);
     }
-    fireEvent.mouseEnter(screen.getByRole("button", { name: "About hops" }));
-    expect(screen.getByRole("tooltip")).toHaveTextContent(SPATIAL_HELP["domains.hops"]!);
+    expect(screen.queryByRole("button", { name: /^About/ })).toBeNull();
   });
 
   it("calls bins bins", async () => {

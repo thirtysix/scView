@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   getSpatialDomains,
   runDomains,
@@ -13,7 +13,7 @@ import {
 import { SPATIAL_EMBEDDING } from "@/api/spatial";
 import { Caption } from "@/components/common/Caption";
 import { Help } from "@/components/common/Help";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
 import Plot from "@/components/plots/Plot";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
@@ -77,7 +77,6 @@ export function SpatialDomainsSubtab({
   const [nicheLabel, setNicheLabel] = useState("");
   const [nicheWindow, setNicheWindow] = useState(20);
   const [nicheCount, setNicheCount] = useState(8);
-  const uid = useId();
 
   useEffect(() => {
     if (!datasetId || !spatial) return;
@@ -180,13 +179,17 @@ export function SpatialDomainsSubtab({
     <div className="space-y-4">
       {/* Domains */}
       <section className="space-y-2" aria-label="Spatial domains">
-        <div className="flex items-center gap-1.5 text-xs font-medium text-slate-700">
-          Spatial domains
-          <InfoTip label="About spatial domains" width={300}>
-            CellCharter&apos;s method (Varrone et al. 2024, Nat Genet): each {unit}&apos;s profile is joined with the mean
-            profile of its neighbours at 1, 2, ... hops, and a Gaussian mixture clusters those. With 0 hops it is the same
-            clustering with no spatial information.
-          </InfoTip>
+        <div className="text-xs font-medium text-slate-700">
+          <HoverTip
+            width={300}
+            tip={<>
+              CellCharter&apos;s method (Varrone et al. 2024, Nat Genet): each {unit}&apos;s profile is joined with the mean
+              profile of its neighbours at 1, 2, ... hops, and a Gaussian mixture clusters those. With 0 hops it is the same
+              clustering with no spatial information.
+            </>}
+          >
+            Spatial domains
+          </HoverTip>
         </div>
         <p className="text-[11px] leading-snug text-slate-500">
           A spatial domain is a stretch of tissue whose {units} look alike and have alike surroundings, such as a cortical
@@ -195,13 +198,9 @@ export function SpatialDomainsSubtab({
         {info && !info.runnable.ok && <p className="text-[11px] leading-snug text-slate-500">{info.runnable.reason}</p>}
 
         <div className="flex flex-wrap items-end gap-2 text-xs">
-          <div className={FIELD}>
-            <span className="flex items-center gap-1">
-              <label htmlFor={`${uid}-k`}>Domains (k)</label>
-              <Help id="domains.k" label="About the number of domains" />
-            </span>
+          <label className={FIELD}>
+            <Help id="domains.k">Domains (k)</Help>
             <input
-              id={`${uid}-k`}
               type="number"
               min={2}
               max={40}
@@ -209,46 +208,32 @@ export function SpatialDomainsSubtab({
               onChange={(e) => setK(num(e.target.value, k))}
               className={`${INPUT} w-14`}
             />
-          </div>
-          <div className={FIELD}>
-            <span className="flex items-center gap-1">
-              <label htmlFor={`${uid}-hops`}>Hops</label>
-              <Help id="domains.hops" label="About hops" />
-            </span>
+          </label>
+          <label className={FIELD}>
+            <Help id="domains.hops">Hops</Help>
             <input
-              id={`${uid}-hops`}
               type="number"
               min={0}
               max={6}
               value={hops}
-              title="How many rings of neighbours each profile is joined with; 0 = no spatial information"
               onChange={(e) => setHops(num(e.target.value, hops))}
               className={`${INPUT} w-14`}
             />
-          </div>
-          <div className={FIELD}>
-            <span className="flex items-center gap-1">
-              <label htmlFor={`${uid}-components`}>Components</label>
-              <Help id="domains.components" label="About the number of components" />
-            </span>
+          </label>
+          <label className={FIELD}>
+            <Help id="domains.components">Components</Help>
             <input
-              id={`${uid}-components`}
               type="number"
               min={2}
               max={plan?.n_pcs_available ?? 100}
               value={pcs}
-              title="Leading components of the embedding each profile uses"
               onChange={(e) => setPcs(num(e.target.value, pcs))}
               className={`${INPUT} w-14`}
             />
-          </div>
-          <div className={FIELD}>
-            <span className="flex items-center gap-1">
-              <label htmlFor={`${uid}-save-as`}>Save as</label>
-              <Help id="domains.save-as" label="About the column name" />
-            </span>
+          </label>
+          <label className={FIELD}>
+            <Help id="domains.save-as">Save as</Help>
             <input
-              id={`${uid}-save-as`}
               type="text"
               value={name}
               onChange={(e) => {
@@ -257,7 +242,7 @@ export function SpatialDomainsSubtab({
               }}
               className={`${INPUT} w-40`}
             />
-          </div>
+          </label>
           <button type="button" disabled={busy || !info?.runnable.ok || nameBlocked} onClick={() => startDomains(k)} className={SOLID}>
             Find domains
           </button>
@@ -313,29 +298,30 @@ export function SpatialDomainsSubtab({
 
       {/* Neighbourhood enrichment */}
       <section className="space-y-2 border-t border-slate-200 pt-3" aria-label="Neighbourhood enrichment">
-        <div className="flex items-center gap-1.5 text-xs font-medium text-slate-700">
-          Neighbourhood enrichment
-          <InfoTip label="About neighbourhood enrichment" width={300}>
-            Counts how often each pair of labels sits side by side on the tissue graph, against the same labels shuffled
-            within each section ({(info?.defaults.n_perms ?? 1000).toLocaleString()} times): z above 0 means more often than
-            chance, below 0 less often. The same statistic as squidpy&apos;s nhood_enrichment. On {units} that mix cells it
-            speaks about the {units}&apos; labels, not about touching cells.
-          </InfoTip>
+        <div className="text-xs font-medium text-slate-700">
+          <HoverTip
+            width={300}
+            tip={<>
+              Counts how often each pair of labels sits side by side on the tissue graph, against the same labels shuffled
+              within each section ({(info?.defaults.n_perms ?? 1000).toLocaleString()} times): z above 0 means more often than
+              chance, below 0 less often. The same statistic as squidpy&apos;s nhood_enrichment. On {units} that mix cells it
+              speaks about the {units}&apos; labels, not about touching cells.
+            </>}
+          >
+            Neighbourhood enrichment
+          </HoverTip>
         </div>
         <div className="flex flex-wrap items-end gap-2 text-xs">
-          <div className={FIELD}>
-            <span className="flex items-center gap-1">
-              <label htmlFor={`${uid}-enrichment-labels`}>Labels</label>
-              <Help id="domains.enrichment-labels" label="About the labels" />
-            </span>
-            <select id={`${uid}-enrichment-labels`} value={enrichPick} onChange={(e) => setEnrichColumn(e.target.value)} className={INPUT}>
+          <label className={FIELD}>
+            <Help id="domains.enrichment-labels">Labels</Help>
+            <select value={enrichPick} onChange={(e) => setEnrichColumn(e.target.value)} className={INPUT}>
               {columns.map((c) => (
                 <option key={c.name} value={c.name}>
                   {prettyObsLabel(c.name)} ({c.n_unique})
                 </option>
               ))}
             </select>
-          </div>
+          </label>
           <button type="button" disabled={busy || !enrichPick} onClick={startEnrichment} className={SOLID}>
             Compute enrichment
           </button>
@@ -349,12 +335,16 @@ export function SpatialDomainsSubtab({
 
       {/* Composition niches */}
       <section className="space-y-2 border-t border-slate-200 pt-3" aria-label="Composition niches">
-        <div className="flex items-center gap-1.5 text-xs font-medium text-slate-700">
-          Composition niches
-          <InfoTip label="About composition niches" width={300}>
-            Each {unit}&apos;s window is its nearest {units} in the section (itself included); {units} whose windows hold
-            the same mix of labels form one niche (k-means, Schurch et al. 2020, Cell).
-          </InfoTip>
+        <div className="text-xs font-medium text-slate-700">
+          <HoverTip
+            width={300}
+            tip={<>
+              Each {unit}&apos;s window is its nearest {units} in the section (itself included); {units} whose windows hold
+              the same mix of labels form one niche (k-means, Schurch et al. 2020, Cell).
+            </>}
+          >
+            Composition niches
+          </HoverTip>
         </div>
         {info && !info.niches_allowed.ok && info.niches_allowed.reason ? (
           <p className="text-[11px] leading-snug text-slate-500" data-testid="niches-refused">
@@ -364,26 +354,19 @@ export function SpatialDomainsSubtab({
           <>
             {info?.niches_allowed.note && <p className="text-[11px] leading-snug text-amber-700">{info.niches_allowed.note}</p>}
             <div className="flex flex-wrap items-end gap-2 text-xs">
-              <div className={FIELD}>
-                <span className="flex items-center gap-1">
-                  <label htmlFor={`${uid}-niche-labels`}>Labels</label>
-                  <Help id="domains.niche-labels" label="About the labels" />
-                </span>
-                <select id={`${uid}-niche-labels`} value={nichePick} onChange={(e) => setNicheLabel(e.target.value)} className={INPUT}>
+              <label className={FIELD}>
+                <Help id="domains.niche-labels">Labels</Help>
+                <select value={nichePick} onChange={(e) => setNicheLabel(e.target.value)} className={INPUT}>
                   {columns.map((c) => (
                     <option key={c.name} value={c.name}>
                       {prettyObsLabel(c.name)} ({c.n_unique})
                     </option>
                   ))}
                 </select>
-              </div>
-              <div className={FIELD}>
-                <span className="flex items-center gap-1">
-                  <label htmlFor={`${uid}-niche-window`}>Window</label>
-                  <Help id="domains.niche-window" label="About the window" />
-                </span>
+              </label>
+              <label className={FIELD}>
+                <Help id="domains.niche-window">Window</Help>
                 <input
-                  id={`${uid}-niche-window`}
                   type="number"
                   min={2}
                   max={200}
@@ -391,14 +374,10 @@ export function SpatialDomainsSubtab({
                   onChange={(e) => setNicheWindow(num(e.target.value, nicheWindow))}
                   className={`${INPUT} w-14`}
                 />
-              </div>
-              <div className={FIELD}>
-                <span className="flex items-center gap-1">
-                  <label htmlFor={`${uid}-niche-count`}>Niches</label>
-                  <Help id="domains.niche-count" label="About the number of niches" />
-                </span>
+              </label>
+              <label className={FIELD}>
+                <Help id="domains.niche-count">Niches</Help>
                 <input
-                  id={`${uid}-niche-count`}
                   type="number"
                   min={2}
                   max={40}
@@ -406,7 +385,7 @@ export function SpatialDomainsSubtab({
                   onChange={(e) => setNicheCount(num(e.target.value, nicheCount))}
                   className={`${INPUT} w-14`}
                 />
-              </div>
+              </label>
               <button type="button" disabled={busy || !nichePick} onClick={startNiches} className={SOLID}>
                 Find niches
               </button>
@@ -475,10 +454,9 @@ function StabilityPlot({
         }}
       />
       <Caption n={{ value: curve.n_fit, unit: "observations per fit" }}>
-        Stability of each k: mean ARI of its {curve.repeats} fits against the other fits at k - 1 and k + 1 (error bars: SD).{" "}
+        <Help id="domains.stability">Stability of each k</Help>: mean ARI of its {curve.repeats} fits against the other fits at k - 1 and k + 1 (error bars: SD).{" "}
         {curve.has_peak ? `Suggested k = ${curve.suggested}, the highest local peak.` : `No local peak, so k = ${curve.suggested}, the highest value.`}{" "}
-        It advises; the biology decides. Click a point to use that k.{" "}
-        <Help id="domains.stability" label="How to read the stability plot" />
+        It advises; the biology decides. Click a point to use that k.
       </Caption>
     </figure>
   );
@@ -525,14 +503,13 @@ function DomainsTable({
         <button type="button" onClick={() => onMarkers(column)} className={OUTLINE} title="Open Markers grouped by these domains">
           Find markers
         </button>
-        <Help id="domains.table" label="About the domain table" />
       </div>
       <div className="max-h-56 overflow-auto rounded-lg border border-slate-200">
         <table className="w-full text-[11px]">
           <thead className="sticky top-0 bg-slate-50">
             <tr className="border-b border-slate-200 text-slate-600">
-              <th className="px-2 py-1 text-left" title="Numbered by size">
-                Domain
+              <th className="px-2 py-1 text-left">
+                <Help id="domains.table">Domain</Help>
               </th>
               <th className="px-2 py-1 text-right">{units}</th>
               {libs.length > 1 && libs.map((l) => <th key={l} className="px-2 py-1 text-right">{l}</th>)}
@@ -599,10 +576,10 @@ function EnrichmentHeatmap({ result }: { result: EnrichmentResult }) {
         style={{ width: "100%", height }}
       />
       <Caption n={[{ value: result.n_labelled ?? 0, unit: units }, { value: labels.length, unit: "labels" }]}>
-        Neighbourhood enrichment of {prettyObsLabel(result.column ?? "")} ({(result.n_perms ?? 0).toLocaleString()} permutations).{" "}
+        <Help id="domains.enrichment-heatmap">Neighbourhood enrichment of {prettyObsLabel(result.column ?? "")}</Help> (
+        {(result.n_perms ?? 0).toLocaleString()} permutations).{" "}
         {pairs.high ? `Most often side by side: ${pairs.high[0]} and ${pairs.high[1]} (z ${pairs.high[2].toFixed(1)}). ` : ""}
-        {pairs.low ? `Most apart: ${pairs.low[0]} and ${pairs.low[1]} (z ${pairs.low[2].toFixed(1)}).` : ""}{" "}
-        <Help id="domains.enrichment-heatmap" label="How to read the enrichment heatmap" />
+        {pairs.low ? `Most apart: ${pairs.low[0]} and ${pairs.low[1]} (z ${pairs.low[2].toFixed(1)}).` : ""}
       </Caption>
       {result.notes?.map((n) => (
         <p key={n} className="text-[11px] text-amber-700">
@@ -671,9 +648,11 @@ function NicheHeatmap({
         style={{ width: "100%", height }}
       />
       <Caption n={{ value: result.n_labelled ?? 0, unit: units }}>
-        {result.n_niches} niches in &quot;{column}&quot;: the mean share of each {prettyObsLabel(result.label_column ?? "")} label in the
-        windows of each niche (the {result.k_window} nearest).{" "}
-        <Help id="domains.niche-heatmap" label="How to read the niche heatmap" />
+        <Help id="domains.niche-heatmap">
+          {result.n_niches} niches in &quot;{column}&quot;
+        </Help>
+        : the mean share of each {prettyObsLabel(result.label_column ?? "")} label in the windows of each niche (the {result.k_window}{" "}
+        nearest).
       </Caption>
       {result.notes?.map((n) => (
         <p key={n} className="text-[11px] text-amber-700">

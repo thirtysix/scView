@@ -1,6 +1,6 @@
 import type { AtacState } from "@/api/atac";
 import { Caption } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { embeddingReady } from "@/hooks/useEmbeddingReady";
 import { WNN_ATAC_CLUSTERS, WNN_ATAC_UMAP, WNN_ATAC_WEIGHT, wnnPlanText } from "@/lib/atac";
 import { prettyObsLabel } from "@/lib/formatting";
@@ -26,12 +26,16 @@ export function AtacWnnCard({ datasetId, state, groupby }: { datasetId: string; 
 
   return (
     <section className="space-y-2 rounded-lg border border-slate-200 p-2" aria-label="Joint RNA + ATAC (WNN)">
-      <h4 className="flex items-center gap-1 text-xs font-semibold text-slate-600">
-        <span>Joint RNA + ATAC (WNN)</span>
-        <InfoTip label="About WNN on ATAC" width={300}>
-          Weighted nearest neighbours (Hao et al. 2021): for each cell, how well its RNA neighbours and its ATAC neighbours
-          predict it decides how much each modality counts. As Seurat&rsquo;s FindMultiModalNeighbors, with RNA PCs and LSI 2:50.
-        </InfoTip>
+      <h4 className="text-xs font-semibold text-slate-600">
+        <HoverTip
+          width={300}
+          tip={<>
+            Weighted nearest neighbours (Hao et al. 2021): for each cell, how well its RNA neighbours and its ATAC neighbours
+            predict it decides how much each modality counts. As Seurat&rsquo;s FindMultiModalNeighbors, with RNA PCs and LSI 2:50.
+          </>}
+        >
+          Joint RNA + ATAC (WNN)
+        </HoverTip>
       </h4>
       {!plan && state.wnn_reason && <p className="text-[11px] leading-snug text-slate-500">{state.wnn_reason}</p>}
       {plan && <p className="text-[11px] leading-snug text-slate-500" data-testid="atac-wnn-plan">{wnnPlanText(plan)}</p>}
