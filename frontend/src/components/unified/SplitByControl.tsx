@@ -6,9 +6,9 @@ import { SPLIT_MAX_VALUES, splitColumnOptions } from "@/lib/splitView";
 import { Help } from "@/components/common/Help";
 
 /**
- * Toolbar "Split" select: off, or a categorical column with 2–6 values to show
+ * Toolbar "Split" select: off, or a categorical column with 2–24 values to show
  * one scatter per value. Columns with more values are listed disabled, with
- * the reason, so it is clear why e.g. cell type is not offered.
+ * the reason, so it is clear why e.g. a 40-cluster column is not offered.
  */
 export function SplitByControl({ disabledReason = null }: { disabledReason?: string | null } = {}) {
   const dataset = useDatasetStore((s) => s.currentDataset);

@@ -77,12 +77,14 @@ const withQuery = (ui: ReactNode) => (
 );
 
 describe("SplitByControl", () => {
-  it("offers columns with 2–6 values, lists bigger ones disabled, and turns the split on and off", () => {
-    useDatasetStore.setState({ currentDataset: dataset([STIM, CELL_TYPE]), currentDatasetId: "ds1" });
+  it("offers columns with 2–24 values, lists bigger ones disabled, and turns the split on and off", () => {
+    const BARCODE_GROUP = { name: "well", dtype: "category", n_unique: 30, values: Array.from({ length: 30 }, (_, i) => `w${i}`) };
+    useDatasetStore.setState({ currentDataset: dataset([STIM, CELL_TYPE, BARCODE_GROUP]), currentDatasetId: "ds1" });
     render(<SplitByControl />);
     const select = screen.getByLabelText("Split the plot by") as HTMLSelectElement;
     expect(screen.getByRole("option", { name: "stim (2)" })).not.toBeDisabled();
-    expect(screen.getByRole("option", { name: "cell_type (8)" })).toBeDisabled();
+    expect(screen.getByRole("option", { name: "cell_type (8)" })).not.toBeDisabled();
+    expect(screen.getByRole("option", { name: "well (30)" })).toBeDisabled();
 
     fireEvent.change(select, { target: { value: "stim" } });
     expect(useSplitViewStore.getState().splitBy).toBe("stim");

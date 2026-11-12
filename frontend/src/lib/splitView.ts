@@ -27,7 +27,8 @@ import {
 import { rasterizePanels, type SvgPanel } from "@/lib/scatterSvg";
 
 export const SPLIT_MIN_VALUES = 2;
-export const SPLIT_MAX_VALUES = 6;
+/** Most values a split shows; above six panels the grid pages (lib/gridPaging.ts). */
+export const SPLIT_MAX_VALUES = 24;
 /** Gap between panels, and the title band above each one, in CSS pixels. */
 export const SPLIT_GAP = 8;
 export const SPLIT_TITLE_H = 22;
@@ -47,7 +48,7 @@ const isCategorical = (c: ObsColumnInfo) =>
   c.dtype === "category" || c.dtype === "object" || c.dtype === "bool";
 
 /**
- * Categorical obs columns offered by the "Split by" control. Columns with 2–6
+ * Categorical obs columns offered by the "Split by" control. Columns with 2–24
  * values can be chosen; those with more come back disabled with the reason.
  * Single-value columns, and those over the backend's 100-value cap (no values
  * listed), are left out.
@@ -73,11 +74,11 @@ export function splitColumnOptions(columns: readonly ObsColumnInfo[]): SplitColu
 }
 
 // ---------------------------------------------------------------------------
-// Compare colourings: the same cells coloured by 2–4 columns, one panel each
+// Compare colourings: the same cells coloured by 2–12 columns, one panel each
 // ---------------------------------------------------------------------------
 
 export const COMPARE_MIN_COLUMNS = 2;
-export const COMPARE_MAX_COLUMNS = 4;
+export const COMPARE_MAX_COLUMNS = 12;
 
 export interface CompareColumnOption {
   name: string;

@@ -72,16 +72,16 @@ beforeEach(() => {
 });
 
 describe("MultiGenePanel", () => {
-  it("takes a pasted list, at most nine genes, and removes one by its chip", () => {
+  it("takes a pasted list, at most 24 genes, and removes one by its chip", () => {
     render(withQuery(<MultiGenePanel datasetId="ds1" groupByColumn="cell_type" />));
     expect(screen.getByRole("button", { name: /Feature grid/ })).toBeDisabled();
     paste("CD3D, MS4A1\nGNLY CD3D");
     expect(useGeneGridStore.getState().genes).toEqual(["CD3D", "MS4A1", "GNLY"]);
-    paste(Array.from({ length: 12 }, (_, i) => `G${i}`).join(" "));
-    expect(useGeneGridStore.getState().genes).toHaveLength(9);
+    paste(Array.from({ length: 30 }, (_, i) => `G${i}`).join(" "));
+    expect(useGeneGridStore.getState().genes).toHaveLength(24);
     fireEvent.click(screen.getByRole("button", { name: "Remove MS4A1" }));
     expect(useGeneGridStore.getState().genes).not.toContain("MS4A1");
-    expect(useGeneGridStore.getState().genes).toHaveLength(8);
+    expect(useGeneGridStore.getState().genes).toHaveLength(23);
   });
 
   it("opens the feature grid on the picks, and an open grid follows the picks", () => {
