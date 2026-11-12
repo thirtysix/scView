@@ -479,6 +479,10 @@ through Edgeless's `privatemode-proxy`), set `LLM_BASE_URL`, `LLM_API_KEY` and `
 literature search then turns off, because its embeddings run on DeepInfra. A compose example for
 the proxy is in [`docs/AI_ASSISTANT.md`](docs/AI_ASSISTANT.md#1f-the-language-model-provider).
 
+AI cell-type annotation is benchmarked on the default model. With DeepSeek-V4-Pro as the annotator,
+some doublet clusters come back as "Doublet" or "Low-quality cells" instead of naming both cell
+types; check doublet-like clusters by hand if you use it.
+
 ### Use scView from your AI agent (MCP)
 scView's backend serves an [MCP](https://modelcontextprotocol.io) server at `/mcp`, so an agent
 such as Claude Code can open datasets, run the processing and do the statistics with the same
