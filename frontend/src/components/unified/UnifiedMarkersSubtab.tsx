@@ -15,7 +15,7 @@ import { MarkerSpecificityPlot } from "@/components/plots/MarkerSpecificityPlot"
 import { CountSplitCheck } from "@/components/unified/CountSplitCheck";
 import type { SplitMarkersResult } from "@/api/splitMarkers";
 import { splitPValueMap } from "@/lib/splitMarkers";
-import { MARKERS_PER_GROUP, NO_MARKERS_REASON, noMarkersReason, oneGroupReason } from "@/api/markers";
+import { MARKERS_PER_GROUP, NO_MARKERS_REASON, markersBlockedReason, noMarkersReason } from "@/api/markers";
 import { AddToGeneListMenu } from "@/components/common/AddToGeneListMenu";
 import { Help } from "@/components/common/Help";
 import { GeneReportButton } from "@/components/report/ReportButtons";
@@ -24,6 +24,7 @@ import { OffTargetPanel } from "@/components/unified/OffTargetPanel";
 import { ProteinNetwork } from "@/components/unified/ProteinNetwork";
 import { formatFoldChange, formatPValue } from "@/lib/formatting";
 import { downloadCsv } from "@/lib/csv";
+import { errorMessage } from "@/lib/errorMessage";
 import {
   MARKER_CSV_HEADERS,
   SPECIFICITY_HELP,
@@ -111,10 +112,11 @@ export function UnifiedMarkersSubtab({
     });
   }, [dataset]);
 
-  // A grouping with one group (chosen on another tab, say) has no markers: the
-  // backend refuses it, so say so here instead of asking.
+  // A grouping with one group (chosen on another tab, say), or a dataset with no
+  // grouping at all yet, has no markers: the backend refuses one group, so say so
+  // here instead of asking.
   const oneGroup = useMemo(
-    () => oneGroupReason(dataset?.obs_columns.find((c) => c.name === groupByColumn)),
+    () => markersBlockedReason(dataset?.obs_columns ?? [], groupByColumn),
     [dataset, groupByColumn],
   );
 
@@ -162,7 +164,7 @@ export function UnifiedMarkersSubtab({
         if (cancelled) return;
         const msg = err instanceof Error ? err.message : String(err);
         if (msg.includes("404")) setNoMarkers(NO_MARKERS_REASON);
-        else setError(msg);
+        else setError(errorMessage(err));
         setIsLoading(false);
       });
 

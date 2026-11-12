@@ -16,6 +16,7 @@ import {
 } from "@/api/activity";
 import { activityLabel, filterRows, heatmapData, sourceRows } from "@/lib/activity";
 import { plotConfig } from "@/lib/plotConfig";
+import { errorMessage } from "@/lib/errorMessage";
 import { RequestError } from "@/components/common/RequestError";
 import { CytokineResponse } from "./CytokineResponse";
 import { TfMotifCandidates } from "./TfMotifCandidates";
@@ -84,7 +85,7 @@ export function UnifiedActivitySubtab({ onScore, groupByColumn, setGroupByColumn
       .catch((e) => {
         if (!cancelled) {
           setSummary(null);
-          setError(e instanceof Error ? e.message : String(e));
+          setError(errorMessage(e));
         }
       })
       .finally(() => {
@@ -104,7 +105,7 @@ export function UnifiedActivitySubtab({ onScore, groupByColumn, setGroupByColumn
         onScore(new Float32Array(res.scores), activityLabel(network, source), undefined, { network, source });
         setShown(source);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(errorMessage(e));
       } finally {
         setColouring(null);
       }

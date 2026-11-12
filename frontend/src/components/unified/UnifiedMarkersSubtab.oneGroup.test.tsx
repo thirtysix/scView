@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { DatasetInfo, ObsColumnInfo } from "@/api/types";
-import { oneGroupReason } from "@/api/markers";
+import { NO_GROUPING_REASON, markersBlockedReason, oneGroupReason } from "@/api/markers";
 import { defaultGroupBy } from "@/lib/obsColumns";
 import { resetViewForDataset, useDatasetStore } from "@/stores/datasetStore";
 import { useUnifiedViewStore } from "@/stores/unifiedViewStore";
@@ -50,6 +50,14 @@ describe("oneGroupReason", () => {
     expect(oneGroupReason(CLUSTERS)).toBeNull();
     expect(oneGroupReason(undefined)).toBeNull();
   });
+
+  it("blocks a dataset with no grouping, but not one still undescribed", () => {
+    const umi = { name: "total_counts", dtype: "float32", n_unique: 90 };
+    expect(markersBlockedReason([LIBRARY, umi], "")).toBe(NO_GROUPING_REASON);
+    expect(markersBlockedReason([LIBRARY, CLUSTERS], "")).toBeNull();
+    expect(markersBlockedReason([], "")).toBeNull();
+    expect(markersBlockedReason([LIBRARY, CLUSTERS], "library_id")).toMatch(/only one group/);
+  });
 });
 
 describe("a group-by kept across datasets", () => {
@@ -72,6 +80,21 @@ describe("UnifiedMarkersSubtab on a one-group column", () => {
     expect(screen.getByTestId("one-group")).toHaveTextContent("library_id has only one group");
     fireEvent.change(screen.getByLabelText("Group markers by"), { target: { value: "leiden" } });
     expect(setGroupByColumn).toHaveBeenCalledWith("leiden");
+  });
+
+  it("says to cluster first when no column has two groups", () => {
+    useDatasetStore.setState({ currentDataset: dataset([LIBRARY]), currentDatasetId: "xen" });
+    render(<UnifiedMarkersSubtab onGeneClick={vi.fn()} groupByColumn="" setGroupByColumn={vi.fn()} />);
+    expect(apiFetch).not.toHaveBeenCalled();
+    expect(screen.getByTestId("one-group")).toHaveTextContent(NO_GROUPING_REASON);
+  });
+
+  it("shows the server's reason, not its JSON, when markers fail", async () => {
+    useDatasetStore.setState({ currentDataset: dataset([LIBRARY, CLUSTERS]), currentDatasetId: "xen" });
+    apiFetch.mockRejectedValue(new Error('API error 400: {"detail":"Column \'leiden\' has 101 groups."}'));
+    render(<UnifiedMarkersSubtab onGeneClick={vi.fn()} groupByColumn="leiden" setGroupByColumn={vi.fn()} />);
+    expect(await screen.findByText("Column 'leiden' has 101 groups.")).toBeInTheDocument();
+    expect(screen.queryByText(/API error|detail/)).toBeNull();
   });
 
   it("asks for a column with two groups", async () => {

@@ -9,6 +9,7 @@ import {
 } from "@/api/pathways";
 import { listDEResults, type DEResultSummary } from "@/api/deOverlap";
 import { Panel } from "@/components/common/Panel";
+import { errorMessage } from "@/lib/errorMessage";
 import { PathwayDiagram } from "@/components/unified/PathwayDiagram";
 
 /** A Reactome row opened from an enrichment table. */
@@ -57,7 +58,7 @@ export function PathwayDiagramPanel({ datasetId, datasetName, open, onClose }: P
     setModel(null);
     getReactomeDiagram(stId)
       .then((m) => live && setModel(m))
-      .catch((e: unknown) => live && setError(e instanceof Error ? e.message : String(e)))
+      .catch((e: unknown) => live && setError(errorMessage(e)))
       .finally(() => live && setLoading(false));
     return () => {
       live = false;
@@ -101,7 +102,7 @@ export function PathwayDiagramPanel({ datasetId, datasetName, open, onClose }: P
     if (!colour || !model || model.too_broad) return;
     getReactomeValues(datasetId, stId, colour)
       .then((v) => live && setValues(v))
-      .catch((e: unknown) => live && setValuesError(e instanceof Error ? e.message : String(e)));
+      .catch((e: unknown) => live && setValuesError(errorMessage(e)));
     return () => {
       live = false;
     };
