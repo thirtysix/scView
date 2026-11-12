@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Loader2 } from "lucide-react";
 import Plot from "@/components/plots/Plot";
 import { Caption } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
+import { HoverTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
 import { getCnv, getCnvHeatmap, type CnvHeatmap, type CnvSummary } from "@/api/cnv";
 import { CnvRunForm } from "@/components/unified/CnvRunForm";
@@ -106,14 +107,17 @@ export function CnvSubtab() {
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-1.5 text-xs font-medium text-slate-700">
-        Copy number (inferred from expression)
-        <InfoTip label="About copy-number inference" width={300}>
-          A gained chromosome arm raises the expression of all its genes a little; a lost one lowers it. Averaged
-          over about 100 neighbouring genes and compared with normal cells, this separates malignant cells (many
-          changes) from normal ones (none). It is inferred from RNA, not measured on DNA: it needs a true normal
-          reference from the same samples, low sequencing depth makes it noisy, and changes smaller than the window
-          are not seen.
-        </InfoTip>
+        <HoverTip
+          tip={<>
+            A gained chromosome arm raises the expression of all its genes a little; a lost one lowers it. Averaged
+            over about 100 neighbouring genes and compared with normal cells, this separates malignant cells (many
+            changes) from normal ones (none). It is inferred from RNA, not measured on DNA: it needs a true normal
+            reference from the same samples, low sequencing depth makes it noisy, and changes smaller than the window
+            are not seen.
+          </>}
+        >
+          Copy number (inferred from expression)
+        </HoverTip>
       </div>
 
       {summary && (
@@ -150,7 +154,9 @@ export function CnvSubtab() {
             </p>
           ))}
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[11px] text-slate-500">Colour the cells by</span>
+            <span className="text-[11px] text-slate-500">
+              <Help id="cnv.colour_by">Colour the cells by</Help>
+            </span>
             {(["cnv_score", "cnv_leiden"] as const).map((c) => (
               <button
                 key={c}
@@ -166,7 +172,7 @@ export function CnvSubtab() {
           </div>
 
           <label className="block text-[11px] font-medium text-slate-500">
-            Group the rows by
+            <Help id="cnv.rows_by">Group the rows by</Help>
             <select
               aria-label="Group the rows by"
               value={groupby}
@@ -223,7 +229,10 @@ export function CnvSubtab() {
                   { value: heat.groups.length, unit: "groups" },
                 ]}
               >
-                Each row a cell, each column a stretch of the genome (chromosomes 1 to X, left to right). Red: higher
+                <Help id="cnv.heatmap">
+                  Each row a cell, each column a stretch of the genome (chromosomes 1 to X, left to right).
+                </Help>{" "}
+                Red: higher
                 than the reference (a gain), blue: lower (a loss). Cells sampled per {prettyObsLabel(heat.column)} group
                 in proportion to its size, ordered by CNV cluster.
               </Caption>
@@ -249,8 +258,10 @@ export function CnvSubtab() {
                 />
               </div>
               <Caption n={{ value: summary.by_group.groups.length, unit: "groups" }}>
-                CNV score (a cell&apos;s mean absolute value over the genome) per{" "}
-                {prettyObsLabel(summary.by_group.column)} group; grey boxes are reference groups. Malignant cells
+                <Help id="cnv.score_box">
+                  CNV score (a cell&apos;s mean absolute value over the genome) per{" "}
+                  {prettyObsLabel(summary.by_group.column)} group;
+                </Help> grey boxes are reference groups. Malignant cells
                 score well above the reference.
               </Caption>
             </div>
@@ -259,12 +270,16 @@ export function CnvSubtab() {
           {summary.clusters && summary.clusters.length > 0 && (
             <div>
               <div className="mb-0.5 flex items-center gap-1 text-[11px] font-medium text-slate-600">
-                CNV clusters
-                <InfoTip label="About CNV clusters" width={260}>
-                  Cells clustered on their copy-number profiles (PCA, neighbour graph, Leiden). High: mean score at
-                  least {summary.defaults.high_ratio}x the reference cells&apos; and under half reference cells. A
-                  chromosome is called gained or lost when its mean value in the cluster is clearly away from 0.
-                </InfoTip>
+                <HoverTip
+                  width={260}
+                  tip={<>
+                    Cells clustered on their copy-number profiles (PCA, neighbour graph, Leiden). High: mean score at
+                    least {summary.defaults.high_ratio}x the reference cells&apos; and under half reference cells. A
+                    chromosome is called gained or lost when its mean value in the cluster is clearly away from 0.
+                  </>}
+                >
+                  CNV clusters
+                </HoverTip>
               </div>
               <div className="max-h-64 overflow-auto rounded-lg border border-slate-200">
                 <table className="w-full text-xs">

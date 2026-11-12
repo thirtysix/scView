@@ -17,7 +17,7 @@ import {
 } from "@/api/milode";
 import type { DatasetInfo } from "@/api/types";
 import { Caption, CapNote } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { SortableTh, ariaSort } from "@/components/common/SortableTh";
 import Plot from "@/components/plots/Plot";
 import { DIVERGING_COLORSCALE } from "@/lib/cellHeatmap";
@@ -339,13 +339,14 @@ export function MiloDETest({ datasetId, info }: Props) {
             </select>
           </label>
           <label className="text-xs font-medium text-slate-500">
-            <span className="mb-1 flex items-center gap-1">
-              Neighbours (k)
-              <InfoTip label="About the neighbourhoods">
+            <span className="mb-1 block">
+              <HoverTip tip={<>
                 As miloDE: a k-nearest-neighbour graph is built on the dataset&apos;s own embedding, and a
                 neighbourhood is every cell within two steps of a sampled centre, a few hundred cells, so
                 each holds enough cells per donor to sum. A larger k gives bigger, fewer neighbourhoods.
-              </InfoTip>
+              </>}>
+                Neighbours (k)
+              </HoverTip>
             </span>
             <select aria-label="Neighbourhood DE k" value={String(k)}
               onChange={(e) => setK(Number(e.target.value))} className={selectCls}>
@@ -442,12 +443,15 @@ export function MiloDETest({ datasetId, info }: Props) {
           <div className="grid gap-4 xl:grid-cols-2">
             <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
               <div className="mb-2 flex items-center gap-2">
-                <h5 className="text-sm font-medium text-slate-700">Genes</h5>
-                <InfoTip label="About the gene table">
-                  How widespread each gene&apos;s DE is: in how many of the neighbourhoods where it was tested it
-                  is DE (spatial FDR &lt; {result.alpha}), and its median log2 fold change over them. A gene DE
-                  in nearly all neighbourhoods changes everywhere; one DE in a few changes in one region.
-                </InfoTip>
+                <h5 className="text-sm font-medium text-slate-700">
+                  <HoverTip tip={<>
+                    How widespread each gene&apos;s DE is: in how many of the neighbourhoods where it was tested it
+                    is DE (spatial FDR &lt; {result.alpha}), and its median log2 fold change over them. A gene DE
+                    in nearly all neighbourhoods changes everywhere; one DE in a few changes in one region.
+                  </>}>
+                    Genes
+                  </HoverTip>
+                </h5>
                 <input type="search" aria-label="Filter genes" placeholder="Filter genes" value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   className="ml-auto w-36 rounded border border-slate-300 px-2 py-0.5 text-xs" />
@@ -513,13 +517,16 @@ export function MiloDETest({ datasetId, info }: Props) {
 
           <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
             <div className="mb-2 flex items-center gap-2">
-              <h5 className="text-sm font-medium text-slate-700">Neighbourhoods</h5>
-              <InfoTip label="About the neighbourhood table">
-                Genes DE in each neighbourhood: by the spatial FDR across neighbourhoods (as the gene table),
-                and by Benjamini-Hochberg within the neighbourhood alone. Click a row to select its cells and
-                list its genes. &quot;Few cells of one condition&quot;: under {Math.round(result.one_sided * 100)}% of
-                its cells come from one condition, so its fold changes rest on a handful of cells per sample.
-              </InfoTip>
+              <h5 className="text-sm font-medium text-slate-700">
+                <HoverTip tip={<>
+                  Genes DE in each neighbourhood: by the spatial FDR across neighbourhoods (as the gene table),
+                  and by Benjamini-Hochberg within the neighbourhood alone. Click a row to select its cells and
+                  list its genes. &quot;Few cells of one condition&quot;: under {Math.round(result.one_sided * 100)}% of
+                  its cells come from one condition, so its fold changes rest on a handful of cells per sample.
+                </>}>
+                  Neighbourhoods
+                </HoverTip>
+              </h5>
             </div>
             {picked && (
               <p className="mb-2 flex flex-wrap items-center gap-2 text-xs text-slate-600" data-testid="milode-picked">

@@ -4,7 +4,7 @@ import { Loader2 } from "lucide-react";
 import { fetchEmbeddingBinary } from "@/api/embeddings";
 import { getWnn, getWnnWeights, type WnnInfo, type WnnWeights } from "@/api/wnn";
 import { Caption } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
 import { RequestError } from "@/components/common/RequestError";
 import Plot from "@/components/plots/Plot";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
@@ -129,13 +129,8 @@ export function WnnCard({ datasetId, groupByColumn }: { datasetId: string; group
 
   return (
     <section className="space-y-2 rounded-lg border border-slate-200 p-2" aria-label="Joint RNA + protein (WNN)">
-      <h4 className="flex items-center gap-1 text-xs font-semibold text-slate-600">
-        <span>Joint RNA + protein (WNN)</span>
-        <InfoTip label="About WNN" width={300}>
-          Weighted nearest neighbours (Hao et al. 2021, Cell): for each cell, how well its RNA neighbours and its
-          protein neighbours predict it decides how much each modality counts; one neighbour graph is then built from
-          both. The same method as Seurat&rsquo;s FindMultiModalNeighbors.
-        </InfoTip>
+      <h4 className="text-xs font-semibold text-slate-600">
+        <Help id="protein.wnn">Joint RNA + protein (WNN)</Help>
       </h4>
 
       {loading && !info && (
@@ -219,7 +214,7 @@ export function WnnCard({ datasetId, groupByColumn }: { datasetId: string; group
               disabled={busy}
               className="rounded border border-slate-300 px-2 py-0.5 text-[11px] text-slate-700 hover:border-primary hover:text-primary disabled:opacity-50"
             >
-              Colour by RNA weight
+              <Help id="protein.rna_weight">Colour by RNA weight</Help>
             </button>
             <button
               type="button"
@@ -230,17 +225,13 @@ export function WnnCard({ datasetId, groupByColumn }: { datasetId: string; group
             >
               Colour by WNN clusters
             </button>
-            <InfoTip label="About the RNA weight" width={280}>
-              Hao 2021&rsquo;s per-cell modality weight: 0 to 1, RNA and protein weights sum to 1. Drawn on a fixed
-              0-1 scale.
-            </InfoTip>
           </div>
           {weights?.violin && Object.keys(weights.violin).length > 0 && (
             <WeightBoxes violin={weights.violin} column={groupby} />
           )}
           {groupby && rows.length > 0 && (
             <Caption n={{ value: rows.reduce((a, r) => a + r.n_cells, 0), unit: "cells" }}>
-              RNA weight by {prettyObsLabel(groupby)}
+              <Help id="protein.weight_by_group">RNA weight by {prettyObsLabel(groupby)}</Help>
               {ends ? `: highest in ${ends.rna}, lowest (protein counts most) in ${ends.protein}` : ""}.
             </Caption>
           )}

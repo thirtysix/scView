@@ -15,7 +15,7 @@ import {
   type VelocityStatus,
 } from "@/api/velocity";
 import { Caption, capText } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
 import Plot from "@/components/plots/Plot";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
 import { useEmbedding } from "@/hooks/useEmbedding";
@@ -281,7 +281,9 @@ export function VelocitySubtab() {
 
       <div className="flex flex-wrap items-center gap-2">
         <label className="cursor-pointer rounded-md border border-slate-300 bg-white px-2 py-1 hover:bg-slate-50">
-          {status.attached ? "Attach other counts" : "Attach a file"} (.loom, .h5ad)
+          <Help id="velocity.attach">
+            {status.attached ? "Attach other counts" : "Attach a file"} (.loom, .h5ad)
+          </Help>
           <input
             type="file"
             accept=".loom,.h5ad"
@@ -294,7 +296,7 @@ export function VelocitySubtab() {
           />
         </label>
         <label className="cursor-pointer rounded-md border border-slate-300 bg-white px-2 py-1 hover:bg-slate-50">
-          STARsolo files
+          <Help id="velocity.attach">STARsolo files</Help>
           <input
             type="file"
             multiple
@@ -319,7 +321,9 @@ export function VelocitySubtab() {
         <div className="space-y-2 rounded-md border border-slate-200 p-2">
           <div className="grid grid-cols-2 gap-2">
             <label className="flex flex-col gap-0.5">
-              <span className="text-slate-500">Model</span>
+              <span className="text-slate-500">
+                <Help id="velocity.model">Model</Help>
+              </span>
               <select
                 value={method}
                 onChange={(e) => setMethod(e.target.value as VelocityMethod)}
@@ -331,7 +335,9 @@ export function VelocitySubtab() {
               </select>
             </label>
             <label className="flex flex-col gap-0.5">
-              <span className="text-slate-500">Table by</span>
+              <span className="text-slate-500">
+                <Help id="velocity.table_by" align="right">Table by</Help>
+              </span>
               <select
                 value={groupBy}
                 onChange={(e) => setGroupBy(e.target.value)}
@@ -344,7 +350,9 @@ export function VelocitySubtab() {
               </select>
             </label>
             <label className="flex flex-col gap-0.5">
-              <span className="text-slate-500">Top genes</span>
+              <span className="text-slate-500">
+                <Help id="velocity.n_top">Top genes</Help>
+              </span>
               <input
                 type="number"
                 min={100}
@@ -356,7 +364,9 @@ export function VelocitySubtab() {
               />
             </label>
             <label className="flex flex-col gap-0.5">
-              <span className="text-slate-500">Neighbours</span>
+              <span className="text-slate-500">
+                <Help id="velocity.neighbors" align="right">Neighbours</Help>
+              </span>
               <input
                 type="number"
                 min={5}
@@ -414,7 +424,7 @@ export function VelocitySubtab() {
             <div className="flex flex-wrap items-center gap-3">
               <label className="flex items-center gap-1">
                 <input type="checkbox" checked={arrows.on} onChange={(e) => setArrows({ on: e.target.checked })} />
-                Arrows on the plot
+                <Help id="velocity.arrows">Arrows on the plot</Help>
               </label>
               <label className="flex items-center gap-1">
                 Scale
@@ -445,7 +455,7 @@ export function VelocitySubtab() {
                 onClick={colourByConfidence}
                 className="rounded-md border border-slate-300 px-2 py-0.5 hover:bg-slate-50"
               >
-                Colour by confidence
+                <Help id="velocity.confidence">Colour by confidence</Help>
               </button>
             </div>
             {blocked && <p className="text-amber-700">{blocked}</p>}
@@ -458,7 +468,10 @@ export function VelocitySubtab() {
           ))}
 
           <Caption n={[{ value: run.n_cells, unit: "cells", of: run.n_dataset_cells }, { value: run.n_velocity_genes, unit: "velocity genes", of: run.n_genes_fit }]}>
-            {run.method_name}. Median confidence {run.median_confidence.toFixed(2)}, unspliced {(run.unspliced_fraction * 100).toFixed(1)}%.{" "}
+            <Help id="velocity.summary">
+              {run.method_name}. Median confidence {run.median_confidence.toFixed(2)}, unspliced{" "}
+              {(run.unspliced_fraction * 100).toFixed(1)}%.
+            </Help>{" "}
             {run.neighbours_note} {run.pca_note ? `${run.pca_note}.` : ""}
           </Caption>
 
@@ -497,12 +510,9 @@ export function VelocitySubtab() {
 
           <div>
             <div className="mb-1 flex items-center gap-2">
-              <span className="font-medium">Phase portrait</span>
-              <InfoTip label="What a phase portrait shows">
-                Each dot is a cell's spliced and unspliced first moments for this gene, the mean over the cell and its
-                neighbours. The red line is the fitted steady-state ratio gamma. Cells above it are read as inducing the gene, cells
-                below as repressing it. A gene with no clear almond shape gives little to fit.
-              </InfoTip>
+              <span className="font-medium">
+                <Help id="velocity.phase">Phase portrait</Help>
+              </span>
               <select
                 aria-label="Gene"
                 value={gene ?? ""}

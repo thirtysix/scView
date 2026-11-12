@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Download, Loader2 } from "lucide-react";
 import { Caption, CapNote } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
+import { HoverTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
 import { SortableTh, ariaSort } from "@/components/common/SortableTh";
 import {
@@ -119,19 +120,23 @@ export function SpatialGenesSubtab({
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-1.5 text-xs font-medium text-slate-700">
-        Spatially variable genes
-        <InfoTip label="About Moran's I" width={300}>
-          Moran&apos;s I asks whether neighbouring {units} have similar values of a gene: 1 means neighbours are
-          alike, about 0 means the pattern is random, and below 0 means neighbours differ. Each {spatial.unit}{" "}
-          is compared with its {spatial.unit === "bin" ? "4 nearest bins (those sharing a side)" : `6 nearest ${units}`} in
-          the same section.
-        </InfoTip>
+      <div className="text-xs font-medium text-slate-700">
+        <HoverTip
+          width={300}
+          tip={<>
+            Moran&apos;s I asks whether neighbouring {units} have similar values of a gene: 1 means neighbours are
+            alike, about 0 means the pattern is random, and below 0 means neighbours differ. Each {spatial.unit}{" "}
+            is compared with its {spatial.unit === "bin" ? "4 nearest bins (those sharing a side)" : `6 nearest ${units}`} in
+            the same section.
+          </>}
+        >
+          Spatially variable genes
+        </HoverTip>
       </div>
 
       <div className="flex flex-wrap items-end gap-2 text-xs">
         <label className="flex flex-col gap-0.5 text-[11px] text-slate-500">
-          Genes
+          <Help id="spatial.genes">Genes</Help>
           <select
             value={genes}
             onChange={(e) => setGenes(e.target.value as "hvg" | "all")}
@@ -143,7 +148,7 @@ export function SpatialGenesSubtab({
         </label>
         {libs.length > 1 && (
           <label className="flex flex-col gap-0.5 text-[11px] text-slate-500">
-            Section
+            <Help id="spatial.section">Section</Help>
             <select
               value={library}
               onChange={(e) => setLibrary(e.target.value)}
@@ -195,7 +200,9 @@ export function SpatialGenesSubtab({
       {result && (
         <div className="space-y-2">
           <Caption n={[{ value: result.n_obs, unit: resultUnits }, { value: result.n_genes, unit: "genes" }]}>
-            Moran&apos;s I of {result.genes === "hvg" ? "the variable genes" : result.genes === "all" ? "every gene" : "the chosen genes"}
+            <Help id="spatial.table">
+              Moran&apos;s I of {result.genes === "hvg" ? "the variable genes" : result.genes === "all" ? "every gene" : "the chosen genes"}
+            </Help>
             {result.libraries.length === 1 && libs.length > 1 ? ` in section ${result.libraries[0]}` : ""};{" "}
             {result.n_significant.toLocaleString()} spatially variable (I &gt; 0, adjusted p &lt; {PADJ}).
           </Caption>

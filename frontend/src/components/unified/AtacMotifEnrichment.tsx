@@ -12,7 +12,8 @@ import {
   type MotifLogo,
 } from "@/api/atacMotifs";
 import { CapNote, Caption } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
+import { HoverTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
 import { daTestName, formatP } from "@/lib/atac";
 import { formatFold, formatPct } from "@/lib/atacMotifs";
@@ -100,14 +101,18 @@ export function AtacMotifEnrichment({ datasetId }: { datasetId: string }) {
   const numberInput = "w-14 rounded border border-slate-300 bg-white px-1 py-0.5 text-[11px] text-slate-700";
   return (
     <div className="space-y-1.5 border-t border-slate-200 pt-2" data-testid="atac-motif-enrichment">
-      <h5 className="flex items-center gap-1 text-[11px] font-semibold text-slate-600">
-        <span>Enriched in differential peaks</span>
-        <InfoTip label="About motif enrichment" width={340}>
-          Signac&rsquo;s FindMotifs. The query is what its vignette takes from a differential test: peaks up in the group at p &lt; 0.005 and open in
-          over 20% of it. The background is 40,000 other peaks drawn to match the query&rsquo;s GC content; one-sided hypergeometric, BH across the 879
-          motifs. A stored differential result keeps each group&rsquo;s 5,000 lowest p, so a query can stop there. Whether the TF itself is expressed in the
-          group separates some paralogues. A motif hit is not binding, and GC-rich motifs enrich easily even after matching.
-        </InfoTip>
+      <h5 className="text-[11px] font-semibold text-slate-600">
+        <HoverTip
+          width={340}
+          tip={<>
+            Signac&rsquo;s FindMotifs. The query is what its vignette takes from a differential test: peaks up in the group at p &lt; 0.005 and open in
+            over 20% of it. The background is 40,000 other peaks drawn to match the query&rsquo;s GC content; one-sided hypergeometric, BH across the 879
+            motifs. A stored differential result keeps each group&rsquo;s 5,000 lowest p, so a query can stop there. Whether the TF itself is expressed in the
+            group separates some paralogues. A motif hit is not binding, and GC-rich motifs enrich easily even after matching.
+          </>}
+        >
+          Enriched in differential peaks
+        </HoverTip>
       </h5>
       <div className="flex flex-wrap items-center gap-1.5">
         <label className="flex items-center gap-1 text-[11px] text-slate-600">
@@ -120,7 +125,7 @@ export function AtacMotifEnrichment({ datasetId }: { datasetId: string }) {
           <input value={pMax} onChange={(e) => setPMax(e.target.value)} inputMode="decimal" aria-label="Largest p or FDR" className={numberInput} />
         </label>
         <label className="flex items-center gap-1 text-[11px] text-slate-600">
-          open in over
+          <Help id="atac.motif-query">open in over</Help>
           <input value={minPct} onChange={(e) => setMinPct(e.target.value)} inputMode="decimal" aria-label="Smallest % of the group's cells" className={numberInput} />
           % of the group
         </label>

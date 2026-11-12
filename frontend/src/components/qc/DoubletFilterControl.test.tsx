@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { FilterPreview, FilterThresholds } from "@/api/qc";
+import { hoverTip, unhover } from "@/test/hoverTip";
 import type { DoubletChoices } from "@/api/doubletSource";
 import { DoubletFilterControl } from "./DoubletFilterControl";
 
@@ -39,6 +40,18 @@ describe("DoubletFilterControl", () => {
     expect(screen.getByText(/usually empty droplets or cells whose tagging failed/)).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText("Also drop predicted doublets"));
     expect(onChange).toHaveBeenCalledWith({ drop_doublets: false });
+  });
+
+  it("explains the sources on hovering the checkbox text, only when there is a choice", async () => {
+    const { rerender } = render(<DoubletFilterControl preview={preview(CHOICES)} thresholds={T} onChange={vi.fn()} />);
+    expect(await hoverTip(screen.getByText("Also drop predicted doublets"))).toContain(
+      "Cell hashing sees doublets of two samples by their tags",
+    );
+    unhover(screen.getByText("Also drop predicted doublets"));
+    rerender(<DoubletFilterControl preview={preview(undefined)} thresholds={T} onChange={vi.fn()} />);
+    fireEvent.mouseEnter(screen.getByText("Also drop predicted doublets"));
+    await act(() => new Promise((r) => setTimeout(r, 350)));
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
 
   it("names Scrublet without a choice when there is no hashing", () => {

@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { Loader2, Play, Square } from "lucide-react";
 import type { ProgramsDefaults, ProgramsRunnable } from "@/api/programs";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
 import { formatDuration } from "@/lib/hvgSensitivity";
 import { parseSweep } from "@/lib/programs";
 import { useProgramsRunStore } from "@/stores/programsRunStore";
@@ -56,11 +57,12 @@ export function ProgramsRunForm({
   return (
     <div className="space-y-2 rounded-lg border border-slate-200 p-2.5" data-testid="programs-run-form">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-slate-600">
-        <label className="flex items-center gap-1" title={`Programs to find (${defaults.min_k} to ${defaults.max_k})`}>
-          k
+        <label className="flex items-center gap-1">
+          <Help id="programs.k">k</Help>
           <input
             type="number"
             aria-label="Number of programs (k)"
+            title={`Programs to find (${defaults.min_k} to ${defaults.max_k})`}
             min={defaults.min_k}
             max={defaults.max_k}
             value={k}
@@ -68,11 +70,8 @@ export function ProgramsRunForm({
             className={inputClass}
           />
         </label>
-        <label
-          className="flex items-center gap-1"
-          title="NMF runs from different random starts (seeds 0, 1, ...); a program is stable when every run finds it"
-        >
-          seeds
+        <label className="flex items-center gap-1">
+          <Help id="programs.seeds">seeds</Help>
           <input
             type="number"
             aria-label="Number of seeds"
@@ -98,13 +97,6 @@ export function ProgramsRunForm({
             className="w-28 rounded border border-slate-300 bg-white px-1.5 py-0.5 text-xs text-slate-700"
           />
         )}
-        <InfoTip label="About the run" align="right" width={280}>
-          NMF on the {runnable.n_flagged?.toLocaleString()} variable genes ({runnable.source}), each
-          divided by its standard deviation, from {seeds} random start{seeds === 1 ? "" : "s"}; the runs&apos;
-          programs are matched by k-means and their median kept (consensus NMF, Kotliar et al. 2019).
-          Compare k fits each value the same way, then saves the programs for k = {k}. A new run replaces
-          the saved programs.
-        </InfoTip>
       </div>
       {(sweepError || !kOk || !seedsOk) && (
         <p className="text-[11px] text-amber-700">
@@ -122,7 +114,20 @@ export function ProgramsRunForm({
             className="flex items-center gap-1 rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-white disabled:opacity-50"
           >
             <Play className="h-3 w-3" />
-            {hasResult ? "Run again" : "Find programs"}
+            <HoverTip
+              width={280}
+              tip={
+                <>
+                  NMF on the {runnable.n_flagged?.toLocaleString()} variable genes ({runnable.source}), each
+                  divided by its standard deviation, from {seeds} random start{seeds === 1 ? "" : "s"}; the runs&apos;
+                  programs are matched by k-means and their median kept (consensus NMF, Kotliar et al. 2019).
+                  Compare k fits each value the same way, then saves the programs for k = {k}. A new run replaces
+                  the saved programs.
+                </>
+              }
+            >
+              {hasResult ? "Run again" : "Find programs"}
+            </HoverTip>
           </button>
         ) : (
           <button

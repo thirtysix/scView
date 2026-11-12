@@ -16,6 +16,7 @@ vi.mock("@/components/qc/SequencingQc", () => ({ SequencingQc: () => null }));
 vi.mock("@/components/qc/Hashing", () => ({ Hashing: () => null }));
 
 import { DataAssessmentPanel } from "./DataAssessmentPanel";
+import { hoverTip } from "@/test/hoverTip";
 import { useDatasetStore } from "@/stores/datasetStore";
 
 const STEPS = [
@@ -72,8 +73,7 @@ describe("DataAssessmentPanel: the Leiden optimisation setting", () => {
       "Full optimisation (default)",
       "Fast Leiden (2 passes)",
     ]);
-    fireEvent.mouseEnter(screen.getByRole("button", { name: "What fast Leiden changes" }));
-    expect(screen.getByRole("tooltip")).toHaveTextContent("ARI 0.93-0.97");
+    expect(await hoverTip(screen.getByText("Leiden optimisation"))).toContain("ARI 0.93-0.97");
   });
 
   it("sends fast Leiden as the number 2 with the run", async () => {

@@ -23,6 +23,8 @@ vi.mock("@/components/plots/Plot", () => ({
 }));
 
 import { SpatialDomainsSubtab } from "./SpatialDomainsSubtab";
+import { SPATIAL_HELP } from "@/lib/help/spatial";
+import { hoverTip, unhover } from "@/test/hoverTip";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useSpatialDomainsRunStore } from "@/stores/spatialDomainsRunStore";
@@ -96,6 +98,19 @@ describe("SpatialDomainsSubtab", () => {
     expect(plan).toHaveTextContent("First 10 components of the PCA, 3 hops");
     expect(plan).toHaveTextContent("Suggest k tries k = 2 to 15, 5 fits each; about 3 min");
     expect(api.getSpatialDomains).toHaveBeenCalledWith("d1", { k: 7, n_hops: 3, n_pcs: 10, enrichment_column: undefined });
+  });
+
+  it("keeps each field's label on its input, and hovering the label shows its tip", async () => {
+    render(<SpatialDomainsSubtab {...groupProps} />);
+    await screen.findByTestId("domains-plan");
+    for (const [label, id] of [["Domains (k)", "domains.k"], ["Hops", "domains.hops"],
+      ["Components", "domains.components"], ["Save as", "domains.save-as"]] as const) {
+      expect(screen.getByLabelText(label).tagName).toBe("INPUT");
+      const text = screen.getByText(label);
+      expect(await hoverTip(text)).toBe(SPATIAL_HELP[id]);
+      unhover(text);
+    }
+    expect(screen.queryByRole("button", { name: /^About/ })).toBeNull();
   });
 
   it("calls bins bins", async () => {

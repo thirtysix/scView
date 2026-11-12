@@ -14,7 +14,8 @@ import {
   type SpotSummary,
 } from "@/api/spotDeconvolution";
 import { Caption } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
+import { HoverTip } from "@/components/common/InfoTip";
 import { unitWord } from "@/lib/spatial";
 import { SpotCompositionCheck } from "@/components/unified/SpotCompositionCheck";
 import { SpotReferenceLabels } from "@/components/unified/SpotReferenceLabels";
@@ -242,13 +243,17 @@ export function SpotCompositionSubtab() {
 
   return (
     <div className="space-y-3 text-xs" data-testid="spot-composition">
-      <div className="flex items-center gap-1.5 font-medium text-slate-700">
-        Spot composition
-        <InfoTip label="About spot composition" width={320}>
-          {bins ? "A Visium HD bin is a square of the capture grid, which can hold parts of several cells." : "Each Visium spot holds several cells."}{" "}
-          This estimates which cell types make up each {unit}, from the profiles of an annotated single-cell dataset in
-          your library (the reference): a fit of the {unit}&apos;s counts as a mix of those profiles, as RCTD does.
-        </InfoTip>
+      <div className="font-medium text-slate-700">
+        <HoverTip
+          width={320}
+          tip={<>
+            {bins ? "A Visium HD bin is a square of the capture grid, which can hold parts of several cells." : "Each Visium spot holds several cells."}{" "}
+            This estimates which cell types make up each {unit}, from the profiles of an annotated single-cell dataset in
+            your library (the reference): a fit of the {unit}&apos;s counts as a mix of those profiles, as RCTD does.
+          </>}
+        >
+          Spot composition
+        </HoverTip>
       </div>
       {!info.available ? (
         <p className="text-slate-500">{info.reason}</p>
@@ -256,7 +261,7 @@ export function SpotCompositionSubtab() {
         <div className="space-y-2 rounded border border-slate-200 p-2">
           <div className="flex flex-wrap items-center gap-2">
             <label className="flex items-center gap-1">
-              Reference
+              <Help id="spotcomp.reference">Reference</Help>
               <select
                 className="rounded border px-1 py-0.5"
                 value={refId}
@@ -278,7 +283,7 @@ export function SpotCompositionSubtab() {
             </label>
             {check?.label_columns && check.label_columns.length > 0 && (
               <label className="flex items-center gap-1">
-                Cell types
+                <Help id="spotcomp.celltypes">Cell types</Help>
                 <select
                   className="rounded border px-1 py-0.5"
                   value={column}
@@ -298,7 +303,17 @@ export function SpotCompositionSubtab() {
               </label>
             )}
             <label className="flex items-center gap-1">
-              Method
+              <HoverTip
+                width={340}
+                tip={<>
+                  RCTD-style: each spot&apos;s counts are modelled as Poisson with log-normal noise around a mix of the
+                  reference&apos;s profiles, after a correction for the platform (how the spots measure genes differently
+                  from the reference). Among the best methods in independent benchmarks. NNLS: a plain least-squares fit of
+                  the same profiles; quicker, and a useful baseline.
+                </>}
+              >
+                Method
+              </HoverTip>
               <select
                 className="rounded border px-1 py-0.5"
                 value={method}
@@ -312,12 +327,6 @@ export function SpotCompositionSubtab() {
                   </option>
                 ))}
               </select>
-              <InfoTip label="About the methods" width={340}>
-                RCTD-style: each spot&apos;s counts are modelled as Poisson with log-normal noise around a mix of the
-                reference&apos;s profiles, after a correction for the platform (how the spots measure genes differently
-                from the reference). Among the best methods in independent benchmarks. NNLS: a plain least-squares fit of
-                the same profiles; quicker, and a useful baseline.
-              </InfoTip>
             </label>
           </div>
           {shown && !shown.ok && !labelProblem && <p className="text-amber-700">{shown.reason}</p>}
@@ -376,7 +385,17 @@ export function SpotCompositionSubtab() {
               {running ? <Loader2 className="inline h-3 w-3 animate-spin" /> : null} Fit {units}
             </button>
             <label className="flex items-center gap-1">
-              Count floor
+              <HoverTip
+                width={320}
+                tip={<>
+                  A {unit} with fewer counts than this is not fitted (&quot;low counts&quot;). RCTD&apos;s default for a spot is{" "}
+                  {info.min_spot_umi}; a smaller Visium HD bin holds fewer counts, so its default scales with the bin&apos;s area
+                  (25 at 8 um): on a mouse brain, 8 um bins of 20-100 counts agreed with their 16 um parent bin as bins of 100+
+                  did.
+                </>}
+              >
+                Count floor
+              </HoverTip>
               <input
                 type="number"
                 className="w-20 rounded border px-1 py-0.5"
@@ -388,12 +407,6 @@ export function SpotCompositionSubtab() {
                 aria-label="Count floor"
                 onChange={(e) => setMinUmi(e.target.value === "" ? null : Number(e.target.value))}
               />
-              <InfoTip label="About the count floor" width={320}>
-                A {unit} with fewer counts than this is not fitted (&quot;low counts&quot;). RCTD&apos;s default for a spot is{" "}
-                {info.min_spot_umi}; a smaller Visium HD bin holds fewer counts, so its default scales with the bin&apos;s area
-                (25 at 8 um): on a mouse brain, 8 um bins of 20-100 counts agreed with their 16 um parent bin as bins of 100+
-                did.
-              </InfoTip>
             </label>
             {below && (
               <Caption testId="spot-floor-caption">
@@ -428,37 +441,52 @@ export function SpotCompositionSubtab() {
             {result.types.length} types from <b>{result.reference.name}</b> ({result.celltype_column}),{" "}
             {result.method_name}; {result.n_fitted.toLocaleString()} of {result.n_spots.toLocaleString()} {units} fitted on{" "}
             {result.n_genes.toLocaleString()} genes
-            {result.s_e != null && `; spot noise ${result.s_e.toFixed(1)}`}
-            {result.libraries.some((l) => l.s_g != null) &&
-              `; platform effect ${result.libraries
-                .filter((l) => l.s_g != null)
-                .map((l) => (result.libraries.length > 1 ? `${l.id} ${l.s_g!.toFixed(2)}` : l.s_g!.toFixed(2)))
-                .join(", ")}`}
-            {used && <span data-testid="spot-labels-used">; {used.text}</span>}
-            .
-            {used && used.detail.length > 0 && (
-              <InfoTip label="The merged labels" width={320}>
-                {used.detail.join("; ")}.
-              </InfoTip>
+            <HoverTip
+              width={320}
+              tip={<>
+                Spot noise: the spread (log scale) of a gene&apos;s count around the mix in one spot. Platform effect: the
+                spread of the genes&apos; differences between the reference and the spots, corrected for before the fit
+                (above about 1, the two measure genes very differently).
+              </>}
+            >
+              {result.s_e != null && `; spot noise ${result.s_e.toFixed(1)}`}
+              {result.libraries.some((l) => l.s_g != null) &&
+                `; platform effect ${result.libraries
+                  .filter((l) => l.s_g != null)
+                  .map((l) => (result.libraries.length > 1 ? `${l.id} ${l.s_g!.toFixed(2)}` : l.s_g!.toFixed(2)))
+                  .join(", ")}`}
+            </HoverTip>
+            {used && (
+              <span data-testid="spot-labels-used">
+                ;{" "}
+                {used.detail.length > 0 ? (
+                  <HoverTip width={320} tip={<>{used.detail.join("; ")}.</>}>
+                    {used.text}
+                  </HoverTip>
+                ) : (
+                  used.text
+                )}
+              </span>
             )}
-            <InfoTip label="About the numbers" width={320}>
-              Spot noise: the spread (log scale) of a gene&apos;s count around the mix in one spot. Platform effect: the
-              spread of the genes&apos; differences between the reference and the spots, corrected for before the fit
-              (above about 1, the two measure genes very differently).
-            </InfoTip>
+            .
           </p>
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-slate-500">Shares of</span>
+            <HoverTip
+              className="text-slate-500"
+              width={300}
+              tip={<>
+                The fit estimates each type&apos;s share of a spot&apos;s RNA. Cell shares divide that by each type&apos;s
+                RNA per cell in the reference, so they assume cell sizes carry over from the reference to the tissue.
+              </>}
+            >
+              Shares of
+            </HoverTip>
             {(["rna", "cell"] as const).map((k) => (
               <label key={k} className="flex items-center gap-1">
                 <input type="radio" name="spot-share-kind" checked={kind === k} onChange={() => changeKind(k)} />
                 {k === "rna" ? "RNA" : "cells (estimated)"}
               </label>
             ))}
-            <InfoTip label="RNA or cell shares" width={300}>
-              The fit estimates each type&apos;s share of a spot&apos;s RNA. Cell shares divide that by each type&apos;s
-              RNA per cell in the reference, so they assume cell sizes carry over from the reference to the tissue.
-            </InfoTip>
             <button className="ml-auto rounded border px-2 py-0.5 hover:bg-slate-50" onClick={colourByTop}>
               Colour by dominant type
             </button>
@@ -492,7 +520,9 @@ export function SpotCompositionSubtab() {
             </tbody>
           </table>
           <Caption n={{ value: result.n_fitted, unit: units }}>
-            {kind === "rna" ? `Share of each ${unit}'s RNA` : `Estimated share of each ${unit}'s cells`} per reference type.
+            <Help id="spotcomp.table">
+              {kind === "rna" ? `Share of each ${unit}'s RNA` : `Estimated share of each ${unit}'s cells`} per reference type.
+            </Help>
             {rows.length > TYPE_LIMIT && !showAll && ` Top ${TYPE_LIMIT} of ${rows.length} by mean share.`}
           </Caption>
           {rows.length > TYPE_LIMIT && (
@@ -538,7 +568,9 @@ export function SpotCompositionSubtab() {
                 </tbody>
               </table>
               <Caption n={{ value: heat.clusters.length, unit: "clusters" }}>
-                Mean {kind === "rna" ? "RNA" : "cell"} share (%) of each type in each cluster&apos;s spots
+                <Help id="spotcomp.cluster-heatmap">
+                  Mean {kind === "rna" ? "RNA" : "cell"} share (%) of each type in each cluster&apos;s spots
+                </Help>
                 {heat.types.length < result.types.length ? `; the ${heat.types.length} largest types` : ""}.
               </Caption>
             </div>

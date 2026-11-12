@@ -12,7 +12,8 @@ import {
 } from "@/api/spatialDomains";
 import { SPATIAL_EMBEDDING } from "@/api/spatial";
 import { Caption } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
+import { HoverTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
 import Plot from "@/components/plots/Plot";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
@@ -178,13 +179,17 @@ export function SpatialDomainsSubtab({
     <div className="space-y-4">
       {/* Domains */}
       <section className="space-y-2" aria-label="Spatial domains">
-        <div className="flex items-center gap-1.5 text-xs font-medium text-slate-700">
-          Spatial domains
-          <InfoTip label="About spatial domains" width={300}>
-            CellCharter&apos;s method (Varrone et al. 2024, Nat Genet): each {unit}&apos;s profile is joined with the mean
-            profile of its neighbours at 1, 2, ... hops, and a Gaussian mixture clusters those. With 0 hops it is the same
-            clustering with no spatial information.
-          </InfoTip>
+        <div className="text-xs font-medium text-slate-700">
+          <HoverTip
+            width={300}
+            tip={<>
+              CellCharter&apos;s method (Varrone et al. 2024, Nat Genet): each {unit}&apos;s profile is joined with the mean
+              profile of its neighbours at 1, 2, ... hops, and a Gaussian mixture clusters those. With 0 hops it is the same
+              clustering with no spatial information.
+            </>}
+          >
+            Spatial domains
+          </HoverTip>
         </div>
         <p className="text-[11px] leading-snug text-slate-500">
           A spatial domain is a stretch of tissue whose {units} look alike and have alike surroundings, such as a cortical
@@ -194,7 +199,7 @@ export function SpatialDomainsSubtab({
 
         <div className="flex flex-wrap items-end gap-2 text-xs">
           <label className={FIELD}>
-            Domains (k)
+            <Help id="domains.k">Domains (k)</Help>
             <input
               type="number"
               min={2}
@@ -204,8 +209,8 @@ export function SpatialDomainsSubtab({
               className={`${INPUT} w-14`}
             />
           </label>
-          <label className={FIELD} title="How many rings of neighbours each profile is joined with; 0 = no spatial information">
-            Hops
+          <label className={FIELD}>
+            <Help id="domains.hops">Hops</Help>
             <input
               type="number"
               min={0}
@@ -215,8 +220,8 @@ export function SpatialDomainsSubtab({
               className={`${INPUT} w-14`}
             />
           </label>
-          <label className={FIELD} title="Leading components of the embedding each profile uses">
-            Components
+          <label className={FIELD}>
+            <Help id="domains.components">Components</Help>
             <input
               type="number"
               min={2}
@@ -227,7 +232,7 @@ export function SpatialDomainsSubtab({
             />
           </label>
           <label className={FIELD}>
-            Save as
+            <Help id="domains.save-as">Save as</Help>
             <input
               type="text"
               value={name}
@@ -293,18 +298,22 @@ export function SpatialDomainsSubtab({
 
       {/* Neighbourhood enrichment */}
       <section className="space-y-2 border-t border-slate-200 pt-3" aria-label="Neighbourhood enrichment">
-        <div className="flex items-center gap-1.5 text-xs font-medium text-slate-700">
-          Neighbourhood enrichment
-          <InfoTip label="About neighbourhood enrichment" width={300}>
-            Counts how often each pair of labels sits side by side on the tissue graph, against the same labels shuffled
-            within each section ({(info?.defaults.n_perms ?? 1000).toLocaleString()} times): z above 0 means more often than
-            chance, below 0 less often. The same statistic as squidpy&apos;s nhood_enrichment. On {units} that mix cells it
-            speaks about the {units}&apos; labels, not about touching cells.
-          </InfoTip>
+        <div className="text-xs font-medium text-slate-700">
+          <HoverTip
+            width={300}
+            tip={<>
+              Counts how often each pair of labels sits side by side on the tissue graph, against the same labels shuffled
+              within each section ({(info?.defaults.n_perms ?? 1000).toLocaleString()} times): z above 0 means more often than
+              chance, below 0 less often. The same statistic as squidpy&apos;s nhood_enrichment. On {units} that mix cells it
+              speaks about the {units}&apos; labels, not about touching cells.
+            </>}
+          >
+            Neighbourhood enrichment
+          </HoverTip>
         </div>
         <div className="flex flex-wrap items-end gap-2 text-xs">
           <label className={FIELD}>
-            Labels
+            <Help id="domains.enrichment-labels">Labels</Help>
             <select value={enrichPick} onChange={(e) => setEnrichColumn(e.target.value)} className={INPUT}>
               {columns.map((c) => (
                 <option key={c.name} value={c.name}>
@@ -326,12 +335,16 @@ export function SpatialDomainsSubtab({
 
       {/* Composition niches */}
       <section className="space-y-2 border-t border-slate-200 pt-3" aria-label="Composition niches">
-        <div className="flex items-center gap-1.5 text-xs font-medium text-slate-700">
-          Composition niches
-          <InfoTip label="About composition niches" width={300}>
-            Each {unit}&apos;s window is its nearest {units} in the section (itself included); {units} whose windows hold
-            the same mix of labels form one niche (k-means, Schurch et al. 2020, Cell).
-          </InfoTip>
+        <div className="text-xs font-medium text-slate-700">
+          <HoverTip
+            width={300}
+            tip={<>
+              Each {unit}&apos;s window is its nearest {units} in the section (itself included); {units} whose windows hold
+              the same mix of labels form one niche (k-means, Schurch et al. 2020, Cell).
+            </>}
+          >
+            Composition niches
+          </HoverTip>
         </div>
         {info && !info.niches_allowed.ok && info.niches_allowed.reason ? (
           <p className="text-[11px] leading-snug text-slate-500" data-testid="niches-refused">
@@ -342,7 +355,7 @@ export function SpatialDomainsSubtab({
             {info?.niches_allowed.note && <p className="text-[11px] leading-snug text-amber-700">{info.niches_allowed.note}</p>}
             <div className="flex flex-wrap items-end gap-2 text-xs">
               <label className={FIELD}>
-                Labels
+                <Help id="domains.niche-labels">Labels</Help>
                 <select value={nichePick} onChange={(e) => setNicheLabel(e.target.value)} className={INPUT}>
                   {columns.map((c) => (
                     <option key={c.name} value={c.name}>
@@ -352,7 +365,7 @@ export function SpatialDomainsSubtab({
                 </select>
               </label>
               <label className={FIELD}>
-                Window
+                <Help id="domains.niche-window">Window</Help>
                 <input
                   type="number"
                   min={2}
@@ -363,7 +376,7 @@ export function SpatialDomainsSubtab({
                 />
               </label>
               <label className={FIELD}>
-                Niches
+                <Help id="domains.niche-count">Niches</Help>
                 <input
                   type="number"
                   min={2}
@@ -441,7 +454,7 @@ function StabilityPlot({
         }}
       />
       <Caption n={{ value: curve.n_fit, unit: "observations per fit" }}>
-        Stability of each k: mean ARI of its {curve.repeats} fits against the other fits at k - 1 and k + 1 (error bars: SD).{" "}
+        <Help id="domains.stability">Stability of each k</Help>: mean ARI of its {curve.repeats} fits against the other fits at k - 1 and k + 1 (error bars: SD).{" "}
         {curve.has_peak ? `Suggested k = ${curve.suggested}, the highest local peak.` : `No local peak, so k = ${curve.suggested}, the highest value.`}{" "}
         It advises; the biology decides. Click a point to use that k.
       </Caption>
@@ -495,8 +508,8 @@ function DomainsTable({
         <table className="w-full text-[11px]">
           <thead className="sticky top-0 bg-slate-50">
             <tr className="border-b border-slate-200 text-slate-600">
-              <th className="px-2 py-1 text-left" title="Numbered by size">
-                Domain
+              <th className="px-2 py-1 text-left">
+                <Help id="domains.table">Domain</Help>
               </th>
               <th className="px-2 py-1 text-right">{units}</th>
               {libs.length > 1 && libs.map((l) => <th key={l} className="px-2 py-1 text-right">{l}</th>)}
@@ -563,7 +576,8 @@ function EnrichmentHeatmap({ result }: { result: EnrichmentResult }) {
         style={{ width: "100%", height }}
       />
       <Caption n={[{ value: result.n_labelled ?? 0, unit: units }, { value: labels.length, unit: "labels" }]}>
-        Neighbourhood enrichment of {prettyObsLabel(result.column ?? "")} ({(result.n_perms ?? 0).toLocaleString()} permutations).{" "}
+        <Help id="domains.enrichment-heatmap">Neighbourhood enrichment of {prettyObsLabel(result.column ?? "")}</Help> (
+        {(result.n_perms ?? 0).toLocaleString()} permutations).{" "}
         {pairs.high ? `Most often side by side: ${pairs.high[0]} and ${pairs.high[1]} (z ${pairs.high[2].toFixed(1)}). ` : ""}
         {pairs.low ? `Most apart: ${pairs.low[0]} and ${pairs.low[1]} (z ${pairs.low[2].toFixed(1)}).` : ""}
       </Caption>
@@ -634,8 +648,11 @@ function NicheHeatmap({
         style={{ width: "100%", height }}
       />
       <Caption n={{ value: result.n_labelled ?? 0, unit: units }}>
-        {result.n_niches} niches in &quot;{column}&quot;: the mean share of each {prettyObsLabel(result.label_column ?? "")} label in the
-        windows of each niche (the {result.k_window} nearest).
+        <Help id="domains.niche-heatmap">
+          {result.n_niches} niches in &quot;{column}&quot;
+        </Help>
+        : the mean share of each {prettyObsLabel(result.label_column ?? "")} label in the windows of each niche (the {result.k_window}{" "}
+        nearest).
       </Caption>
       {result.notes?.map((n) => (
         <p key={n} className="text-[11px] text-amber-700">

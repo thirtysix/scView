@@ -9,7 +9,8 @@ import {
   type DEActivityResponse,
   type ActivityRef,
 } from "@/api/activity";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
 import { activityLabel, deProfile } from "@/lib/activity";
 import { downloadCsv } from "@/lib/csv";
 import { formatPct } from "@/lib/deDetection";
@@ -96,13 +97,20 @@ export function DEActivity({ datasetId, result, labelA, labelB, onScore }: Props
     <div className="flex flex-col gap-2 rounded-lg border border-slate-200 p-2.5 text-xs">
       <div className="flex items-center gap-2">
         <Activity className="h-3.5 w-3.5 flex-shrink-0 text-slate-400" />
-        <span className="font-semibold text-slate-700">TF / pathway activity</span>
-        <InfoTip width={300}>
-          decoupler&apos;s univariate linear model on this comparison&apos;s test statistic for all{" "}
-          {profile.genes.length.toLocaleString()} tested genes: a positive score means the
-          source&apos;s activated targets are higher in {labelA} and its repressed targets lower.
-          Benjamini-Hochberg adjusted across sources. Human networks; on a mouse dataset, mapped through orthologs.
-        </InfoTip>
+        <span className="font-semibold text-slate-700">
+          <HoverTip
+            tip={
+              <>
+                decoupler&apos;s univariate linear model on this comparison&apos;s test statistic for all{" "}
+                {profile.genes.length.toLocaleString()} tested genes: a positive score means the
+                source&apos;s activated targets are higher in {labelA} and its repressed targets lower.
+                Benjamini-Hochberg adjusted across sources. Human networks; on a mouse dataset, mapped through orthologs.
+              </>
+            }
+          >
+            TF / pathway activity
+          </HoverTip>
+        </span>
         <span className="flex-1" />
         <button
           onClick={() => run(network)}
@@ -124,7 +132,7 @@ export function DEActivity({ datasetId, result, labelA, labelB, onScore }: Props
               network === n ? "bg-primary font-medium text-white" : "text-slate-500 hover:text-slate-700"
             }`}
           >
-            {NETWORK_LABELS[n].long}
+            <Help id="de.activity-network">{NETWORK_LABELS[n].long}</Help>
           </button>
         ))}
       </div>

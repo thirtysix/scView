@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { attachAtacMetrics, getAtacQc, type AtacQc } from "@/api/atac";
+import { Help } from "@/components/common/Help";
 import { Caption } from "@/components/common/Caption";
 import { RequestError } from "@/components/common/RequestError";
 import Plot from "@/components/plots/Plot";
@@ -56,7 +57,9 @@ export function AtacQcCard({
   const cells = Math.min(qc?.n_cells ?? 0, QC_MAX_CELLS);
   return (
     <section className="space-y-2 rounded-lg border border-slate-200 p-2" aria-label="ATAC quality">
-      <h4 className="text-xs font-semibold text-slate-600">ATAC quality</h4>
+      <h4 className="text-xs font-semibold text-slate-600">
+        <Help id="atac.qc">ATAC quality</Help>
+      </h4>
       <RequestError message={error} />
       {qc?.columns.map((col) => (
         <div key={col.key} data-testid={`atac-qc-${col.key}`}>

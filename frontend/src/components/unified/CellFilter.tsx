@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useDialogFocus } from "@/hooks/useDialogFocus";
 import { Filter, Loader2, Plus, Trash2, X } from "lucide-react";
 import { cellsMatching, filterCells } from "@/api/cells";
 import type { DatasetInfo, ObsColumnInfo } from "@/api/types";
 import { GeneSearch } from "@/components/common/GeneSearch";
+import { Help } from "@/components/common/Help";
 import {
   describeFilter,
   filterConditions,
@@ -211,13 +212,15 @@ export function CellFilterPanel({ dataset, onClose }: CellFilterPanelProps) {
       className="absolute left-0 top-full z-50 mt-1 w-[30rem] max-w-[90vw] space-y-2.5 rounded-lg border border-slate-200 bg-white p-3 text-xs shadow-lg"
     >
       <div className="flex items-center justify-between">
-        <span className="font-semibold text-slate-700">Filter cells</span>
+        <span className="font-semibold text-slate-700">
+          <Help id="filter.about" side="below">Filter cells</Help>
+        </span>
         <button onClick={onClose} aria-label="Close" className="rounded p-0.5 text-slate-400 hover:bg-slate-100">
           <X className="h-3.5 w-3.5" />
         </button>
       </div>
 
-      <OpToggle label="Cells matching" op={draft.op} onChange={(op) => setDraft({ ...draft, op })} />
+      <OpToggle label="Cells matching" shown={<Help id="filter.match">Cells matching</Help>} op={draft.op} onChange={(op) => setDraft({ ...draft, op })} />
 
       <div className="max-h-[50vh] space-y-1.5 overflow-y-auto pr-1">
         {draft.items.map((item) =>
@@ -321,10 +324,21 @@ export function CellFilterPanel({ dataset, onClose }: CellFilterPanelProps) {
   );
 }
 
-function OpToggle({ label, op, onChange }: { label: string; op: FilterOp; onChange: (op: FilterOp) => void }) {
+function OpToggle({
+  label,
+  shown,
+  op,
+  onChange,
+}: {
+  label: string;
+  /** What the label shows when it carries a catalog tip; else `label`. */
+  shown?: ReactNode;
+  op: FilterOp;
+  onChange: (op: FilterOp) => void;
+}) {
   return (
     <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
-      <span>{label}</span>
+      <span>{shown ?? label}</span>
       <div className="flex overflow-hidden rounded border border-slate-300" role="radiogroup" aria-label={label}>
         {(["and", "or"] as const).map((o) => (
           <button

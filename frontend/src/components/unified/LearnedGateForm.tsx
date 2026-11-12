@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { trainLearnedGate, type TrainResult } from "@/api/learnedGates";
 import type { DatasetInfo } from "@/api/types";
-import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
 import { LearnedGateCard } from "@/components/unified/LearnedGateCard";
 import { replicateColumns } from "@/lib/de";
 import { errorMessage } from "@/lib/errorMessage";
@@ -82,14 +82,8 @@ export function LearnedGateForm({
 
   return (
     <div className="space-y-1.5 rounded border border-slate-200 bg-slate-50 p-2 text-[11px]" data-testid="learn-gate-form">
-      <p className="flex items-center gap-1 text-slate-600">
-        Learn a gate from the {nSel.toLocaleString()} selected cells
-        <InfoTip label="About learned gates" width={320}>
-          A learned gate is a small model (an L1 logistic regression on up to 50 genes) of what sets the selected cells
-          apart from the other cells in the same samples. Unlike a saved gate, it carries to other datasets: apply it
-          from Learned gates. Other cells come only from the samples (and conditions) that hold the selection, so a
-          lasso on control cells does not learn the stimulation.
-        </InfoTip>
+      <p className="text-slate-600">
+        <Help id="gates.learned" width={320}>Learn a gate from the {nSel.toLocaleString()} selected cells</Help>
       </p>
       <div className="flex flex-wrap items-center gap-2">
         <label className="flex items-center gap-1 text-slate-600">

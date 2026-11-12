@@ -10,7 +10,8 @@ import {
 } from "@/api/transcripts";
 import type { WatchdogEvent } from "@/api/pipelineRun";
 import { Caption } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
+import { HoverTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
 import { errorMessage } from "@/lib/errorMessage";
@@ -162,12 +163,16 @@ export function TranscriptsSubtab() {
   return (
     <div className="space-y-3 text-xs" data-testid="transcripts-subtab">
       <section className="space-y-2 rounded-lg border border-slate-200 p-2" aria-label="Transcripts">
-        <h4 className="flex items-center gap-1 text-xs font-semibold text-slate-600">
-          <span>Transcripts</span>
-          <InfoTip label="About transcripts" width={320}>
-            Every decoded molecule of the run, by position. Kept: quality q &ge; {status?.min_qv ?? 20} (10x&rsquo;s own default) and
-            genes only, without the control features. The index stays with this dataset; the uploaded file is deleted once indexed.
-          </InfoTip>
+        <h4 className="text-xs font-semibold text-slate-600">
+          <HoverTip
+            width={320}
+            tip={<>
+              Every decoded molecule of the run, by position. Kept: quality q &ge; {status?.min_qv ?? 20} (10x&rsquo;s own default) and
+              genes only, without the control features. The index stays with this dataset; the uploaded file is deleted once indexed.
+            </>}
+          >
+            Transcripts
+          </HoverTip>
         </h4>
 
         {merged && (
@@ -259,7 +264,8 @@ export function TranscriptsSubtab() {
             </Caption>
             {check?.available ? (
               <Caption testId="transcripts-check">
-                Against the count matrix, per gene (q &ge; {summary.min_qv} with a cell id): r = {check.r != null ? check.r.toFixed(4) : "n/a"},
+                <Help id="transcripts.check">Against the count matrix, per gene</Help> (q &ge; {summary.min_qv} with a cell id): r ={" "}
+                {check.r != null ? check.r.toFixed(4) : "n/a"},
                 median difference {fmt(check.median_abs_diff)}, largest {fmt(check.max_abs_diff)}
                 {check.max_abs_diff ? ` (${check.max_diff_gene})` : ""}; {fmt(check.n_equal)} of {fmt(check.n_genes)} genes equal.
                 {check.only_in_transcripts?.length ? ` Only among the transcripts: ${check.only_in_transcripts.join(", ")}.` : ""}
@@ -299,7 +305,7 @@ export function TranscriptsSubtab() {
                 className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50"
                 disabled={genes.length >= max}
               >
-                Add
+                <Help id="transcripts.genes">Add</Help>
               </button>
             </form>
             {genes.length > 0 && (
@@ -309,7 +315,7 @@ export function TranscriptsSubtab() {
                     <span className="inline-block h-2.5 w-2.5 rounded-full border border-slate-400" style={{ background: transcriptColorCss(i) }} />
                     {g}
                     {shown?.perGene[i] != null && <span className="text-slate-400">{shown.perGene[i]!.toLocaleString()}</span>}
-                    <button type="button" aria-label={`Remove ${g}`} className="text-slate-400 hover:text-slate-600" onClick={() => setGenes(genes.filter((x) => x !== g))}>
+                    <button type="button" aria-label={`Remove ${g}`} title={`Remove ${g}`} className="text-slate-400 hover:text-slate-600" onClick={() => setGenes(genes.filter((x) => x !== g))}>
                       <X className="h-3 w-3" />
                     </button>
                   </li>
@@ -317,7 +323,7 @@ export function TranscriptsSubtab() {
               </ul>
             )}
             <label className="flex items-center gap-1 text-[11px] font-medium text-slate-500">
-              Dot size
+              <Help id="transcripts.dot-size">Dot size</Help>
               <input
                 type="range"
                 min={DOT_SIZE_RANGE[0]}
@@ -347,7 +353,9 @@ export function TranscriptsSubtab() {
 
       {!merged && missingOutlines.length > 0 && (
         <section className="space-y-2 rounded-lg border border-slate-200 p-2" aria-label="Cell outlines">
-          <h4 className="text-xs font-semibold text-slate-600">Cell outlines</h4>
+          <h4 className="text-xs font-semibold text-slate-600">
+            <Help id="transcripts.outlines">Cell outlines</Help>
+          </h4>
           <p className="text-[11px] leading-snug text-slate-500">
             Upload {missingOutlines.map((k) => `${k === "cell" ? "cell" : "nucleus"}_boundaries.parquet`).join(" and ")} from the Xenium
             output folder (about 9 MB each) to draw cells instead of points: the plot&rsquo;s Draw choice appears with them. A new import of

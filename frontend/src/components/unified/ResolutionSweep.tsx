@@ -13,6 +13,7 @@ import {
 } from "@/api/clustering";
 import { ClusterTreePlot } from "@/components/unified/ClusterTreePlot";
 import { MergeCheck } from "@/components/unified/MergeCheck";
+import { Help } from "@/components/common/Help";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
 import { prettyEmbeddingLabel } from "@/lib/formatting";
 import { bestSilhouette, formatResolutions, parseResolutions } from "@/lib/resolutionSweep";
@@ -150,7 +151,9 @@ export function ResolutionSweepPanel({ datasetId, onClose }: { datasetId: string
     >
       <div className="flex items-start justify-between gap-2">
         <div>
-          <div className="text-sm font-semibold text-slate-800">Try clustering resolutions</div>
+          <div className="text-sm font-semibold text-slate-800">
+            <Help id="resolutions.about" side="below">Try clustering resolutions</Help>
+          </div>
           <p className="mt-0.5 text-[11px] text-slate-500">
             {method} on the dataset&rsquo;s neighbour graph at each resolution. Nothing is saved until you keep one.
           </p>
@@ -289,7 +292,9 @@ export function ResolutionSweepPanel({ datasetId, onClose }: { datasetId: string
 
       {tree && tree.nodes.length > 0 && (
         <div className="space-y-1">
-          <div className="text-[11px] font-medium text-slate-600">Clustering tree</div>
+          <div className="text-[11px] font-medium text-slate-600">
+            <Help id="resolutions.tree">Clustering tree</Help>
+          </div>
           <ClusterTreePlot tree={tree} selected={selected} onSelect={setSelected} />
           <p className="text-[10px] leading-snug text-slate-400">
             Each row is a resolution; an edge carries the cells a cluster shares with one at the next resolution

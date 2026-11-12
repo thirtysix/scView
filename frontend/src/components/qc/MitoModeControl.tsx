@@ -4,7 +4,7 @@ import type { FilterThresholds } from "@/api/qc";
 import type { MitoMode, MitoTypeRule, MitoTypesTable } from "@/api/mitoFilter";
 import { getMitoByType } from "@/api/mitoByType";
 import { Caption } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { useDatasetStore } from "@/stores/datasetStore";
 
 /** As the backend says it (core/mito_by_type.py NOT_MEASURABLE): never "0 %". */
@@ -245,14 +245,20 @@ export function MitoModeControl({
   return (
     <div className="space-y-1 text-[11px] text-slate-600" data-testid="mito-mode-control">
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className="font-medium text-slate-500">% mito</span>
-        <InfoTip label="About per-type % mito bounds" width={300}>
-          One rule judges every cell by the same % mito threshold (MAD mode: each sample&apos;s median + MADs and
-          the ceiling; fixed: the ceiling). Cell types differ in their healthy mitochondrial share, so one rule
-          can remove most of a type with a high baseline. Per cell type, each type with enough cells gets its own
-          bound, its median + {values.qc_mad_k_mt ?? 3} MADs (at most 50%); small, flat or damaged types keep the one
-          rule. Counts and genes are judged as before.
-        </InfoTip>
+        <span className="font-medium text-slate-500">
+          <HoverTip
+            width={300}
+            tip={<>
+              One rule judges every cell by the same % mito threshold (MAD mode: each sample&apos;s median + MADs and
+              the ceiling; fixed: the ceiling). Cell types differ in their healthy mitochondrial share, so one rule
+              can remove most of a type with a high baseline. Per cell type, each type with enough cells gets its own
+              bound, its median + {values.qc_mad_k_mt ?? 3} MADs (at most 50%); small, flat or damaged types keep the one
+              rule. Counts and genes are judged as before.
+            </>}
+          >
+            % mito
+          </HoverTip>
+        </span>
         <div role="group" aria-label="% mito rule" className="inline-flex rounded-md border border-slate-200 p-0.5">
           {(["global", "per_type"] as const).map((m) => (
             <button
@@ -296,12 +302,16 @@ export function MitoModeControl({
               onChange={(e) => onChange?.({ qc_mito_type_floor: e.target.checked })}
               className="h-3 w-3 rounded border-slate-300"
             />
-            Never stricter than the global rule
+            <HoverTip
+              width={300}
+              tip={<>
+                {floorText(mad)} Off by default: per type, a type&apos;s own bound is used even where it is below the
+                global rule&apos;s.
+              </>}
+            >
+              Never stricter than the global rule
+            </HoverTip>
           </label>
-          <InfoTip label="About never stricter than the global rule" width={300}>
-            {floorText(mad)} Off by default: per type, a type&apos;s own bound is used even where it is below the
-            global rule&apos;s.
-          </InfoTip>
         </div>
       )}
       {!measurable && <p className="text-slate-500">{MITO_NOT_MEASURABLE}</p>}

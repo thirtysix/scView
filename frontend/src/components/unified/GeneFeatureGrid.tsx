@@ -4,6 +4,7 @@ import { BlendLegend } from "@/components/plots/BlendLegend";
 import { MultiPanelScatter, type GridHover, type GridPanel } from "@/components/unified/MultiPanelScatter";
 import { useSameCellsGridLasso } from "@/components/unified/GridLasso";
 import { SelectionChip } from "@/components/common/SelectionChip";
+import { Help } from "@/components/common/Help";
 import { useGeneExpression } from "@/hooks/useGeneExpression";
 import { exportFilename } from "@/lib/exportFilename";
 import { prettyEmbeddingLabel } from "@/lib/formatting";
@@ -218,7 +219,7 @@ export function GeneFeatureGrid({
       errorText={failed}
       header={
         <>
-          {blend ? "Blend" : "Genes"}{" "}
+          {blend ? <Help id="expression.blend">Blend</Help> : <Help id="expression.feature-grid">Genes</Help>}{" "}
           <span className="font-semibold text-slate-700">{legendGenes.join(" · ")}</span>
           {missing.length > 0 && ready && (
             <span className="ml-1 text-amber-600">· not in this layer: {missing.join(", ")}</span>

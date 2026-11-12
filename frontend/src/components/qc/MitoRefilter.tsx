@@ -5,7 +5,7 @@ import { getMitoRefilter, runMitoRefilter, type RefilterPreview, type RefilterTy
 import { cancelPipelineRun, type RunOutcomeFields, type WatchdogEvent } from "@/api/pipelineRun";
 import { CancelRunButton, RunOutcome, RunWatchNotes } from "@/components/panels/RunWatch";
 import { Caption } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { floorText } from "@/components/qc/MitoModeControl";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -155,21 +155,21 @@ export function RefilterPreviewView({ p }: { p: RefilterPreview }) {
 /** The re-filter's floor option: per type never stricter than the global rule. */
 function FloorCheckbox({ checked, disabled, onChange }: { checked: boolean; disabled: boolean; onChange: (v: boolean) => void }) {
   return (
-    <span className="inline-flex items-center gap-1">
-      <label className="inline-flex items-center gap-1 text-[11px] text-slate-600">
-        <input
-          type="checkbox"
-          checked={checked}
-          disabled={disabled}
-          onChange={(e) => onChange(e.target.checked)}
-          className="h-3 w-3 rounded border-slate-300"
-        />
+    <label className="inline-flex items-center gap-1 text-[11px] text-slate-600">
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+        className="h-3 w-3 rounded border-slate-300"
+      />
+      <HoverTip
+        width={300}
+        tip={<>{floorText(true)} The global rule is the one the dataset was filtered with, so no cell it kept is removed.</>}
+      >
         Never stricter than the global rule
-      </label>
-      <InfoTip label="About never stricter than the global rule" width={300}>
-        {floorText(true)} The global rule is the one the dataset was filtered with, so no cell it kept is removed.
-      </InfoTip>
-    </span>
+      </HoverTip>
+    </label>
   );
 }
 

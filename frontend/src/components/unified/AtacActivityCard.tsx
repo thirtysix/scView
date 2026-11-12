@@ -3,7 +3,8 @@ import { Loader2 } from "lucide-react";
 import { getAtacActivity, type AtacActivity, type AtacState } from "@/api/atac";
 import { Caption, CapNote } from "@/components/common/Caption";
 import { GeneSearch } from "@/components/common/GeneSearch";
-import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
+import { HoverTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
 import Plot from "@/components/plots/Plot";
 import { errorMessage } from "@/lib/errorMessage";
@@ -49,12 +50,16 @@ export function AtacActivityCard({
 
   return (
     <section className="space-y-2 rounded-lg border border-slate-200 p-2" aria-label="Gene activity">
-      <h4 className="flex items-center gap-1 text-xs font-semibold text-slate-600">
-        <span>Gene activity</span>
-        <InfoTip label="About gene activity" width={300}>
-          Peak counts within the gene body + 2 kb upstream, summed per gene, log1p per 10k. It is peak-based: reads in a gene
-          outside every called peak are not counted, unlike Signac&rsquo;s fragment-based GeneActivity.
-        </InfoTip>
+      <h4 className="text-xs font-semibold text-slate-600">
+        <HoverTip
+          width={300}
+          tip={<>
+            Peak counts within the gene body + 2 kb upstream, summed per gene, log1p per 10k. It is peak-based: reads in a gene
+            outside every called peak are not counted, unlike Signac&rsquo;s fragment-based GeneActivity.
+          </>}
+        >
+          Gene activity
+        </HoverTip>
       </h4>
       {!summary && <p className="text-[11px] leading-snug text-slate-500">Run ATAC analysis to compute gene activity.</p>}
       {summary && !summary.available && (
@@ -94,7 +99,9 @@ export function AtacActivityCard({
             style={{ width: "100%" }}
           />
           <Caption n={{ value: shown.rna.n_shown, unit: "cells", of: shown.n_cells }}>
-            {shown.gene}{shown.gene === activeGene ? " (on the plot)" : ""}: RNA against peak-based activity
+            <Help id="atac.activity-vs-rna">
+              {shown.gene}{shown.gene === activeGene ? " (on the plot)" : ""}: RNA against peak-based activity
+            </Help>
             {shown.r !== null ? `, r = ${shown.r.toFixed(2)} over all cells` : ""}. {shown.n_nonzero.toLocaleString()} cells have
             activity.
           </Caption>

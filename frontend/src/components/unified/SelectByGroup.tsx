@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ListChecks } from "lucide-react";
 import { DialogBox } from "@/components/common/DialogBox";
+import { Help } from "@/components/common/Help";
 import { prettyObsLabel } from "@/lib/formatting";
 
 export interface GroupSelectSource {
@@ -72,7 +73,7 @@ export function SelectByGroupControl({ source }: { source: GroupSelectSource | n
         >
           <fieldset>
             <legend className="mb-2 font-semibold text-slate-700">
-              Select cells by {prettyObsLabel(source.column)}
+              <Help id="plot.select-by-group" side="below">Select cells by {prettyObsLabel(source.column)}</Help>
             </legend>
             <div className="max-h-56 space-y-0.5 overflow-y-auto">
               {source.categories.map((g, i) => (

@@ -6,7 +6,7 @@ import { plotConfig } from "@/lib/plotConfig";
 import type { DEResponse } from "@/api/de";
 import { runDEAudit, type DEAuditProgress, type DEAuditResult, type DEAuditStart } from "@/api/deAudit";
 import { Caption, CapNote } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
 import { errorMessage } from "@/lib/errorMessage";
 import { formatPValue } from "@/lib/formatting";
@@ -100,19 +100,24 @@ export function DEAudit({ datasetId, result, betweenGroups, donorColumns, replic
           type="button"
           onClick={run}
           disabled={running || blocker != null}
-          title={blocker ?? "Shuffle the condition across donors and rerun this test, and compare with pseudobulk"}
+          title={blocker ?? undefined}
           className="flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-slate-600 hover:bg-slate-50 disabled:opacity-50"
         >
           {running ? <Loader2 className="h-3 w-3 animate-spin" /> : <ShieldCheck className="h-3 w-3" />}
-          Audit this result
+          <HoverTip
+            tip={
+              <>
+                A cell-level test counts every cell as a replicate, so differences between donors look like
+                differences between the groups (Squair et al. 2021; Zimmerman et al. 2021). The audit reruns the
+                same test after shuffling the group labels across whole donors (each shuffle keeps the donors
+                and loses the comparison), and runs pseudobulk, which tests donors, on the same cells. If the
+                shuffles find about as many genes, or pseudobulk finds few of them, read the pseudobulk list.
+              </>
+            }
+          >
+            Audit this result
+          </HoverTip>
         </button>
-        <InfoTip label="About the DE audit" width={300}>
-          A cell-level test counts every cell as a replicate, so differences between donors look like
-          differences between the groups (Squair et al. 2021; Zimmerman et al. 2021). The audit reruns the
-          same test after shuffling the group labels across whole donors (each shuffle keeps the donors
-          and loses the comparison), and runs pseudobulk, which tests donors, on the same cells. If the
-          shuffles find about as many genes, or pseudobulk finds few of them, read the pseudobulk list.
-        </InfoTip>
         {running && (
           <>
             <span className="text-slate-500" role="status">
@@ -221,15 +226,21 @@ function AuditResultView({ audit, onGeneClick }: { audit: DEAuditResult; onGeneC
           <div className="min-w-0">
             <Plot data={histData} layout={histLayout} config={plotConfig("de_audit_shuffles")} useResizeHandler style={STYLE} />
             <Caption n={[{ value: audit.null_counts.length, unit: "donor shuffles" }, { value: audit.n_genes_tested, unit: "genes tested" }]}>
-              Genes the same test calls after each shuffle ({schemeLabel(audit.scheme)}): {summary.shuffles}; red line: the
-              real labels ({audit.observed.toLocaleString()}){summary.empirical ? `, ${summary.empirical}` : ""}.{" "}
-              <InfoTip label="About the shuffles">
-                Shuffles are balanced: each side gets the same mix of real {String(audit.comparison.group_a ?? "A")} and{" "}
-                {String(audit.comparison.group_b ?? "B")} samples, so a real effect cancels and what is left is donor
-                differences. With an odd number of donors a small part of a real effect stays. The verdict calls the
-                shuffles &ldquo;as many&rdquo; when their median reaches {Math.round(audit.null_share * 100)}% of the
-                observed count.
-              </InfoTip>
+              <HoverTip
+                tip={
+                  <>
+                    Shuffles are balanced: each side gets the same mix of real {String(audit.comparison.group_a ?? "A")} and{" "}
+                    {String(audit.comparison.group_b ?? "B")} samples, so a real effect cancels and what is left is donor
+                    differences. With an odd number of donors a small part of a real effect stays. The verdict calls the
+                    shuffles &ldquo;as many&rdquo; when their median reaches {Math.round(audit.null_share * 100)}% of the
+                    observed count.
+                  </>
+                }
+              >
+                Genes the same test calls after each shuffle
+              </HoverTip>{" "}
+              ({schemeLabel(audit.scheme)}): {summary.shuffles}; red line: the real labels ({audit.observed.toLocaleString()})
+              {summary.empirical ? `, ${summary.empirical}` : ""}.
             </Caption>
           </div>
           <div className="min-w-0">
@@ -244,12 +255,17 @@ function AuditResultView({ audit, onGeneClick }: { audit: DEAuditResult; onGeneC
       {audit.stopped && <p className="text-[11px] text-amber-700">Shuffles {audit.stopped}.</p>}
       {pb ? (
         <p className="text-[11px] text-slate-600">
-          {concordanceText(pb, audit.alpha)}{" "}
-          <InfoTip label="About the concordance">
-            Jaccard: genes significant in both over genes significant in either (1 = the same list). Spearman: rank
-            correlation of the two fold changes over the genes both tested. Pseudobulk sums each donor&apos;s counts and
-            tests donors, not cells.
-          </InfoTip>
+          <HoverTip
+            tip={
+              <>
+                Jaccard: genes significant in both over genes significant in either (1 = the same list). Spearman: rank
+                correlation of the two fold changes over the genes both tested. Pseudobulk sums each donor&apos;s counts and
+                tests donors, not cells.
+              </>
+            }
+          >
+            {concordanceText(pb, audit.alpha)}
+          </HoverTip>
         </p>
       ) : (
         audit.pseudobulk_note && <p className="text-[11px] text-amber-700">No pseudobulk: {audit.pseudobulk_note}</p>
@@ -262,12 +278,17 @@ function AuditResultView({ audit, onGeneClick }: { audit: DEAuditResult; onGeneC
       {pb && (
         <>
           <Caption n={{ value: audit.n_cell_only, unit: "genes" }}>
-            Significant at cell level, not in pseudobulk: the likely false positives. Top donor: the share of the
-            difference lost when that donor is left out.{" "}
-            <InfoTip label="About the top-donor share">
-              Near 0%: the donors carry the difference evenly, so the gene is more likely a small effect that only
-              thousands of cells make significant (or a normalisation shift). Near 100%: one donor carries it.
-            </InfoTip>
+            Significant at cell level, not in pseudobulk: the likely false positives.{" "}
+            <HoverTip
+              tip={
+                <>
+                  Near 0%: the donors carry the difference evenly, so the gene is more likely a small effect that only
+                  thousands of cells make significant (or a normalisation shift). Near 100%: one donor carries it.
+                </>
+              }
+            >
+              Top donor: the share of the difference lost when that donor is left out.
+            </HoverTip>
           </Caption>
           <CapNote shown={audit.cell_only.length} total={audit.n_cell_only} by="cell-level p" rest="the results export has these" />
           {audit.cell_only.length > 0 && (

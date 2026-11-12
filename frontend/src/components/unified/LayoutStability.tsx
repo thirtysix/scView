@@ -18,7 +18,8 @@ import {
   type LayoutThumb,
 } from "@/api/layouts";
 import { Caption, CapNote } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
 import { useEmbeddingReady } from "@/hooks/useEmbeddingReady";
 import { decodeArrowBuffer } from "@/lib/arrow";
@@ -293,7 +294,7 @@ export function LayoutStabilityPanel({ datasetId, onClose }: { datasetId: string
       <div className="flex items-start justify-between gap-2">
         <div>
           <div className="text-sm font-semibold text-slate-800">
-            Which structure in this plot survives another seed or neighbour count?
+            <Help id="layouts.about" side="below">Which structure in this plot survives another seed or neighbour count?</Help>
           </div>
           <p className="mt-0.5 text-[11px] text-slate-500">
             A UMAP is one draw of a random layout. This lays the same cells out again
@@ -478,9 +479,10 @@ export function LayoutStabilityPanel({ datasetId, onClose }: { datasetId: string
       {summary && summary.relations.length > 0 && (
         <div className="space-y-1">
           <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-1 text-[11px] font-medium text-slate-600">
-              Pairs of {prettyObsLabel(summary.group_by ?? "")} that touch
-              <InfoTip width={320}>{summary.rule}</InfoTip>
+            <div className="text-[11px] font-medium text-slate-600">
+              <HoverTip tip={summary.rule} width={320}>
+                Pairs of {prettyObsLabel(summary.group_by ?? "")} that touch
+              </HoverTip>
             </div>
             {neverCount > 0 && (
               <label className="flex items-center gap-1 text-[11px] text-slate-500">
@@ -564,13 +566,7 @@ export function LayoutStabilityPanel({ datasetId, onClose }: { datasetId: string
       {summary && summary.groups.length > 0 && (
         <details className="text-[11px]">
           <summary className="cursor-pointer text-slate-600">
-            Placement by group across layouts{" "}
-            <InfoTip width={300}>
-              Placement (as in Plot reliability): the share of a cell&rsquo;s graph neighbours (the dataset&rsquo;s own
-              neighbour count, the graph rebuilt on the laid-out cells) that lie among its nearest 5% of cells on the
-              plot; the median over the group&rsquo;s cells. A wide range means the group sits near its real neighbours
-              in some layouts and away from them in others.
-            </InfoTip>
+            <Help id="layouts.placement" width={300}>Placement by group across layouts</Help>
           </summary>
           <table className="mt-1 w-full border-collapse" data-testid="groups-table">
             <thead>

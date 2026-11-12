@@ -1,6 +1,7 @@
 import { atacExportUrl, type AtacState } from "@/api/atac";
 import { Caption } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
+import { HoverTip } from "@/components/common/InfoTip";
 import Plot from "@/components/plots/Plot";
 import { embeddingReady } from "@/hooks/useEmbeddingReady";
 import { ATAC_CLUSTERS, ATAC_UMAP, depthChoiceText, planText } from "@/lib/atac";
@@ -29,13 +30,17 @@ export function AtacLsiCard({ datasetId, state }: { datasetId: string; state: At
 
   return (
     <section className="space-y-2 rounded-lg border border-slate-200 p-2" aria-label="LSI and clusters">
-      <h4 className="flex items-center gap-1 text-xs font-semibold text-slate-600">
-        <span>LSI and clusters</span>
-        <InfoTip label="About LSI" width={300}>
-          Signac&rsquo;s recipe: peaks above the 5th percentile of counts, TF-IDF (method 1), truncated SVD, 50 components.
-          The first component usually follows sequencing depth and is then left out. A neighbour graph of its own (the RNA
-          graph is never touched), a UMAP and Leiden clusters follow, then gene activity.
-        </InfoTip>
+      <h4 className="text-xs font-semibold text-slate-600">
+        <HoverTip
+          width={300}
+          tip={<>
+            Signac&rsquo;s recipe: peaks above the 5th percentile of counts, TF-IDF (method 1), truncated SVD, 50 components.
+            The first component usually follows sequencing depth and is then left out. A neighbour graph of its own (the RNA
+            graph is never touched), a UMAP and Leiden clusters follow, then gene activity.
+          </>}
+        >
+          LSI and clusters
+        </HoverTip>
       </h4>
       {state.plan_reason && <p className="text-[11px] leading-snug text-slate-500">{state.plan_reason}</p>}
       {state.plan && <p className="text-[11px] leading-snug text-slate-500" data-testid="atac-plan">{planText(state.plan)}</p>}
@@ -77,8 +82,8 @@ export function AtacLsiCard({ datasetId, state }: { datasetId: string; state: At
             style={{ width: "100%" }}
           />
           <Caption n={{ value: lsi.n_selected, unit: "peaks" }}>
-            Each component&rsquo;s correlation with the cell&rsquo;s total counts (the first {rs.length} of {lsi.depth_r.length}); grey
-            components are not in the graph. {lsi.n_clusters} ATAC clusters.
+            <Help id="atac.lsi-depth">Each component&rsquo;s correlation with the cell&rsquo;s total counts</Help> (the first{" "}
+            {rs.length} of {lsi.depth_r.length}); grey components are not in the graph. {lsi.n_clusters} ATAC clusters.
           </Caption>
           <div className="flex flex-wrap gap-1.5">
             <button type="button" className={BUTTON} disabled={!hasUmap} onClick={() => setEmbedding(ATAC_UMAP)}>Show ATAC UMAP</button>

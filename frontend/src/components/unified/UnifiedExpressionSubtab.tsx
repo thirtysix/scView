@@ -4,6 +4,7 @@ import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { GeneSearch } from "@/components/common/GeneSearch";
 import { AddToGeneListMenu } from "@/components/common/AddToGeneListMenu";
+import { Help } from "@/components/common/Help";
 import { ColorLegend } from "@/components/plots/ColorLegend";
 import type { ResolvedColorScale } from "@/lib/colorScale";
 import { MultiGenePanel } from "@/components/unified/MultiGenePanel";
@@ -55,7 +56,9 @@ export function UnifiedExpressionSubtab({
     <div className="space-y-3">
       {/* Gene search */}
       <div>
-        <label className="mb-1 block text-[11px] font-medium text-slate-500">Search gene</label>
+        <label className="mb-1 block text-[11px] font-medium text-slate-500">
+          <Help id="expression.search">Search gene</Help>
+        </label>
         <GeneSearch
           datasetId={datasetId}
           onSelect={onGeneSelect}
@@ -97,7 +100,7 @@ export function UnifiedExpressionSubtab({
       {expressionLayers.length > 1 && (
         <div>
           <label className="mb-1 block text-[11px] font-medium text-slate-500">
-            Expression layer
+            <Help id="expression.layer">Expression layer</Help>
           </label>
           {/* The same setting as the toolbar's Layer menu. */}
           <select
@@ -115,7 +118,7 @@ export function UnifiedExpressionSubtab({
       {/* Group by */}
       <div>
         <label className="mb-1 block text-[11px] font-medium text-slate-500">
-          Group by (violin)
+          <Help id="expression.group-by">Group by (violin)</Help>
         </label>
         <select
           aria-label="Group by (violin)"

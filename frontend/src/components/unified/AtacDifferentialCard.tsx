@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { daCsvUrl, getDaEstimate, getDaPage, getLatestDa, type AtacDaEstimate, type AtacDaRow, type AtacDaTest, type AtacState } from "@/api/atac";
 import { CapNote, Caption } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
+import { HoverTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
 import { daFitLabel, daFitText, daMostPass, daTestName, formatDistance, formatP } from "@/lib/atac";
 import { formatDuration } from "@/lib/hvgSensitivity";
@@ -102,19 +103,23 @@ export function AtacDifferentialCard({
 
   return (
     <section className="space-y-2 rounded-lg border border-slate-200 p-2" aria-label="Differential peaks">
-      <h4 className="flex items-center gap-1 text-xs font-semibold text-slate-600">
-        <span>Differential peaks</span>
-        <InfoTip label="About differential peaks" width={320}>
-          Each group against the rest, for peaks open in at least 5% of either; FDR within each group. Logistic regression, the default:
-          what Signac recommends (Seurat&rsquo;s LR test, group ~ peak + the cell&rsquo;s total counts against group ~ total counts).
-          Every peak gets a score test against one fit per group, and the 10,000 highest of each group a true likelihood ratio; it costs
-          minutes per column, and the line below says how many. Wilcoxon: rank-sum on TF-IDF, no covariate, faster, but in a low-depth
-          group its calls follow depth.
-        </InfoTip>
+      <h4 className="text-xs font-semibold text-slate-600">
+        <HoverTip
+          width={320}
+          tip={<>
+            Each group against the rest, for peaks open in at least 5% of either; FDR within each group. Logistic regression, the default:
+            what Signac recommends (Seurat&rsquo;s LR test, group ~ peak + the cell&rsquo;s total counts against group ~ total counts).
+            Every peak gets a score test against one fit per group, and the 10,000 highest of each group a true likelihood ratio; it costs
+            minutes per column, and the line below says how many. Wilcoxon: rank-sum on TF-IDF, no covariate, faster, but in a low-depth
+            group its calls follow depth.
+          </>}
+        >
+          Differential peaks
+        </HoverTip>
       </h4>
       <div className="flex flex-wrap items-center gap-1.5">
         <label className="flex items-center gap-1.5 text-[11px] text-slate-600">
-          Groups from
+          <Help id="atac.da-groups">Groups from</Help>
           <select value={column} onChange={(e) => setColumn(e.target.value)}
                   className="rounded border border-slate-300 bg-white px-1 py-0.5 text-[11px] text-slate-700">
             <option value="">Choose a column</option>
@@ -164,7 +169,7 @@ export function AtacDifferentialCard({
             <table className="w-full min-w-max border-separate border-spacing-x-1 text-[11px] text-slate-600">
               <thead className="sticky top-0 bg-white text-left text-slate-500">
                 <tr>
-                  <th className="font-medium">Peak</th>
+                  <th className="font-medium" title="The peak's place on the genome: chromosome, start and end">Peak</th>
                   <th className="font-medium" title="The gene whose TSS is nearest; pseudogenes and small RNAs left out">Nearest gene</th>
                   <th className="text-right font-medium" title="To that gene's TSS: + downstream, - upstream on its strand">To TSS</th>
                   <th className="pl-2 font-medium" title="Promoter: within 2 kb of a TSS; gene body; distal">Class</th>

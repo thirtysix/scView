@@ -10,6 +10,7 @@ vi.mock("@/api/spatialAutocorr", async (orig) => ({
 }));
 
 import { SpatialGenesSubtab, sortMoranRows } from "./SpatialGenesSubtab";
+import { hoverTip } from "@/test/hoverTip";
 import { useDatasetStore } from "@/stores/datasetStore";
 
 const lib = (id: string, n: number) => ({
@@ -119,8 +120,7 @@ describe("SpatialGenesSubtab", () => {
   it("says bins on Visium HD, each compared with the 4 sharing a side", async () => {
     setDataset({ technology: "visium_hd", unit: "bin", bin_size_um: 8, library_column: "library_id", libraries: [lib("A", 1000)] });
     render(<SpatialGenesSubtab onGeneClick={vi.fn()} />);
-    fireEvent.click(screen.getByRole("button", { name: /About Moran/ }));
-    expect((await screen.findAllByText(/4 nearest bins \(those sharing a side\)/)).length).toBeGreaterThan(0);
+    expect(await hoverTip(screen.getByText("Spatially variable genes"))).toMatch(/4 nearest bins \(those sharing a side\)/);
   });
 
   it("is empty without spatial data and asks the server nothing", () => {

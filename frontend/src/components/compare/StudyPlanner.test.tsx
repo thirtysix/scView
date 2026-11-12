@@ -20,6 +20,7 @@ vi.mock("@/components/plots/Plot", () => ({
 }));
 
 import { StudyPlanner } from "./StudyPlanner";
+import { hoverTip, unhover } from "@/test/hoverTip";
 
 const KANG: DatasetInfo = {
   id: "kang",
@@ -86,6 +87,9 @@ describe("StudyPlanner", () => {
     await waitFor(() => expect(screen.getByTestId("planner-pilot")).toHaveTextContent(
       "Pilot: 8 donors of Donor, 8 CTRL and 8 STIM samples (paired); 814 cells per sample (median)."));
     expect(planPilot).toHaveBeenCalledWith("kang", { group_key: "cluster", condition_key: "stim" });
+    const mode = screen.getByText("Cell-type proportions");
+    expect(await hoverTip(mode)).toContain("Power is the share of those studies that find the effect");
+    unhover(mode);
     fireEvent.click(screen.getByRole("button", { name: /Simulate/ }));
     await waitFor(() => expect(runCompositionPlan).toHaveBeenCalled());
     const body = runCompositionPlan.mock.calls[0]![1];

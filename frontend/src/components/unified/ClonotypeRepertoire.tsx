@@ -4,7 +4,8 @@ import { Loader2 } from "lucide-react";
 import Plot from "@/components/plots/Plot";
 import { getDiversity, getOverlap, getUsage, type DiversityMetric, type Overlap, type Usage } from "@/api/vdj";
 import { Caption, capText } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
+import { HoverTip } from "@/components/common/InfoTip";
 import { plotlyColorscale } from "@/lib/colors";
 import { prettyObsLabel } from "@/lib/formatting";
 import { plotConfig } from "@/lib/plotConfig";
@@ -50,7 +51,9 @@ export function ClonotypeRepertoire({
   return (
     <section aria-label="Repertoire per group" className="space-y-2 border-t border-slate-200 pt-2">
       <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-600">
-        <span className="font-medium">Repertoire per</span>
+        <span className="font-medium">
+          <Help id="clonotypes.repertoire_by">Repertoire per</Help>
+        </span>
         <select
           aria-label="Repertoire grouping"
           value={column}
@@ -104,7 +107,7 @@ function DiversityChart({ datasetId, column }: { datasetId: string; column: stri
   return (
     <div className="space-y-1" data-testid="vdj-diversity">
       <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-600">
-        <span className="font-medium">Diversity</span>
+        <span className="font-medium">{info ? <HoverTip tip={info.info}>Diversity</HoverTip> : "Diversity"}</span>
         <select
           aria-label="Diversity measure"
           value={metric}
@@ -117,13 +120,9 @@ function DiversityChart({ datasetId, column }: { datasetId: string; column: stri
             </option>
           ))}
         </select>
-        {info && <InfoTip label={`About ${info.label}`}>{info.info}</InfoTip>}
-        <label
-          className="flex items-center gap-1"
-          title={`Subsample every group to the smallest group's cells (groups with ${minCells}+ cells), 20 seeded draws, and show the mean and SD`}
-        >
+        <label className="flex items-center gap-1">
           <input type="checkbox" checked={rarefy} onChange={(e) => setRarefy(e.target.checked)} />
-          rarefy
+          <Help id="clonotypes.rarefy">rarefy</Help>
         </label>
         <label className="flex items-center gap-1" title="Groups with fewer cells with a clonotype get no value (and do not set the rarefaction depth)">
           min
@@ -204,7 +203,14 @@ function OverlapHeatmap({ datasetId, column }: { datasetId: string; column: stri
   return (
     <div className="space-y-1" data-testid="vdj-overlap">
       <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-600">
-        <span className="font-medium">Clonotype overlap</span>
+        <span className="font-medium">
+          <HoverTip tip={<>
+            Morisita-Horn (Horn 1966) compares clone sizes: 1 when two groups hold the same clonotypes in the same
+            proportions, 0 when they share none. It is weighted towards the expanded clonotypes and changes little
+            with how many cells each group has, so it is the default. Jaccard counts shared clonotypes over all
+            clonotypes of the two groups, every singleton equally, so it falls as groups get larger.
+          </>}>Clonotype overlap</HoverTip>
+        </span>
         <span role="group" aria-label="Overlap measure" className="inline-flex overflow-hidden rounded border border-slate-200">
           {(["morisita_horn", "jaccard"] as const).map((m) => (
             <button
@@ -217,12 +223,6 @@ function OverlapHeatmap({ datasetId, column }: { datasetId: string; column: stri
             </button>
           ))}
         </span>
-        <InfoTip label="About the overlap measures" width={300}>
-          Morisita-Horn (Horn 1966) compares clone sizes: 1 when two groups hold the same clonotypes in the same
-          proportions, 0 when they share none. It is weighted towards the expanded clonotypes and changes little
-          with how many cells each group has, so it is the default. Jaccard counts shared clonotypes over all
-          clonotypes of the two groups, every singleton equally, so it falls as groups get larger.
-        </InfoTip>
         {isFetching && <Loader2 className="h-3 w-3 animate-spin text-slate-400" />}
       </div>
       {error && (
@@ -291,7 +291,9 @@ function UsageHeatmap({ datasetId, column }: { datasetId: string; column: string
   return (
     <div className="space-y-1" data-testid="vdj-usage">
       <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-600">
-        <span className="font-medium">Gene usage</span>
+        <span className="font-medium">
+          <Help id="clonotypes.usage">Gene usage</Help>
+        </span>
         <select
           aria-label="Chain"
           value={data?.chain ?? chain}

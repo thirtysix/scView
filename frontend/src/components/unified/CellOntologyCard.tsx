@@ -13,7 +13,7 @@ import {
 import { Caption } from "@/components/common/Caption";
 import { CellTypeCombobox, TermChip } from "@/components/common/CellTypeCombobox";
 import { DialogBox } from "@/components/common/DialogBox";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { prettyObsLabel } from "@/lib/formatting";
 import { errorMessage } from "@/lib/errorMessage";
 
@@ -117,14 +117,20 @@ export function CellOntologyCard({ datasetId, column, onClose }: CellOntologyCar
         className="flex max-h-[85vh] w-[420px] max-w-full flex-col rounded-lg border border-slate-200 bg-white text-xs shadow-xl"
       >
         <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-3 py-2">
-          <h2 className="flex items-center gap-1 text-sm font-semibold text-slate-700">
-            Cell Ontology: {prettyObsLabel(column)}
-            <InfoTip label="About Cell Ontology terms" width={300}>
-              The Cell Ontology (CL) is the shared vocabulary of cell types that atlases and CELLxGENE use.
-              Giving each label a term makes the labels comparable across datasets. Suggestions come from the
-              label names only; nothing is saved until you accept it. A term for every label lets the
-              CELLxGENE export write <code>cell_type_ontology_term_id</code>.
-            </InfoTip>
+          <h2 className="text-sm font-semibold text-slate-700">
+            <HoverTip
+              side="below"
+              tip={
+                <>
+                  The Cell Ontology (CL) is the shared vocabulary of cell types that atlases and CELLxGENE use.
+                  Giving each label a term makes the labels comparable across datasets. Suggestions come from the
+                  label names only; nothing is saved until you accept it. A term for every label lets the
+                  CELLxGENE export write <code>cell_type_ontology_term_id</code>.
+                </>
+              }
+            >
+              Cell Ontology: {prettyObsLabel(column)}
+            </HoverTip>
           </h2>
           <button
             type="button"

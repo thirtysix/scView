@@ -19,6 +19,7 @@ vi.mock("@/components/plots/Plot", () => ({
 }));
 
 import { PerturbationSubtab } from "./PerturbationSubtab";
+import { hoverTip, unhover } from "@/test/hoverTip";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useDESettingsStore } from "@/stores/deSettingsStore";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -90,6 +91,17 @@ beforeEach(() => {
 });
 
 describe("PerturbationSubtab", () => {
+  it("keeps each label on its control, and explains it on hover", async () => {
+    api.getPerturbation.mockResolvedValue(BASE);
+    render(<PerturbationSubtab />);
+    await screen.findByText(/390 cells with one target/);
+    expect(screen.getByLabelText("Min UMIs")).toHaveValue(5);
+    expect(screen.getByLabelText("Top / second ≥")).toHaveValue(2);
+    expect(await hoverTip(screen.getByText("Top / second ≥"))).toMatch(/0 turns this off, so every guide counts/);
+    unhover(screen.getByText("Top / second ≥"));
+    expect(await hoverTip(screen.getByText("Perturbation (CRISPR screen)"))).toMatch(/In a pooled screen each cell carries a guide RNA/);
+  });
+
   it("previews the assignment from the guide counts and saves it", async () => {
     api.getPerturbation.mockResolvedValueOnce(BASE).mockResolvedValue({ ...BASE, call: CALL });
     api.saveAssignment.mockResolvedValue({ ...BASE, call: CALL });

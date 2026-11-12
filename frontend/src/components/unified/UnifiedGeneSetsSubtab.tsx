@@ -8,6 +8,7 @@ import { scoreGeneSet, type ScoreMethod } from "@/api/genesetScore";
 import type { OnScoreGeneSet } from "@/hooks/useGeneSetScoring";
 import { useScoringMethodStore } from "@/stores/scoringMethodStore";
 import { Caption } from "@/components/common/Caption";
+import { Help } from "@/components/common/Help";
 import { ScoringMethodChoice } from "@/components/common/ScoringMethodChoice";
 import { errorMessage } from "@/lib/errorMessage";
 import { ScoreDepthCheck } from "@/components/unified/ScoreDepthCheck";
@@ -199,7 +200,7 @@ export function UnifiedGeneSetsSubtab({
       {/* Collection dropdown */}
       <div>
         <label className="mb-1 block text-[11px] font-medium text-slate-500">
-          Collection
+          <Help id="genesets.collection">Collection</Help>
         </label>
         <select
           value={selectedCollection}
@@ -230,7 +231,7 @@ export function UnifiedGeneSetsSubtab({
       {/* Search filter for gene sets */}
       <div className="relative">
         <label className="mb-1 block text-[11px] font-medium text-slate-500">
-          Gene Sets
+          <Help id="genesets.list">Gene Sets</Help>
         </label>
         <div className="relative">
           <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
@@ -288,7 +289,9 @@ export function UnifiedGeneSetsSubtab({
       {/* Selected gene set info + Score button */}
       {selectedGeneSet && (
         <div className="rounded-lg border border-blue-100 bg-blue-50/50 p-2.5">
-          <div className="mb-1 text-xs font-semibold text-blue-700">{selectedGeneSet.name}</div>
+          <div className="mb-1 text-xs font-semibold text-blue-700">
+            <Help id="genesets.score">{selectedGeneSet.name}</Help>
+          </div>
           <div className="mb-2 text-[10px] text-blue-500">
             {selectedGeneSet.n_genes} genes in{" "}
             {selectedGeneSet.collection_name || selectedGeneSet.collection}
@@ -350,7 +353,7 @@ export function UnifiedGeneSetsSubtab({
       {/* Group by */}
       <div>
         <label className="mb-1 block text-[11px] font-medium text-slate-500">
-          Group by (violin)
+          <Help id="genesets.group-by">Group by (violin)</Help>
         </label>
         <select
           aria-label="Group by (violin)"

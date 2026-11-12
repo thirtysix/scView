@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Loader2, Play, Square } from "lucide-react";
 import type { CnvDefaults, CnvRunnable, CnvSummary } from "@/api/cnv";
-import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
+import { HoverTip } from "@/components/common/InfoTip";
 import { formatDuration } from "@/lib/hvgSensitivity";
 import { progressText, referenceColumns, suggestReferenceColumn, suggestReferenceGroups } from "@/lib/cnv";
 import { prettyObsLabel } from "@/lib/formatting";
@@ -89,12 +90,23 @@ export function CnvRunForm({
   return (
     <div className="space-y-2 rounded-lg border border-slate-200 p-2.5" data-testid="cnv-run-form">
       <p className="text-[11px] leading-snug text-slate-600">
-        Tumour cells often gain or lose whole chromosome arms, which nudges all the genes there up or down
-        together. Comparing each cell with <strong>normal reference cells</strong> from the same samples (immune or
+        <HoverTip
+          width={300}
+          tip={<>
+            inferCNV-style (Tirosh et al. 2016; as infercnvpy): log expression of the {runnable.n_placed?.toLocaleString()}{" "}
+            genes placed on {runnable.assembly} ({runnable.source}) minus the reference groups&apos; means, clipped to
+            ±3, averaged over {windowSize} neighbouring genes per chromosome, centred per cell, small values set to 0. Y and
+            mitochondrial genes are left out. A new run replaces the saved one.
+          </>}
+        >
+          Tumour cells often gain or lose whole chromosome arms, which nudges all the genes there up or down
+          together.
+        </HoverTip>{" "}
+        Comparing each cell with <strong>normal reference cells</strong> from the same samples (immune or
         stromal cells, which keep two copies) shows those changes. Pick the normal groups below.
       </p>
       <label className="block text-[11px] font-medium text-slate-500">
-        Reference column
+        <Help id="cnv.reference_column">Reference column</Help>
         <select
           aria-label="Reference column"
           value={column}
@@ -111,7 +123,7 @@ export function CnvRunForm({
       {values.length > 0 && (
         <fieldset>
           <legend className="mb-0.5 text-[11px] font-medium text-slate-500">
-            Normal reference groups ({groups.length} ticked)
+            <Help id="cnv.reference_groups">Normal reference groups ({groups.length} ticked)</Help>
           </legend>
           <div className="flex max-h-28 flex-wrap gap-x-3 gap-y-0.5 overflow-auto">
             {values.map((v) => (
@@ -124,8 +136,8 @@ export function CnvRunForm({
         </fieldset>
       )}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-slate-600">
-        <label className="flex items-center gap-1" title="Genes averaged in each running window">
-          window
+        <label className="flex items-center gap-1">
+          <Help id="cnv.window">window</Help>
           <input
             type="number"
             aria-label="Window (genes)"
@@ -136,8 +148,8 @@ export function CnvRunForm({
             className={inputClass}
           />
         </label>
-        <label className="flex items-center gap-1" title="Keep every n-th window (smaller result, faster)">
-          step
+        <label className="flex items-center gap-1">
+          <Help id="cnv.step">step</Help>
           <input
             type="number"
             aria-label="Step (genes)"
@@ -148,16 +160,10 @@ export function CnvRunForm({
             className={inputClass}
           />
         </label>
-        <label className="flex items-center gap-1" title="Leave chromosome X out: it differs between sexes, so a tumour and reference from different donors can look like an X change">
+        <label className="flex items-center gap-1">
           <input type="checkbox" checked={dropX} onChange={(e) => setDropX(e.target.checked)} />
-          leave out X
+          <Help id="cnv.exclude_x">leave out X</Help>
         </label>
-        <InfoTip label="About the method" align="right" width={300}>
-          inferCNV-style (Tirosh et al. 2016; as infercnvpy): log expression of the {runnable.n_placed?.toLocaleString()}{" "}
-          genes placed on {runnable.assembly} ({runnable.source}) minus the reference groups&apos; means, clipped to
-          ±3, averaged over {windowSize} neighbouring genes per chromosome, centred per cell, small values set to 0. Y and
-          mitochondrial genes are left out. A new run replaces the saved one.
-        </InfoTip>
       </div>
       {problem && <p className="text-[11px] text-amber-700">{problem}</p>}
       <div className="flex flex-wrap items-center gap-2">

@@ -3,7 +3,7 @@ import { AlertTriangle, Info, Loader2 } from "lucide-react";
 import { getAmbient, type AmbientResponse } from "@/api/ambient";
 import { isLargeRefusal } from "@/api/client";
 import { errorMessage } from "@/lib/errorMessage";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { Caption } from "@/components/common/Caption";
 import { pct, rhoStatusText, rhoText } from "@/lib/ambient";
 
@@ -58,15 +58,19 @@ export function AmbientRna({
   return (
     <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-3" data-testid="ambient-rna">
       <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5">
-          <h3 className="text-sm font-semibold text-slate-700">Ambient RNA</h3>
-          <InfoTip label="About ambient RNA" width={340}>
-            Free-floating RNA from lysed cells lands in every droplet, so abundant transcripts of one cell type (LYZ,
-            haemoglobin, IGKC) show up at a low level in all clusters. The soup is read from the empty droplets of the
-            raw (unfiltered) matrix, and the contamination fraction rho is estimated as SoupX does (Young &amp; Behjati
-            2020, GigaScience). {help.rho ?? ""}
-          </InfoTip>
-        </div>
+        <h3 className="text-sm font-semibold text-slate-700">
+          <HoverTip
+            width={340}
+            tip={<>
+              Free-floating RNA from lysed cells lands in every droplet, so abundant transcripts of one cell type (LYZ,
+              haemoglobin, IGKC) show up at a low level in all clusters. The soup is read from the empty droplets of the
+              raw (unfiltered) matrix, and the contamination fraction rho is estimated as SoupX does (Young &amp; Behjati
+              2020, GigaScience). {help.rho ?? ""}
+            </>}
+          >
+            Ambient RNA
+          </HoverTip>
+        </h3>
         {loading && <Loader2 className="h-3 w-3 animate-spin text-slate-400" />}
       </div>
 

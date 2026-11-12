@@ -27,6 +27,7 @@ import { DEAudit } from "@/components/unified/DEAudit";
 import { PseudobulkDiagnostics, PseudobulkModelRows } from "@/components/unified/PseudobulkDiagnostics";
 import { describePbModel, pbMethodLabel } from "@/lib/pseudobulk";
 import { AddToGeneListMenu } from "@/components/common/AddToGeneListMenu";
+import { Help } from "@/components/common/Help";
 import { CapNote } from "@/components/common/Caption";
 import { downloadCsv } from "@/lib/csv";
 import { describePrefilter, formatPct, genesPassing, minPctChoices } from "@/lib/deDetection";
@@ -346,11 +347,8 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
   // The cell-level test's gene prefilter (pseudobulk filters on summed counts).
   const minPctRow = (
     <div className="flex items-center gap-1.5">
-      <span
-        className="w-12 font-medium text-slate-500"
-        title="Test only genes detected (> 0) in at least this share of the cells of either group: fewer tests, so a fairer multiple-testing correction, and no near-absent genes at the edges of the volcano."
-      >
-        Genes
+      <span className="w-12 font-medium text-slate-500">
+        <Help id="de.min-pct">Genes</Help>
       </span>
       <select
         aria-label="Genes tested"
@@ -369,11 +367,8 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
   const methodInfo = cellMethodInfo(cellMethod);
   const methodRow = (
     <div className="flex items-center gap-1.5">
-      <span
-        className="w-12 font-medium text-slate-500"
-        title={`${CELL_METHODS.map((m) => `${m.label}: ${m.help}`).join("\n\n")}\n\n${MAST_NOTE}`}
-      >
-        Method
+      <span className="w-12 font-medium text-slate-500">
+        <Help id="de.method">Method</Help>
       </span>
       <select
         aria-label="Cell-level test"
@@ -430,7 +425,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
               mode === m ? "bg-primary text-white" : "text-slate-500 hover:text-slate-700"
             }`}
           >
-            {label}
+            <Help id="de.mode">{label}</Help>
           </button>
         ))}
       </div>
@@ -444,7 +439,9 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
           ) : (
             <>
               <div className="flex items-center gap-1.5">
-                <span className="w-12 font-medium text-slate-500">Compare</span>
+                <span className="w-12 font-medium text-slate-500">
+                  <Help id="de.compare">Compare</Help>
+                </span>
                 <select value={splitBy} onChange={(e) => setSplitBy(e.target.value)} className={selectCls}>
                   {splitCols.map((c) => (
                     <option key={c.name} value={c.name}>
@@ -454,7 +451,9 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
                 </select>
               </div>
               <div className="flex items-center gap-1.5">
-                <span className="w-12 font-medium text-slate-500">Groups</span>
+                <span className="w-12 font-medium text-slate-500">
+                  <Help id="de.groups">Groups</Help>
+                </span>
                 <select value={groupA} onChange={(e) => setGroupA(e.target.value)} className={selectCls}>
                   {splitValues.map((v) => (
                     <option key={v} value={v}>
@@ -465,6 +464,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
                 <button
                   onClick={() => update({ groupA: groupB, groupB: groupA })}
                   title="Swap groups"
+                  aria-label="Swap groups"
                   className="rounded border border-slate-300 bg-white p-1 text-slate-500 hover:bg-slate-100"
                 >
                   <ArrowLeftRight className="h-3 w-3" />
@@ -478,7 +478,9 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
                 </select>
               </div>
               <div className="flex items-center gap-1.5">
-                <span className="w-12 font-medium text-slate-500">Within</span>
+                <span className="w-12 font-medium text-slate-500">
+                  <Help id="de.within">Within</Help>
+                </span>
                 <select
                   value={withinCol}
                   onChange={(e) =>
@@ -509,7 +511,9 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
                 )}
               </div>
               <div className="flex items-center gap-1.5">
-                <span className="w-12 font-medium text-slate-500">Test</span>
+                <span className="w-12 font-medium text-slate-500">
+                  <Help id="de.test">Test</Help>
+                </span>
                 <div className="flex min-w-0 flex-1 rounded border border-slate-300 bg-white p-0.5">
                   {(
                     [
@@ -534,7 +538,9 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
               {test === "pseudobulk" && (
                 <>
                   <div className="flex items-center gap-1.5">
-                    <span className="w-12 font-medium text-slate-500">Donor</span>
+                    <span className="w-12 font-medium text-slate-500">
+                      <Help id="de.donor">Donor</Help>
+                    </span>
                     <select
                       value={replicateKey}
                       onChange={(e) => setReplicateKey(e.target.value)}
@@ -556,11 +562,8 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
                   />
                   {covariateCols.length > 0 && (
                     <div className="flex items-start gap-1.5" data-testid="pb-covariates">
-                      <span
-                        className="w-12 flex-shrink-0 pt-0.5 font-medium text-slate-500"
-                        title="Per-sample columns in the design before the condition (~sex + batch + condition). One value per donor sample; a column confounded with the comparison is refused."
-                      >
-                        Adjust
+                      <span className="w-12 flex-shrink-0 pt-0.5 font-medium text-slate-500">
+                        <Help id="de.covariates">Adjust</Help>
                       </span>
                       <div className="flex flex-wrap gap-1">
                         {covariateCols.map((c) => {
@@ -691,7 +694,9 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
         <>
           {/* Threshold + export */}
           <div className="flex flex-wrap items-center gap-2 text-xs">
-            <label className="whitespace-nowrap font-medium text-slate-500">|log2FC| &ge;</label>
+            <label className="whitespace-nowrap font-medium text-slate-500">
+              <Help id="de.min-fc">|log2FC| &ge;</Help>
+            </label>
             <input
               aria-label="Minimum |log2FC|"
               type="range"
@@ -854,7 +859,9 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
           {result.detection && result.detection.length > 1 && (
             <div className="rounded-lg border border-slate-200 px-2 pt-1.5 text-[10px] text-slate-500">
               <div className="flex items-baseline justify-between gap-2">
-                <span className="font-medium text-slate-600">Gene detection</span>
+                <span className="font-medium text-slate-600">
+                  <Help id="de.detection">Gene detection</Help>
+                </span>
                 <span className="truncate">
                   genes by the larger share of cells they are detected in, of the two groups
                 </span>
@@ -899,8 +906,8 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
             <table className="w-full text-xs">
               <thead className="sticky top-0 z-10">
                 <tr className="border-b border-slate-200 bg-slate-50">
-                  <th className="px-2 py-1.5 text-left font-medium text-slate-600" title="Gene symbol; click a row to colour the scatter by its expression">
-                    Gene
+                  <th className="px-2 py-1.5 text-left font-medium text-slate-600">
+                    <Help id="de.table">Gene</Help>
                   </th>
                   <th
                     className="px-2 py-1.5 text-right font-medium text-slate-600"
@@ -955,6 +962,7 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
                             askAboutGene(g);
                           }}
                           title="Ask the co-pilot about this gene"
+                          aria-label={`Ask the co-pilot about ${g.gene}`}
                           className="flex-shrink-0 text-slate-300 opacity-0 transition-opacity hover:text-primary group-hover:opacity-100"
                         >
                           <Sparkles className="h-3 w-3" />

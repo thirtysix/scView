@@ -10,7 +10,7 @@ import {
   type ReferenceCheck,
 } from "@/api/labelTransfer";
 import { Caption } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
 import { aboutGb, METHOD_LABELS, referenceChoices, unmappedLevel } from "@/lib/labelTransfer";
 import { useDatasetStore } from "@/stores/datasetStore";
@@ -124,11 +124,13 @@ export function ReferenceMappingCard({
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4" data-testid="reference-mapping">
       <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-800">
-        <MapIcon className="h-4 w-4" /> Label from a reference dataset
-        <InfoTip width={320}>
+        <MapIcon className="h-4 w-4" />
+        <HoverTip width={320} tip={<>
           Pick another dataset in your library whose cells are already annotated. Each cell here takes the labels of its
           nearest reference cells, and cells unlike any reference cell are flagged &quot;not in reference&quot;.
-        </InfoTip>
+        </>}>
+          Label from a reference dataset
+        </HoverTip>
       </div>
       {!info.available ? (
         <p className="text-xs text-slate-500">{info.reason}</p>
@@ -171,7 +173,15 @@ export function ReferenceMappingCard({
               </label>
             )}
             <label className="flex items-center gap-1">
-              Method
+              <HoverTip width={340} tip={<>
+                Project onto reference (like scanpy&apos;s ingest): the reference is left as it is and this dataset is placed
+                in its PCA. It assumes no batch effect between the two: use it for data from the same lab and protocol.
+                Integrate first: both are corrected together with Harmony, for a reference from another lab or protocol;
+                it can also blend a state found only here into its nearest reference type. Train CellTypist: a classifier
+                trained on the reference (about a minute).
+              </>}>
+                Method
+              </HoverTip>
               <select
                 className="rounded border px-1 py-0.5"
                 value={method}
@@ -185,13 +195,6 @@ export function ReferenceMappingCard({
                   </option>
                 ))}
               </select>
-              <InfoTip width={340}>
-                Project onto reference (like scanpy&apos;s ingest): the reference is left as it is and this dataset is placed
-                in its PCA. It assumes no batch effect between the two: use it for data from the same lab and protocol.
-                Integrate first: both are corrected together with Harmony, for a reference from another lab or protocol;
-                it can also blend a state found only here into its nearest reference type. Train CellTypist: a classifier
-                trained on the reference (about a minute).
-              </InfoTip>
             </label>
             <label className="flex items-center gap-1">
               Neighbours
@@ -239,10 +242,11 @@ export function ReferenceMappingCard({
           {result && !running && (
             <div className="space-y-2 border-t pt-2" data-testid="reference-mapping-result">
               <p className="text-slate-700">
-                {result.labels.length} labels from <b>{result.reference.name}</b> ({result.reference.label_column},{" "}
-                {result.method_text}); median score {result.median_score.toFixed(2)}; <b>{pct(result.unmapped_share)}</b>{" "}
-                not in reference
-                <InfoTip width={320}>{result.note}</InfoTip>
+                <HoverTip width={320} tip={<>{result.note}</>}>
+                  {result.labels.length} labels from <b>{result.reference.name}</b> ({result.reference.label_column},{" "}
+                  {result.method_text}); median score {result.median_score.toFixed(2)}; <b>{pct(result.unmapped_share)}</b>{" "}
+                  not in reference
+                </HoverTip>
               </p>
               {(result.shift ?? 1) >= SHIFT_NOTE && (
                 <p className="text-amber-700" data-testid="reference-mapping-shift">

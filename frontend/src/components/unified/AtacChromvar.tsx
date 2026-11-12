@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { chromVarCsvUrl, getChromVarGroups, getChromVarMotif, type ChromVarGroups, type ChromVarMotif, type MotifState } from "@/api/atacMotifs";
 import { CapNote, Caption } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
+import { HoverTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
 import Plot from "@/components/plots/Plot";
 import { formatP } from "@/lib/atac";
@@ -76,13 +77,17 @@ export function AtacChromvar({
   const zLimit = Math.max(1e-6, ...(heat?.mean_z.flat().map((v) => Math.abs(v ?? 0)) ?? [])); // symmetric: 0 is the midpoint colour
   return (
     <div className="space-y-1.5 border-t border-slate-200 pt-2" data-testid="atac-chromvar">
-      <h5 className="flex items-center gap-1 text-[11px] font-semibold text-slate-600">
-        <span>Activity per cell (chromVAR)</span>
-        <InfoTip label="About chromVAR" width={340}>
-          How far each cell&rsquo;s counts in a motif&rsquo;s peaks are from what its depth predicts, against 50 sets of peaks matched on total counts and GC
-          (chromVAR&rsquo;s computeDeviations, the same scores Signac&rsquo;s RunChromVAR gave). The score is relative to those peaks across these cells: it is not a
-          measure of binding or of the TF&rsquo;s amount, and paralogues that share a motif move together.
-        </InfoTip>
+      <h5 className="text-[11px] font-semibold text-slate-600">
+        <HoverTip
+          width={340}
+          tip={<>
+            How far each cell&rsquo;s counts in a motif&rsquo;s peaks are from what its depth predicts, against 50 sets of peaks matched on total counts and GC
+            (chromVAR&rsquo;s computeDeviations, the same scores Signac&rsquo;s RunChromVAR gave). The score is relative to those peaks across these cells: it is not a
+            measure of binding or of the TF&rsquo;s amount, and paralogues that share a motif move together.
+          </>}
+        >
+          Activity per cell (chromVAR)
+        </HoverTip>
       </h5>
       {!live && (
         <div className="flex flex-wrap items-center gap-1.5">
@@ -131,14 +136,17 @@ export function AtacChromvar({
                 }}
               />
               <Caption n={[{ value: groups.n_cells, unit: "cells" }, { value: heat.motifs.length, unit: "motifs" }, { value: groups.groups.length, unit: "groups" }]}>
-                Mean z per {prettyObsLabel(groups.column)} of the {heat.motifs.length} most variable of 879 motifs. Click a motif for its activity on the plot.
+                <Help id="atac.chromvar-heatmap">
+                  Mean z per {prettyObsLabel(groups.column)} of the {heat.motifs.length} most variable of 879 motifs.
+                </Help>{" "}
+                Click a motif for its activity on the plot.
               </Caption>
             </div>
           )}
           {groups && (
             <div className="space-y-1">
               <label className="flex items-center gap-1.5 text-[11px] text-slate-600">
-                Group against the rest
+                <Help id="atac.chromvar-vs-rest">Group against the rest</Help>
                 <select value={shown} onChange={(e) => setGroup(e.target.value)}
                         className="rounded border border-slate-300 bg-white px-1 py-0.5 text-[11px] text-slate-700">
                   {groups.groups.map((g) => <option key={g} value={g}>{g}</option>)}
@@ -148,7 +156,7 @@ export function AtacChromvar({
                 <table className="w-full min-w-max border-separate border-spacing-x-1 text-[11px] text-slate-600">
                   <thead className="sticky top-0 bg-white text-left text-slate-500">
                     <tr>
-                      <th className="font-medium">Motif</th>
+                      <th className="font-medium" title="JASPAR 2024 motif; click a row to colour the plot by its activity">Motif</th>
                       <th className="text-right font-medium" title="Mean z in the group">Mean z</th>
                       <th className="text-right font-medium" title="Mean z in the group minus mean z in the other cells">Difference</th>
                       <th className="text-right font-medium" title="Wilcoxon rank-sum, BH across motifs within this group">FDR</th>
@@ -173,14 +181,14 @@ export function AtacChromvar({
           )}
           <div className="space-y-1">
             <div className="flex items-center gap-1.5 text-[11px] font-medium text-slate-600">
-              <span>Most variable motifs</span>
+              <Help id="atac.chromvar-variable">Most variable motifs</Help>
               <a href={chromVarCsvUrl(datasetId)} download className="font-normal text-primary hover:underline">CSV</a>
             </div>
             <div className="max-h-52 overflow-auto">
               <table className="w-full min-w-max border-separate border-spacing-x-1 text-[11px] text-slate-600">
                 <thead className="sticky top-0 bg-white text-left text-slate-500">
                   <tr>
-                    <th className="font-medium">Motif</th>
+                    <th className="font-medium" title="JASPAR 2024 motif; click a row to colour the plot by its activity">Motif</th>
                     <th className="text-right font-medium" title="sd of z over the cells (chromVAR's computeVariability)">Variability</th>
                     <th className="text-right font-medium" title="Peaks with a hit">Peaks</th>
                     <th className="font-medium" title="Information-weighted GC over 0.7">GC</th>

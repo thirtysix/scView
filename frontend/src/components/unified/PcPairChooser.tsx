@@ -1,6 +1,7 @@
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { isPcaEmbedding } from "@/hooks/useEmbedding";
+import { Help } from "@/components/common/Help";
 
 /**
  * "PCs: x [ ] y [ ]" next to the embedding selector, only while a PCA with more
@@ -36,11 +37,11 @@ export function PcPairChooser() {
     </select>
   );
   return (
-    <span className="flex items-center gap-1" title="Which two principal components the scatter shows">
+    <Help id="plot.pc-pair" side="below" className="flex items-center gap-1">
       <label className="text-[11px] font-medium text-slate-500">x</label>
       {select(0)}
       <label className="text-[11px] font-medium text-slate-500">y</label>
       {select(1)}
-    </span>
+    </Help>
   );
 }

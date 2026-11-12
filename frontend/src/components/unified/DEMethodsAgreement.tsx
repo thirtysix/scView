@@ -1,6 +1,6 @@
 import { Download } from "lucide-react";
 import type { DEMethodsResponse } from "@/api/de";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { downloadCsv } from "@/lib/csv";
 import { formatPct } from "@/lib/deDetection";
 import { agreementCsv, agreementRows, cellMethodInfo } from "@/lib/deMethods";
@@ -40,15 +40,23 @@ export function DEMethodsAgreement({ result, labelA, labelB, csvName, onGeneClic
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-slate-200 p-2.5 text-xs">
       <div className="flex items-center gap-2">
-        <span className="font-semibold text-slate-700">Method agreement</span>
-        <InfoTip width={320}>
-          The same cells and the same {fmt(result.n_genes_tested)} genes under each test. Jaccard: the
-          share of genes two tests both put in their top {result.top_n} on a side (1 = the same
-          genes), shared genes in brackets. Spearman: the rank correlation of the two tests&apos;
-          per-gene statistics over every gene. Wilcoxon and Welch&apos;s t-test ask the same question
-          of each gene on its own, so they usually agree; logistic regression fits all genes at once
-          and ranks the ones that jointly tell the groups apart, which can differ a lot.
-        </InfoTip>
+        <span className="font-semibold text-slate-700">
+          <HoverTip
+            width={320}
+            tip={
+              <>
+                The same cells and the same {fmt(result.n_genes_tested)} genes under each test. Jaccard: the
+                share of genes two tests both put in their top {result.top_n} on a side (1 = the same
+                genes), shared genes in brackets. Spearman: the rank correlation of the two tests&apos;
+                per-gene statistics over every gene. Wilcoxon and Welch&apos;s t-test ask the same question
+                of each gene on its own, so they usually agree; logistic regression fits all genes at once
+                and ranks the ones that jointly tell the groups apart, which can differ a lot.
+              </>
+            }
+          >
+            Method agreement
+          </HoverTip>
+        </span>
         <span className="flex-1 truncate text-[10px] text-slate-400">
           {labelA} (n={fmt(result.n_selected)}) vs {labelB} (n={fmt(result.n_rest)})
           {result.min_pct ? ` · genes in ≥ ${formatPct(result.min_pct)} of either group` : ""}

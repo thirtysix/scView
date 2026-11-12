@@ -19,6 +19,7 @@ const refresh = vi.hoisted(() => vi.fn(async () => ({})));
 vi.mock("@/hooks/useDatasetRefresh", () => ({ useDatasetRefresh: () => refresh }));
 
 import { SpotCompositionSubtab } from "./SpotCompositionSubtab";
+import { hoverTip } from "@/test/hoverTip";
 import { binCaveat, fmtShare, heatmapLayout, shareFill, shareLabel, toOverlayValues, typeRows } from "@/lib/spotComposition";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -155,8 +156,7 @@ describe("SpotCompositionSubtab", () => {
     useDatasetStore.setState({ currentDatasetId: "d1", currentDataset: bins, availableDatasets: [bins, ds("ref")] });
     api.getSpotDeconvolution.mockResolvedValue({ ...INFO, saved: null });
     render(<SpotCompositionSubtab />);
-    fireEvent.click(await screen.findByRole("button", { name: "About spot composition" }));
-    expect((await screen.findAllByText(/A Visium HD bin is a square of the capture grid/)).length).toBeGreaterThan(0);
+    expect(await hoverTip(await screen.findByText("Spot composition"))).toMatch(/A Visium HD bin is a square of the capture grid/);
     expect(binCaveat(8)).toMatch(/dominant type/);
     expect(binCaveat(16)).toMatch(/2 to 4 cells/);
   });

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertCircle, AlertTriangle, Loader2 } from "lucide-react";
 import { getPerDonorExpression, type DonorMethod, type PerDonorExpression as Result } from "@/api/donors";
 import { DonorBoxPlot } from "@/components/plots/DonorBoxPlot";
+import { Help } from "@/components/common/Help";
+import { helpText } from "@/lib/help";
 import { useCategoryColors } from "@/hooks/useCategoryColors";
 import { rgbCss } from "@/lib/categoryColors";
 import { conditionColumns, suggestConditionColumn } from "@/lib/composition";
@@ -118,7 +120,7 @@ export function PerDonorExpression({ datasetId, gene, noGeneReason, groupColumn,
     <div className="space-y-1">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
         <label className="flex items-center gap-1">
-          Split by
+          <Help id="perdonor.split-by">Split by</Help>
           <select
             aria-label="Condition column"
             value={conditionKey}
@@ -137,7 +139,7 @@ export function PerDonorExpression({ datasetId, gene, noGeneReason, groupColumn,
           </select>
         </label>
         <label className="flex items-center gap-1">
-          Donor
+          <Help id="perdonor.donor">Donor</Help>
           <select aria-label="Donor column" value={sample} onChange={(e) => setSample(e.target.value)} className={selCls}>
             <option value="">
               {!sample && result?.sample_key_detected && result.sample_key
@@ -151,10 +153,11 @@ export function PerDonorExpression({ datasetId, gene, noGeneReason, groupColumn,
             ))}
           </select>
         </label>
-        <label className="flex items-center gap-1" title={METHOD_HELP[method]}>
-          Value
+        <label className="flex items-center gap-1">
+          <Help id="perdonor.value">Value</Help>
           <select
             aria-label="Pseudobulk value"
+            title={METHOD_HELP[method]}
             value={method}
             onChange={(e) => setMethod(e.target.value as DonorMethod)}
             className={selCls}
@@ -224,6 +227,7 @@ export function PerDonorExpression({ datasetId, gene, noGeneReason, groupColumn,
           plotName={`per_donor_${result.gene}_${result.group_key}`}
           datasetName={dataset?.name}
           height={height}
+          captionTip={helpText("perdonor.plot")}
           design={result.design}
           pairedTests={result.paired_tests}
           unpairedTests={result.unpaired_tests}

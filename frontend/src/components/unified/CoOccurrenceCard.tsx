@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { getCoOccurrence, runCoOccurrence, type CoOccurrenceInfo, type CoOccurrenceResult } from "@/api/spatialDomains";
 import { Caption } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
+import { HoverTip } from "@/components/common/InfoTip";
 import { PreflightNote } from "@/components/common/PreflightNote";
 import { RequestError } from "@/components/common/RequestError";
 import Plot from "@/components/plots/Plot";
@@ -89,19 +90,23 @@ export function CoOccurrenceCard({
 
   return (
     <section className="space-y-2 border-t border-slate-200 pt-3" aria-label="Co-occurrence" data-testid="cooccurrence-card">
-      <div className="flex items-center gap-1.5 text-xs font-medium text-slate-700">
-        Co-occurrence
-        <InfoTip label="About co-occurrence" width={320}>
-          The same statistic as squidpy&apos;s co_occurrence: for labels a and b within a distance, P(b | a) / P(b), both from
-          the pairs of observations no further apart than that distance, so each distance includes the shorter ones. Above 1,
-          b is near a more often than among all pairs at that range. Pairs are counted within each section, never between
-          sections. On spots or bins that mix cells it speaks about their labels, not about touching cells. It is a
-          description, not a test.
-        </InfoTip>
+      <div className="text-xs font-medium text-slate-700">
+        <HoverTip
+          width={320}
+          tip={<>
+            The same statistic as squidpy&apos;s co_occurrence: for labels a and b within a distance, P(b | a) / P(b), both from
+            the pairs of observations no further apart than that distance, so each distance includes the shorter ones. Above 1,
+            b is near a more often than among all pairs at that range. Pairs are counted within each section, never between
+            sections. On spots or bins that mix cells it speaks about their labels, not about touching cells. It is a
+            description, not a test.
+          </>}
+        >
+          Co-occurrence
+        </HoverTip>
       </div>
       <div className="flex flex-wrap items-end gap-2 text-xs">
         <label className={FIELD}>
-          Labels
+          <Help id="domains.cooccur-labels">Labels</Help>
           <select value={column} onChange={(e) => setPicked(e.target.value)} className={INPUT} aria-label="Co-occurrence labels">
             {columns.map((c) => (
               <option key={c.name} value={c.name}>
@@ -110,8 +115,8 @@ export function CoOccurrenceCard({
             ))}
           </select>
         </label>
-        <label className={FIELD} title="How many distances to score; squidpy's default gives 49 scores">
-          Distances
+        <label className={FIELD}>
+          <Help id="domains.cooccur-distances">Distances</Help>
           <input
             type="number"
             min={2}
@@ -124,8 +129,8 @@ export function CoOccurrenceCard({
             className={`${INPUT} w-16`}
           />
         </label>
-        <label className={FIELD} title="Leave empty for squidpy's default range, which on a large section starts far above a cell's size">
-          Up to ({unit})
+        <label className={FIELD}>
+          <Help id="domains.cooccur-reach">Up to ({unit})</Help>
           <input
             type="number"
             min={0}
@@ -188,7 +193,7 @@ function CoOccurrenceResults({ result }: { result: CoOccurrenceResult }) {
       {result.stale && <p className="text-[11px] leading-snug text-amber-700">{result.stale_reason}</p>}
       <div className="flex flex-wrap items-end gap-2 text-xs">
         <label className={FIELD}>
-          Near which label
+          <Help id="domains.cooccur-near">Near which label</Help>
           <select value={own} onChange={(e) => setCondition(e.target.value)} className={INPUT} aria-label="Conditioning label">
             {labels.map((l) => (
               <option key={l} value={l}>
@@ -257,7 +262,7 @@ function CoOccurrenceResults({ result }: { result: CoOccurrenceResult }) {
       </figure>
       <figure className="space-y-1" data-testid="cooccurrence-heatmap">
         <label className={FIELD}>
-          Heatmap within ({unit})
+          <Help id="domains.cooccur-heatmap">Heatmap within ({unit})</Help>
           <select value={t} onChange={(e) => setAt(Number(e.target.value))} className={`${INPUT} w-28`} aria-label="Heatmap distance">
             {distances.map((d, i) => (
               <option key={i} value={i}>

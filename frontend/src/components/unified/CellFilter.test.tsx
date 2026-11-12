@@ -12,6 +12,8 @@ import { useSelectionStore } from "@/stores/selectionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { CellFilterControl, clearCellFilterDrafts } from "./CellFilter";
 import { UnifiedToolbar } from "./UnifiedToolbar";
+import { hoverTip, unhover } from "@/test/hoverTip";
+import { PLOT_HELP } from "@/lib/help/plot";
 
 const dataset: DatasetInfo = {
   id: "ds",
@@ -130,6 +132,15 @@ describe("CellFilterControl", () => {
     fireEvent.change(within(dialog).getByLabelText("Value"), { target: { value: "0" } });
     await waitFor(() => expect(within(dialog).getByRole("alert")).toHaveTextContent("not in layer"));
     expect(within(dialog).getByRole("button", { name: "Select" })).toBeDisabled();
+  });
+
+  it("explains the filter on its heading and ALL / ANY on its label", async () => {
+    const dialog = open();
+    const heading = within(dialog).getByText("Filter cells");
+    expect(await hoverTip(heading)).toBe(PLOT_HELP["filter.about"]);
+    unhover(heading);
+    expect(await hoverTip(within(dialog).getByText("Cells matching"))).toBe(PLOT_HELP["filter.match"]);
+    expect(within(dialog).getByRole("radiogroup", { name: "Cells matching" })).toBeTruthy();
   });
 
   it("reopens on the filter the selection came from", () => {

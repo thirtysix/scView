@@ -21,6 +21,8 @@ vi.mock("@/hooks/useDatasetRefresh", () => ({ useDatasetRefresh: () => vi.fn(asy
 
 import { SpotCompositionSubtab } from "./SpotCompositionSubtab";
 import { SpotReferenceLabels } from "./SpotReferenceLabels";
+import { SPATIAL_HELP } from "@/lib/help/spatial";
+import { hoverTip, unhover } from "@/test/hoverTip";
 import {
   NO_EDITS,
   type LabelEdits,
@@ -179,6 +181,15 @@ describe("SpotReferenceLabels", () => {
     expect(screen.getByTestId("spot-labels-table")).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText("Leave out Unknown"));
     expect(screen.getByTestId("spot-labels-count")).toHaveTextContent("1 type, at most 50");
+  });
+
+  it("explains the labels and merging by name on hover, the toggle keeping its name", async () => {
+    render(<Harness />);
+    const toggle = screen.getByRole("button", { name: "Reference labels" });
+    expect(await hoverTip(within(toggle).getByText("Reference labels"))).toMatch(/minimum of 25 cells and the limit of 50 types/);
+    unhover(within(toggle).getByText("Reference labels"));
+    expect(await hoverTip(screen.getByText("Merge by shared name"))).toBe(SPATIAL_HELP["spotcomp.merge-names"]);
+    expect(screen.queryByRole("button", { name: /^About/ })).toBeNull();
   });
 
   it("merges a typed name and clears", () => {

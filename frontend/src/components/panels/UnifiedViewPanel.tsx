@@ -97,6 +97,8 @@ import type { WorldRect } from "@/lib/cellOutlines";
 import { TRANSCRIPT_COLORS, shownText, transcriptColorCss } from "@/lib/transcripts";
 import { SPATIAL_EMBEDDING } from "@/api/spatial";
 import type { TissueMode } from "@/components/plots/EmbeddingScatter";
+import { helpText } from "@/lib/help";
+import { Help } from "@/components/common/Help";
 
 const SUBTABS = [
   { id: "markers" as const, label: "Markers" },
@@ -1552,6 +1554,7 @@ export function UnifiedViewPanel() {
         {/* Drag handle */}
         <div
           onMouseDown={handleDragStart}
+          title="Drag to resize the plot and the side panel"
           className="group flex w-2 flex-shrink-0 cursor-col-resize items-center justify-center"
         >
           <div className="h-8 w-1 rounded-full bg-slate-300 transition-colors group-hover:bg-primary group-active:bg-primary" />
@@ -1580,7 +1583,9 @@ export function UnifiedViewPanel() {
                 />
               </div>
               <div className="flex w-1/2 min-w-0 flex-col gap-1.5 rounded-lg border border-slate-200 bg-slate-50/60 p-2.5 text-xs">
-                <div className="text-[11px] font-semibold text-slate-600">Summary</div>
+                <div className="text-[11px] font-semibold text-slate-600">
+                  <Help id="plot.summary" side="below" align="right">Summary</Help>
+                </div>
                 <InfoRow label={unitTitle(dataset?.spatial)} value={numCells.toLocaleString()} />
                 <InfoRow label="Grouping" value={prettyObsLabel(groupByColumn)} />
                 <InfoRow
@@ -1603,7 +1608,7 @@ export function UnifiedViewPanel() {
           )}
           {/* Tab bar: wraps onto a second row rather than scrolling, so no tab is cut off */}
           <TabList
-            tabs={SUBTABS.filter(
+            tabs={SUBTABS.map((tab) => ({ ...tab, hint: helpText(`tab.${tab.id}`) })).filter(
               (tab) =>
                 (tab.id !== "protein" || dataset?.protein) &&
                 // Accessibility: only a dataset with 10x Multiome peaks has it. Peaks arrive with the

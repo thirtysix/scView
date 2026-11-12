@@ -5,6 +5,7 @@ const { getLabelMatches } = vi.hoisted(() => ({ getLabelMatches: vi.fn() }));
 vi.mock("@/api/ontology", () => ({ getLabelMatches }));
 
 import { AnnotationOntologyIds } from "./AnnotationOntologyIds";
+import { hoverTip } from "@/test/hoverTip";
 
 describe("AnnotationOntologyIds", () => {
   it("names a single-cell match (DC2 = cDC2, not CL's legacy pDC synonym)", async () => {
@@ -24,5 +25,6 @@ describe("AnnotationOntologyIds", () => {
     expect(screen.getByText("DC2").closest("tr")).toHaveTextContent("AI · single-cell name");
     expect(screen.getByText("DC1").closest("tr")).toHaveTextContent("single-cell name");
     expect(screen.getByText("DC1").closest("tr")).not.toHaveTextContent("undefined");
+    expect(await hoverTip(screen.getByText("Cell Ontology ids"))).toContain("matched to a Cell Ontology (CL) term by name only");
   });
 });

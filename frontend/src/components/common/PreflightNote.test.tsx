@@ -6,6 +6,7 @@ vi.mock("@/api/preflight", () => api);
 
 import type { LeidenChoice, PreflightVerdict, Umap3dChoice } from "@/api/preflight";
 import { FastLeidenOffer, PreflightIngestNotes, PreflightNote, PreflightRunNote, Umap3dNote } from "./PreflightNote";
+import { hoverTip } from "@/test/hoverTip";
 
 const GB = 1024 ** 3;
 
@@ -46,13 +47,12 @@ describe("PreflightNote", () => {
     expect(document.querySelector("[data-level=fits]")?.className).toContain("text-slate-500");
   });
 
-  it("tight: amber text, suggestions left to the tooltip", () => {
+  it("tight: amber text, suggestions left to the tooltip", async () => {
     render(<PreflightNote verdict={verdict("tight", { suggestions: ["Raise SCVIEW_MEMORY_GB"] })} />);
     expect(document.querySelector("[data-level=tight]")?.className).toContain("text-amber-700");
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.queryByText(/Raise SCVIEW_MEMORY_GB/)).toBeNull();
-    fireEvent.mouseEnter(screen.getByRole("button", { name: "How this estimate is made" }));
-    expect(screen.getByRole("tooltip")).toHaveTextContent("If it does not fit: Raise SCVIEW_MEMORY_GB");
+    expect(await hoverTip(screen.getByText(/About 3.1 GB more than now/))).toContain("If it does not fit: Raise SCVIEW_MEMORY_GB");
   });
 
   it("won't fit: an amber alert with the suggestions in order", () => {
@@ -82,7 +82,7 @@ describe("PreflightNote", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("the tooltip breaks the estimate down: parts, free memory, other datasets, error band, VM caveat", () => {
+  it("the tooltip breaks the estimate down: parts, free memory, other datasets, error band, VM caveat", async () => {
     render(
       <PreflightNote
         verdict={verdict("tight", {
@@ -91,7 +91,7 @@ describe("PreflightNote", () => {
         })}
       />,
     );
-    fireEvent.mouseEnter(screen.getByRole("button", { name: "How this estimate is made" }));
+    await hoverTip(screen.getByText(/About 3.1 GB more than now/));
     const tip = screen.getByRole("tooltip");
     expect(tip).toHaveTextContent("This dataset now");
     expect(tip).toHaveTextContent("0.9 GB");
@@ -155,7 +155,7 @@ function leiden(extra: Partial<LeidenChoice> = {}): LeidenChoice {
 }
 
 describe("FastLeidenOffer", () => {
-  it("over ten minutes: both times and a one-click opt-in, with what it changes in a tooltip", () => {
+  it("over ten minutes: both times and a one-click opt-in, with what it changes in a tooltip", async () => {
     const onChange = vi.fn();
     render(<FastLeidenOffer choice={leiden()} onChange={onChange} />);
     const offer = screen.getByTestId("fast-leiden-offer");
@@ -164,7 +164,7 @@ describe("FastLeidenOffer", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Use fast Leiden" }));
     expect(onChange).toHaveBeenCalledWith(2);
-    fireEvent.mouseEnter(screen.getByRole("button", { name: "What fast Leiden changes" }));
+    await hoverTip(screen.getByText(/full optimisation may take/));
     const tip = screen.getByRole("tooltip");
     expect(tip).toHaveTextContent("same Leiden algorithm with the same seed, stopped after two passes");
     expect(tip).toHaveTextContent("ARI 0.93-0.97");

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { ChevronRight, ChevronDown, Loader2 } from "lucide-react";
 import { apiFetch } from "@/api/client";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { CustomCollectionsGroup } from "./CustomCollectionsGroup";
 
 /* ------------------------------------------------------------------ */
@@ -61,14 +61,17 @@ function SpeciesHeading({ species }: { species: "human" | "mouse" }) {
     return <div className="mt-0.5 mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Mouse gene sets</div>;
   }
   return (
-    <div className="mt-1.5 mb-0.5 flex items-center gap-1 border-t border-slate-100 pt-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-      Human gene sets (mapped to mouse)
-      <InfoTip label="About human gene sets on mouse data">
-        These sets list human gene symbols. For enrichment on mouse data each gene is replaced by its mouse
-        orthologs from HGNC HCOP (as decoupler does); a gene with no mouse ortholog is left out. If the ortholog
-        table cannot be fetched, genes are matched ignoring case instead. The mouse collections above need no
-        mapping.
-      </InfoTip>
+    <div className="mt-1.5 mb-0.5 border-t border-slate-100 pt-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+      <HoverTip
+        tip={<>
+          These sets list human gene symbols. For enrichment on mouse data each gene is replaced by its mouse
+          orthologs from HGNC HCOP (as decoupler does); a gene with no mouse ortholog is left out. If the ortholog
+          table cannot be fetched, genes are matched ignoring case instead. The mouse collections above need no
+          mapping.
+        </>}
+      >
+        Human gene sets (mapped to mouse)
+      </HoverTip>
     </div>
   );
 }

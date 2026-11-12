@@ -9,6 +9,7 @@ import type { FilterThresholds } from "@/api/qc";
 import type { MitoTypesTable, RefilterPreview } from "@/api/mitoFilter";
 import type { MitoByType as Report, TypeMito } from "@/api/mitoByType";
 import type { DatasetInfo } from "@/api/types";
+import { hoverTip, unhover } from "@/test/hoverTip";
 
 const { getMitoByType, getMitoRefilter, runMitoRefilter } = vi.hoisted(() => ({
   getMitoByType: vi.fn(),
@@ -64,14 +65,14 @@ beforeEach(() => {
 });
 
 describe("the floor in the filtering step's % mito control", () => {
-  it("is a checkbox under per type, off by default, that sets qc_mito_type_floor", () => {
+  it("is a checkbox under per type, off by default, that sets qc_mito_type_floor", async () => {
     const onChange = vi.fn();
     render(<MitoModeControl datasetId="d1" values={T} onChange={onChange} hasMt table={table(false)} />);
     const box = screen.getByRole("checkbox", { name: "Never stricter than the global rule" });
     expect(box).not.toBeChecked();
     fireEvent.click(box);
     expect(onChange).toHaveBeenCalledWith({ qc_mito_type_floor: true });
-    expect(screen.getByLabelText("About never stricter than the global rule")).toBeInTheDocument();
+    expect(await hoverTip(screen.getByText("Never stricter than the global rule"))).toContain("Off by default");
   });
 
   it("is not offered with one global rule", () => {
@@ -157,6 +158,10 @@ describe("the floor in the re-filter", () => {
     render(<MitoRefilter datasetId="d1" column="cell_type" perCluster={false} />);
     const box = () => screen.getByRole("checkbox", { name: "Never stricter than the global rule" });
     expect(box()).not.toBeChecked();
+    expect(await hoverTip(screen.getByText("Never stricter than the global rule"))).toContain(
+      "so no cell it kept is removed",
+    );
+    unhover(screen.getByText("Never stricter than the global rule"));
     fireEvent.click(screen.getByRole("button", { name: /Re-filter with per-type bounds/ }));
     await screen.findByTestId("refilter-preview");
     expect(getMitoRefilter).toHaveBeenLastCalledWith("d1", "cell_type", false);

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { getSpotCheck, runSpotCheck, type SpotCheck } from "@/api/spotDeconvolution";
 import { Caption } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { errorMessage } from "@/lib/errorMessage";
 import { SPOT_METHOD_LABELS } from "@/lib/spotComposition";
 import { type LabelEdits, editsBody, hasEdits, labelsUsed } from "@/lib/spotLabels";
@@ -71,12 +71,16 @@ export function SpotCompositionCheck({
   return (
     <div className="space-y-2 rounded border border-slate-200 p-2" data-testid="spot-check">
       <div className="flex items-center gap-1.5 font-medium text-slate-700">
-        Self-check
-        <InfoTip label="About the self-check" width={320}>
-          Half of each reference type&apos;s cells make the profiles; the other half are pooled into synthetic spots of 2
-          to 10 cells with known shares, thinned to Visium-like depths, and fitted by both methods. RMSE and JSD: how far
-          the estimates are from the truth (0 is perfect). AUPR: how well a type&apos;s presence is told from its absence.
-        </InfoTip>
+        <HoverTip
+          width={320}
+          tip={<>
+            Half of each reference type&apos;s cells make the profiles; the other half are pooled into synthetic spots of 2
+            to 10 cells with known shares, thinned to Visium-like depths, and fitted by both methods. RMSE and JSD: how far
+            the estimates are from the truth (0 is perfect). AUPR: how well a type&apos;s presence is told from its absence.
+          </>}
+        >
+          Self-check
+        </HoverTip>
         <button
           className="ml-auto rounded border px-2 py-0.5 font-normal hover:bg-slate-50 disabled:opacity-50"
           disabled={disabled || running}

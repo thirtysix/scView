@@ -7,7 +7,7 @@ import { DoubletAgreement } from "@/components/qc/DoubletAgreement";
 import { DoubletMethods } from "@/components/qc/DoubletMethods";
 import { ThresholdHistogram, type RefLine } from "@/components/plots/ThresholdHistogram";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import {
   fewCalledHelp,
   fewCalledText,
@@ -299,10 +299,12 @@ export function DoubletCard({
             {fewCalled.slice(0, FEW_CALLED_SHOWN).map((r) => (
               <div key={r.name}>
                 <p className="flex flex-wrap items-center gap-x-1.5">
-                  <span>{fewCalledText(r)}</span>
-                  <InfoTip width={320} label={`Why ${r.name} is flagged`}>
-                    {fewCalledHelp(summary.few_called_share ?? 0.002, summary.few_called_min_cells ?? 2000)}
-                  </InfoTip>
+                  <HoverTip
+                    width={320}
+                    tip={<>{fewCalledHelp(summary.few_called_share ?? 0.002, summary.few_called_min_cells ?? 2000)}</>}
+                  >
+                    {fewCalledText(r)}
+                  </HoverTip>
                   {r.hist && (
                     <button
                       type="button"

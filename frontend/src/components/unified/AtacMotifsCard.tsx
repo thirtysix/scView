@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { cancelScan, getMotifState, scanPeaks, type ChromVarMotif, type MotifState } from "@/api/atacMotifs";
 import { Caption } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
 import { scanBlockedText, scanDownloadText, scanEstimateText } from "@/lib/atacMotifs";
 import { errorMessage } from "@/lib/errorMessage";
@@ -86,14 +86,18 @@ export function AtacMotifsCard({
   const blocked = state ? scanBlockedText(state) : null;
   return (
     <section className="space-y-2 rounded-lg border border-slate-200 p-2" aria-label="Motifs in peaks" data-testid="atac-motifs">
-      <h4 className="flex items-center gap-1 text-xs font-semibold text-slate-600">
-        <span>Motifs in peaks</span>
-        <InfoTip label="About motifs in peaks" width={340}>
-          The 879 JASPAR 2024 motifs in every peak, with the same hits as Signac&rsquo;s AddMotifs (motifmatchr: p &lt; 5e-5, the peaks&rsquo;
-          own base frequencies, both strands). A motif hit is not binding. Paralogous TFs share motifs, so the name stands for a family.
-          GC-rich motifs enrich easily even after matching the background on GC. A chromVAR score is relative to matched peaks across these
-          cells, not an amount of TF.
-        </InfoTip>
+      <h4 className="text-xs font-semibold text-slate-600">
+        <HoverTip
+          width={340}
+          tip={<>
+            The 879 JASPAR 2024 motifs in every peak, with the same hits as Signac&rsquo;s AddMotifs (motifmatchr: p &lt; 5e-5, the peaks&rsquo;
+            own base frequencies, both strands). A motif hit is not binding. Paralogous TFs share motifs, so the name stands for a family.
+            GC-rich motifs enrich easily even after matching the background on GC. A chromVAR score is relative to matched peaks across these
+            cells, not an amount of TF.
+          </>}
+        >
+          Motifs in peaks
+        </HoverTip>
       </h4>
       <RequestError message={error} />
       {state && !state.available && <p className="text-[11px] leading-snug text-slate-500">{state.reason}</p>}

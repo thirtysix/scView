@@ -3,7 +3,8 @@ import { Loader2 } from "lucide-react";
 import { getCoverage, getFragments, type Coverage } from "@/api/atacFragments";
 import type { LinksLocus } from "@/api/atacLinks";
 import { Caption } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
+import { HoverTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
 import Plot from "@/components/plots/Plot";
 import { useCategoryColors } from "@/hooks/useCategoryColors";
@@ -179,13 +180,17 @@ export function AtacCoverage({
 
   return (
     <section className="space-y-2 rounded-lg border border-slate-200 p-2" aria-label="Coverage tracks">
-      <h4 className="flex items-center gap-1 text-xs font-semibold text-slate-600">
-        <span>Coverage tracks</span>
-        <InfoTip label="About coverage tracks" width={320}>
-          How many fragments cover each base, per group of cells, drawn from the fragments file for the window you ask
-          for. A peak in one group&rsquo;s track only is accessible chromatin in those cells. A gene shows its body{" "}
-          {(genePad / 1000).toFixed(0)} kb either side, so the promoter is in view.
-        </InfoTip>
+      <h4 className="text-xs font-semibold text-slate-600">
+        <HoverTip
+          width={320}
+          tip={<>
+            How many fragments cover each base, per group of cells, drawn from the fragments file for the window you ask
+            for. A peak in one group&rsquo;s track only is accessible chromatin in those cells. A gene shows its body{" "}
+            {(genePad / 1000).toFixed(0)} kb either side, so the promoter is in view.
+          </>}
+        >
+          Coverage tracks
+        </HoverTip>
       </h4>
       <form
         className="flex flex-wrap items-center gap-2"
@@ -202,7 +207,7 @@ export function AtacCoverage({
           onChange={(e) => setText(e.target.value)}
         />
         <label className="flex items-center gap-1 text-[11px] text-slate-500">
-          Group by
+          <Help id="atac.coverage-group">Group by</Help>
           <select
             aria-label="Group by"
             className="rounded border border-slate-200 bg-white px-1 py-0.5 text-xs text-slate-700"
@@ -238,8 +243,11 @@ export function AtacCoverage({
             style={{ width: "100%" }}
           />
           <Caption n={{ value: cov.n_fragments, unit: "fragments in the window" }}>
-            {cov.region.chrom}:{cov.region.start.toLocaleString()}-{cov.region.end.toLocaleString()}, about{" "}
-            {Math.round(cov.bin_size).toLocaleString()} bp per bin. {cov.normalisation}{" "}
+            <Help id="atac.coverage-tracks">
+              {cov.region.chrom}:{cov.region.start.toLocaleString()}-{cov.region.end.toLocaleString()}, about{" "}
+              {Math.round(cov.bin_size).toLocaleString()} bp per bin.
+            </Help>{" "}
+            {cov.normalisation}{" "}
             {cov.peaks.length > 0 ? `${cov.peaks.length} peaks marked. ` : "No peak table on this dataset. "}
             {cov.genes_note}
             {arcs && " Arcs: a peak's correlation with the gene, a candidate and never proof of regulation."}

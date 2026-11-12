@@ -11,6 +11,7 @@ import {
   type SweepRow,
 } from "@/api/clustering";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
+import { Help } from "@/components/common/Help";
 import { prettyObsLabel } from "@/lib/formatting";
 import { formatDuration } from "@/lib/hvgSensitivity";
 import { clustersAfter, defaultSelection, describePair, pairKey } from "@/lib/mergeCheck";
@@ -159,7 +160,9 @@ export function MergeCheck({
   return (
     <section aria-label="Merge check" className="space-y-1.5 border-t border-slate-200 pt-2">
       <div>
-        <div className="text-[11px] font-medium text-slate-600">Should any clusters merge?</div>
+        <div className="text-[11px] font-medium text-slate-600">
+          <Help id="merge.about">Should any clusters merge?</Help>
+        </div>
         <p className="text-[10px] leading-snug text-slate-500">
           Splits every cell&rsquo;s counts into two independent halves (negative binomial count splitting), re-runs the
           pipeline on one half and tests neighbouring clusters on the other, so the test does not reuse the data that made
@@ -182,7 +185,7 @@ export function MergeCheck({
           ))}
         </select>
         <label className="flex items-center gap-1 text-slate-500">
-          merge below
+          <Help id="merge.threshold">merge below</Help>
           <select
             aria-label="Genes below which a pair is a merge candidate"
             value={maxGenes}

@@ -4,7 +4,8 @@ import type { PlotMouseEvent } from "plotly.js";
 import Plot from "@/components/plots/Plot";
 import { DonorBoxPlot } from "@/components/plots/DonorBoxPlot";
 import { Caption, CapNote } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
+import { HoverTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
 import {
   compareCsvUrl,
@@ -184,7 +185,7 @@ export function CommunicationCompare({ datasetId, datasetName, groupby, options 
       <div className="grid grid-cols-3 gap-2">
         <div>
           <label htmlFor="ccc-cmp-column" className="mb-1 block text-[11px] font-medium text-slate-500">
-            Condition
+            <Help id="communication.compare_conditions">Condition</Help>
           </label>
           <select
             id="ccc-cmp-column"
@@ -228,7 +229,7 @@ export function CommunicationCompare({ datasetId, datasetName, groupby, options 
       </div>
       <div className="flex items-center gap-2">
         <label className="text-[11px] text-slate-500" htmlFor="ccc-cmp-expr-prop">
-          Detected in at least
+          <Help id="communication.expr_prop">Detected in at least</Help>
         </label>
         <select
           id="ccc-cmp-expr-prop"
@@ -281,7 +282,21 @@ export function CommunicationCompare({ datasetId, datasetName, groupby, options 
       {result && (
         <>
           <Caption n={[{ value: result.n_cells, unit: "cells" }, { value: result.groups.length, unit: "groups" }]}>
-            {compareSummary(result)} ({prettyObsLabel(result.groupby)}; {prettyObsLabel(result.condition)}).
+            <HoverTip
+              tip={<>
+                Each condition is scored as a single run would score it, on the same groups (a group with fewer than{" "}
+                {result.min_cells} cells in either condition is left out of both) and the same ligand-receptor pairs. An
+                interaction counts in a condition when its specificity rank is at most {result.specific_threshold}.
+                Gained: counts in B only, with its ligand-receptor mean at least {result.fold}x higher in B; lost: the
+                reverse; changed: counts in both, means {result.fold}x apart. The heatmap is CellChat&apos;s differential
+                number (or strength) of interactions. P-values come only from donors: each donor&apos;s mean expression of
+                the ligand in the sender times the receptor in the receiver, compared between conditions. Cells are not
+                replicates, so without donors there is no test.
+              </>}
+            >
+              {compareSummary(result)}
+            </HoverTip>{" "}
+            ({prettyObsLabel(result.groupby)}; {prettyObsLabel(result.condition)}).
             {Object.keys(result.dropped_groups).length > 0 &&
               ` Left out of both (under ${result.min_cells} cells in a condition): ${Object.entries(result.dropped_groups)
                 .map(([g, n]) => `${g} (${n.a} / ${n.b})`)
@@ -299,17 +314,7 @@ export function CommunicationCompare({ datasetId, datasetName, groupby, options 
               </>
             ) : (
               result.replicates.reason
-            )}{" "}
-            <InfoTip label="About the comparison" align="right">
-              Each condition is scored as a single run would score it, on the same groups (a group with fewer than{" "}
-              {result.min_cells} cells in either condition is left out of both) and the same ligand-receptor pairs. An
-              interaction counts in a condition when its specificity rank is at most {result.specific_threshold}.
-              Gained: counts in B only, with its ligand-receptor mean at least {result.fold}x higher in B; lost: the
-              reverse; changed: counts in both, means {result.fold}x apart. The heatmap is CellChat&apos;s differential
-              number (or strength) of interactions. P-values come only from donors: each donor&apos;s mean expression of
-              the ligand in the sender times the receptor in the receiver, compared between conditions. Cells are not
-              replicates, so without donors there is no test.
-            </InfoTip>
+            )}
           </p>
           {result.composition.some((c) => c.flagged) && (
             <p role="note" className="flex gap-1.5 text-[11px] text-amber-800">
@@ -328,7 +333,9 @@ export function CommunicationCompare({ datasetId, datasetName, groupby, options 
 
           <div>
             <div className="mb-1 flex items-center gap-2">
-              <span className="text-[11px] font-medium text-slate-600">Change between groups ({result.b} − {result.a})</span>
+              <span className="text-[11px] font-medium text-slate-600">
+                <Help id="communication.diff_heatmap">Change between groups ({result.b} − {result.a})</Help>
+              </span>
               <select
                 aria-label="Heatmap value"
                 value={weight}
@@ -377,18 +384,20 @@ export function CommunicationCompare({ datasetId, datasetName, groupby, options 
           </div>
 
           <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
-            <select
-              aria-label="Call"
-              value={filter.call}
-              onChange={(e) => setFilter((f) => ({ ...f, call: e.target.value as CallFilter }))}
-              className={sel}
-            >
-              {CALL_FILTERS.map((c) => (
-                <option key={c.value} value={c.value}>
-                  {c.label}
-                </option>
-              ))}
-            </select>
+            <Help id="communication.call">
+              <select
+                aria-label="Call"
+                value={filter.call}
+                onChange={(e) => setFilter((f) => ({ ...f, call: e.target.value as CallFilter }))}
+                className={sel}
+              >
+                {CALL_FILTERS.map((c) => (
+                  <option key={c.value} value={c.value}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+            </Help>
             <select aria-label="Sender" value={filter.source} onChange={(e) => setFilter((f) => ({ ...f, source: e.target.value }))} className={sel}>
               <option value="">Any sender</option>
               {result.groups.map((g) => (
@@ -423,7 +432,9 @@ export function CommunicationCompare({ datasetId, datasetName, groupby, options 
               disabled={!result.replicates.test}
               onChange={(e) => setFilter((f) => ({ ...f, maxPadj: e.target.checked ? 0.05 : null }))}
             />
-            Only adjusted p &lt; 0.05{!result.replicates.test && " (no donor test here)"}
+            <Help id="communication.padj_filter">
+              Only adjusted p &lt; 0.05{!result.replicates.test && " (no donor test here)"}
+            </Help>
           </label>
 
           <div>

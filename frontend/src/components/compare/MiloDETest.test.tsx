@@ -21,6 +21,7 @@ vi.mock("@/components/plots/Plot", () => ({
 }));
 
 import { MiloDETest } from "./MiloDETest";
+import { hoverTip, unhover } from "@/test/hoverTip";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 
@@ -101,6 +102,18 @@ describe("MiloDETest", () => {
     const table = screen.getAllByRole("table")[0]!;
     expect(within(table).queryByText("CCL2")).toBeNull();
     expect(within(table).getByText("ISG15")).toBeTruthy();
+  });
+
+  it("explains the gene and neighbourhood tables on hovering their headings", async () => {
+    render(<MiloDETest datasetId="kang" info={KANG} />);
+    await screen.findByTestId("milode-plan");
+    fireEvent.click(screen.getByRole("button", { name: /Run neighbourhood DE/ }));
+    await screen.findByTestId("milode-headline");
+    const genes = within(screen.getByRole("heading", { name: "Genes" })).getByText("Genes");
+    expect(await hoverTip(genes)).toContain("spatial FDR < 0.1");
+    unhover(genes);
+    const nhoods = within(screen.getByRole("heading", { name: "Neighbourhoods" })).getByText("Neighbourhoods");
+    expect(await hoverTip(nhoods)).toContain("under 10% of its cells come from one condition");
   });
 
   it("can cancel a run", async () => {

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Layers, Loader2 } from "lucide-react";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { DENSITY_MAX_GENES, DENSITY_TIP, showDensity } from "@/lib/density";
 import { errorText } from "@/lib/embeddingReliability";
 import { useUnifiedViewStore } from "@/stores/unifiedViewStore";
@@ -53,8 +53,7 @@ export function DensityToggle({
           onChange={(e) => void toggle(e.target.checked)}
           className="h-3 w-3"
         />
-        Density
-        <InfoTip label="What the density shows">{DENSITY_TIP}</InfoTip>
+        <HoverTip tip={DENSITY_TIP}>Density</HoverTip>
         {busy && <Loader2 className="h-3 w-3 animate-spin text-slate-400" />}
       </label>
       {error && (
@@ -120,15 +119,14 @@ export function JointDensityButton({
           disabled={!usable || busy}
           aria-pressed={shown}
           onClick={() => void click()}
-          title={usable ? "Colour the plot by where all these genes are expressed together (weighted density)" : "Pick 2 or more genes"}
+          title={usable ? undefined : "Pick 2 or more genes"}
           className={`flex items-center gap-1 rounded border px-2 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50 ${
             shown ? "border-blue-300 bg-blue-50 text-blue-700" : "border-slate-300 bg-white text-slate-600 hover:bg-slate-100"
           }`}
         >
           {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Layers className="h-3.5 w-3.5" />}
-          {shown ? "Hide joint density" : "Joint density"}
+          <HoverTip tip={DENSITY_TIP}>{shown ? "Hide joint density" : "Joint density"}</HoverTip>
         </button>
-        <InfoTip label="What the joint density shows">{DENSITY_TIP}</InfoTip>
       </span>
       {error && (
         <p role="alert" className="w-full text-[11px] text-red-600">

@@ -4,6 +4,7 @@ import type { TfMotifResult, TfMotifRow, TfMotifStatus } from "@/api/tfMotifs";
 import type { DatasetInfo } from "@/api/types";
 import { formatP, sortTfRows, tfCsvRows, tfGene } from "@/lib/tfMotifs";
 import { stepLabel } from "@/lib/stepLabel";
+import { hoverTip } from "@/test/hoverTip";
 
 const { getTfMotifStatus, getLastTfMotifs, prepareTfMotifs, runTfMotifs, getActivityCells, getActivitySummary } =
   vi.hoisted(() => ({
@@ -203,6 +204,6 @@ describe("TfMotifCandidates", () => {
     render(<UnifiedActivitySubtab onScore={vi.fn()} groupByColumn="" setGroupByColumn={() => {}} />);
     fireEvent.click(screen.getByRole("button", { name: "Upstream TF candidates" }));
     expect(await screen.findByRole("button", { name: "Prepare motif table" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "About upstream TF candidates" })).toBeTruthy();
+    expect(await hoverTip(screen.getByText("Upstream TF candidates (promoter motifs)"))).toMatch(/JASPAR 2024/);
   });
 });

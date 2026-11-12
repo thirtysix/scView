@@ -10,7 +10,8 @@ import {
   type GseaTerm,
 } from "@/api/enrichment";
 import { collectionLabel } from "@/api/genesets";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
 import { MSigDBCollectionTree, DEFAULT_MSIGDB_COLLECTIONS } from "@/components/panels/MSigDBCollectionTree";
 import { EnrichmentTermsTable } from "@/components/unified/EnrichmentTermsTable";
 import { GseaResults } from "@/components/unified/GseaResults";
@@ -211,17 +212,24 @@ export function DEEnrichment({
     <div className="flex flex-col gap-2 rounded-lg border border-slate-200 p-2.5 text-xs">
       <div className="flex items-center gap-2">
         <Network className="h-3.5 w-3.5 flex-shrink-0 text-slate-400" />
-        <span className="font-semibold text-slate-700">Pathway enrichment</span>
-        <InfoTip width={300}>
-          Over-representation (hypergeometric test, Benjamini-Hochberg adjusted) of the significant
-          genes in the table above: the genes higher in {labelA} and, separately, those higher in{" "}
-          {labelB}, so two opposing programmes are not blurred into one. The background is every
-          gene this DE tested, not every gene the collections name. GSEA instead ranks every tested
-          gene (by the test&apos;s statistic: Wilcoxon z, Welch t or the logistic regression
-          coefficient; sign(log2FC) × −log10(p) for pseudobulk) and asks
-          whether a set&apos;s genes bunch at the top or bottom, so it needs no cut-off and finds
-          programmes of many small shifts; the leading edge is the genes that drive it.
-        </InfoTip>
+        <span className="font-semibold text-slate-700">
+          <HoverTip
+            tip={
+              <>
+                Over-representation (hypergeometric test, Benjamini-Hochberg adjusted) of the significant
+                genes in the table above: the genes higher in {labelA} and, separately, those higher in{" "}
+                {labelB}, so two opposing programmes are not blurred into one. The background is every
+                gene this DE tested, not every gene the collections name. GSEA instead ranks every tested
+                gene (by the test&apos;s statistic: Wilcoxon z, Welch t or the logistic regression
+                coefficient; sign(log2FC) × −log10(p) for pseudobulk) and asks
+                whether a set&apos;s genes bunch at the top or bottom, so it needs no cut-off and finds
+                programmes of many small shifts; the leading edge is the genes that drive it.
+              </>
+            }
+          >
+            Pathway enrichment
+          </HoverTip>
+        </span>
         <span className="flex-1 truncate text-slate-500">
           {fmt(query.up.length)} up · {fmt(query.down.length)} down
         </span>
@@ -379,7 +387,9 @@ export function DEEnrichment({
       {gsea && (
         <div className="flex flex-col gap-1.5 border-t border-slate-100 pt-2">
           <div className="flex flex-wrap items-center gap-2">
-            <h4 className="text-[11px] font-semibold text-slate-700">GSEA: every tested gene, ranked</h4>
+            <h4 className="text-[11px] font-semibold text-slate-700">
+              <Help id="enrichment.gsea">GSEA: every tested gene, ranked</Help>
+            </h4>
             <ScoringMethodChoice label="Score terms with" className="ml-auto" />
           </div>
           <GseaResults

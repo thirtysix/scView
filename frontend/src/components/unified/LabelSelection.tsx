@@ -3,6 +3,7 @@ import { useDialogFocus } from "@/hooks/useDialogFocus";
 import { Loader2, Tag, Undo2 } from "lucide-react";
 import { ApiDetailError, labelCells, listLabelColumns, undoLabel } from "@/api/labels";
 import { CellTypeCombobox, type PickedTerm } from "@/components/common/CellTypeCombobox";
+import { Help } from "@/components/common/Help";
 import type { DatasetInfo } from "@/api/types";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
 import { columnNameError, labelError, suggestColumnName, UNASSIGNED } from "@/lib/labels";
@@ -218,7 +219,9 @@ function LabelSelectionForm({ dataset, indices, onClose }: LabelSelectionFormPro
       className="absolute left-0 top-full z-50 mt-1 w-72 space-y-2.5 rounded-lg border border-slate-200 bg-white p-3 text-xs shadow-lg"
     >
       <div className="font-semibold text-slate-700">
-        Label {formatNumber(indices.size)} selected cell{indices.size === 1 ? "" : "s"}
+        <Help id="plot.label-selection" side="below">
+          Label {formatNumber(indices.size)} selected cell{indices.size === 1 ? "" : "s"}
+        </Help>
       </div>
 
       <CellTypeCombobox

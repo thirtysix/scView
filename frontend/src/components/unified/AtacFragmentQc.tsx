@@ -15,7 +15,8 @@ import {
 } from "@/api/atacFragments";
 import type { WatchdogEvent } from "@/api/pipelineRun";
 import { Caption } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
+import { HoverTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
 import Plot from "@/components/plots/Plot";
 import { useCategoryColors } from "@/hooks/useCategoryColors";
@@ -190,12 +191,16 @@ export function AtacFragmentQc({ datasetId }: { datasetId: string }) {
 
   return (
     <section className="space-y-2 rounded-lg border border-slate-200 p-2" aria-label="Fragment QC">
-      <h4 className="flex items-center gap-1 text-xs font-semibold text-slate-600">
-        <span>Fragment QC</span>
-        <InfoTip label="About fragment QC" width={320}>
-          The fragments file lists every ATAC fragment with its position and cell. One pass over it scores each cell&rsquo;s
-          TSS enrichment and nucleosome signal, with Signac&rsquo;s definitions, and gives the coverage tracks their scale.
-        </InfoTip>
+      <h4 className="text-xs font-semibold text-slate-600">
+        <HoverTip
+          width={320}
+          tip={<>
+            The fragments file lists every ATAC fragment with its position and cell. One pass over it scores each cell&rsquo;s
+            TSS enrichment and nucleosome signal, with Signac&rsquo;s definitions, and gives the coverage tracks their scale.
+          </>}
+        >
+          Fragment QC
+        </HoverTip>
       </h4>
 
       {!status?.attached && (
@@ -284,30 +289,40 @@ export function AtacFragmentQc({ datasetId }: { datasetId: string }) {
         <div className="space-y-2" data-testid="atac-qc">
           <dl className="grid grid-cols-3 gap-2 text-[11px]">
             <div>
-              <dt className="flex items-center gap-1 text-slate-400">
-                TSS enrichment
-                <InfoTip label="About TSS enrichment" width={320}>
-                  Tn5 cuts per base within 500 bp of a protein-coding TSS, over cuts per base in the 100 bp at each end of
-                  +-1 kb. Open promoters make it high; a cell with little signal over background has it near 1. Signac&rsquo;s
-                  PBMC vignette keeps cells above {TSS_LOW}; ENCODE&rsquo;s bulk ATAC standard calls 5-7 acceptable for GRCh38 with a
-                  slightly different measure.
-                </InfoTip>
+              <dt className="text-slate-400">
+                <HoverTip
+                  width={320}
+                  tip={<>
+                    Tn5 cuts per base within 500 bp of a protein-coding TSS, over cuts per base in the 100 bp at each end of
+                    +-1 kb. Open promoters make it high; a cell with little signal over background has it near 1. Signac&rsquo;s
+                    PBMC vignette keeps cells above {TSS_LOW}; ENCODE&rsquo;s bulk ATAC standard calls 5-7 acceptable for GRCh38 with a
+                    slightly different measure.
+                  </>}
+                >
+                  TSS enrichment
+                </HoverTip>
               </dt>
               <dd className="font-medium tabular-nums text-slate-700">{fmt(qc.medians.tss_enrichment)} (median)</dd>
             </div>
             <div>
-              <dt className="flex items-center gap-1 text-slate-400">
-                Nucleosome signal
-                <InfoTip label="About nucleosome signal" width={320}>
-                  Fragments spanning one nucleosome (147-294 bp) over nucleosome-free ones (under 147 bp). Signac&rsquo;s PBMC
-                  vignette keeps cells below {NUCLEOSOME_HIGH}; high values mean few short fragments, a sign of over-digested or
-                  poorly transposed nuclei.
-                </InfoTip>
+              <dt className="text-slate-400">
+                <HoverTip
+                  width={320}
+                  tip={<>
+                    Fragments spanning one nucleosome (147-294 bp) over nucleosome-free ones (under 147 bp). Signac&rsquo;s PBMC
+                    vignette keeps cells below {NUCLEOSOME_HIGH}; high values mean few short fragments, a sign of over-digested or
+                    poorly transposed nuclei.
+                  </>}
+                >
+                  Nucleosome signal
+                </HoverTip>
               </dt>
               <dd className="font-medium tabular-nums text-slate-700">{fmt(qc.medians.nucleosome_signal)} (median)</dd>
             </div>
             <div>
-              <dt className="text-slate-400">Fragments per cell</dt>
+              <dt className="text-slate-400">
+                <Help id="atac.fragments-per-cell">Fragments per cell</Help>
+              </dt>
               <dd className="font-medium tabular-nums text-slate-700">{fmt(qc.medians.n_fragments, 0)} (median)</dd>
             </div>
           </dl>
@@ -319,7 +334,7 @@ export function AtacFragmentQc({ datasetId }: { datasetId: string }) {
           ))}
 
           <label className="flex items-center gap-1 text-[11px] text-slate-500">
-            Group by
+            <Help id="atac.fragment-group">Group by</Help>
             <select
               aria-label="Group by"
               className="rounded border border-slate-200 bg-white px-1 py-0.5 text-xs text-slate-700"

@@ -4,7 +4,8 @@ import Plot from "@/components/plots/Plot";
 import { MarkerPlot } from "@/components/plots/MarkerPlot";
 import { Panel } from "@/components/common/Panel";
 import { Caption } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
 import { plotConfig } from "@/lib/plotConfig";
 import { plotlyColorscale } from "@/lib/colors";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -187,7 +188,7 @@ export function MinimalPanel({ datasetId, groupby }: { datasetId: string; groupb
         className="flex w-full items-center gap-1 px-2 py-1.5 text-left text-xs font-semibold text-slate-600 hover:bg-slate-50"
       >
         {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-        Minimal panel
+        <Help id="markers.minimal-panel">Minimal panel</Help>
         <span className="font-normal text-slate-500">: fewest genes that tell the groups apart</span>
       </button>
       {open && (
@@ -205,12 +206,17 @@ export function MinimalPanel({ datasetId, groupby }: { datasetId: string; groupb
               />
             </label>
             <label className="flex flex-col gap-0.5">
-              <span className="inline-flex items-center gap-1">
-                Candidates per group
-                <InfoTip label="About the candidates">
-                  Each group&apos;s top markers as the app chooses them everywhere (expressed in at least 20% of
-                  the group, adjusted p &lt; 0.05, by fold change, no ribosomal or mitochondrial genes).
-                </InfoTip>
+              <span>
+                <HoverTip
+                  tip={
+                    <>
+                      Each group&apos;s top markers as the app chooses them everywhere (expressed in at least 20% of
+                      the group, adjusted p &lt; 0.05, by fold change, no ribosomal or mitochondrial genes).
+                    </>
+                  }
+                >
+                  Candidates per group
+                </HoverTip>
               </span>
               <input
                 type="number"
@@ -321,7 +327,7 @@ export function MinimalPanel({ datasetId, groupby }: { datasetId: string; groupb
           )}
           {start && steps.length > 0 && (
             <Caption n={[{ value: start.n_cells, unit: "cells" }, { value: start.groups.length, unit: "groups" }]}>
-              Balanced accuracy (mean recall over groups) of a multinomial logistic regression, {start.cv}, on
+              <Help id="markers.panel-curve">Balanced accuracy (mean recall over groups)</Help> of a multinomial logistic regression, {start.cv}, on
               up to {start.cells_per_group} cells per group drawn with a fixed seed; z-scored log expression. At
               each step the {start.screen} most promising of {start.n_candidates} candidates (score test) are
               cross-validated and the best joins. Dashed: each group&apos;s top marker in turn, no selection.
@@ -414,7 +420,7 @@ export function MinimalPanel({ datasetId, groupby }: { datasetId: string; groupb
                 </Panel>
               )}
               <Caption n={{ value: result.n_cells, unit: "cells" }}>
-                Each row: the share of a group&apos;s sampled cells the panel&apos;s model calls each group, each
+                <Help id="markers.panel-confusion">Each row:</Help> the share of a group&apos;s sampled cells the panel&apos;s model calls each group, each
                 cell predicted by the model fitted on the other folds ({result.cv}).
               </Caption>
 

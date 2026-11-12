@@ -8,6 +8,7 @@ vi.mock("@/lib/density", async (orig) => ({
 }));
 
 import { DensityToggle, JointDensityButton } from "./DensityToggle";
+import { hoverTip } from "@/test/hoverTip";
 import { useUnifiedViewStore } from "@/stores/unifiedViewStore";
 
 beforeEach(() => {
@@ -25,7 +26,7 @@ describe("DensityToggle", () => {
     await waitFor(() => expect(showDensity).toHaveBeenCalledWith("ds1", ["CD3D"]));
     expect(useUnifiedViewStore.getState().densityMode).toBe(true);
     expect(onGeneSelect).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: "What the density shows" })).toBeTruthy();
+    expect(await hoverTip(screen.getByText("Density"))).toContain("kernel density");
   });
 
   it("off: the gene's expression again", () => {

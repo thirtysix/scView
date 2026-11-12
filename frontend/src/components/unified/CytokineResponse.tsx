@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Loader2 } from "lucide-react";
 import Plot from "@/components/plots/Plot";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
 import { Caption } from "@/components/common/Caption";
 import { RequestError } from "@/components/common/RequestError";
 import { useDatasetStore } from "@/stores/datasetStore";
@@ -98,28 +99,35 @@ export function CytokineResponse({ groupByColumn, setGroupByColumn }: Props) {
   const selectCls = "w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-700";
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-1.5">
-        <span className="text-xs font-medium text-slate-700">Cytokine response (CytoSig)</span>
-        <InfoTip label="About cytokine response" width={300}>
-          Which cytokines&apos; signalling the expression looks like. CytoSig (Jiang et al. 2021)
-          collected the genes that change when cells are treated with each of 43 cytokines. A
-          group&apos;s change in expression is fitted to those signatures (ridge regression), and
-          each fit is compared with fits after shuffling the genes (z-score). A high z means the
-          cells look like they <em>received</em> that signal; it says nothing about which cells
-          make the cytokine. Human signatures: mouse genes are matched by symbol in upper case.
-        </InfoTip>
+      <div className="text-xs font-medium text-slate-700">
+        <HoverTip
+          tip={
+            <>
+              Which cytokines&apos; signalling the expression looks like. CytoSig (Jiang et al. 2021)
+              collected the genes that change when cells are treated with each of 43 cytokines. A
+              group&apos;s change in expression is fitted to those signatures (ridge regression), and
+              each fit is compared with fits after shuffling the genes (z-score). A high z means the
+              cells look like they <em>received</em> that signal; it says nothing about which cells
+              make the cytokine. Human signatures: mouse genes are matched by symbol in upper case.
+            </>
+          }
+        >
+          Cytokine response (CytoSig)
+        </HoverTip>
       </div>
 
-      <fieldset className="flex gap-3 text-xs text-slate-600">
+      <fieldset className="text-xs text-slate-600">
         <legend className="sr-only">Compare</legend>
-        <label className="flex items-center gap-1">
-          <input type="radio" name="cytokine-mode" checked={mode === "groups"} onChange={() => setMode("groups")} />
-          Each group vs the others
-        </label>
-        <label className="flex items-center gap-1">
-          <input type="radio" name="cytokine-mode" checked={mode === "conditions"} onChange={() => setMode("conditions")} />
-          Two conditions
-        </label>
+        <Help id="cytokine.mode" className="inline-flex gap-3">
+          <label className="flex items-center gap-1">
+            <input type="radio" name="cytokine-mode" checked={mode === "groups"} onChange={() => setMode("groups")} />
+            Each group vs the others
+          </label>
+          <label className="flex items-center gap-1">
+            <input type="radio" name="cytokine-mode" checked={mode === "conditions"} onChange={() => setMode("conditions")} />
+            Two conditions
+          </label>
+        </Help>
       </fieldset>
 
       <div className="grid grid-cols-2 gap-2">
@@ -136,7 +144,7 @@ export function CytokineResponse({ groupByColumn, setGroupByColumn }: Props) {
         </label>
         {mode === "groups" ? (
           <label className="text-[11px] font-medium text-slate-500">
-            Compared with
+            <Help id="cytokine.reference" align="right">Compared with</Help>
             <select value={reference} onChange={(e) => setReference(e.target.value as "rest" | "all")} className={`mt-1 ${selectCls}`}>
               <option value="rest">the rest of the cells</option>
               <option value="all">all cells</option>
@@ -237,7 +245,8 @@ export function CytokineResponse({ groupByColumn, setGroupByColumn }: Props) {
             ]}
             testId="cytokine-caption"
           >
-            CytoSig z-score per {result.mode === "conditions" ? "comparison" : "group"}: {comparisonText(result)}.
+            <Help id="cytokine.heatmap">CytoSig z-score</Help> per {result.mode === "conditions" ? "comparison" : "group"}:{" "}
+            {comparisonText(result)}.
             Red: looks like a response to the cytokine; blue: the opposite.
           </Caption>
 

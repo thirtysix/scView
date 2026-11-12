@@ -3,6 +3,7 @@ import { useDatasetStore } from "@/stores/datasetStore";
 import { useSplitViewStore } from "@/stores/splitViewStore";
 import { prettyObsLabel } from "@/lib/formatting";
 import { SPLIT_MAX_VALUES, splitColumnOptions } from "@/lib/splitView";
+import { Help } from "@/components/common/Help";
 
 /**
  * Toolbar "Split" select: off, or a categorical column with 2–6 values to show
@@ -29,7 +30,7 @@ export function SplitByControl({ disabledReason = null }: { disabledReason?: str
   return (
     <div className="flex items-center gap-1.5">
       <label htmlFor="split-by" className="text-[11px] font-medium text-slate-500">
-        Split
+        <Help id="plot.split" side="below">Split</Help>
       </label>
       <select
         id="split-by"
@@ -42,7 +43,7 @@ export function SplitByControl({ disabledReason = null }: { disabledReason?: str
             ? disabledReason
             : allowed.length === 0
             ? `No column with 2–${SPLIT_MAX_VALUES} values to split by`
-            : `One plot per value (2–${SPLIT_MAX_VALUES} values), sharing the camera, colours and colour scale`
+            : undefined
         }
         className={`max-w-[140px] rounded border px-2 py-1 text-xs focus:border-blue-400 focus:outline-none disabled:opacity-50 ${
           splitBy

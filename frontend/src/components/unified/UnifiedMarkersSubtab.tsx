@@ -17,6 +17,7 @@ import type { SplitMarkersResult } from "@/api/splitMarkers";
 import { splitPValueMap } from "@/lib/splitMarkers";
 import { MARKERS_PER_GROUP, NO_MARKERS_REASON, noMarkersReason } from "@/api/markers";
 import { AddToGeneListMenu } from "@/components/common/AddToGeneListMenu";
+import { Help } from "@/components/common/Help";
 import { GeneReportButton } from "@/components/report/ReportButtons";
 import { MinimalPanel } from "@/components/unified/MinimalPanel";
 import { OffTargetPanel } from "@/components/unified/OffTargetPanel";
@@ -276,7 +277,7 @@ export function UnifiedMarkersSubtab({
   return (
     <div className="flex flex-col gap-2">
       {/* Groupby + group selectors */}
-      <div className="flex flex-wrap gap-2">
+      <Help id="markers.groups" className="flex flex-wrap gap-2">
         {groupbyColumns.length > 0 && (
           <select
             value={groupByColumn}
@@ -301,7 +302,7 @@ export function UnifiedMarkersSubtab({
             </option>
           ))}
         </select>
-      </div>
+      </Help>
 
       {/* Filter + count */}
       <div className="flex items-center gap-2">
@@ -322,6 +323,7 @@ export function UnifiedMarkersSubtab({
           onClick={handleExportCSV}
           disabled={sortedMarkers.length === 0}
           title="Export CSV"
+          aria-label="Export CSV"
           className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 disabled:opacity-50"
         >
           <Download className="h-3 w-3" />
@@ -337,7 +339,9 @@ export function UnifiedMarkersSubtab({
 
       {/* |FC| threshold filter */}
       <div className="flex items-center gap-2">
-        <label className="text-[11px] font-medium text-slate-500 whitespace-nowrap">|FC| &ge;</label>
+        <label className="text-[11px] font-medium text-slate-500 whitespace-nowrap">
+          <Help id="markers.min-fc">|FC| &ge;</Help>
+        </label>
         <input
           aria-label="Minimum |FC|"
           type="range"
@@ -362,7 +366,7 @@ export function UnifiedMarkersSubtab({
             className="flex items-center gap-1 text-[11px] text-slate-500 hover:text-slate-700"
           >
             {showPlot ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-            Specificity vs fold change
+            <Help id="markers.specificity-plot">Specificity vs fold change</Help>
           </button>
           {showPlot && (
             <div className="mt-1 rounded-lg border border-slate-200 p-1">
@@ -390,10 +394,9 @@ export function UnifiedMarkersSubtab({
               <SortableTh
                 onSort={() => handleSort("gene")}
                 sort={ariaSort("gene", sortField, sortDir)}
-                title="Gene symbol; click a row to colour the scatter by its expression"
                 className="px-2 py-1.5 text-left font-medium text-slate-600"
               >
-                Gene {sortIcon("gene")}
+                <Help id="markers.table">Gene</Help> {sortIcon("gene")}
               </SortableTh>
               <SortableTh
                 onSort={() => handleSort("logfoldchange")}
@@ -474,6 +477,7 @@ export function UnifiedMarkersSubtab({
                           askAboutGene(marker.gene);
                         }}
                         title="Ask the co-pilot about this gene"
+                        aria-label={`Ask the co-pilot about ${marker.gene}`}
                         className="flex-shrink-0 text-slate-300 opacity-0 transition-opacity hover:text-primary group-hover:opacity-100"
                       >
                         <Sparkles className="h-3 w-3" />

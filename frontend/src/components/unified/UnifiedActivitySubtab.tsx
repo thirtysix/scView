@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Loader2, Search } from "lucide-react";
 import type { PlotMouseEvent } from "plotly.js";
 import Plot from "@/components/plots/Plot";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
 import { CapNote, Caption } from "@/components/common/Caption";
 import { useDatasetStore } from "@/stores/datasetStore";
 import {
@@ -136,7 +137,18 @@ export function UnifiedActivitySubtab({ onScore, groupByColumn, setGroupByColumn
             !cytokines && !motifs && network === n ? "bg-primary text-white" : "border border-slate-200 text-slate-600 hover:bg-slate-50"
           }`}
         >
-          {NETWORK_LABELS[n].long}
+          <HoverTip
+            tip={
+              <>
+                Each cell gets one score per transcription factor (CollecTRI) or pathway (PROGENy): the
+                t-value of a linear fit of its log-normalised expression on the source&apos;s signed
+                target weights (decoupler&apos;s ULM). Positive: the targets it activates are high and the
+                ones it represses low. Human networks; on a mouse dataset, mapped through orthologs.
+              </>
+            }
+          >
+            {NETWORK_LABELS[n].long}
+          </HoverTip>
         </button>
       ))}
       <button
@@ -163,12 +175,6 @@ export function UnifiedActivitySubtab({ onScore, groupByColumn, setGroupByColumn
       >
         Upstream TF candidates
       </button>
-      <InfoTip label="About TF and pathway activity" align="right">
-        Each cell gets one score per transcription factor (CollecTRI) or pathway (PROGENy): the
-        t-value of a linear fit of its log-normalised expression on the source&apos;s signed
-        target weights (decoupler&apos;s ULM). Positive: the targets it activates are high and the
-        ones it represses low. Human networks; on a mouse dataset, mapped through orthologs.
-      </InfoTip>
     </div>
   );
   if (motifs) {
@@ -198,7 +204,9 @@ export function UnifiedActivitySubtab({ onScore, groupByColumn, setGroupByColumn
       {tabs}
 
       <div>
-        <label className="mb-1 block text-[11px] font-medium text-slate-500">Group by (heatmap)</label>
+        <label className="mb-1 block text-[11px] font-medium text-slate-500">
+          <Help id="activity.group-by">Group by (heatmap)</Help>
+        </label>
         <select
           aria-label="Group by (heatmap)"
           value={groupby}
@@ -227,7 +235,11 @@ export function UnifiedActivitySubtab({ onScore, groupByColumn, setGroupByColumn
           {heat && (
             <div>
               <div className="mb-1 flex items-center justify-between text-[11px] text-slate-500">
-                <span>Mean activity per group{network === "collectri" ? ", most variable TFs" : ""}</span>
+                <span>
+                  <Help id="activity.heatmap">
+                    Mean activity per group{network === "collectri" ? ", most variable TFs" : ""}
+                  </Help>
+                </span>
                 {network === "collectri" && (
                   <select
                     aria-label="TFs shown"
@@ -355,7 +367,7 @@ export function UnifiedActivitySubtab({ onScore, groupByColumn, setGroupByColumn
           {summary.orthologs && (
             <p className="text-[11px] text-amber-700">
               Mouse dataset: {summary.label} is human, so it was mapped to mouse through{" "}
-              orthologs <InfoTip label="About the ortholog mapping">{summary.orthologs.mapped_by}.</InfoTip>
+              <HoverTip tip={<>{summary.orthologs.mapped_by}.</>}>orthologs</HoverTip>
               {summary.orthologs.n_targets_mapped != null && summary.orthologs.n_human_targets != null && (
                 <>
                   {" "}({summary.orthologs.n_targets_mapped.toLocaleString()} of{" "}

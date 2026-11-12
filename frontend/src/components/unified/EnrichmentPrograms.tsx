@@ -1,6 +1,6 @@
 import { useState, useCallback, useMemo } from "react";
 import { Loader2, ChevronRight, Sparkles, Target } from "lucide-react";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { formatPValue } from "@/lib/formatting";
 import { EnrichmentNetworkCanvas } from "@/components/unified/EnrichmentNetworkCanvas";
 import type { EnrichmentNetworkResponse, NetworkNode } from "@/api/enrichmentNetwork";
@@ -93,48 +93,72 @@ export function EnrichmentPrograms({
       {/* Summary + the knobs that actually change the answer */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-md border border-slate-200 bg-slate-50/70 px-2 py-1.5">
         <span className="text-[11px] tabular-nums text-slate-600">
-          <span className="font-semibold text-slate-800">{data.n_terms}</span> terms &rarr;{" "}
-          <span className="font-semibold text-slate-800">{data.n_clusters}</span> programs
-          <InfoTip width={300}>
-            <strong className="text-slate-700">What you are looking at.</strong> Each program is a
-            group of enriched terms that overlap so heavily in their genes that they are describing
-            one signal. Terms are linked when their genes overlap (combined coefficient &ge;{" "}
-            {data.params.min_similarity}), and Leiden community detection groups the linked ones.
-            The program takes its name from its most significant member term.
-          </InfoTip>
+          <HoverTip
+            tip={
+              <>
+                <strong className="text-slate-700">What you are looking at.</strong> Each program is a
+                group of enriched terms that overlap so heavily in their genes that they are describing
+                one signal. Terms are linked when their genes overlap (combined coefficient &ge;{" "}
+                {data.params.min_similarity}), and Leiden community detection groups the linked ones.
+                The program takes its name from its most significant member term.
+              </>
+            }
+          >
+            <span className="font-semibold text-slate-800">{data.n_terms}</span> terms &rarr;{" "}
+            <span className="font-semibold text-slate-800">{data.n_clusters}</span> programs
+          </HoverTip>
         </span>
 
         {data.n_size_filtered > 0 && (
           <span className="text-[10px] tabular-nums text-slate-400">
-            {data.n_size_filtered} size-filtered
-            <InfoTip width={300}>
-              Terms outside {data.params.min_term_size}&ndash;{data.params.max_term_size} genes are
-              excluded, the conventional bounds for over-representation analysis. GO terms range
-              from 1 to nearly 2,000 genes, and the enormous vague ones ("homeostatic process")
-              overlap almost everything, so leaving them in makes every program merge into a blob.
-            </InfoTip>
+            <HoverTip
+              tip={
+                <>
+                  Terms outside {data.params.min_term_size}&ndash;{data.params.max_term_size} genes are
+                  excluded, the conventional bounds for over-representation analysis. GO terms range
+                  from 1 to nearly 2,000 genes, and the enormous vague ones ("homeostatic process")
+                  overlap almost everything, so leaving them in makes every program merge into a blob.
+                </>
+              }
+            >
+              {data.n_size_filtered} size-filtered
+            </HoverTip>
           </span>
         )}
 
         {data.truncated > 0 && (
           <span className="text-[10px] tabular-nums text-amber-600">
-            {data.truncated} terms not shown
-            <InfoTip width={260}>
-              Only the most significant terms are graphed. {data.truncated} further significant
-              terms were dropped by the cap, so this view is not complete.
-            </InfoTip>
+            <HoverTip
+              width={260}
+              tip={
+                <>
+                  Only the most significant terms are graphed. {data.truncated} further significant
+                  terms were dropped by the cap, so this view is not complete.
+                </>
+              }
+            >
+              {data.truncated} terms not shown
+            </HoverTip>
           </span>
         )}
 
         <div className="ml-auto flex items-center gap-1.5">
-          <label className="text-[10px] font-medium text-slate-500">Granularity</label>
-          <InfoTip width={320}>
-            <strong className="text-slate-700">This is a dial, not a discovery.</strong> Roughly,
-            the minimum gene-set overlap a program has to hold together at. Higher splits the same
-            terms into more, smaller programs; lower merges them. On our sample data the very same
-            terms give 34 programs at 0.2 and 144 at 0.9. There is no correct value, so pick what
-            reads well and report what you picked.
-          </InfoTip>
+          <label className="text-[10px] font-medium text-slate-500">
+            <HoverTip
+              width={320}
+              tip={
+                <>
+                  <strong className="text-slate-700">This is a dial, not a discovery.</strong> Roughly,
+                  the minimum gene-set overlap a program has to hold together at. Higher splits the same
+                  terms into more, smaller programs; lower merges them. On our sample data the very same
+                  terms give 34 programs at 0.2 and 144 at 0.9. There is no correct value, so pick what
+                  reads well and report what you picked.
+                </>
+              }
+            >
+              Granularity
+            </HoverTip>
+          </label>
           <select
             value={resolution}
             onChange={(e) => onResolutionChange(parseFloat(e.target.value))}
@@ -157,16 +181,22 @@ export function EnrichmentPrograms({
               onChange={(e) => onToggleGraph(e.target.checked)}
               className="h-3 w-3 rounded border-slate-300"
             />
-            Similarity graph
+            <HoverTip
+              width={320}
+              tip={
+                <>
+                  <strong className="text-slate-700">This is the evidence, not the answer.</strong> Each
+                  dot is one enriched term, placed so that terms sharing genes sit near each other. The
+                  visible clumps are what the program list on the left is derived from. It is here to show
+                  the redundancy is real and structured; the list is the readable version. Hover a dot for
+                  its term, click to score its genes on the scatter. Only the four strongest programs take
+                  a colour, because more than four colours cannot be reliably told apart; the rest stay grey.
+                </>
+              }
+            >
+              Similarity graph
+            </HoverTip>
           </label>
-          <InfoTip width={320}>
-            <strong className="text-slate-700">This is the evidence, not the answer.</strong> Each
-            dot is one enriched term, placed so that terms sharing genes sit near each other. The
-            visible clumps are what the program list on the left is derived from. It is here to show
-            the redundancy is real and structured; the list is the readable version. Hover a dot for
-            its term, click to score its genes on the scatter. Only the four strongest programs take
-            a colour, because more than four colours cannot be reliably told apart; the rest stay grey.
-          </InfoTip>
           <span className="ml-auto text-[10px] tabular-nums text-slate-400">
             {data.n_edges.toLocaleString()} links
           </span>
@@ -187,14 +217,21 @@ export function EnrichmentPrograms({
       {/* Programs */}
       <div className="max-h-[calc(100vh-560px)] min-h-[160px] overflow-auto rounded-md border border-slate-200">
         <div className="sticky top-0 z-10 flex items-center gap-1 border-b border-slate-200 bg-slate-50 px-2 py-1.5 text-[10px] font-medium text-slate-600">
-          <span className="w-8 text-right">Terms</span>
-          <InfoTip width={300}>
-            <strong className="text-slate-700">Do not read this as importance.</strong> It counts
-            how many redundant terms collapsed into the program, which mostly reflects how finely
-            the ontology's curators subdivided that branch. Immune biology is annotated far more
-            densely than most metabolism, so immune programs look big by default. That is why rows
-            are ranked by adj.P rather than by this number.
-          </InfoTip>
+          <span className="w-8 text-right">
+            <HoverTip
+              tip={
+                <>
+                  <strong className="text-slate-700">Do not read this as importance.</strong> It counts
+                  how many redundant terms collapsed into the program, which mostly reflects how finely
+                  the ontology's curators subdivided that branch. Immune biology is annotated far more
+                  densely than most metabolism, so immune programs look big by default. That is why rows
+                  are ranked by adj.P rather than by this number.
+                </>
+              }
+            >
+              Terms
+            </HoverTip>
+          </span>
           <span className="flex-1 pl-1">Program</span>
           <span className="w-14 text-right">Adj.P</span>
         </div>
@@ -228,6 +265,7 @@ export function EnrichmentPrograms({
                     <button
                       onClick={(e) => { e.stopPropagation(); onScoreGenes(c.genes, c.label); }}
                       title={`Score all ${c.genes.length} genes across this program on the scatter`}
+                      aria-label={`Score the ${c.label} program on the scatter`}
                       className="flex-shrink-0 text-slate-300 opacity-0 transition-opacity hover:text-primary focus:opacity-100 group-hover:opacity-100"
                     >
                       {isScoring ? <Loader2 className="h-3 w-3 animate-spin text-blue-500" /> : <Target className="h-3 w-3" />}
@@ -235,6 +273,7 @@ export function EnrichmentPrograms({
                     <button
                       onClick={(e) => { e.stopPropagation(); onAsk(c.label, c.terms, c.genes); }}
                       title="Ask the co-pilot about this program"
+                      aria-label={`Ask the co-pilot about the ${c.label} program`}
                       className="flex-shrink-0 text-slate-300 opacity-0 transition-opacity hover:text-primary focus:opacity-100 group-hover:opacity-100"
                     >
                       <Sparkles className="h-3 w-3" />

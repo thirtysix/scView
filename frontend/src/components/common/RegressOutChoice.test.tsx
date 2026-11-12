@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { RegressOutChoice } from "./RegressOutChoice";
+import { hoverTip } from "@/test/hoverTip";
 import { regressOptions } from "@/lib/regressOut";
 
 const options = regressOptions([]);
@@ -18,9 +19,9 @@ describe("RegressOutChoice", () => {
     expect(onChange).toHaveBeenLastCalledWith(["cc_difference"]);
   });
 
-  it("says when it helps and when it hurts", () => {
+  it("says when it helps and when it hurts, on hovering its caption", async () => {
     render(<RegressOutChoice options={options} value={[]} onChange={() => {}} />);
-    fireEvent.mouseEnter(screen.getByRole("button", { name: "When regress-out helps" }));
+    await hoverTip(screen.getByText("None: off (the default)."));
     const tip = screen.getByRole("tooltip");
     expect(tip).toHaveTextContent("removes real biology in proliferating tissue");
     expect(tip).toHaveTextContent("usually redundant after normalisation");

@@ -13,7 +13,7 @@ import {
   type ExportFormatOptions,
   type ReadinessItem,
 } from "@/api/exportFormats";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { formatBytes } from "@/lib/formatting";
 import { errorMessage } from "@/lib/errorMessage";
 
@@ -170,19 +170,25 @@ export function ExportFormatDialog({ datasetId, format, onClose }: Props) {
                   disabled={busy || !info.has_counts}
                   onChange={(e) => setIncludeRaw(e.target.checked)}
                 />
-                Include raw counts (as .raw)
-                <InfoTip label="About raw counts">
+                <HoverTip tip={<>
                   The desktop explorer shows X (log-normalised values) only. CELLxGENE Discover requires the raw
                   counts as raw.X, so include them when the file is meant for a submission.
                   {!info.has_counts && " This dataset has no raw counts."}
-                </InfoTip>
+                </>}>
+                  Include raw counts (as .raw)
+                </HoverTip>
               </label>
             )}
 
             {format === "cellxgene" && (info.ontology_columns?.length ?? 0) > 0 && (
               <div className="space-y-1">
                 <label className="flex flex-wrap items-center gap-2 text-slate-700">
-                  Cell type terms
+                  <HoverTip tip={<>
+                    Writes cell_type_ontology_term_id from the terms you gave the labels (Cell Ontology, under the
+                    legend). Only your own choices are written, and only when every label has one.
+                  </>}>
+                    Cell type terms
+                  </HoverTip>
                   <select
                     value={termsFrom}
                     disabled={busy}
@@ -197,10 +203,6 @@ export function ExportFormatDialog({ datasetId, format, onClose }: Props) {
                       </option>
                     ))}
                   </select>
-                  <InfoTip label="About cell type terms">
-                    Writes cell_type_ontology_term_id from the terms you gave the labels (Cell Ontology, under the
-                    legend). Only your own choices are written, and only when every label has one.
-                  </InfoTip>
                 </label>
                 {info.cell_type_terms && !info.cell_type_terms.written && (
                   <p role="status" className="text-xs text-amber-700">
@@ -273,14 +275,15 @@ export function ExportFormatDialog({ datasetId, format, onClose }: Props) {
 
             {info.readiness && (
               <section aria-label="CELLxGENE Discover readiness">
-                <h3 className="mb-1 flex items-center gap-1 font-medium text-slate-700">
-                  Ready for CELLxGENE Discover? {info.readiness.n_ok} of {info.readiness.n_items} checks pass
-                  <InfoTip label="About the readiness report" align="right">
+                <h3 className="mb-1 font-medium text-slate-700">
+                  <HoverTip tip={<>
                     Checked against the published Discover schema {info.readiness.schema_version}. A report only:
                     scView never fills in ontology terms; the curator chooses them (cell type terms are written only
                     from the mapping you made yourself). The organism term goes in
-                    uns, and several terms in one cell are joined with " || ".
-                  </InfoTip>
+                    uns, and several terms in one cell are joined with &quot; || &quot;.
+                  </>}>
+                    Ready for CELLxGENE Discover? {info.readiness.n_ok} of {info.readiness.n_items} checks pass
+                  </HoverTip>
                 </h3>
                 <table className="w-full text-xs">
                   <tbody>

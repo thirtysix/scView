@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Loader2, Upload } from "lucide-react";
 import { attachVdj, type VdjFile, type VdjSummary } from "@/api/vdj";
+import { Help } from "@/components/common/Help";
 import { errorText } from "@/lib/programs";
 import { choiceLabel, fileSentence, needsSample, valueLabel } from "@/lib/vdj";
 
@@ -54,7 +55,9 @@ export function ClonotypeAttach({
   return (
     <div className="space-y-1.5 text-[11px] text-slate-600" data-testid="vdj-attach">
       <label className="flex items-center gap-1.5">
-        <span className="shrink-0 font-medium">Contig table</span>
+        <span className="shrink-0 font-medium">
+          <Help id="clonotypes.contig_table">Contig table</Help>
+        </span>
         <input
           aria-label="Contig table file"
           type="file"
@@ -66,7 +69,7 @@ export function ClonotypeAttach({
       </label>
       {choices.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5">
-          <span title="The sample these contigs came from: barcodes are matched within its cells only">Sample</span>
+          <Help id="clonotypes.sample">Sample</Help>
           <select
             aria-label="Sample column"
             value={column}

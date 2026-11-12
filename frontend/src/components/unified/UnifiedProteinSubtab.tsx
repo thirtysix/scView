@@ -10,6 +10,7 @@ import { normLabel, proteinLayerFor, type ProteinNorm } from "@/lib/dsb";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { GeneSearch } from "@/components/common/GeneSearch";
+import { Help } from "@/components/common/Help";
 import { ColorLegend } from "@/components/plots/ColorLegend";
 import type { ResolvedColorScale } from "@/lib/colorScale";
 import { MarkerPlot } from "@/components/plots/MarkerPlot";
@@ -98,7 +99,7 @@ export function UnifiedProteinSubtab({
     <div className="space-y-3">
       <p className="text-[11px] leading-snug text-slate-500">
         {targets.length} antibod{targets.length === 1 ? "y" : "ies"} measured with the RNA (CITE-seq).
-        Click one to colour the cells.
+        <Help id="protein.chips">Click one to colour the cells.</Help>
       </p>
       <ProteinNormalisation
         datasetId={datasetId}
@@ -129,7 +130,9 @@ export function UnifiedProteinSubtab({
       )}
 
       <div>
-        <label className="mb-1 block text-[11px] font-medium text-slate-500">Group by (violin, heatmap)</label>
+        <label className="mb-1 block text-[11px] font-medium text-slate-500">
+          <Help id="protein.group_by">Group by (violin, heatmap)</Help>
+        </label>
         <select
           aria-label="Group by"
           value={groupByColumn}
@@ -146,7 +149,9 @@ export function UnifiedProteinSubtab({
 
       {groupByColumn && targets.length > 0 && (
         <div>
-          <h4 className="mb-1 text-xs font-semibold text-slate-600">Proteins by group</h4>
+          <h4 className="mb-1 text-xs font-semibold text-slate-600">
+            <Help id="protein.heatmap">Proteins by group</Help>
+          </h4>
           <MarkerPlot
             datasetId={datasetId}
             groupby={groupByColumn}
@@ -269,7 +274,9 @@ function ProteinVsRna({
   if (proteins.length === 0) return null;
   return (
     <div className="space-y-2 rounded-lg border border-slate-200 p-2">
-      <h4 className="text-xs font-semibold text-slate-600">Protein vs RNA</h4>
+      <h4 className="text-xs font-semibold text-slate-600">
+        <Help id="protein.vs_rna">Protein vs RNA</Help>
+      </h4>
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <select
           aria-label="Protein to compare"

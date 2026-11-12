@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Loader2 } from "lucide-react";
 import Plot from "@/components/plots/Plot";
 import { Panel } from "@/components/common/Panel";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { apiFetchBinary } from "@/api/client";
 import { errorMessage } from "@/lib/errorMessage";
 import { getPcaDiagnostics, type PcaDiagnostics as Result } from "@/api/pca";
@@ -135,16 +135,19 @@ export function PcaDiagnostics({ datasetId, refreshKey = 0 }: { datasetId: strin
   return (
     <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5">
-          <h3 className="text-sm font-semibold text-slate-700">PCA</h3>
-          <InfoTip label="About the PCA diagnostics">
-            How much of the variance each principal component keeps, where the curve bends (the
-            elbow: Kneedle, the PC farthest below the line from the first to the last PC), how many
-            leading PCs reach 90% of what the stored PCs keep together, and which genes each PC
-            weighs most. A PC led by ribosomal, mitochondrial or cell-cycle genes is a technical
-            or cell-state axis rather than a cell-type one.
-          </InfoTip>
-        </div>
+        <h3 className="text-sm font-semibold text-slate-700">
+          <HoverTip
+            tip={<>
+              How much of the variance each principal component keeps, where the curve bends (the
+              elbow: Kneedle, the PC farthest below the line from the first to the last PC), how many
+              leading PCs reach 90% of what the stored PCs keep together, and which genes each PC
+              weighs most. A PC led by ribosomal, mitochondrial or cell-cycle genes is a technical
+              or cell-state axis rather than a cell-type one.
+            </>}
+          >
+            PCA
+          </HoverTip>
+        </h3>
         <span className="flex items-center gap-2">
           {loading && <Loader2 className="h-3 w-3 animate-spin text-slate-400" />}
           <button

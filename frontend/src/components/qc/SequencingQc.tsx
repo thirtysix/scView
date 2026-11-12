@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AlertTriangle, Info, Loader2, Paperclip, XCircle } from "lucide-react";
 import Plot from "@/components/plots/Plot";
 import { Panel } from "@/components/common/Panel";
-import { InfoTip } from "@/components/common/InfoTip";
+import { HoverTip } from "@/components/common/InfoTip";
 import { Caption } from "@/components/common/Caption";
 import {
   attachSeqMetrics,
@@ -345,16 +345,20 @@ export function SequencingQc({ datasetId, onChange }: { datasetId: string; onCha
   return (
     <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-3" data-testid="sequencing-qc">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5">
-          <h3 className="text-sm font-semibold text-slate-700">Sequencing QC (Cell Ranger)</h3>
-          <InfoTip label="About sequencing QC" width={320}>
-            Read from the Cell Ranger run&apos;s metrics_summary.csv and raw (unfiltered) barcode matrix. Flags are Cell
-            Ranger&apos;s own web-summary alerts (version 10.1 thresholds; error and warning lines), plus 10x&apos;s
-            recommended depth of 20,000 read pairs per cell as a note. The barcode-rank plot ranks every barcode with
-            UMIs by its total; the knee and inflection are computed as DropletUtils barcodeRanks does (curve tracing),
-            and the cells of the dataset are coloured.
-          </InfoTip>
-        </div>
+        <h3 className="text-sm font-semibold text-slate-700">
+          <HoverTip
+            width={320}
+            tip={<>
+              Read from the Cell Ranger run&apos;s metrics_summary.csv and raw (unfiltered) barcode matrix. Flags are Cell
+              Ranger&apos;s own web-summary alerts (version 10.1 thresholds; error and warning lines), plus 10x&apos;s
+              recommended depth of 20,000 read pairs per cell as a note. The barcode-rank plot ranks every barcode with
+              UMIs by its total; the knee and inflection are computed as DropletUtils barcodeRanks does (curve tracing),
+              and the cells of the dataset are coloured.
+            </>}
+          >
+            Sequencing QC (Cell Ranger)
+          </HoverTip>
+        </h3>
         <span className="flex items-center gap-2">
           {loading && <Loader2 className="h-3 w-3 animate-spin text-slate-400" />}
           {data && !attaching && (

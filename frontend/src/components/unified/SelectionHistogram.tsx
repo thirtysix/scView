@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import Plot from "@/components/plots/Plot";
+import { Help } from "@/components/common/Help";
 import { useObsCodes } from "@/hooks/useObsCodes";
 import { useObsValues } from "@/hooks/useObsValues";
 import { pseudoLogTicks } from "@/lib/logAxis";
@@ -202,7 +203,7 @@ export function SelectionHistogram({ datasetId, groupColumn }: SelectionHistogra
           </select>
         </label>
         <label className="flex items-center gap-1">
-          Compare
+          <Help id="plot.histogram" side="below">Compare</Help>
           <select aria-label="Compare" className={select} value={effectiveCompare} onChange={(e) => setCompare(e.target.value as Compare)}>
             <option value="selection" disabled={!hasSelection}>
               {hasSelection ? `Selection (${selected!.size.toLocaleString()}) vs rest` : "Selection vs rest (select cells first)"}

@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import Plot from "@/components/plots/Plot";
+import { Help } from "@/components/common/Help";
 import { getGroupDistances } from "@/api/clustering";
 import { nearestGroups, orderedHeatmap, spaceLabel } from "@/lib/clusterDistances";
 import { dendrogramSegments, rowDendrogram } from "@/lib/dendrogram";
@@ -89,7 +90,7 @@ export function ClusterDistanceHeatmap({
     <div className="space-y-1 text-[11px] text-slate-500">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <label htmlFor="distance-column" className="font-medium text-slate-600">
-          Distances between
+          <Help id="plot.cluster-distances" side="below">Distances between</Help>
         </label>
         <select
           id="distance-column"
