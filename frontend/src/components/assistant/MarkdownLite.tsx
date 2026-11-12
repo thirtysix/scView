@@ -1,11 +1,15 @@
 import { type ReactNode } from "react";
+import type { Claim } from "@/api/assistant";
 import { CitationChip } from "@/components/assistant/CitationChip";
+import { ClaimMark } from "@/components/assistant/ClaimMark";
+import { findClaimMarks } from "@/lib/claimMarks";
 
 /** Minimal, dependency-free markdown renderer for co-pilot answers.
  *  Supports: paragraphs, bullet/numbered lists, ATX headers, ``` code blocks, GFM
  *  pipe tables (with column alignment), inline **bold**, *italic*, `code` (also
  *  inside bold or italic), and [kind:...] citation chips. Renders via React text
- *  nodes (no raw HTML), so it's XSS-safe. */
+ *  nodes (no raw HTML), so it's XSS-safe. With `claims` (the claims ledger), each
+ *  checked sentence is marked in place by its verdict (ClaimMark). */
 
 // bold | code | italic | citation tag. The citation alternative matches any
 // `[prefix: ...]` token (prefix = letters/spaces/-/_) that isn't a markdown link,
@@ -78,12 +82,35 @@ function startsTable(line: string, next: string | undefined): boolean {
 export function MarkdownLite({
   text,
   onCitation,
+  claims,
 }: {
   text: string;
   onCitation?: (tag: string) => void;
+  claims?: Claim[];
 }) {
   const lines = text.replace(/\r\n/g, "\n").split("\n");
   const blocks: ReactNode[] = [];
+  const marks = claims?.filter((c) => c.span) ?? [];
+  const marked = new Set<number>();
+
+  // One block's inline content, with each checked sentence in it marked by its verdict.
+  const inline = (s: string, k: string): ReactNode[] => {
+    const spans = marks.length ? findClaimMarks(s, marks, marked) : [];
+    if (!spans.length) return renderInline(s, k, onCitation);
+    const out: ReactNode[] = [];
+    let at = 0;
+    spans.forEach((m, j) => {
+      if (m.start > at) out.push(...renderInline(s.slice(at, m.start), `${k}-t${j}`, onCitation));
+      out.push(
+        <ClaimMark key={`${k}-c${j}`} claim={m.claim}>
+          {renderInline(s.slice(m.start, m.end), `${k}-c${j}`, onCitation)}
+        </ClaimMark>,
+      );
+      at = m.end;
+    });
+    if (at < s.length) out.push(...renderInline(s.slice(at), `${k}-end`, onCitation));
+    return out;
+  };
   let para: string[] = [];
   let list: { ordered: boolean; items: string[] } | null = null;
   let inCode = false;
@@ -94,7 +121,7 @@ export function MarkdownLite({
     if (para.length) {
       blocks.push(
         <p key={`p-${key++}`} className="my-1 first:mt-0 last:mb-0">
-          {renderInline(para.join(" "), `p${key}`, onCitation)}
+          {inline(para.join(" "), `p${key}`)}
         </p>
       );
       para = [];
@@ -107,7 +134,7 @@ export function MarkdownLite({
       blocks.push(
         <Tag key={`l-${key++}`} className={`${cls} my-1 space-y-0.5 pl-5`}>
           {list.items.map((it, i) => (
-            <li key={i}>{renderInline(it, `li${key}-${i}`, onCitation)}</li>
+            <li key={i}>{inline(it, `li${key}-${i}`)}</li>
           ))}
         </Tag>
       );
@@ -149,7 +176,7 @@ export function MarkdownLite({
               <tr key={ri} className="border-b border-border/50 last:border-0">
                 {Array.from({ length: n }, (_, i) => (
                   <td key={i} style={{ textAlign: aligns[i] }} className="px-2 py-1 align-top">
-                    {renderInline(r[i] ?? "", `t${t}-${ri}-${i}`, onCitation)}
+                    {inline(r[i] ?? "", `t${t}-${ri}-${i}`)}
                   </td>
                 ))}
               </tr>

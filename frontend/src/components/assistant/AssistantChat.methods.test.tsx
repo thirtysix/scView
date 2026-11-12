@@ -47,5 +47,11 @@ describe("Write methods", () => {
     // refuted stays listed with the ledger collapsed, checked against the recipe
     expect(screen.getByText(/says 1.0 for resolution/)).toBeInTheDocument();
     expect(screen.getByText("the recorded recipe")).toBeInTheDocument();
+    // and each sentence is marked in the methods text itself
+    const marks = [...document.querySelectorAll("[data-claim]")];
+    expect(marks.map((m) => [m.getAttribute("data-claim"), m.textContent])).toEqual([
+      ["refuted", REFUTED],
+      ["supported", SUPPORTED],
+    ]);
   });
 });

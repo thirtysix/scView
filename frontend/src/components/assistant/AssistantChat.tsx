@@ -580,7 +580,7 @@ export function AssistantChat({ surface = "drawer" }: { surface?: "drawer" | "pa
             <div className="min-w-0 flex-1">
               {t.role === "assistant" ? (
                 t.content ? (
-                  <MarkdownLite text={t.content} onCitation={handleCitation} />
+                  <MarkdownLite text={t.content} onCitation={handleCitation} claims={t.claims} />
                 ) : (
                   <div className="flex items-center gap-2 py-1 text-sm text-muted-foreground">
                     <Loader2 className="h-4 w-4 animate-spin" />
