@@ -134,7 +134,8 @@ export function TfMotifCandidates({ groupByColumn, setGroupByColumn, onScore, on
       if (result?.activity.available && row.activity_agrees !== null) {
         for (const source of [gene, ...row.tfs.filter((t) => t !== gene)]) {
           try {
-            const res = await getActivityCells(datasetId, "collectri", source.toUpperCase());
+            // As the dataset names the TF ("Gata1" in mouse): the server matches the network's case.
+            const res = await getActivityCells(datasetId, "collectri", source);
             onScore(new Float32Array(res.scores), activityLabel("collectri", res.source), undefined, {
               network: "collectri",
               source: res.source,
