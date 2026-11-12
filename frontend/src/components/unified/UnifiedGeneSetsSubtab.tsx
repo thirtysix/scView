@@ -199,12 +199,9 @@ export function UnifiedGeneSetsSubtab({
     <div className="space-y-3">
       {/* Collection dropdown */}
       <div>
-        <div className="mb-1 flex items-center gap-1">
-          <label className="block text-[11px] font-medium text-slate-500">
-            Collection
-          </label>
-          <Help id="genesets.collection" label="About gene-set collections" />
-        </div>
+        <label className="mb-1 block text-[11px] font-medium text-slate-500">
+          <Help id="genesets.collection">Collection</Help>
+        </label>
         <select
           value={selectedCollection}
           onChange={(e) => {
@@ -233,12 +230,9 @@ export function UnifiedGeneSetsSubtab({
 
       {/* Search filter for gene sets */}
       <div className="relative">
-        <div className="mb-1 flex items-center gap-1">
-          <label className="block text-[11px] font-medium text-slate-500">
-            Gene Sets
-          </label>
-          <Help id="genesets.list" label="About the gene-set list" />
-        </div>
+        <label className="mb-1 block text-[11px] font-medium text-slate-500">
+          <Help id="genesets.list">Gene Sets</Help>
+        </label>
         <div className="relative">
           <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
           <input
@@ -295,9 +289,8 @@ export function UnifiedGeneSetsSubtab({
       {/* Selected gene set info + Score button */}
       {selectedGeneSet && (
         <div className="rounded-lg border border-blue-100 bg-blue-50/50 p-2.5">
-          <div className="mb-1 flex items-center gap-1 text-xs font-semibold text-blue-700">
-            <span className="min-w-0 break-words">{selectedGeneSet.name}</span>
-            <Help id="genesets.score" label="What a gene-set score is" />
+          <div className="mb-1 text-xs font-semibold text-blue-700">
+            <Help id="genesets.score">{selectedGeneSet.name}</Help>
           </div>
           <div className="mb-2 text-[10px] text-blue-500">
             {selectedGeneSet.n_genes} genes in{" "}
@@ -359,12 +352,9 @@ export function UnifiedGeneSetsSubtab({
 
       {/* Group by */}
       <div>
-        <div className="mb-1 flex items-center gap-1">
-          <label className="block text-[11px] font-medium text-slate-500">
-            Group by (violin)
-          </label>
-          <Help id="genesets.group-by" label="About the violin's groups" />
-        </div>
+        <label className="mb-1 block text-[11px] font-medium text-slate-500">
+          <Help id="genesets.group-by">Group by (violin)</Help>
+        </label>
         <select
           aria-label="Group by (violin)"
           value={groupByColumn}

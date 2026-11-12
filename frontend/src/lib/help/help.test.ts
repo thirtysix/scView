@@ -39,6 +39,8 @@ describe("help catalog", () => {
     const uses = sources.flatMap(({ p, code }) =>
       [...code.matchAll(/<Help\b([^>]*)>/g)].map((m) => ({ p, attrs: m[1]! })),
     );
+    const iconStyle = uses.filter((u) => u.attrs.trimEnd().endsWith("/")).map((u) => u.p);
+    expect(iconStyle, "wrap the thing explained: <Help id=...>Label</Help>, not <Help id=... />").toEqual([]);
     const dynamic = uses.filter((u) => !/\bid="[^"]+"/.test(u.attrs)).map((u) => u.p);
     expect(dynamic, "use a literal id, so this test can check it").toEqual([]);
     const missing = uses.map((u) => u.attrs.match(/\bid="([^"]+)"/)![1]!).filter((id) => !HELP[id]);

@@ -1,31 +1,36 @@
-import { InfoTip } from "./InfoTip";
+import type { ReactNode } from "react";
+import { HoverTip } from "./InfoTip";
 import { helpText } from "@/lib/help";
 
 /**
- * An info icon whose tip comes from the help catalog (`lib/help`). Use it next to a card
- * heading, a control's label or a column header; the text lives in the catalog so the
- * same wording is used wherever the thing appears. Renders nothing for an unknown id.
+ * A plain-language tip from the help catalog (`lib/help`) on the thing it explains: wrap the
+ * heading, label text or column header, and hovering it opens the tip. The text lives in the
+ * catalog so the same wording is used wherever the thing appears. An unknown id renders the
+ * children alone.
+ *
+ *   <Help id="de.min-fc">Min |log2FC|</Help>
  */
 export function Help({
   id,
-  align = "left",
-  width = 280,
-  label = "More information",
+  children,
   side = "above",
+  align = "left",
+  width = 300,
+  className,
 }: {
   id: string;
+  children: ReactNode;
+  side?: "above" | "below";
   align?: "left" | "right";
   width?: number;
-  /** What the icon explains, read out by screen readers ("About the volcano plot"). */
-  label?: string;
-  /** Where the tip opens: "below" near the top of a scrolling box (see InfoTip). */
-  side?: "above" | "below";
+  /** Wrapper classes, e.g. "flex items-center gap-1" when it wraps a row rather than text. */
+  className?: string;
 }) {
   const text = helpText(id);
-  if (!text) return null;
+  if (!text) return <>{children}</>;
   return (
-    <InfoTip align={align} width={width} label={label} side={side}>
-      {text}
-    </InfoTip>
+    <HoverTip tip={text} side={side} align={align} width={width} className={className}>
+      {children}
+    </HoverTip>
   );
 }
