@@ -550,12 +550,13 @@ export function MultiPanelScatter({
       style={{ background: bgColor }}
     >
       {/* Header: what is shown, extra controls, camera + export + close */}
-      <div className="flex h-8 flex-shrink-0 items-center gap-2 border-b border-slate-200 bg-white px-3 text-[11px] text-slate-500">
-        {/* What is shown keeps its room; the caveat gives way first (it truncates, its tip keeps the text) */}
+      <div data-testid="grid-header" className="flex min-h-8 flex-shrink-0 flex-wrap items-center gap-x-2 gap-y-0.5 border-b border-slate-200 bg-white px-3 py-0.5 text-[11px] text-slate-500">
+        {/* What is shown keeps its room; the caveat gives way first (it truncates, its tip keeps the
+            text), and a narrow header wraps to a second row instead of overlapping the pager */}
         <span className="max-w-[50%] flex-shrink-0 truncate">{header}</span>
         {sampledBadge && <span className="flex-shrink-0 text-[10px] text-slate-400">{sampledBadge}</span>}
         <div className="flex-1" />
-        <EmbeddingCaveat embedding={embedding} className="min-w-0 shrink" />
+        <EmbeddingCaveat embedding={embedding} className="min-w-0 max-w-full shrink overflow-hidden" />
         {headerControls}
         <GridPager
           n={nPanels}
