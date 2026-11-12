@@ -723,6 +723,8 @@ async def get_markers(
     if d.get("skipped_groups"):
         extra["skipped_groups"] = d["skipped_groups"]
         extra["skipped_reason"] = d.get("skipped_reason")
+    if d.get("matrix"):  # what the test ranked: log-normalised values (core/marker_matrix.py)
+        extra["ranked_on"] = d["matrix"]
     return dumps({"dataset_id": dataset_id, "column": column, "columns": cols, "markers": out, **extra},
                  _max_chars(DEFAULT_LIMIT * max(1, n_genes // 10)))
 
@@ -1513,7 +1515,7 @@ async def plot(
             d = await _dotplot_within(dataset_id, genes, groupby, layer, within_column, within_value or "")
         else:
             d = await _get(f"{_ds(dataset_id)}/expression/by-group", genes=genes, groupby=groupby, layer=layer)
-        caption = f"{len(d['groups'])} groups of {d['groupby']}{scope}, layer {d['layer']}"
+        caption = f"{len(d['groups'])} groups of {d['groupby']}{scope}, layer {d.get('layer_label') or d['layer']}"
         png = await asyncio.to_thread(plots.dotplot, d, f"Dot plot by {d['groupby']}{scope}", caption)
         return [Image(data=png, format="png"), TextContent(type="text", text=caption)]
 
@@ -1639,7 +1641,7 @@ async def _dotplot_within(dataset_id: str, genes: list[str], groupby: str, layer
                         {"genes": genes, "groupby": groupby, "layer": layer, "cells": cells.tolist(),
                          "include_groups": False})
         sel = r["selection"]
-        out.update(genes=r["genes"], layer=r["layer"])
+        out.update(genes=r["genes"], layer=r["layer"], layer_label=r.get("layer_label"))
         out["groups"].append(g)
         out["mean"].append(sel["mean"])
         out["fraction"].append(sel["fraction"])

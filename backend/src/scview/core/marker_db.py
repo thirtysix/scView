@@ -1089,21 +1089,17 @@ def _computed(adata, groupby: str, groups: list[str]):
     """Wilcoxon markers (with pts) on a throwaway object sharing the matrix, so the
     dataset is not touched (by blocks of genes, ``core/rank_genes.py``); None when fewer
     than two groups have 3 cells."""
-    import anndata as ad
+    from scview.core import marker_matrix, rank_genes
 
-    from scview.core import rank_genes
-
-    src = adata.raw if adata.raw is not None else adata
-    X = src.X
-    if getattr(adata, "isbacked", False) and not isinstance(X, np.ndarray):
-        X = X[:]
     counts = adata.obs[groupby].astype(str).value_counts()
     keep = [g for g in groups if counts.get(g, 0) >= 3]
     if len(keep) < 2:
         return None
-    obs = pd.DataFrame({groupby: pd.Categorical(adata.obs[groupby].astype(str), categories=groups)},
+    labels = pd.Series(pd.Categorical(adata.obs[groupby].astype(str), categories=groups),
                        index=adata.obs_names)
-    tmp = ad.AnnData(X=X, obs=obs, var=pd.DataFrame(index=src.var_names))
+    # log-normalised values, never raw counts in .raw (core/marker_matrix.py); a backed
+    # dataset's matrix is read whole, as it was here before
+    tmp, _ = marker_matrix.light(adata, groupby, labels)
     rank_genes.rank_genes_groups(tmp, groupby, groups=keep, reference="rest", method="wilcoxon",
                                  pts=True, use_raw=False, key_added=markers_key(groupby))
     return tmp

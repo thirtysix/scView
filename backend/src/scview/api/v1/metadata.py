@@ -133,7 +133,7 @@ def _follow_rename(adata, column: str, old: str, new: str, merge: bool) -> None:
     which are keyed by group name and otherwise keep the old label."""
     import pandas as pd
 
-    from scview.core import rank_genes
+    from scview.core import marker_matrix
     from scview.core.ora_background import meta_key
     from scview.core.pipeline import drop_enrichment_cache
 
@@ -147,9 +147,9 @@ def _follow_rename(adata, column: str, old: str, new: str, merge: bool) -> None:
             for key in keys:
                 adata.uns.pop(key, None)
         elif keys:
-            # by blocks of genes, bit for bit scanpy's (core/rank_genes.py)
-            rank_genes.rank_genes_groups(adata, column, method="wilcoxon", pts=True,
-                                         key_added=markers_key(column), specificity=True)
+            # by blocks of genes, bit for bit scanpy's (core/rank_genes.py), on log-normalised
+            # values (core/marker_matrix.py)
+            marker_matrix.rank(adata, column, key_added=markers_key(column))
             if "rank_genes_groups" in keys:
                 adata.uns["rank_genes_groups"] = adata.uns[markers_key(column)]
         return

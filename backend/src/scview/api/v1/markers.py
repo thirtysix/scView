@@ -16,6 +16,7 @@ from scview.core.arrow_serializer import dataframe_to_arrow_ipc
 from scview.core.obs_writes import dataset_edit
 from scview.core import working_copy
 from scview.core.large_mode import LargeDatasetError
+from scview.core.marker_matrix import on_counts
 from scview.core.ora_background import resolve_markers_key
 from scview.core.pipeline import drop_enrichment_cache, note_skipped
 from scview.core.uns_keys import markers_column, markers_key
@@ -53,6 +54,24 @@ def _skipped_groups(adata, column: str) -> list[str]:
     return [str(g) for g in list(raw)]
 
 
+def _stale_default_column(adata) -> str:
+    """The column of the default marker table when it was ranked on raw counts and that
+    column is still there, else ""."""
+    rgg = adata.uns.get("rank_genes_groups")
+    if not isinstance(rgg, dict) or not on_counts(rgg, adata):
+        return ""
+    col = str((rgg.get("params") or {}).get("groupby") or "")
+    return col if col in adata.obs.columns else ""
+
+
+def _ranked_on(adata, column: str) -> str | None:
+    """The matrix the stored markers of ``column`` were ranked on (``params["matrix"]``)."""
+    key = resolve_markers_key(adata.uns, column or "")
+    params = adata.uns[key].get("params") if key else None
+    matrix = params.get("matrix") if isinstance(params, dict) else None
+    return str(matrix) if matrix else None
+
+
 def _no_markers(format: str, reason: str):
     """An empty marker table with ``reason``: JSON as the frontend's MarkersResponse
     (no groups) plus ``reason``; Arrow as an empty table, the reason in a header."""
@@ -67,35 +86,28 @@ def _no_markers(format: str, reason: str):
 def _compute_markers(adata: ad.AnnData, column: str) -> dict:
     """Wilcoxon markers for every group of ``column``, as the pipeline computes them
     (by blocks of genes, ``core/rank_genes.py``: bit for bit scanpy's, with the
-    specificity frame from the group means unless scanpy ran).
+    specificity frame from the group means unless scanpy ran), on log-normalised values
+    (``core/marker_matrix.py``: never the raw counts a CELLxGENE file keeps in .raw).
 
     Runs on a light AnnData sharing the dataset's matrix rather than on a copy of
     the whole dataset, and leaves the dataset's own obs column as it is.
     """
-    from scview.core import rank_genes
+    from scview.core import marker_matrix, rank_genes
 
     if getattr(adata, "isbacked", False):
         adata = adata.to_memory()
-    # scanpy ranks .raw when there is one; give it that matrix directly.
-    use_raw = adata.raw is not None
-    src = adata.raw if use_raw else adata
     labels = adata.obs[column]
     # rank_genes_groups needs a categorical groupby; coerce bool / numeric /
     # object columns (e.g. predicted_doublet) the way the pipeline does.
     if not isinstance(labels.dtype, pd.CategoricalDtype):
         labels = labels.astype(str).astype("category")
-    work = ad.AnnData(
-        X=src.X,
-        obs=pd.DataFrame({column: labels.values}, index=adata.obs_names),
-        var=pd.DataFrame(index=src.var_names),
-    )
-    if "log1p" in adata.uns:  # the base the fold changes undo, as for the pipeline's
-        work.uns["log1p"] = adata.uns["log1p"]
+    work, matrix = marker_matrix.light(adata, column, labels)
     groups, skipped = sparse_markers.testable_groups(labels)
     rank_genes.rank_genes_groups(work, column, method="wilcoxon", pts=True, use_raw=False,
                                  specificity=True, groups=groups)
     rgg = work.uns["rank_genes_groups"]
-    rgg["params"]["use_raw"] = use_raw  # what the ranking actually read
+    rgg["params"]["use_raw"] = matrix == marker_matrix.RAW_LOG  # what the ranking actually read
+    rgg["params"]["matrix"] = matrix
     note_skipped(rgg, skipped)
     return rgg
 
@@ -104,7 +116,7 @@ def _compute_markers_large(adaptor, column: str) -> dict:
     """``_compute_markers`` for a large dataset: the same Wilcoxon test from the gene
     store (``core/sparse_markers.py``, equal to scanpy's), its specificity columns from
     the group means computed on the way; the matrix stays on disk."""
-    from scview.core import large_mode
+    from scview.core import large_mode, marker_matrix
 
     store = adaptor.gene_store()
     if store is None:
@@ -124,6 +136,7 @@ def _compute_markers_large(adaptor, column: str) -> dict:
                                      use_raw=False, specificity=True, check_store=False)
     rgg = work.uns["rank_genes_groups"]
     rgg["params"]["use_raw"] = False
+    rgg["params"]["matrix"] = marker_matrix.X_LOG  # a large dataset's X (core/large_layout.py)
     note_skipped(rgg, skipped)
     return rgg
 
@@ -159,13 +172,19 @@ def _compute_and_save(dm: DatasetManager, dataset_id: str, adaptor, column: str)
         drop_enrichment_cache(adata, column)
         if not marker_specificity.has_specificity(adata.uns[key]):  # scanpy ran: best effort
             marker_specificity.attach(adata, adata.uns[key], column)
+        keys = [key]
+        default = adata.uns.get("rank_genes_groups")
+        if (isinstance(default, dict) and (default.get("params") or {}).get("groupby") == column
+                and on_counts(default, adata)):  # the default table, ranked on counts: replaced
+            adata.uns["rank_genes_groups"] = adata.uns[key]
+            keys.append("rank_genes_groups")
     except LargeDatasetError:
         raise
     except Exception as e:
         logger.error("On-demand marker computation failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Marker computation failed: {e!s}")
     try:
-        dm.persist_uns(dataset_id, adaptor, [key])
+        dm.persist_uns(dataset_id, adaptor, keys)
     except Exception as e:  # still served from memory; recomputed after a reload
         logger.warning("Could not save markers for '%s': %s", column, e)
 
@@ -235,6 +254,10 @@ async def get_markers(
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
+    if not groupby_column:
+        # The default table ranked on raw counts (core/marker_matrix.py) is computed again
+        # for its own column, as a column's would be.
+        groupby_column = _stale_default_column(adaptor.adata)
 
     # Markers for a specific obs column: stored ones, else computed once and stored
     # under the column's key (as the pipeline does), so the next visit is instant.
@@ -278,6 +301,9 @@ async def get_markers(
         groups = list(dict.fromkeys(r["group"] for r in records))
         markers_by_group = {g: [r for r in records if r["group"] == g] for g in groups}
         out = {"groups": groups, "markers": markers_by_group}
+        matrix = _ranked_on(adaptor.adata, groupby_column)
+        if matrix:
+            out["matrix"] = matrix
         skipped = _skipped_groups(adaptor.adata, groupby_column)
         if skipped:
             out["skipped_groups"] = skipped

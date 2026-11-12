@@ -320,19 +320,20 @@ def large_backend(backend: Any):
 def _wilcoxon(adata: ad.AnnData, groupby: str, key_added: str | None = None) -> None:
     """Wilcoxon markers with pts, as ``sc.tl.rank_genes_groups`` writes them (into
     ``uns[key_added or "rank_genes_groups"]``), by blocks of genes (``core/rank_genes.py``,
-    bit for bit scanpy's); in a large-dataset run from its gene store. Either way with the
-    specificity frame already in (``sparse_markers``) unless scanpy ran."""
+    bit for bit scanpy's), on log-normalised values (``core/marker_matrix.py``: never the
+    raw counts an imported file keeps in .raw); in a large-dataset run from its gene store
+    (X, log-normalised). Either way with the specificity frame already in
+    (``sparse_markers``) unless scanpy ran."""
+    from scview.core import marker_matrix
     from scview.core.sparse_markers import testable_groups
 
     groups, skipped = testable_groups(adata.obs[groupby])
     backend = _LARGE.get()
     if backend is not None:
         backend.rank_genes_groups(adata, groupby, key_added=key_added, groups=groups)
+        adata.uns[key_added or "rank_genes_groups"]["params"]["matrix"] = marker_matrix.X_LOG
     else:
-        from scview.core import rank_genes
-
-        rank_genes.rank_genes_groups(adata, groupby, method="wilcoxon", pts=True, groups=groups,
-                                     key_added=key_added, specificity=True)
+        marker_matrix.rank(adata, groupby, key_added=key_added, groups=groups)
     note_skipped(adata.uns[key_added or "rank_genes_groups"], skipped)
 
 

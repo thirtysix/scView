@@ -22,6 +22,7 @@ def test_markers_under_the_default_key_are_found_by_column(tmp_path):
     a = ad.AnnData(X)
     a.var_names = [f"G{i}" for i in range(20)]
     a.obs["louvain"] = pd.Categorical(["0"] * 30 + ["1"] * 30 + ["2"] * 30)
+    sc.pp.log1p(a)  # markers ranked on counts are stale (core/marker_matrix.py)
     sc.tl.rank_genes_groups(a, "louvain", method="wilcoxon")
     path = tmp_path / "x.h5ad"
     a.write_h5ad(path)
