@@ -273,6 +273,26 @@ detect_seurat_version <- function(obj) {
 
 #' Extract Seurat slots and write an h5ad file using the Python
 #' anndata package through reticulate.
+#' Join the per-sample layers (counts.1, counts.2, data.1, ...) of every Seurat v5 assay that
+#' has them. An assay that cannot be joined is left as it is (and reported).
+join_split_layers <- function(obj) {
+  assays <- tryCatch(SeuratObject::Assays(obj), error = function(e) character(0))
+  for (a in assays) {
+    if (!inherits(obj[[a]], "Assay5")) next
+    lyr <- tryCatch(SeuratObject::Layers(obj[[a]]), error = function(e) character(0))
+    if (!any(grepl("^(counts|data)\\.", lyr))) next
+    joined <- tryCatch(SeuratObject::JoinLayers(obj[[a]]), error = function(e) {
+      cat(sprintf("[convert] Could not join the layers of %s: %s\n", a, conditionMessage(e)))
+      NULL
+    })
+    if (!is.null(joined)) {
+      obj[[a]] <- joined
+      cat(sprintf("[convert] Joined %d split layers of assay %s\n", length(lyr), a))
+    }
+  }
+  obj
+}
+
 manual_convert <- function(obj, output_path, version_info) {
 
   suppressMessages(library(reticulate))
@@ -296,6 +316,10 @@ manual_convert <- function(obj, output_path, version_info) {
     sprintf(paste0("the chromatin assay %s: ATAC inside a Seurat object is not read yet; upload the 10x ",
                    "filtered_feature_bc_matrix.h5 or an .h5mu for its peaks"), paste(chromatin, collapse = ", "))
   } else character(0)
+
+  # Seurat v5 keeps one layer per sample after split() / merge() (counts.1, counts.2, ...), and
+  # GetAssayData() cannot read those: join them first.
+  obj <- join_split_layers(obj)
 
   # RNA as before; a Visium object's genes are in its Spatial assay.
   main_assay <- seurat_main_assay(obj)
@@ -321,6 +345,11 @@ manual_convert <- function(obj, output_path, version_info) {
 
   if (is.null(counts)) {
     return(list(success = FALSE, error = "Could not extract expression matrix from Seurat object"))
+  }
+  # Joined layers come back sample by sample; the metadata is in the object's cell order.
+  cells <- colnames(obj)
+  if (!identical(colnames(counts), cells) && setequal(colnames(counts), cells)) {
+    counts <- counts[, cells, drop = FALSE]
   }
 
   # anndata expects cells x genes (obs x var)

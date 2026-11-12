@@ -77,6 +77,10 @@ def check_fixture(name: str, exp: dict, res: dict, out: Path) -> None:
             assert list(m.index) == list(a.obs_names)
             _close(float(m.to_numpy().sum()), exp[key]["sum"], f"{slot} sum")
 
+    if "x_rows_match_obs" in exp:  # each cell's counts belong to its own metadata row
+        col = exp["x_rows_match_obs"]
+        rows = np.asarray(a.X.sum(axis=1)).ravel()
+        np.testing.assert_allclose(rows, a.obs[col].to_numpy(dtype=np.float64), err_msg=f"X rows vs obs {col}")
     for col, dtype in exp.get("obs_dtypes", {}).items():
         assert col in a.obs, f"obs {col} missing: {list(a.obs.columns)}"
         assert str(a.obs[col].dtype) == dtype, (col, str(a.obs[col].dtype))
