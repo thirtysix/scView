@@ -264,4 +264,17 @@ describe("AnnotationControl (CellTypist)", () => {
     expect(screen.getByText("high mito four")).toBeInTheDocument();
     expect(screen.queryByText("fine")).toBeNull();
   });
+
+  it("says which clusters went to the AI with a random-marker note (v0.75.0 records)", async () => {
+    getProvenance.mockResolvedValue({ recorded: { history: [{
+      step: "cell_type_annotation", tool: "t", timestamp: "",
+      params: { annotation_method: "llm", annotation_target: "paul15_clusters_celltypeAnno",
+        llm_random_markers_noted: ["7", "8"] },
+    }] } });
+    render(<AnnotationControl onAnnotate={vi.fn().mockResolvedValue(undefined)} running={false} species="human" />);
+    fireEvent.click(screen.getByText("Annotate cell types"));
+    const note = await screen.findByTestId("annotation-decided");
+    expect(note.textContent).toContain("The AI was told that the markers of clusters 7, 8 do not beat 9 of 10");
+    expect(note.textContent).not.toContain("Unidentified");
+  });
 });

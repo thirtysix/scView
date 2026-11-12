@@ -3,7 +3,7 @@ export const QC_HELP: Record<string, string> = {
   "evidence.section":
     "Why each cluster was labelled or flagged, from the numbers scView's own rules read. Plain evidence, never a probability: a probability model was tested on benchmark clusters and did worse than these rules.",
   "evidence.markers":
-    "How well the cluster's top markers match the best cell type in the marker databases, against random gene lists of the same size. The bar is beating 9 of 10 of them: 1 in 10 random lists reach the p shown. Markers that fall short are labelled Unidentified by AI annotation.",
+    "How well the cluster's top markers match the best cell type in the marker databases, against random gene lists of the same size. The bar is beating 9 of 10 of them: 1 in 10 random lists reach the p shown. Markers that fall short go to AI annotation with a note saying so.",
   "evidence.qc":
     "Median genes and mitochondrial share per cell against the typical cluster (the median across clusters), with the cluster QC flags that fired. Few genes with high mito, or very high mito, marks damaged cells, which AI annotation labels Low-quality cells.",
   "evidence.doublet":

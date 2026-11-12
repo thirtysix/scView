@@ -414,7 +414,10 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
 
 interface Decided {
   lowQuality: string[];
+  /** Labelled Unidentified by scView itself: annotations of v0.71.0 to v0.74.0 */
   unidentified: string[];
+  /** Sent to the AI with a note that their markers look random (`llm_random_markers_noted`) */
+  noted: string[];
   toAi: string[];
   /** The clustering the annotation was based on (its clusters' evidence). */
   column?: string;
@@ -435,8 +438,8 @@ async function lastLlmNotes(datasetId: string, target: string): Promise<{ cut: s
     const p = step.params ?? {};
     const cut = typeof p.llm_reply_cut === "string" && p.llm_reply_cut ? p.llm_reply_cut : null;
     const d = { lowQuality: ids(p.llm_decided_low_quality), unidentified: ids(p.llm_random_markers),
-      toAi: ids(p.llm_high_mito_type_to_ai) };
-    const any = d.lowQuality.length || d.unidentified.length || d.toAi.length;
+      noted: ids(p.llm_random_markers_noted), toAi: ids(p.llm_high_mito_type_to_ai) };
+    const any = d.lowQuality.length || d.unidentified.length || d.noted.length || d.toAi.length;
     return { cut, decided: any ? d : null };
   } catch {
     return { cut: null, decided: null };
@@ -446,7 +449,7 @@ async function lastLlmNotes(datasetId: string, target: string): Promise<{ cut: s
 /** Which clusters scView labelled without the AI, and why: the rule, then each cluster's evidence. */
 function DecidedNote({ decided, datasetId }: { decided: Decided; datasetId: string }) {
   const [showEvidence, setShowEvidence] = useState(false);
-  const groups = [...decided.lowQuality, ...decided.unidentified, ...decided.toAi];
+  const groups = [...decided.lowQuality, ...decided.unidentified, ...decided.noted, ...decided.toAi];
   return (
     <div className="mt-2 space-y-0.5 rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs text-slate-600" data-testid="annotation-decided">
       {decided.lowQuality.length > 0 && (
@@ -459,6 +462,12 @@ function DecidedNote({ decided, datasetId }: { decided: Decided; datasetId: stri
         <p>
           scView labelled {clusterList(decided.unidentified)} <b>Unidentified</b> itself: their markers do not beat
           9 of 10 random gene lists of the same size against the marker databases.
+        </p>
+      )}
+      {decided.noted.length > 0 && (
+        <p>
+          The AI was told that the markers of {clusterList(decided.noted)} do not beat 9 of 10 random gene lists
+          of the same size against the marker databases: junk, or a state the databases lack.
         </p>
       )}
       {decided.toAi.length > 0 && (

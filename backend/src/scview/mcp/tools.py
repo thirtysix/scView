@@ -787,8 +787,8 @@ async def cluster_evidence(
     (never a probability): its markers against random genes (best marker-database p vs what 1 in
     10 random lists reach), median genes and % mito against the typical cluster with the cluster
     QC flags that fired, a doublet-like cluster's two parents, database types as shares of the
-    evidence (named groupings only), and the label scView gave ('Low-quality cells',
-    'Unidentified') or would give itself in an AI annotation. Markers must be computed first."""
+    evidence (named groupings only), and the label scView gave ('Low-quality cells') or would give
+    itself in an AI annotation, or the note the AI got. Markers must be computed first."""
     d = await _get(f"{_ds(dataset_id)}/clusters/evidence", column=column or None)
     return dumps({"dataset_id": dataset_id, **pick(d, "column", "n_groups", "markers", "typing", "annotation", "notes"),
                   "clusters": [{"group": c["group"], "n_cells": c["n_cells"], "label": c["label"],

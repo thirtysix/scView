@@ -1730,9 +1730,13 @@ def _annotate_llm(adata: ad.AnnData, params: PipelineParams, groupby: str, targe
 
     hint = params.annotation_tissue.strip()
     qc = _annotation_qc_notes(adata, groupby)
-    # Damaged cells and marker lists that name no type are decided here, not by the AI; the
-    # rest are sent (annotation benchmark arms ox + dq, 2026-11-11).
+    # Damaged cells are decided here, not by the AI; the rest are sent (annotation benchmark arms
+    # ox + dq, 2026-11-11), marker lists no better than random ones with a note saying so.
     decided, decided_record = _annotation_decided(adata, groupby, marker_map)
+    from scview.core.marker_randomness import NOTE as RANDOM_NOTE
+
+    for g in decided_record.get(RANDOM_NOTED, []):
+        qc[g] = f"{qc[g]}; {RANDOM_NOTE}" if g in qc else RANDOM_NOTE
     sent = {g: genes for g, genes in marker_map.items() if str(g) not in decided}
     listing = "\n".join(f"{g}: {', '.join(genes)}" + (f" [QC: {qc[str(g)]}]" if str(g) in qc else "")
                         for g, genes in sent.items())
@@ -1873,10 +1877,15 @@ def _record_llm_cl_ids(adata: ad.AnnData, target: str, model_ids: dict[str, str 
 
 LOW_QUALITY_LABEL = "Low-quality cells"
 _LOW_QUALITY = re.compile(r"^\s*(?:likely\s+|probable\s+)?low[-\s]?quality(?:\s+cells?)?\s*$", re.I)
-# The label scView gives a cluster whose markers do not beat 9 of 10 random gene lists of the same
-# size against the marker databases (core/marker_randomness.py), without asking the AI. Not "Unknown": that is the label of clusters
-# a cut reply never reached.
+# The label scView gave a cluster whose markers do not beat 9 of 10 random gene lists of the same
+# size against the marker databases (core/marker_randomness.py), without asking the AI, from
+# v0.71.0 to v0.74.0 (record key ``llm_random_markers``). Not "Unknown": that is the label of
+# clusters a cut reply never reached. Since v0.75.0 such a cluster goes to the AI with a note
+# (``RANDOM_NOTED``): disease and injury states are not in the databases (kidney PT_VCAM1).
 UNIDENTIFIED_LABEL = "Unidentified"
+# The step record's key for the clusters sent with that note. A new key, not the old one with a new
+# meaning: records of v0.71.0-v0.74.0 still say their clusters were labelled Unidentified.
+RANDOM_NOTED = "llm_random_markers_noted"
 # Cluster QC flags that mean damaged cells: scView labels these clusters "Low-quality cells" itself.
 # low_genes is not one: erythrocytes and platelets have few genes by nature.
 _DAMAGE_FLAGS = ("low_quality", "high_mito")
@@ -1933,13 +1942,15 @@ def _annotation_decided(adata: ad.AnnData, groupby: str,
     - "Low-quality cells": cluster QC flags it ``low_quality`` (few genes and high mito) or
       ``high_mito``, unless its markers best match a type with much mito RNA by nature
       (``_HIGH_MITO_TYPE``): that cluster goes to the AI with its QC note.
-    - "Unidentified": its markers do not beat 9 of 10 random gene lists of the same size
-      against the marker databases (``core/marker_randomness.py``). Damaged wins when both hold.
+    - Markers that do not beat 9 of 10 random gene lists of the same size against the marker
+      databases (``core/marker_randomness.py``) are not decided: the cluster goes to the AI with a
+      QC note saying so (record ``RANDOM_NOTED``). Damaged wins when both hold.
 
     In the annotation benchmark the AI's low-quality call moved with the wording and with the other
-    clusters in the prompt (arms pp, ox), and a random-marker note in the prompt moved other clusters'
-    calls (arms rm, ua); deciding both here kept them (arm dq). Best effort: a check that cannot run
-    decides nothing."""
+    clusters in the prompt (arms pp, ox); deciding it here kept it (arm dq). Random-like lists were
+    labelled "Unidentified" here too until v0.75.0 (user decision 2026-11-12): disease and injury
+    states that the databases lack (kidney PT_VCAM1) were hidden that way, and cluster QC catches
+    most junk. Best effort: a check that cannot run decides nothing."""
     from scview.core import cluster_qc, marker_randomness
 
     try:
@@ -1963,9 +1974,9 @@ def decide_clusters(check, report, marker_map) -> tuple[dict[str, str], dict[str
     best = {str(g): t for g, t in check.best.items()}
     to_ai = sorted((g for g in damaged if g in in_map and _HIGH_MITO_TYPE.search(best.get(g, ""))), key=str)
     low = sorted((g for g in damaged if g in in_map and g not in to_ai), key=str)
-    unid = sorted((str(g) for g in check.flagged if str(g) in in_map and str(g) not in low), key=str)
-    decided = {g: LOW_QUALITY_LABEL for g in low} | {g: UNIDENTIFIED_LABEL for g in unid}
-    record = {k: v for k, v in (("llm_decided_low_quality", low), ("llm_random_markers", unid),
+    noted = sorted((str(g) for g in check.flagged if str(g) in in_map and str(g) not in low), key=str)
+    decided = {g: LOW_QUALITY_LABEL for g in low}
+    record = {k: v for k, v in (("llm_decided_low_quality", low), (RANDOM_NOTED, noted),
                                 ("llm_high_mito_type_to_ai", to_ai)) if v}
     return decided, record
 

@@ -112,7 +112,7 @@ def _annotate(monkeypatch, markers, flags, check, reply):
     return fit, sent, a
 
 
-def test_scview_decides_damaged_and_random_clusters_and_sends_only_the_rest(monkeypatch):
+def test_scview_decides_damaged_clusters_and_notes_random_ones_for_the_ai(monkeypatch):
     markers = {"0": ["CD3D"], "1": ["MS4A1"], "2": ["G1"], "3": ["G2"], "4": ["MYH6"]}
     flags = {"2": ["high_mito"], "3": ["low_quality"], "4": ["high_mito"]}
     check = lambda adata, mk: MR.RandomCheck(  # noqa: E731
@@ -120,24 +120,35 @@ def test_scview_decides_damaged_and_random_clusters_and_sends_only_the_rest(monk
     fit, sent, a = _annotate(monkeypatch, markers, flags, check,
                              "tissue: heart\n0: T cells | CL:0000084\n4: Cardiomyocytes | CL:0000746")
     listing = sent[0].split("Clusters and marker genes:")[1].strip().splitlines()
-    # 1 random, 2 and 3 damaged (3 is also random: damaged wins); 4 is high mito but best matches
-    # cardiomyocytes, so it goes to the AI with its QC note.
-    assert listing == ["0: CD3D", "4: MYH6 [QC: flagged high_mito]"]
+    # 1 random: sent with a note (since v0.75.0, no longer "Unidentified"); 2 and 3 damaged (3 is also
+    # random: damaged wins); 4 is high mito but best matches cardiomyocytes, so it goes to the AI
+    # with its QC note.
+    assert listing == ["0: CD3D", f"1: MS4A1 [QC: {MR.NOTE}]", "4: MYH6 [QC: flagged high_mito]"]
+    assert MR.NOTE == "markers do not beat 9 of 10 random gene lists of the same size against the marker databases"
     m = a.uns["cell_type_llm_mapping"]
-    assert m == {"0": "T cells", "1": "Unidentified", "2": "Low-quality cells", "3": "Low-quality cells",
-                 "4": "Cardiomyocytes"}
+    assert m == {"0": "T cells", "1": "Unknown", "2": "Low-quality cells", "3": "Low-quality cells",
+                 "4": "Cardiomyocytes"}  # the reply left 1 out
     assert fit["llm_decided_low_quality"] == ["2", "3"]
-    assert fit["llm_random_markers"] == ["1"]
+    assert fit[P.RANDOM_NOTED] == ["1"] and "llm_random_markers" not in fit
     assert fit["llm_high_mito_type_to_ai"] == ["4"]
-    assert fit["ids"].get("Unidentified") is None and fit["ids"].get("Low-quality cells") is None
-    assert "Unidentified" not in sent[0]  # the prompt is v0.68's: the AI is never told about it
+    assert fit["ids"].get("Low-quality cells") is None
+    assert "Unidentified" not in sent[0] and "Unidentified" not in m.values()
 
 
 def test_every_cluster_decided_asks_no_model(monkeypatch):
     check = lambda adata, mk: MR.RandomCheck(flagged={"0": {}}, checked=2)  # noqa: E731
-    fit, sent, a = _annotate(monkeypatch, {"0": ["G1"], "1": ["G2"]}, {"1": ["high_mito"]}, check, "")
+    fit, sent, a = _annotate(monkeypatch, {"0": ["G1"], "1": ["G2"]},
+                             {"0": ["low_quality"], "1": ["high_mito"]}, check, "")
     assert sent == []
-    assert a.uns["cell_type_llm_mapping"] == {"0": "Unidentified", "1": "Low-quality cells"}
+    assert a.uns["cell_type_llm_mapping"] == {"0": "Low-quality cells", "1": "Low-quality cells"}
+
+
+def test_a_random_like_cluster_alone_still_asks_the_model(monkeypatch):
+    check = lambda adata, mk: MR.RandomCheck(flagged={"0": {}}, checked=2)  # noqa: E731
+    fit, sent, a = _annotate(monkeypatch, {"0": ["G1"], "1": ["G2"]}, {"1": ["high_mito"]}, check,
+                             "tissue: kidney\n0: Injured proximal tubule cells | CL:none")
+    assert len(sent) == 1 and f"0: G1 [QC: {MR.NOTE}]" in sent[0]
+    assert a.uns["cell_type_llm_mapping"] == {"0": "Injured proximal tubule cells", "1": "Low-quality cells"}
 
 
 def test_failing_checks_decide_nothing(monkeypatch):
