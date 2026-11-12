@@ -32,6 +32,17 @@ describe("InfoTip", () => {
     expect(screen.getByRole("tooltip")).toBeInTheDocument();
   });
 
+  it("opens above by default, below on request", () => {
+    const { unmount } = render(<InfoTip>up</InfoTip>);
+    fireEvent.click(screen.getByRole("button"));
+    expect(screen.getByRole("tooltip")).toHaveClass("bottom-full");
+    unmount();
+    render(<InfoTip side="below">down</InfoTip>);
+    fireEvent.click(screen.getByRole("button"));
+    expect(screen.getByRole("tooltip")).toHaveClass("top-full");
+    expect(screen.getByRole("tooltip")).not.toHaveClass("bottom-full");
+  });
+
   it("does not let its click reach the row behind it", () => {
     let rowClicks = 0;
     render(

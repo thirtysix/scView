@@ -3,6 +3,7 @@ import { useDatasetStore } from "@/stores/datasetStore";
 import { useSplitViewStore } from "@/stores/splitViewStore";
 import { prettyObsLabel } from "@/lib/formatting";
 import { SPLIT_MAX_VALUES, splitColumnOptions } from "@/lib/splitView";
+import { Help } from "@/components/common/Help";
 
 /**
  * Toolbar "Split" select: off, or a categorical column with 2–6 values to show
@@ -31,6 +32,7 @@ export function SplitByControl({ disabledReason = null }: { disabledReason?: str
       <label htmlFor="split-by" className="text-[11px] font-medium text-slate-500">
         Split
       </label>
+      <Help id="plot.split" label="About splitting the plot" side="below" />
       <select
         id="split-by"
         aria-label="Split the plot by"

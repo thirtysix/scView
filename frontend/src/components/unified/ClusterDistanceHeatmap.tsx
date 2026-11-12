@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import Plot from "@/components/plots/Plot";
+import { Help } from "@/components/common/Help";
 import { getGroupDistances } from "@/api/clustering";
 import { nearestGroups, orderedHeatmap, spaceLabel } from "@/lib/clusterDistances";
 import { dendrogramSegments, rowDendrogram } from "@/lib/dendrogram";
@@ -105,6 +106,7 @@ export function ClusterDistanceHeatmap({
           ))}
         </select>
         <span>groups, in PCA space</span>
+        <Help id="plot.cluster-distances" label="About the cluster distances" side="below" />
         {data?.correlation && (
           <span role="group" aria-label="Measure" className="ml-auto inline-flex overflow-hidden rounded border border-slate-200">
             {(["distance", "correlation"] as const).map((m) => (

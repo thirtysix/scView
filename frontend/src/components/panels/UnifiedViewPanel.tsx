@@ -98,6 +98,7 @@ import { TRANSCRIPT_COLORS, shownText, transcriptColorCss } from "@/lib/transcri
 import { SPATIAL_EMBEDDING } from "@/api/spatial";
 import type { TissueMode } from "@/components/plots/EmbeddingScatter";
 import { helpText } from "@/lib/help";
+import { Help } from "@/components/common/Help";
 
 const SUBTABS = [
   { id: "markers" as const, label: "Markers" },
@@ -1553,6 +1554,7 @@ export function UnifiedViewPanel() {
         {/* Drag handle */}
         <div
           onMouseDown={handleDragStart}
+          title="Drag to resize the plot and the side panel"
           className="group flex w-2 flex-shrink-0 cursor-col-resize items-center justify-center"
         >
           <div className="h-8 w-1 rounded-full bg-slate-300 transition-colors group-hover:bg-primary group-active:bg-primary" />
@@ -1581,7 +1583,10 @@ export function UnifiedViewPanel() {
                 />
               </div>
               <div className="flex w-1/2 min-w-0 flex-col gap-1.5 rounded-lg border border-slate-200 bg-slate-50/60 p-2.5 text-xs">
-                <div className="text-[11px] font-semibold text-slate-600">Summary</div>
+                <div className="flex items-center gap-1 text-[11px] font-semibold text-slate-600">
+                  Summary
+                  <Help id="plot.summary" label="About the summary" side="below" align="right" />
+                </div>
                 <InfoRow label={unitTitle(dataset?.spatial)} value={numCells.toLocaleString()} />
                 <InfoRow label="Grouping" value={prettyObsLabel(groupByColumn)} />
                 <InfoRow

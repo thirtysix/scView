@@ -10,6 +10,7 @@ import {
 } from "@/api/reliability";
 import { Caption } from "@/components/common/Caption";
 import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
 import { embeddingDims } from "@/hooks/useEmbedding";
 import { useEmbeddingReady } from "@/hooks/useEmbeddingReady";
 import { decodeArrowBuffer } from "@/lib/arrow";
@@ -293,6 +294,7 @@ export function EmbeddingReliabilityPanel({
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-1.5">
           <h3 className="text-sm font-semibold text-slate-800">Plot reliability{plot ? `: ${plot}` : ""}</h3>
+          <Help id="reliability.about" label="About plot reliability" side="below" />
           {busy && <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500" aria-label="Loading" />}
         </div>
         <div className="flex items-center gap-1">

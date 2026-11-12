@@ -3,6 +3,7 @@ import { Loader2 } from "lucide-react";
 import Plot from "@/components/plots/Plot";
 import { Caption } from "@/components/common/Caption";
 import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
 import {
   getSplitMarkersInfo,
   keepSplitResult,
@@ -262,6 +263,7 @@ export function CountSplitCheck({
               />
               Split p-values in the table
             </label>
+            <Help id="countsplit.show-p" label="About split p-values" />
             {current?.tested && (
               <button
                 type="button"

@@ -23,11 +23,15 @@ export function InfoTip({
   align = "left",
   width = 260,
   label = "More information",
+  side = "above",
 }: {
   children: ReactNode;
   align?: "left" | "right";
   width?: number;
   label?: string;
+  /** "below" for an icon near the top of a scrolling box (toolbar, dialog title), where a tip
+   *  opening upwards would be cut off. */
+  side?: "above" | "below";
 }) {
   const [open, setOpen] = useState(false);
   const id = useId();
@@ -53,7 +57,7 @@ export function InfoTip({
           id={id}
           role="tooltip"
           style={{ width }}
-          className={`absolute bottom-full z-30 mb-1.5 block rounded-md border border-slate-200 bg-white p-2 text-[10px] font-normal leading-relaxed text-slate-600 shadow-lg ${
+          className={`absolute ${side === "below" ? "top-full mt-1.5" : "bottom-full mb-1.5"} z-30 block rounded-md border border-slate-200 bg-white p-2 text-[10px] font-normal leading-relaxed text-slate-600 shadow-lg ${
             align === "right" ? "right-0" : "left-0"
           }`}
         >

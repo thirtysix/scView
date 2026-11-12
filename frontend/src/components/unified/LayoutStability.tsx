@@ -19,6 +19,7 @@ import {
 } from "@/api/layouts";
 import { Caption, CapNote } from "@/components/common/Caption";
 import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
 import { useEmbeddingReady } from "@/hooks/useEmbeddingReady";
 import { decodeArrowBuffer } from "@/lib/arrow";
@@ -292,8 +293,9 @@ export function LayoutStabilityPanel({ datasetId, onClose }: { datasetId: string
     >
       <div className="flex items-start justify-between gap-2">
         <div>
-          <div className="text-sm font-semibold text-slate-800">
+          <div className="flex items-center gap-1 text-sm font-semibold text-slate-800">
             Which structure in this plot survives another seed or neighbour count?
+            <Help id="layouts.about" label="About the layout check" side="below" />
           </div>
           <p className="mt-0.5 text-[11px] text-slate-500">
             A UMAP is one draw of a random layout. This lays the same cells out again
@@ -565,12 +567,7 @@ export function LayoutStabilityPanel({ datasetId, onClose }: { datasetId: string
         <details className="text-[11px]">
           <summary className="cursor-pointer text-slate-600">
             Placement by group across layouts{" "}
-            <InfoTip width={300}>
-              Placement (as in Plot reliability): the share of a cell&rsquo;s graph neighbours (the dataset&rsquo;s own
-              neighbour count, the graph rebuilt on the laid-out cells) that lie among its nearest 5% of cells on the
-              plot; the median over the group&rsquo;s cells. A wide range means the group sits near its real neighbours
-              in some layouts and away from them in others.
-            </InfoTip>
+            <Help id="layouts.placement" label="About placement across layouts" width={300} />
           </summary>
           <table className="mt-1 w-full border-collapse" data-testid="groups-table">
             <thead>

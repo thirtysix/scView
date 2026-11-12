@@ -7,6 +7,7 @@ import { ChevronDown, ChevronUp } from "lucide-react";
 import { useUnifiedViewStore, type BottomView } from "@/stores/unifiedViewStore";
 import { ViolinPlot } from "@/components/plots/ViolinPlot";
 import { Caption } from "@/components/common/Caption";
+import { Help } from "@/components/common/Help";
 import { ClusterDistanceHeatmap } from "@/components/unified/ClusterDistanceHeatmap";
 import { PerDonorExpression } from "@/components/unified/PerDonorExpression";
 import { SelectionHistogram } from "@/components/unified/SelectionHistogram";
@@ -148,7 +149,8 @@ export function UnifiedBottomPanel({
       {isOpen && shown === "distribution" && (
         <div className="border-t border-slate-100 px-2 py-1">
           {datasetId && (
-            <div className="mb-1 flex justify-end">
+            <div className="mb-1 flex items-center justify-end gap-1">
+              <Help id="plot.distribution" label="About the distribution views" side="below" align="right" />
               <div className="flex overflow-hidden rounded border border-slate-300 text-[11px]" role="group" aria-label="Distribution of">
                 {MODES.filter((m) => m.id !== "donor" || violinGroupColumn).map((m) => (
                   <button
@@ -192,6 +194,7 @@ export function UnifiedBottomPanel({
                   { value: Object.keys(violinData).length, unit: "groups" },
                 ]}
               >
+                <Help id="plot.violin" label="How to read the violins" />{" "}
                 {violinTitle ?? "Values"} per {violinGroupLabel ?? violinGroupColumn}: one violin per group
                 {selectionViolin ? `; the last (orange) is the ${selectionViolin.values.length.toLocaleString()} selected cells, from any group` : ""}.
               </Caption>

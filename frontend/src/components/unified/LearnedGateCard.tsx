@@ -3,6 +3,7 @@ import { Loader2 } from "lucide-react";
 import { saveLearnedGate, type GateGene, type TrainResult } from "@/api/learnedGates";
 import { Caption } from "@/components/common/Caption";
 import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
 import { errorMessage } from "@/lib/errorMessage";
 import { decodeSelection } from "@/lib/session";
 import { useSelectionStore } from "@/stores/selectionStore";
@@ -60,7 +61,10 @@ export function LearnedGateCard({
   return (
     <div className="space-y-1.5 rounded border border-slate-200 bg-white p-2 text-[11px]" data-testid="learned-gate-card">
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className="font-semibold text-slate-700">Learned gate &ldquo;{gate.name}&rdquo;</span>
+        <span className="flex items-center gap-1 font-semibold text-slate-700">
+          Learned gate &ldquo;{gate.name}&rdquo;
+          <Help id="gates.learned-result" label="How to read the learned gate" />
+        </span>
         <span className={`rounded px-1.5 py-0.5 ${VERDICT_STYLE[report.verdict.level] ?? ""}`} data-testid="learned-gate-verdict">
           {report.verdict.text}
         </span>
