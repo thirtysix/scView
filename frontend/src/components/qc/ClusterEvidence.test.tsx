@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { act, render, screen, fireEvent } from "@testing-library/react";
 import type { ClusterEvidenceReport, ClusterQcReport } from "@/api/qc";
 import { hoverTip } from "@/test/hoverTip";
 
@@ -67,6 +67,39 @@ describe("ClusterEvidenceList", () => {
     getClusterEvidence.mockRejectedValue(new Error('API error 400: {"detail":"Column \'x\' not found in obs."}'));
     render(<ClusterEvidenceList datasetId="d1" column="x" />);
     expect(await screen.findByText("Evidence unavailable: Column 'x' not found in obs.")).toBeInTheDocument();
+  });
+
+  it("says what it is doing only when the answer is slow (a first, uncached call)", async () => {
+    vi.useFakeTimers();
+    try {
+      let answer!: (r: ClusterEvidenceReport) => void;
+      getClusterEvidence.mockReturnValue(new Promise((r) => (answer = r)));
+      render(<ClusterEvidenceList datasetId="d1" />);
+      await act(async () => vi.advanceTimersByTime(900));
+      expect(screen.queryByTestId("evidence-slow")).toBeNull();
+      await act(async () => vi.advanceTimersByTime(200));
+      expect(screen.getByTestId("evidence-slow")).toHaveTextContent(
+        "Comparing each cluster's markers with random genes. The first time takes about 10 to 15 seconds.",
+      );
+      await act(async () => answer(REPORT));
+      expect(screen.queryByTestId("evidence-slow")).toBeNull();
+      expect(details()).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows no waiting line for a cached (fast) answer", async () => {
+    vi.useFakeTimers();
+    try {
+      render(<ClusterEvidenceList datasetId="d1" />);
+      await act(async () => vi.advanceTimersByTime(50));
+      expect(details()).toHaveLength(3);
+      await act(async () => vi.advanceTimersByTime(2000));
+      expect(screen.queryByTestId("evidence-slow")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
