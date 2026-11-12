@@ -1,21 +1,27 @@
-"""Which human build ATAC peaks and fragments are on: GRCh38, or hg19 (GRCh37).
+"""Which build ATAC peaks and fragments are on: GRCh38 or hg19 (GRCh37) for human, mm10 or
+mm9 (NCBIM37) for mouse.
 
-hg19 and GRCh38 name their chromosomes alike, so names alone take hg19 input for GRCh38
-and give it GRCh38 gene bodies, motifs, links and TSS positions, all shifted. scView has
-gene positions (``gene_annotation``) and genome sequence (``genome_seq``) for GRCh38 and
-mm10 only, so input known to be hg19 is recorded as ``hg19`` and every genome-dependent
-step refuses it with ``HG19_REFUSAL`` (``gene_annotation.canonical_genome`` raises it).
+Each older build names its chromosomes as the newer one does, so names alone take hg19 input
+for GRCh38 (mm9 for mm10) and give it the newer build's gene bodies, motifs, links and TSS
+positions, all shifted. scView has gene positions (``gene_annotation``) and genome sequence
+(``genome_seq``) for GRCh38 and mm10 only, so input known to be hg19 or mm9 is recorded as
+``hg19`` / ``mm9`` and every genome-dependent step refuses it with ``HG19_REFUSAL`` /
+``MM9_REFUSAL`` (``gene_annotation.canonical_genome`` raises it).
 
 The signals, each enough on its own:
 
-- a reference the input names: a 10x h5's ``features/genome`` ("hg19"), a fragments
+- a reference the input names: a 10x h5's ``features/genome`` ("hg19", "mm9"), a fragments
   file's ``# reference_path=.../refdata-cellranger-atac-hg19-1.2.0`` header line;
-- coordinates past GRCh38's chromosome ends that hg19's chromosomes still hold. hg19's
-  chr9 is 2.8 Mb longer, chr8 1.2 Mb, chr21 1.4 Mb, chr19 0.5 Mb, and those ends are
-  gene-dense (9q34.3, 8q24.3, 19q13.43), so a whole-genome peak set on hg19 has peaks
-  there. A GRCh38 set never does. Input past the ends of both is neither (another species).
+- coordinates past the newer build's chromosome ends that the older build's chromosomes
+  still hold. hg19's chr9 is 2.8 Mb longer than GRCh38's, chr8 1.2 Mb, chr21 1.4 Mb, chr19
+  0.5 Mb, and those ends are gene-dense (9q34.3, 8q24.3, 19q13.43). mm9's chr7 is 7.1 Mb
+  longer than mm10's, chr8 2.3 Mb, chr1 1.7 Mb, chr12 1.1 Mb, and distal chr7 holds the
+  H19/Igf2 and Kcnq1 clusters. So a whole-genome peak set on the older build has peaks there;
+  one on the newer build never does. Input past the ends of both, or on a chromosome the
+  older build lacks, is neither (another species).
 
-Where nothing says, the current behaviour stays (GRCh38 from Ensembl ids or chromosome names).
+Where nothing says, the current behaviour stays (GRCh38 or mm10 from Ensembl ids or
+chromosome names). mm39 (GRCm39) is not told from mm10 here.
 """
 
 from __future__ import annotations
@@ -26,12 +32,19 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 
 HG19 = "hg19"
+MM9 = "mm9"
 
 HG19_REFUSAL = ("This ATAC input is on hg19 (GRCh37), and scView has gene positions and genome sequence for "
                 "GRCh38 and mm10 only, so gene activity, nearest genes, motifs, peak-gene links and TSS "
                 "enrichment are off: lift the peaks over to GRCh38, or run Cell Ranger ARC on GRCh38, to use them.")
+MM9_REFUSAL = ("This ATAC input is on mm9 (NCBIM37), and scView has gene positions and genome sequence for "
+               "GRCh38 and mm10 only, so gene activity, nearest genes, motifs, peak-gene links and TSS "
+               "enrichment are off: lift the peaks over to mm10, or run Cell Ranger ARC on mm10, to use them.")
+REFUSALS = {HG19: HG19_REFUSAL, MM9: MM9_REFUSAL}
+# The build scView has positions for, of each older build's species.
+NEWER = {HG19: "GRCh38", MM9: "mm10"}
 
-# UCSC chrom.sizes, autosomes and X/Y.
+# UCSC chrom.sizes, autosomes and X/Y: hgdownload.soe.ucsc.edu/goldenPath/{hg38,hg19,mm10,mm9}/bigZips/*.chrom.sizes.
 HG38_SIZES = {
     "1": 248956422, "2": 242193529, "3": 198295559, "4": 190214555, "5": 181538259, "6": 170805979,
     "7": 159345973, "8": 145138636, "9": 138394717, "10": 133797422, "11": 135086622, "12": 133275309,
@@ -44,9 +57,25 @@ HG19_SIZES = {
     "13": 115169878, "14": 107349540, "15": 102531392, "16": 90354753, "17": 81195210, "18": 78077248,
     "19": 59128983, "20": 63025520, "21": 48129895, "22": 51304566, "X": 155270560, "Y": 59373566,
 }
+MM10_SIZES = {
+    "1": 195471971, "2": 182113224, "3": 160039680, "4": 156508116, "5": 151834684, "6": 149736546,
+    "7": 145441459, "8": 129401213, "9": 124595110, "10": 130694993, "11": 122082543, "12": 120129022,
+    "13": 120421639, "14": 124902244, "15": 104043685, "16": 98207768, "17": 94987271, "18": 90702639,
+    "19": 61431566, "X": 171031299, "Y": 91744698,
+}
+MM9_SIZES = {
+    "1": 197195432, "2": 181748087, "3": 159599783, "4": 155630120, "5": 152537259, "6": 149517037,
+    "7": 152524553, "8": 131738871, "9": 124076172, "10": 129993255, "11": 121843856, "12": 121257530,
+    "13": 120284312, "14": 125194864, "15": 103494974, "16": 98319150, "17": 95272651, "18": 90772031,
+    "19": 61342430, "X": 166650296, "Y": 15902555,
+}
+# (older build, newer build's sizes, older build's sizes), human first.
+_BUILDS = ((HG19, HG38_SIZES, HG19_SIZES), (MM9, MM10_SIZES, MM9_SIZES))
 
 # hg19 / GRCh37 / b37 / hs37d5 as a word in a reference name or path.
 _HG19_NAME = re.compile(r"(?<![a-z0-9])(hg19|grch37|b37|hs37d5|hg37)(?![a-z0-9])", re.IGNORECASE)
+# mm9 / NCBIM37 (Ensembl) / MGSCv37 (NCBI) likewise.
+_MM9_NAME = re.compile(r"(?<![a-z0-9])(mm9|ncbim37|mgscv37)(?![a-z0-9])", re.IGNORECASE)
 _CHROM = re.compile(r"^(?:chr)?([0-9]+|X|Y)$", re.IGNORECASE)
 # Header keys of a Cell Ranger ATAC / ARC fragments file that name the reference.
 _REFERENCE_KEYS = ("reference_path", "reference", "genome", "reference_genome", "reference_assembly")
@@ -59,28 +88,51 @@ def names_hg19(name: object) -> bool:
     return bool(name) and bool(_HG19_NAME.search(str(name)))
 
 
+def names_mm9(name: object) -> bool:
+    """A reference name or path that says mm9 / NCBIM37."""
+    return bool(name) and bool(_MM9_NAME.search(str(name)))
+
+
+def old_build(name: object) -> str | None:
+    """``hg19`` or ``mm9`` when a reference name or path says so, else None."""
+    return HG19 if names_hg19(name) else MM9 if names_mm9(name) else None
+
+
+def refusal(name: object) -> str | None:
+    """The sentence a genome-dependent step refuses a named older build with, else None."""
+    return REFUSALS.get(old_build(name) or "")
+
+
 def _key(chrom: object) -> str | None:
     m = _CHROM.match(str(chrom))
     return m.group(1).upper() if m else None
 
 
+def _older(pairs: list[tuple[str, int]], newer: dict[str, int], older: dict[str, int]) -> bool:
+    """Some positions past the newer build's end of their chromosome, none past the older
+    build's, and none on a chromosome the older build lacks."""
+    past_new = 0
+    for k, e in pairs:
+        if k not in older or e > older[k]:
+            return False
+        past_new += e > newer[k]
+    return past_new > 0
+
+
 def from_positions(chroms: Iterable[object], ends: Iterable[object]) -> str | None:
-    """``hg19`` when some positions lie past GRCh38's end of their chromosome but none past
-    hg19's; None otherwise (GRCh38, another species, or no evidence either way)."""
-    past_38 = past_19 = 0
+    """``hg19`` (or ``mm9``) when some positions lie past GRCh38's (mm10's) end of their
+    chromosome but none past hg19's (mm9's); None otherwise (the newer build, another
+    species, or no evidence either way)."""
+    pairs = []
     for chrom, end in zip(chroms, ends):
         k = _key(chrom)
         try:
             e = int(end)
         except (TypeError, ValueError):
             continue
-        if k is None or e < 0:
-            continue
-        if e > HG19_SIZES[k]:
-            past_19 += 1
-        if e > HG38_SIZES[k]:
-            past_38 += 1
-    return HG19 if past_38 and not past_19 else None
+        if k is not None and e >= 0:
+            pairs.append((k, e))
+    return next((build for build, newer, older in _BUILDS if _older(pairs, newer, older)), None)
 
 
 def from_intervals(parsed: Iterable[tuple[str, int, int] | None]) -> str | None:
@@ -108,8 +160,8 @@ def read_header(path: str | Path, max_lines: int = HEADER_LINES) -> dict[str, st
 
 
 def from_header(header: dict[str, str]) -> str | None:
-    """``hg19`` when the fragments header names an hg19 / GRCh37 reference."""
-    return HG19 if any(names_hg19(header.get(k)) for k in _REFERENCE_KEYS) else None
+    """``hg19`` (``mm9``) when the fragments header names an hg19 / GRCh37 (mm9) reference."""
+    return next((b for b in map(old_build, (header.get(k) for k in _REFERENCE_KEYS)) if b), None)
 
 
 def from_index(names: Sequence[str], linear: Sequence[Sequence[int]]) -> str | None:
