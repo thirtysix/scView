@@ -42,6 +42,33 @@ export function scoreDetail(col: ObsColumnInfo): string {
   return `Gene-set score (${METHOD_LABELS[s.method ?? ""] ?? s.method ?? "score_genes"})`;
 }
 
+/** A saved record entry as far as matching needs it (api/savedScores.ts SavedScoreRecord). */
+interface RecordLike {
+  kind: string;
+  name: string;
+  method?: string | null;
+  genes?: string[];
+}
+
+/**
+ * Whether the dataset already holds this gene-set score as drawn: a saved entry for the
+ * set with the same method and the same genes scored. A set has one column whatever the
+ * method, so re-picking a score drawn earlier (AUCell) after another method saved
+ * (score_genes) must save it again, or the plot and the column disagree.
+ */
+export function savedGeneSetMatches(
+  saved: Record<string, RecordLike>,
+  name: string,
+  method: string,
+  genesFound: string[],
+): boolean {
+  const entry = Object.values(saved).find((e) => e.kind === "geneset" && e.name === name);
+  if (!entry) return false;
+  if ((entry.method ?? "score_genes") !== method) return false;
+  const a = new Set(entry.genes ?? []);
+  return a.size === new Set(genesFound).size && genesFound.every((g) => a.has(g));
+}
+
 // ---------------------------------------------------------------------------
 // A score saved or removed: whoever shows the dataset's columns refreshes them
 // ---------------------------------------------------------------------------

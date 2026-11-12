@@ -5,6 +5,8 @@ import { useCustomGeneSetsStore } from "@/stores/customGeneSetsStore";
 import { apiFetch } from "@/api/client";
 import type { CollectionChoice } from "@/api/genesets";
 import { scoreGeneSet, type ScoreMethod } from "@/api/genesetScore";
+import { listSavedScores } from "@/api/savedScores";
+import { savedGeneSetMatches } from "@/lib/savedScores";
 import type { OnScoreGeneSet } from "@/hooks/useGeneSetScoring";
 import { useScoringMethodStore } from "@/stores/scoringMethodStore";
 import { Caption } from "@/components/common/Caption";
@@ -140,27 +142,62 @@ export function UnifiedGeneSetsSubtab({
   // Cache of already-computed scores, so re-selecting a previously-scored gene
   // set restores its overlay instantly instead of forcing a re-score. Keyed by
   // dataset id + gene-set name (scores are per-dataset).
-  const scoreCache = useRef<Map<string, ScoreSummary & { scores: Float32Array }>>(new Map());
+  const scoreCache = useRef<Map<string, ScoreSummary & { scores: Float32Array; genesFound: string[] }>>(new Map());
+  // The selection now (cache key): a save that ends after another pick must not touch its line.
+  const selectedKey = useRef<string | null>(null);
   // The collection is part of the key: a custom set may share an MSigDB set's name;
   // and the method: each set can be on the plot either way.
   const cacheKey = (gs: GeneSetSearchResult, m: ScoreMethod) => `${datasetId}::${m}::${gs.collection}::${gs.name}`;
+
+  // A cached score drawn again is saved again when the dataset's column holds another
+  // method's or genes' score of the set (one column per set): what is drawn is what is saved.
+  const resaveIfDiffers = useCallback(
+    async (gs: GeneSetSearchResult, key: string) => {
+      const cached = scoreCache.current.get(key);
+      if (!datasetId || !cached) return;
+      let saved;
+      try {
+        saved = await listSavedScores(datasetId);
+      } catch {
+        return; // the record is unknown: leave the column as it is
+      }
+      if (savedGeneSetMatches(saved, gs.name, cached.method, cached.genesFound)) return;
+      try {
+        const res = await scoreGeneSet(datasetId, gs.genes, gs.name, cached.method, true);
+        const next = { ...cached, saved: res.saved_column ?? null, saveNote: res.save_note ?? null };
+        scoreCache.current.set(key, next);
+        if (selectedKey.current === key) {
+          const { scores: _scores, genesFound: _found, ...summary } = next;
+          setScoreResult(summary);
+        }
+      } catch (err) {
+        if (selectedKey.current === key) {
+          setScoreResult((r) => (r ? { ...r, saved: null, saveNote: `Not saved: ${errorMessage(err)}` } : r));
+        }
+      }
+    },
+    [datasetId],
+  );
 
   // Select a gene set from the list — re-apply a cached score if we have one.
   const handleSelectGeneSet = useCallback(
     (gs: GeneSetSearchResult) => {
       setSelectedGeneSet(gs);
       setScoreError(null);
-      const cached = scoreCache.current.get(cacheKey(gs, method));
+      const key = cacheKey(gs, method);
+      selectedKey.current = key;
+      const cached = scoreCache.current.get(key);
       if (cached) {
-        const { scores, ...summary } = cached;
+        const { scores, genesFound: _found, ...summary } = cached;
         setScoreResult(summary);
         onScoreComplete(scores, gs.name, gs.genes, undefined, cached.method);
+        void resaveIfDiffers(gs, key);
       } else {
         setScoreResult(null);
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [datasetId, onScoreComplete, method],
+    [datasetId, onScoreComplete, method, resaveIfDiffers],
   );
 
   // Score gene set using correct API fields
@@ -184,7 +221,9 @@ export function UnifiedGeneSetsSubtab({
         saved: response.saved_column ?? null,
         saveNote: response.save_note ?? null,
       };
-      scoreCache.current.set(cacheKey(selectedGeneSet, method), { ...summary, scores });
+      const key = cacheKey(selectedGeneSet, method);
+      selectedKey.current = key;
+      scoreCache.current.set(key, { ...summary, scores, genesFound: response.genes_found });
       setScoreResult(summary);
       onScoreComplete(scores, selectedGeneSet.name, selectedGeneSet.genes, undefined, response.method);
     } catch (err) {
