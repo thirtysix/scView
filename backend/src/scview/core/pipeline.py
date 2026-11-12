@@ -187,7 +187,10 @@ class PipelineParams:
     annotation_method: str = "llm"               # llm (default, any-tissue) | celltypist | marker_score
     celltypist_model: str = "Immune_All_Low.pkl"  # CellTypist model (immune default)
     annotation_groupby: str = ""                 # cluster column for consensus (empty = active clustering / "cluster")
-    annotation_target: str = "cell_type"         # obs column to write
+    # obs column to write; empty = <grouping>_celltypeAnno, scView's own. An existing column scView
+    # did not write (a file's curated cell_type) is refused unless annotation_overwrite is set.
+    annotation_target: str = ""
+    annotation_overwrite: bool = False           # allow writing over a column scView did not write
     annotation_llm_model: str = ""               # chat model id for method="llm" (provider's name)
     annotation_tissue: str = ""                  # optional tissue hint for method="llm"
     annotation_marker_sets: str = "databases"    # marker_score: databases (core/marker_db.py) | builtin (14 immune sets)
@@ -1481,6 +1484,46 @@ def _run_dissociation_stress(adata: ad.AnnData, params: PipelineParams) -> dict[
     return {"species": species, "n_genes": len(genes), "genes": genes}
 
 
+class AnnotationTargetError(ValueError):
+    """An annotation would write over a column scView did not create (a 422 at the routes)."""
+
+
+def default_annotation_target(groupby: str) -> str:
+    """scView's own column for an annotation of ``groupby`` (the UI suggests the same)."""
+    return f"{groupby}_celltypeAnno" if groupby else "celltypeAnno"
+
+
+def annotation_columns(adata: ad.AnnData) -> set[str]:
+    """Columns an earlier annotation step wrote (provenance; before v0.75.0 the default
+    target was 'cell_type' and a record could leave it out)."""
+    out: set[str] = set()
+    for h in provenance.read_provenance(adata).get("history") or []:
+        if isinstance(h, dict) and h.get("step") == "cell_type_annotation":
+            out.add(str((h.get("params") or {}).get("annotation_target") or "cell_type"))
+    return out
+
+
+def check_annotation_target(adata: ad.AnnData, target: str, overwrite: bool = False) -> None:
+    """Raise ``AnnotationTargetError`` when ``target`` is a column of the dataset that scView
+    did not write (an author's or a curated annotation, e.g. CELLxGENE's cell_type) and
+    ``overwrite`` is off. A column an earlier annotation wrote, or a ``scview_`` one, is fine."""
+    if overwrite or target not in adata.obs.columns:
+        return
+    if target.startswith("scview_") or target in annotation_columns(adata):
+        return
+    raise AnnotationTargetError(
+        f"Not run: '{target}' is a column scView did not write (it came with the data, e.g. a "
+        "curated or author annotation), and annotation would overwrite it. Leave the output "
+        "column empty for scView's own (<grouping>_celltypeAnno), name a new column, or set "
+        "annotation_overwrite to replace it.")
+
+
+def resolve_annotation_target(adata: ad.AnnData, params: PipelineParams) -> str:
+    """The column the annotation step writes: the one named, else scView's own."""
+    return (params.annotation_target or "").strip() or default_annotation_target(
+        _resolve_annotation_groupby(adata, params))
+
+
 def _resolve_annotation_groupby(adata: ad.AnnData, params: PipelineParams) -> str:
     """Clustering column to take per-cluster consensus over, or "" if none exists.
 
@@ -2119,8 +2162,9 @@ def _run_cell_type_annotation(
     marker scoring). See docs/CELLTYPE_ANNOTATION.md.
     """
     method = (params.annotation_method or "llm").lower()
-    target = params.annotation_target or "cell_type"
     groupby = _resolve_annotation_groupby(adata, params)
+    target = resolve_annotation_target(adata, params)
+    check_annotation_target(adata, target, params.annotation_overwrite)
 
     # Default method is the any-tissue LLM; degrade to CellTypist when no LLM key is set.
     if method == "llm":
@@ -2165,8 +2209,11 @@ def _run_cell_type_annotation(
     qual = label_qualifiers.apply(adata, groupby, target) if groupby else {}
     if not groupby:
         label_qualifiers.drop(adata, target)
-    # Recorded with the step: the model's species and gene overlap (CellTypist only).
-    return {**{k: v for k, v in (fit or {}).items() if k != "model"}, **qual} or None
+    # Recorded with the step: the column written (so a later run may write it again), the
+    # model's species and gene overlap (CellTypist only).
+    return {**{k: v for k, v in (fit or {}).items() if k != "model"}, **qual,
+            "annotation_target": target,
+            **({"annotation_overwrite": True} if params.annotation_overwrite else {})}
 
 
 def drop_enrichment_cache(adata: ad.AnnData, col: str) -> None:

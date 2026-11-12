@@ -736,12 +736,15 @@ async def annotate_celltypist(
                                             "Immune_All_High.pkl, Healthy_COVID19_PBMC.pkl.")] = "Immune_All_Low.pkl",
     groupby: Annotated[str, Field(description="Clusters for the majority vote (default: the active clustering).")] = "",
     target_column: Annotated[str, Field(description="Obs column to write.")] = "celltypist",
+    overwrite: Annotated[bool, Field(description=(
+        "Replace target_column when it is a column that came with the data (an author or curated "
+        "annotation); without it such a column is refused."))] = False,
 ) -> str:
     """Label cells with a CellTypist reference model (the pipeline's cell_type_annotation step;
     a job). The result names the labels' confidence and the model's gene overlap. The model is
     downloaded on first use."""
     p = {"annotation_method": "celltypist", "celltypist_model": model, "annotation_groupby": groupby,
-         "annotation_target": target_column}
+         "annotation_target": target_column, "annotation_overwrite": overwrite}
 
     async def finish(job: jobs.Job) -> dict[str, Any]:
         out = _pipeline_result(job)

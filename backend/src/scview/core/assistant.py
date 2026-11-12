@@ -2023,7 +2023,8 @@ def _coerce_items(
             groupby = str(it.get("groupby") or "")
             if groupby and groupby not in cols:
                 groupby = ""
-            target = f"{groupby}_celltypeAnno" if groupby else "cell_type"
+            # scView's own column, never a file's curated cell_type (pipeline.check_annotation_target)
+            target = f"{groupby}_celltypeAnno" if groupby else "celltypeAnno"
             params: dict = {"annotation_method": method, "annotation_target": target}
             if groupby:
                 params["annotation_groupby"] = groupby

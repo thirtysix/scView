@@ -166,7 +166,8 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
     lastWritten ?? (hasColumn(target.trim()) ? target.trim() : hasColumn("cell_type") ? "cell_type" : null);
 
   const handleAnnotate = async () => {
-    const tgt = target.trim() || "cell_type";
+    // scView's own column (the server's default too), never a file's curated cell_type
+    const tgt = target.trim() || (groupby ? `${groupby}_celltypeAnno` : "celltypeAnno");
     const params: Record<string, unknown> = {
       annotation_method: method,
       annotation_groupby: groupby,
