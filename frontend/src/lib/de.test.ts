@@ -147,6 +147,16 @@ describe("describeComparison with confounding", () => {
     expect(text).toContain("Caution: The two sides are different 'dataset' groups");
   });
 
+  it("passes a one-sided technology warning to the co-pilot", () => {
+    const r: DEResponse = {
+      n_selected: 100, n_rest: 120, label: "DKD", genes: [], method: "wilcoxon",
+      technology_warnings: ["'assay' value '10x 3' v3' is only in normal (37% of its cells)."],
+    };
+    const text = describeComparison({ a: "DKD", b: "normal", betweenGroups: true }, r);
+    expect(text).toContain("Caution: 'assay' value '10x 3' v3' is only in normal (37% of its cells)");
+    expect(text).not.toContain("cells).");
+  });
+
   it("passes a transcriptome-size caution, and only a caution", () => {
     const size = {
       source: "X", median_a: 3000, median_b: 1000, ratio: 3, caution: true, threshold: 1.5,

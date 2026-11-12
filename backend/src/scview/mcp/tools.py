@@ -871,6 +871,7 @@ def _de_warnings(r: dict[str, Any]) -> list[str]:
                  f"(median counts {num(ts.get('median_a'))} vs {num(ts.get('median_b'))})")
     if r.get("dropped_samples"):
         w.append(f"samples left out: {', '.join(map(str, r['dropped_samples'][:10]))}")
+    w += [f"technology: {x}" for x in r.get("technology_warnings") or []]
     w += [f"replicates: {x}" for x in r.get("replicate_warnings") or []]
     w += [f"covariate: {x}" for x in r.get("covariate_notes") or []]
     return w

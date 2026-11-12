@@ -814,6 +814,16 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
                   ? "biological" : `'${result.confounding.condition}'`} effect.
               </span>
             )}
+            {(result.technology_warnings ?? []).map((w) => (
+              <span
+                key={w}
+                role="alert"
+                data-testid="de-technology-caution"
+                className="mt-1 block rounded border border-amber-200 bg-amber-50 px-1.5 py-1 text-amber-800"
+              >
+                {w}
+              </span>
+            ))}
             {(result.replicate_warnings ?? []).map((w) => (
               <span
                 key={w}

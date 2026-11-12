@@ -13,6 +13,12 @@ Two shapes matter (Hicks et al. 2018; Luecken & Theis 2019):
 
 Used by DE between groups (api/v1/de.py), the joint-embedding plan
 (core/integration.py) and the QC report's study design (core/qc_report.py).
+
+A third shape is checked for cell-level DE and the composition test
+(``one_sided_levels``): a technology or batch value present on one side only, holding
+a fair share of that side's cells (Wilson 2022: the one 3' library is 37% of the
+control nuclei, every DKD library 5'; half the cell-level DKD genes are also 5'-vs-3'
+genes). Such a column is crossed with the condition, so ``check`` lets it pass.
 Donor columns are not batches here: donors nested in conditions are the normal
 design, handled by the replicate guard and pseudobulk.
 """
@@ -31,6 +37,10 @@ CONDITION_RE = re.compile(
     re.I,
 )
 BATCH_RE = re.compile(r"batch|library|lane|plate|chip|^dataset$|^run$|seq_?run", re.I)
+# Technology columns (CELLxGENE ``assay``, a chemistry or kit): few values, and a value
+# on one side only makes a cell-level comparison partly a technology comparison.
+TECH_RE = re.compile(r"assay|chemistry|technolog|platform|protocol|^kit|_kit|suspension_type|"
+                     r"seq_?tech|library_prep", re.I)
 
 # A batch counts as holding a condition only with this many of its cells (and
 # this share of them): a few stray or mislabelled cells must not hide a design
@@ -152,3 +162,93 @@ def in_design(adata) -> list[Confounding]:
                 hit.role = "correction" if batch == key else "comparison"
                 found.append(hit)
     return found
+
+
+# A value on one side only is worth a warning when it holds at least this share of that
+# side's cells; a column with more values than this is per sample, not a technology.
+ONE_SIDED_SHARE = 0.10
+ONE_SIDED_MAX_LEVELS = 8
+MAX_SAMPLES_NAMED = 5
+
+
+def one_sided_levels(obs: pd.DataFrame, sides: dict[str, np.ndarray], *, skip: Sequence[str] = (),
+                     sample_key: str | None = None, extra: Sequence[str] = (),
+                     what: str = "de") -> list[dict]:
+    """Technology or batch values found on one side only (``sides``: label -> cell mask),
+    each holding at least ONE_SIDED_SHARE of that side's cells: ``{"column", "value",
+    "side", "share", "n_cells", "samples", "n_samples", "message"}``, largest share first.
+    ``samples`` names the ``sample_key`` values behind it (one sample: the effect rests on
+    one library). ``what`` ("de" or "composition") words the consequence."""
+    labels = list(sides)
+    if len(labels) < 2:
+        return []
+    side_of = np.full(len(obs), None, dtype=object)
+    for k in labels:
+        m = np.asarray(sides[k], bool) & pd.isna(side_of)
+        side_of[m] = k
+    keep = pd.notna(side_of)
+    if not keep.any():
+        return []
+    sub = obs.loc[keep]
+    side = pd.Series(side_of[keep], index=sub.index)
+    skipped = set(skip) | ({sample_key} if sample_key else set())
+    named = [str(c) for c in obs.columns if TECH_RE.search(str(c)) or BATCH_RE.search(str(c))]
+    out: list[dict] = []
+    for col in dict.fromkeys([*extra, *named]):
+        if col not in obs.columns or col in skipped:
+            continue
+        v = sub[col].astype(str).where(sub[col].notna())
+        ok = v.notna()
+        if not 2 <= v[ok].nunique() <= ONE_SIDED_MAX_LEVELS:
+            continue
+        counts = pd.crosstab(v[ok], side[ok]).reindex(columns=labels, fill_value=0)
+        sizes = counts.sum(axis=1)
+        present = (counts >= MIN_CELLS) & (counts.div(sizes, axis=0) >= MIN_SHARE)
+        if (present.sum(axis=0) == 0).any():
+            continue  # a side with no value present: too few cells to say anything
+        n_sides = present.sum(axis=1)
+        if (n_sides[n_sides > 0] == 1).all() and not (
+                TECH_RE.search(col) and (present.sum(axis=0) == 1).all()):
+            continue  # every value on one side: samples nested in the sides (the usual design)
+        side_sizes = counts.sum(axis=0)
+        for level in counts.index[n_sides == 1]:
+            k = present.columns[present.loc[level].to_numpy()][0]
+            share = float(counts.loc[level, k]) / max(float(side_sizes[k]), 1.0)
+            if share < ONE_SIDED_SHARE:
+                continue
+            samples: list[str] = []
+            if sample_key and sample_key in obs.columns:
+                cells = ((v == level) & (side == k)).to_numpy()
+                samples = sorted(set(sub.loc[cells, sample_key].dropna().astype(str)))
+            out.append({"column": col, "value": str(level), "side": str(k), "share": round(share, 4),
+                        "n_cells": int(counts.loc[level, k]), "samples": samples[:MAX_SAMPLES_NAMED],
+                        "n_samples": len(samples),
+                        "message": _one_sided_message(col, str(level), str(k), share, samples,
+                                                      sample_key, what)})
+    out.sort(key=lambda d: -d["share"])
+    return out
+
+
+def _one_sided_message(col: str, level: str, side: str, share: float, samples: list[str],
+                       sample_key: str | None, what: str) -> str:
+    if len(samples) == 1:
+        src, drop = f", all from one '{sample_key}' value: {samples[0]}", f"leave {samples[0]} out"
+    elif samples:
+        src, drop = f", from {len(samples)} '{sample_key}' values", "leave those samples out"
+    else:
+        src, drop = "", "leave those cells out"
+    head = f"'{col}' value '{level}' is only in {side} ({share:.0%} of its cells{src})"
+    if what == "composition":
+        return (f"{head}: technologies and batches recover cell types differently, so a difference "
+                f"in composition is partly a '{col}' difference. Add '{col}' as a covariate, or {drop}.")
+    return (f"{head}: a cell-level test between the sides is partly a '{level}' vs other '{col}' "
+            f"test. Compare donors (pseudobulk) with '{col}' as a covariate, or {drop}.")
+
+
+def one_level_samples(values: Sequence, sample_names: Sequence[str]) -> list[tuple[str, str]]:
+    """(value, sample) for each value of a per-sample covariate held by one sample only:
+    as a covariate it fits that sample exactly, so the condition is estimated without it."""
+    s = pd.Series([str(v) for v in values])
+    counts = s.value_counts()
+    return [(str(v), str(sample_names[int(np.flatnonzero(s.to_numpy() == v)[0])]))
+            for v in counts.index[counts == 1]]

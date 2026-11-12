@@ -30,7 +30,7 @@ from pydantic import BaseModel, Field, model_validator
 from scview.dependencies import get_dataset_manager
 from scview.core import de_composition, de_methods, de_prefilter, de_results, transcriptome_size
 from scview.core import large_mode, memory_budget, preflight, selection_facts, working_copy
-from scview.core.confounding import for_comparison, recorded_batch_key
+from scview.core.confounding import for_comparison, one_sided_levels, recorded_batch_key
 from scview.core.replicates import (
     donor_candidates, few_donors, on_both_sides, partly_paired, pick_donor, repeated_donors,
 )
@@ -205,6 +205,9 @@ class DEResponse(BaseModel):
     replicate_warnings: list[str] = []
     # /de/compare: the two sides are also different batches (core/confounding.py).
     confounding: dict | None = None
+    # /de/compare, cell-level: a technology or batch value on one side only, holding a
+    # fair share of its cells (core/confounding.py one_sided_levels).
+    technology_warnings: list[str] = []
     # /de/compare: the two sides' samples differ in sex (core/sex_check.py compare_sides).
     sex: dict | None = None
     # /de/compare: the two sides' cluster/state composition (core/de_composition.py).
@@ -354,6 +357,19 @@ def _sex_adjusted(sex: dict, obs, body: _CompareScope) -> dict:
         f"{head}; '{meta}' is a covariate in this design, so sex-linked genes are adjusted for. "
         "Where one side holds a single sex, the sex effect is estimated from the other side "
         "only: read XIST and Y-chromosome genes with care.")}
+
+
+def _one_sided(obs, body: _CompareScope, mask_a, mask_b, key: str | None, extra) -> list[str]:
+    """The cell-level test's technology / batch values found on one side only, as warnings
+    (core/confounding.py one_sided_levels); a confounded batch is already ``confounding``."""
+    try:
+        hits = one_sided_levels(
+            obs, {str(body.group_a): mask_a, str(body.group_b): mask_b},
+            skip=[c for c in (body.split_by, body.within_column) if c], sample_key=key, extra=extra)
+    except Exception as e:  # noqa: BLE001 - a caution, never the reason DE fails
+        logger.warning("Technology check of a DE comparison failed: %s", e)
+        return []
+    return [h["message"] for h in hits]
 
 
 def _replicate_guard(obs, mask_a, mask_b, key: str | None) -> dict:
@@ -839,11 +855,12 @@ async def differential_expression_compare(
         obs, {c for c in (body.split_by, body.within_column) if c}, mask_a, mask_b
     )
     guard = _replicate_guard(obs, mask_a, mask_b, key)
+    tech = _one_sided(obs, body, mask_a, mask_b, key, extra)
     result_id = _remember(dataset_id, res, _compared(body, n_a, n_b, key), adaptor)
     return DEResponse(n_selected=n_a, n_rest=n_b, label=_compare_label(body), genes=res.genes,
                       result_id=result_id, transcriptome_size=size, confounding=confounding,
                       composition=composition, sex=sex, sex_linked=_sex_linked(adata, res.genes),
-                      **guard, **res.fields())
+                      technology_warnings=tech, **guard, **res.fields())
 
 
 @router.post("/datasets/{dataset_id}/de/compare/methods", response_model=DEMethodsResponse)

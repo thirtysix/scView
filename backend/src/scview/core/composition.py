@@ -51,7 +51,7 @@ import pandas as pd
 from scipy import optimize, special, stats
 
 from scview.core import paired_design, results_store
-from scview.core.confounding import check, condition_columns, for_comparison
+from scview.core.confounding import check, condition_columns, for_comparison, one_sided_levels
 from scview.core.replicates import few_donors, repeated_donors
 
 Transform = Literal["logit", "asin"]
@@ -596,6 +596,10 @@ def composition_test(
     warnings, notes = design_warnings(obs, condition_key, group_key, keep.to_numpy(), batch_key)
     result.warnings += warnings
     result.notes += notes
+    sides = {k: ((cond == k) & keep).to_numpy() for k in chosen}
+    for hit in one_sided_levels(obs, sides, skip=[c for c in (condition_key, group_key, within_column) if c],
+                                sample_key=sample_key, what="composition"):
+        result.warnings.append(hit["message"])
     only = _one_condition_groups(cell_counts, groups)
     if only:
         shown = ", ".join(only[:5]) + (f" and {len(only) - 5} more" if len(only) > 5 else "")
@@ -613,14 +617,14 @@ def composition_test(
             "No sample or donor column: the cells cannot be grouped into replicates, so "
             "only the proportions are shown. Pick the column that names each donor or sample.")
         return result
-    sides = [((cond == k) & keep).to_numpy() for k in chosen]
-    rep = repeated_donors(obs, sample_key, sides, donor_key, exclude={condition_key, group_key})
+    rep = repeated_donors(obs, sample_key, list(sides.values()), donor_key,
+                          exclude={condition_key, group_key})
     if rep:
         result.repeated_donors = rep
         if rep["message"]:
             result.warnings.append(rep["message"])
         person = _labels(obs, rep["donor_key"])
-        people = {k: int(person[side].nunique()) for k, side in zip(chosen, sides)}
+        people = {k: int(person[side].nunique()) for k, side in sides.items()}
     else:
         people = dict(result.n_samples)
     few = [k for k in chosen if result.n_samples[k] < MIN_SAMPLES]

@@ -50,6 +50,8 @@ export interface DEResponse {
   replicate_warnings?: string[];
   /** /de/compare: the two sides are also different batches (datasets, runs). */
   confounding?: DEConfounding | null;
+  /** /de/compare, cell-level: a technology or batch value on one side only (absent from older servers). */
+  technology_warnings?: string[];
   /** /de/compare: the sides' samples differ in sex (absent from older servers). */
   sex?: DESexDifference | null;
   /** Genes of `genes` that follow sex itself: XIST, TSIX, Y-chromosome genes

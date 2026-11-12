@@ -45,6 +45,8 @@ import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 
+from scview.core.confounding import one_level_samples
+
 logger = logging.getLogger(__name__)
 
 # A donor x condition sample needs this many cells to be a usable sum.
@@ -132,7 +134,8 @@ def _rank(M: np.ndarray) -> int:
 
 
 def _covariate_design(cov: dict[str, np.ndarray], nuisance: np.ndarray, is_a: np.ndarray,
-                      sample_cond: np.ndarray, names: dict[str, str]
+                      sample_cond: np.ndarray, names: dict[str, str],
+                      sample_names: list[str] | None = None,
                       ) -> tuple[np.ndarray, dict[str, pd.Series], list[str], list[str]]:
     """(the covariates' design columns, each used covariate's per-sample values for
     DESeq2's formula, the covariates used, notes on those left out). Refuses one that
@@ -182,6 +185,12 @@ def _covariate_design(cov: dict[str, np.ndarray], nuisance: np.ndarray, is_a: np
         base = np.column_stack([base, block])
         cols.append(block)
         used.append(name)
+        if not numeric and sample_names is not None:
+            for value, who in one_level_samples(s.astype(str), sample_names):
+                notes.append(
+                    f"'{name}' value '{value}' is held by one sample ({who}): as a covariate it fits "
+                    "that sample exactly, so the condition is estimated as if that sample were "
+                    "left out.")
     C = np.column_stack(cols) if cols else np.zeros((len(is_a), 0))
     return C, meta, used, notes
 
@@ -373,7 +382,8 @@ def pseudobulk_de(
         dummies = donor_codes[:, None] == np.arange(1, donor_codes.max() + 1)[None, :]
         nuisance = np.column_stack([nuisance, dummies.astype(np.float64)])
     cov_cols, cov_meta, cov_used, cov_notes = _covariate_design(
-        cov_values, nuisance, is_a, sample_cond, names)
+        cov_values, nuisance, is_a, sample_cond, names,
+        [f"{d} ({names[c]})" for d, c in zip(sample_donor, sample_cond)])
     nuisance = np.column_stack([nuisance, cov_cols])
     lib = C.sum(axis=1)
     try:
