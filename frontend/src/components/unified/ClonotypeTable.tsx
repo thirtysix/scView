@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { getClonotypes } from "@/api/vdj";
 import { Caption, CapNote } from "@/components/common/Caption";
+import { Help } from "@/components/common/Help";
 import { prettyObsLabel } from "@/lib/formatting";
 import { errorText } from "@/lib/programs";
 import { chainText, genesText } from "@/lib/vdj";
@@ -43,7 +44,10 @@ export function ClonotypeTable({ datasetId, groupColumns }: { datasetId: string;
   return (
     <section aria-label="Top clonotypes" className="space-y-1">
       <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-600">
-        <span className="font-medium">Largest clonotypes</span>
+        <span className="flex items-center gap-1 font-medium">
+          Largest clonotypes
+          <Help id="clonotypes.largest" label="About the largest clonotypes" />
+        </span>
         <label className="flex items-center gap-1">
           by
           <select

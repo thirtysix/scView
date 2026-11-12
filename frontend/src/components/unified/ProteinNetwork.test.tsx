@@ -34,6 +34,14 @@ describe("ProteinNetwork", () => {
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
   });
 
+  it("labels its settings and explains them from the help catalog", () => {
+    render(<ProteinNetwork datasetId="d1" sources={[{ value: "de:r1", label: "STIM" }]} />);
+    expect(screen.getByLabelText("Top genes")).toHaveValue("100");
+    expect(screen.getByLabelText("Minimum score")).toHaveValue("400");
+    fireEvent.mouseEnter(screen.getByRole("button", { name: "About the STRING score" }));
+    expect(screen.getByRole("tooltip")).toHaveTextContent(/confidence that an interaction is real/);
+  });
+
   it("builds the network on request and lists every protein in a keyboard table", async () => {
     const onGene = vi.fn();
     render(<ProteinNetwork datasetId="d1" sources={[{ value: "de:r1", label: "STIM" }]} showDirection onGeneClick={onGene} />);

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import Plot from "@/components/plots/Plot";
 import { Caption } from "@/components/common/Caption";
-import { InfoTip } from "@/components/common/InfoTip";
+import { Help } from "@/components/common/Help";
 import { RequestError } from "@/components/common/RequestError";
 import {
   getDeconvolutionCheck,
@@ -85,12 +85,7 @@ export function DeconvolutionCheck({
     <section className="space-y-2 rounded-lg border border-slate-200 p-2" aria-label="Self-check">
       <div className="flex items-center gap-1.5 text-xs font-medium text-slate-700">
         Self-check
-        <InfoTip label="About the self-check" width={300}>
-          Each donor is held out in turn. The reference built from the other donors estimates the held-out
-          donor&apos;s own pseudobulk and mixtures of its cells with known fractions (random fractions, 2,000 to
-          10,000 cells each). The mixtures come from this dataset, so this is a best case: real bulk samples add
-          platform and protocol differences.
-        </InfoTip>
+        <Help id="deconvolution.check" label="About the self-check" width={300} />
       </div>
       <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
         <button
@@ -204,7 +199,7 @@ export function DeconvolutionCheck({
               { value: check.n_mixtures, unit: "mixtures each" },
             ]}
           >
-            Reference {prettyObsLabel(check.celltype_column)} by {prettyObsLabel(check.donor_column)}. Truth against
+            <Help id="deconvolution.check_read" label="How to read the self-check" /> Reference {prettyObsLabel(check.celltype_column)} by {prettyObsLabel(check.donor_column)}. Truth against
             estimate for {check.method_names[shownMethod] ?? shownMethod}, each point one cell type in one mixture or
             held-out donor
             {check.points_capped ? ` (a sample of the ${(check.n_points[shownMethod] ?? 0).toLocaleString()} points)` : ""}. Points on

@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import Plot from "@/components/plots/Plot";
 import { Caption } from "@/components/common/Caption";
+import { Help } from "@/components/common/Help";
 import { InfoTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
 import {
@@ -69,6 +70,7 @@ export function PerturbationSubtab() {
   const [sortKey, setSortKey] = useState<TargetSortKey>("ko_fraction");
   const [desc, setDesc] = useState(true);
   const [shown, setShown] = useState<string | null>(null);
+  const uid = useId();
 
   const load = useCallback(async () => {
     if (!datasetId) return;
@@ -228,11 +230,18 @@ export function PerturbationSubtab() {
 
       {summary && !nothing && (
         <section aria-label="Guide assignment" className="space-y-2">
-          <div className="font-medium text-slate-600">1. Each cell&apos;s guide</div>
+          <div className="flex items-center gap-1 font-medium text-slate-600">
+            1. Each cell&apos;s guide
+            <Help id="perturbation.guides" label="About the guide assignment" />
+          </div>
           <div className="flex flex-wrap items-end gap-2">
-            <label className="flex flex-col gap-0.5">
-              <span className="text-[11px] text-slate-500">Source</span>
+            <div className="flex flex-col gap-0.5">
+              <span className="flex items-center gap-1 text-[11px] text-slate-500">
+                <label htmlFor={`${uid}-source`}>Source</label>
+                <Help id="perturbation.source" label="About the guide source" />
+              </span>
               <select
+                id={`${uid}-source`}
                 aria-label="Guide source"
                 value={source}
                 onChange={(e) => setSource(e.target.value as GuideSource)}
@@ -242,7 +251,7 @@ export function PerturbationSubtab() {
                 {summary.has_counts && <option value="counts">Guide counts ({summary.guides.length} guides)</option>}
                 <option value="column">An obs column</option>
               </select>
-            </label>
+            </div>
             {source === "column" && (
               <label className="flex flex-col gap-0.5">
                 <span className="text-[11px] text-slate-500">Column</span>
@@ -270,22 +279,29 @@ export function PerturbationSubtab() {
             )}
             {source === "counts" && (
               <>
-                <label className="flex flex-col gap-0.5" title="A guide counts in a cell from this many UMIs">
-                  <span className="text-[11px] text-slate-500">Min UMIs</span>
+                <div className="flex flex-col gap-0.5">
+                  <span className="flex items-center gap-1 text-[11px] text-slate-500">
+                    <label htmlFor={`${uid}-min-umi`}>Min UMIs</label>
+                    <Help id="perturbation.min_umi" label="About the minimum UMIs" />
+                  </span>
                   <input
+                    id={`${uid}-min-umi`}
+                    title="A guide counts in a cell from this many UMIs"
                     type="number"
                     min={1}
                     value={minUmi}
                     onChange={(e) => setMinUmi(Number(e.target.value) || 1)}
                     className="w-16 rounded border border-slate-300 px-1.5 py-1"
                   />
-                </label>
-                <label
-                  className="flex flex-col gap-0.5"
-                  title="With two or more guides, keep the top one alone when it has at least this many times the UMIs of the second (0: off, every guide counts)"
-                >
-                  <span className="text-[11px] text-slate-500">Top / second ≥</span>
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  <span className="flex items-center gap-1 text-[11px] text-slate-500">
+                    <label htmlFor={`${uid}-min-ratio`}>Top / second ≥</label>
+                    <Help id="perturbation.min_ratio" label="About the top to second guide ratio" />
+                  </span>
                   <input
+                    id={`${uid}-min-ratio`}
+                    title="With two or more guides, keep the top one alone when it has at least this many times the UMIs of the second (0: off, every guide counts)"
                     type="number"
                     min={0}
                     step={0.5}
@@ -293,13 +309,18 @@ export function PerturbationSubtab() {
                     onChange={(e) => setMinRatio(Math.max(0, Number(e.target.value) || 0))}
                     className="w-16 rounded border border-slate-300 px-1.5 py-1"
                   />
-                </label>
+                </div>
               </>
             )}
             {preview && (
-              <label className="flex flex-col gap-0.5" title="The non-targeting guides' target: Mixscape compares every target with these cells">
-                <span className="text-[11px] text-slate-500">Control (non-targeting)</span>
+              <div className="flex flex-col gap-0.5">
+                <span className="flex items-center gap-1 text-[11px] text-slate-500">
+                  <label htmlFor={`${uid}-control`}>Control (non-targeting)</label>
+                  <Help id="perturbation.control" label="About the control label" />
+                </span>
                 <select
+                  id={`${uid}-control`}
+                  title="The non-targeting guides' target: Mixscape compares every target with these cells"
                   aria-label="Control label"
                   value={control || preview.control || ""}
                   onChange={(e) => setControl(e.target.value)}
@@ -312,7 +333,7 @@ export function PerturbationSubtab() {
                     </option>
                   ))}
                 </select>
-              </label>
+              </div>
             )}
           </div>
           <RequestError message={previewError} />
@@ -401,9 +422,14 @@ export function PerturbationSubtab() {
             </InfoTip>
           </div>
           <div className="flex flex-wrap items-end gap-2">
-            <label className="flex flex-col gap-0.5" title="Find each cell's control neighbours only within its own replicate / batch">
-              <span className="text-[11px] text-slate-500">Within (replicate / batch)</span>
+            <div className="flex flex-col gap-0.5">
+              <span className="flex items-center gap-1 text-[11px] text-slate-500">
+                <label htmlFor={`${uid}-split-by`}>Within (replicate / batch)</label>
+                <Help id="perturbation.split_by" label="About finding neighbours within a batch" />
+              </span>
               <select
+                id={`${uid}-split-by`}
+                title="Find each cell's control neighbours only within its own replicate / batch"
                 aria-label="Split by"
                 value={splitBy}
                 onChange={(e) => setSplitBy(e.target.value)}
@@ -416,7 +442,7 @@ export function PerturbationSubtab() {
                   </option>
                 ))}
               </select>
-            </label>
+            </div>
             {running ? (
               <button onClick={() => abort.current?.abort()} className="rounded border border-slate-300 px-2 py-1 text-slate-700">
                 Cancel
@@ -446,7 +472,7 @@ export function PerturbationSubtab() {
             const r = (result ?? saved)!;
             return (
               <Caption n={[{ value: r.n_cells, unit: "cells" }, { value: r.n_targets, unit: "targets" }]}>
-                {r.summary.n_ko.toLocaleString()} of {r.summary.n_target_cells.toLocaleString()} target cells KO (
+                <Help id="perturbation.result" label="How to read the Mixscape table" /> {r.summary.n_ko.toLocaleString()} of {r.summary.n_target_cells.toLocaleString()} target cells KO (
                 {pctText(r.summary.ko_fraction)}); {r.summary.n_targets_with_ko} targets with KO cells; against{" "}
                 {r.n_control.toLocaleString()} &apos;{r.control}&apos; cells, on {r.gene_source}
                 {r.split_by ? `, neighbours within ${r.split_by}` : ""}.{r.warnings.length ? ` ${r.warnings.join(" ")}` : ""}
@@ -466,6 +492,7 @@ export function PerturbationSubtab() {
                 {label}
               </button>
             ))}
+            <Help id="perturbation.colour_by" label="About the Mixscape colourings" />
           </div>
           <div className="max-h-80 overflow-auto rounded-lg border border-slate-200">
             <table className="w-full">
@@ -548,7 +575,7 @@ export function PerturbationSubtab() {
                     />
                   </div>
                   <Caption n={{ value: shownRow.n_cells, unit: "cells" }}>
-                    Probability of being perturbed for each {shownRow.target} cell; above 0.5 is KO.
+                    <Help id="perturbation.posterior" label="How to read the P(KO) histogram" /> Probability of being perturbed for each {shownRow.target} cell; above 0.5 is KO.
                   </Caption>
                 </>
               )}
@@ -573,7 +600,7 @@ export function PerturbationSubtab() {
                 />
               </div>
               <Caption n={{ value: result.lda.n_shown, unit: "cells shown", of: result.lda.n_cells }}>
-                Linear discriminant view of the KO and control cells on their perturbation signature (the DE genes):
+                <Help id="perturbation.lda" label="How to read the LDA view" /> Linear discriminant view of the KO and control cells on their perturbation signature (the DE genes):
                 targets with a shared effect sit together.
               </Caption>
             </div>

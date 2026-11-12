@@ -3,6 +3,7 @@ import { SortableTh } from "@/components/common/SortableTh";
 import { Download, Loader2, Play, Search, Square } from "lucide-react";
 import type { Data, PlotMouseEvent } from "plotly.js";
 import Plot from "@/components/plots/Plot";
+import { Help } from "@/components/common/Help";
 import { InfoTip } from "@/components/common/InfoTip";
 import {
   communicationCsvUrl,
@@ -187,26 +188,30 @@ export function UnifiedCommunicationSubtab({ groupByColumn }: Props) {
           signalling. To compare two conditions, use Compare conditions.
         </InfoTip>
       </div>
-      <div className="flex overflow-hidden rounded-md border border-slate-300 text-[11px]" role="group" aria-label="Mode">
-        {(["single", "compare"] as const).map((m) => (
-          <button
-            key={m}
-            type="button"
-            aria-pressed={mode === m}
-            onClick={() => update({ mode: m })}
-            className={`flex-1 px-2 py-1 ${mode === m ? "bg-primary/10 font-medium text-primary" : "bg-white text-slate-600 hover:bg-slate-50"}`}
-          >
-            {m === "single" ? "One run" : "Compare conditions"}
-          </button>
-        ))}
+      <div className="flex items-center gap-1">
+        <div className="flex flex-1 overflow-hidden rounded-md border border-slate-300 text-[11px]" role="group" aria-label="Mode">
+          {(["single", "compare"] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              aria-pressed={mode === m}
+              onClick={() => update({ mode: m })}
+              className={`flex-1 px-2 py-1 ${mode === m ? "bg-primary/10 font-medium text-primary" : "bg-white text-slate-600 hover:bg-slate-50"}`}
+            >
+              {m === "single" ? "One run" : "Compare conditions"}
+            </button>
+          ))}
+        </div>
+        <Help id="communication.mode" label="About One run and Compare conditions" align="right" />
       </div>
     </>
   );
   const groupbySelect = (
     <div>
-      <label htmlFor="ccc-groupby" className="mb-1 block text-[11px] font-medium text-slate-500">
-        Senders and receivers
-      </label>
+      <div className="mb-1 flex items-center gap-1 text-[11px] font-medium text-slate-500">
+        <label htmlFor="ccc-groupby">Senders and receivers</label>
+        <Help id="communication.groupby" label="About senders and receivers" />
+      </div>
       <select id="ccc-groupby" value={groupby} onChange={(e) => update({ groupby: e.target.value })} className={sel}>
         <option value="">Choose a column</option>
         {groupColumns.map((c) => (
@@ -236,7 +241,10 @@ export function UnifiedCommunicationSubtab({ groupByColumn }: Props) {
       <div className="grid grid-cols-2 gap-2">
         {groupbySelect}
         <div>
-          <label className="mb-1 block text-[11px] font-medium text-slate-500">Cells</label>
+          <div className="mb-1 flex items-center gap-1 text-[11px] font-medium text-slate-500">
+            <label>Cells</label>
+            <Help id="communication.cells" label="About the cells scored" align="right" />
+          </div>
           <select
             aria-label="Cells"
             value={subsetColumn ? `${subsetColumn}\u0000${subsetValue}` : ""}
@@ -274,6 +282,7 @@ export function UnifiedCommunicationSubtab({ groupByColumn }: Props) {
           ))}
         </select>
         <span className="text-[11px] text-slate-500">of a group&apos;s cells</span>
+        <Help id="communication.expr_prop" label="About the detection threshold" />
         <div className="ml-auto">
           {running ? (
             <button
@@ -368,6 +377,10 @@ export function UnifiedCommunicationSubtab({ groupByColumn }: Props) {
                 {v.label}
               </button>
             ))}
+            {view === "dot" && <Help id="communication.dot" label="How to read the dot plot" />}
+            {view === "circle" && <Help id="communication.circle" label="How to read the circle plot" />}
+            {view === "heatmap" && <Help id="communication.heatmap" label="How to read the heatmap" />}
+            {view === "roles" && <Help id="communication.roles" label="How to read the roles plot" />}
             {view !== "dot" && (
               <select
                 aria-label="Weight"
@@ -379,6 +392,7 @@ export function UnifiedCommunicationSubtab({ groupByColumn }: Props) {
                 <option value="strength">Strength</option>
               </select>
             )}
+            {view !== "dot" && <Help id="communication.weight" label="About Count and Strength" align="right" />}
           </div>
 
           {view === "dot" && <DotPlotView dot={dot} />}

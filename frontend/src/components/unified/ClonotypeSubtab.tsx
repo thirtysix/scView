@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { getVdj, redefineClonotypes, removeVdj, type VdjSummary } from "@/api/vdj";
 import { Caption } from "@/components/common/Caption";
+import { Help } from "@/components/common/Help";
 import { InfoTip } from "@/components/common/InfoTip";
 import { ClonotypeAttach } from "@/components/unified/ClonotypeAttach";
 import { ClonotypeRepertoire } from "@/components/unified/ClonotypeRepertoire";
@@ -177,6 +178,7 @@ function VdjSummaryCard({
             {c.label}
           </button>
         ))}
+        <Help id="clonotypes.colour_by" label="About the clonotype colourings" />
       </div>
       {summary.stale && (
         <div role="status" className="rounded-md bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800">
