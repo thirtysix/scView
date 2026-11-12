@@ -54,6 +54,17 @@ interface ScoreSummary {
   saveNote?: string | null;
 }
 
+/** A score drawn before: its summary, values and the genes it found (for the saved check). */
+type CachedScore = ScoreSummary & { scores: Float32Array; genesFound: string[] };
+
+/** The summary line's part of a cached score. */
+function summaryOf(c: CachedScore): ScoreSummary {
+  const s: Partial<CachedScore> = { ...c };
+  delete s.scores;
+  delete s.genesFound;
+  return s as ScoreSummary;
+}
+
 interface UnifiedGeneSetsSubtabProps {
   onScoreComplete: OnScoreGeneSet;
   groupByColumn: string;
@@ -142,7 +153,7 @@ export function UnifiedGeneSetsSubtab({
   // Cache of already-computed scores, so re-selecting a previously-scored gene
   // set restores its overlay instantly instead of forcing a re-score. Keyed by
   // dataset id + gene-set name (scores are per-dataset).
-  const scoreCache = useRef<Map<string, ScoreSummary & { scores: Float32Array; genesFound: string[] }>>(new Map());
+  const scoreCache = useRef<Map<string, CachedScore>>(new Map());
   // The selection now (cache key): a save that ends after another pick must not touch its line.
   const selectedKey = useRef<string | null>(null);
   // The collection is part of the key: a custom set may share an MSigDB set's name;
@@ -166,10 +177,7 @@ export function UnifiedGeneSetsSubtab({
         const res = await scoreGeneSet(datasetId, gs.genes, gs.name, cached.method, true);
         const next = { ...cached, saved: res.saved_column ?? null, saveNote: res.save_note ?? null };
         scoreCache.current.set(key, next);
-        if (selectedKey.current === key) {
-          const { scores: _scores, genesFound: _found, ...summary } = next;
-          setScoreResult(summary);
-        }
+        if (selectedKey.current === key) setScoreResult(summaryOf(next));
       } catch (err) {
         if (selectedKey.current === key) {
           setScoreResult((r) => (r ? { ...r, saved: null, saveNote: `Not saved: ${errorMessage(err)}` } : r));
@@ -188,9 +196,8 @@ export function UnifiedGeneSetsSubtab({
       selectedKey.current = key;
       const cached = scoreCache.current.get(key);
       if (cached) {
-        const { scores, genesFound: _found, ...summary } = cached;
-        setScoreResult(summary);
-        onScoreComplete(scores, gs.name, gs.genes, undefined, cached.method);
+        setScoreResult(summaryOf(cached));
+        onScoreComplete(cached.scores, gs.name, gs.genes, undefined, cached.method);
         void resaveIfDiffers(gs, key);
       } else {
         setScoreResult(null);
