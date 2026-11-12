@@ -1081,7 +1081,9 @@ async def composition_test(
     reference: Annotated[str | None, Field(description="Baseline condition (default: the first).")] = None,
     transform: Annotated[Literal["logit", "asin"], Field(description=(
         "Scale the per-sample shares are tested on: logit (propeller's default) or arcsine square root."))] = "logit",
-    paired: Annotated[bool | None, Field(description="Default: paired when every donor is in every condition.")] = None,
+    paired: Annotated[bool | None, Field(description=(
+        "Default: paired when every donor is in every condition. True: pair the sample values found "
+        "in every condition and leave the others out (the result says how many)."))] = None,
     exclude_samples: Annotated[list[str] | None, Field(description=(
         "Values of the sample column to leave out (e.g. one donor's samples, for a leave-one-out)."))] = None,
     within_column: Annotated[str | None, Field(description=(
@@ -1090,6 +1092,9 @@ async def composition_test(
         "The subset's value(s) of within_column (e.g. ['Immune']: T cells among immune cells)."))] = None,
     donor_key: Annotated[str | None, Field(description=(
         "Person column the samples nest in, for the repeated-donor warning (default: detected)."))] = None,
+    covariates: Annotated[list[str] | None, Field(max_length=4, description=(
+        "Per-sample obs columns in the design before the condition (sex, batch; the animal column "
+        "blocks on the animal when the condition varies within it, e.g. depot)."))] = None,
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
     """Do cell types make up different shares of the cells between conditions, with donors as
@@ -1098,7 +1103,7 @@ async def composition_test(
     body = {"condition_key": condition_key, "group_key": group_key, "sample_key": sample_key,
             "conditions": conditions, "reference": reference, "transform": transform, "paired": paired,
             "exclude_samples": exclude_samples, "within_column": within_column,
-            "within_value": within_value, "donor_key": donor_key}
+            "within_value": within_value, "donor_key": donor_key, "covariates": covariates}
     d = await _post(f"{_ds(dataset_id)}/composition/test", body)
     groups = [_flat(g) for g in d.pop("groups", []) or []]
     d.pop("samples", None)  # per-sample shares: in get_result's table

@@ -62,6 +62,9 @@ MAX_GROUPS = 100
 MAX_CONDITIONS = 8
 MAX_SAMPLES = 500  # more and the column is per-cell, not per-sample
 FDR = 0.05
+MAX_COVARIATES = 4
+MAX_DROPPED_LISTED = 50
+SEP = "\x1f"  # between the condition and the sample value in a sample id
 
 
 class CompositionError(ValueError):
@@ -124,6 +127,10 @@ class CompositionResult:
     excluded_samples: list | None = None  # sample values left out on request
     # Samples nested in donors with several per donor (core/replicates.py repeated_donors).
     repeated_donors: dict | None = None
+    # Per-sample columns in the design before the condition (sex, batch), and notes on
+    # those left out; None in results stored before covariates existed.
+    covariates: list | None = None
+    covariate_notes: list | None = None
 
     def comparison(self) -> str:
         """What was compared, for the stored result's label and key."""
@@ -136,6 +143,11 @@ class CompositionResult:
         ex = getattr(self, "excluded_samples", None)
         if ex:
             parts.append(f"without {', '.join(ex[:4])}{' ...' if len(ex) > 4 else ''}")
+        covs = getattr(self, "covariates", None)
+        if covs:
+            parts.append(f"adjusted for {', '.join(covs)}")
+        if (self.pairing or {}).get("n_dropped"):
+            parts.append(f"paired on {self.pairing['n_pairs']}")
         return "; ".join(parts)
 
     def to_dict(self) -> dict:
@@ -156,6 +168,8 @@ class CompositionResult:
             "within": getattr(self, "within", None),
             "excluded_samples": getattr(self, "excluded_samples", None),
             "repeated_donors": getattr(self, "repeated_donors", None),
+            "covariates": getattr(self, "covariates", None) or [],
+            "covariate_notes": getattr(self, "covariate_notes", None) or [],
             "comparison": self.comparison(),
         }
 
@@ -462,6 +476,7 @@ def composition_test(
     within_column: str | None = None,
     within_values: list[str] | None = None,
     donor_key: str | None = None,
+    covariates: list[str] | None = None,
 ) -> CompositionResult:
     """Test each group of ``group_key`` for a different share of the cells
     between the conditions of ``condition_key``, with the samples of
@@ -473,10 +488,25 @@ def composition_test(
     ``exclude_samples`` leaves those ``sample_key`` values out; ``within_column`` /
     ``within_values`` test the shares among those cells only (T cells among immune
     cells). ``donor_key`` names the person column the samples nest in, for the
-    repeated-donor warning (None: detected)."""
-    for col in (condition_key, group_key, sample_key, within_column, donor_key):
+    repeated-donor warning (None: detected).
+
+    ``covariates``: per-sample obs columns (sex, batch, the animal) put in the design
+    before the condition, as Milo and pseudobulk DE take them. ``paired`` True pairs on
+    the sample values found in every condition and leaves the others out (said in
+    ``pairing`` and the notes); None pairs only when every value is in every condition."""
+    covariates = list(dict.fromkeys(covariates or []))
+    for col in (condition_key, group_key, sample_key, within_column, donor_key, *covariates):
         if col and col not in obs.columns:
             raise CompositionError(f"Column '{col}' not found.")
+    if len(covariates) > MAX_COVARIATES:
+        raise CompositionError(f"At most {MAX_COVARIATES} covariates.")
+    clash = [c for c in covariates if c in (condition_key, group_key, sample_key, within_column)]
+    if clash:
+        raise CompositionError(
+            f"'{clash[0]}' is the condition, group, sample or subset column, so it cannot also be "
+            "a covariate.")
+    if covariates and not sample_key:
+        raise CompositionError("Covariates need a sample column: they are one value per sample.")
     if len({condition_key, group_key, sample_key} - {None}) < (3 if sample_key else 2):
         raise CompositionError("The condition, sample and group columns must be different.")
     if transform not in ("logit", "asin"):
@@ -564,7 +594,23 @@ def composition_test(
     ok = n_per >= MIN_CELLS_PER_SAMPLE if sample is not None else np.ones(len(n_per), bool)
     result.dropped_samples = [f"{s_donor[i]} ({s_cond[i]}, {n_per[i]} cells)"
                               for i in np.flatnonzero(~ok)]
+    cov_values = {name: _sample_values(obs.loc[keep.to_numpy(), name], s_codes, len(s_names), name,
+                                       list(s_names))[ok] for name in covariates}
     counts, s_cond, s_donor, n_per = counts[ok], s_cond[ok], s_donor[ok], n_per[ok]
+    sides = {k: ((cond == k) & keep).to_numpy() for k in chosen}
+    dropped_pairs: list[str] = []
+    if paired and sample is not None:
+        full = _pairs(obs, s_cond, s_donor, chosen, sample_key, sides, donor_key, condition_key, group_key)
+        if len(full) < len(set(s_donor)):
+            use = np.isin(s_donor, sorted(full))
+            gone = sorted(set(s_donor[~use]))
+            shown = ", ".join(gone[:8]) + (f" and {len(gone) - 8} more" if len(gone) > 8 else "")
+            result.notes.append(
+                f"Paired on the {len(full)} '{sample_key}' values found in every condition; "
+                f"{len(gone)} left out because they lack a condition ({shown}).")
+            counts, s_cond, s_donor, n_per = counts[use], s_cond[use], s_donor[use], n_per[use]
+            cov_values = {k: v[use] for k, v in cov_values.items()}
+            dropped_pairs = gone
     props = counts / np.maximum(n_per, 1)[:, None]
     cell_counts = np.vstack([counts[s_cond == k].sum(axis=0) for k in chosen])
 
@@ -585,6 +631,9 @@ def composition_test(
             n_cells={k: int(cell_counts[i, gi]) for i, k in enumerate(chosen)}))
     if sample is not None:
         result.pairing = paired_design.detect_design(zip(s_donor, s_cond), chosen)
+        if dropped_pairs:
+            result.pairing = {**result.pairing, "n_dropped": len(dropped_pairs),
+                              "dropped": dropped_pairs[:MAX_DROPPED_LISTED]}
         if result.pairing["paired"] and len(chosen) == 2:
             # On the shares as served (rounded), so the numbers match the plot.
             points = [{"group": g, "condition": row.condition, "sample": row.sample,
@@ -596,8 +645,8 @@ def composition_test(
     warnings, notes = design_warnings(obs, condition_key, group_key, keep.to_numpy(), batch_key)
     result.warnings += warnings
     result.notes += notes
-    sides = {k: ((cond == k) & keep).to_numpy() for k in chosen}
-    for hit in one_sided_levels(obs, sides, skip=[c for c in (condition_key, group_key, within_column) if c],
+    for hit in one_sided_levels(obs, sides, skip=[c for c in (condition_key, group_key, within_column, *covariates)
+                                                  if c],
                                 sample_key=sample_key, what="composition"):
         result.warnings.append(hit["message"])
     only = _one_condition_groups(cell_counts, groups)
@@ -618,7 +667,7 @@ def composition_test(
             "only the proportions are shown. Pick the column that names each donor or sample.")
         return result
     rep = repeated_donors(obs, sample_key, list(sides.values()), donor_key,
-                          exclude={condition_key, group_key})
+                          exclude={condition_key, group_key}, covariates=covariates)
     if rep:
         result.repeated_donors = rep
         if rep["message"]:
@@ -649,15 +698,21 @@ def composition_test(
             f"Pairing needs every '{sample_key}' value in every condition; some are missing.")
     if paired is None and not complete and any(
             len(set(s_cond[s_donor == d])) > 1 for d in donors):
+        n_full = sum(1 for d in donors if set(s_cond[s_donor == d]) == set(chosen))
         result.notes.append(
             f"Some '{sample_key}' values occur in more than one condition but not in all, so "
-            "the samples are treated as independent (unpaired).")
+            "the samples are treated as independent (unpaired)."
+            + (f" Paired true pairs the {n_full} in every condition and leaves the rest out."
+               if n_full >= paired_design.MIN_PAIRS_TEST else ""))
 
-    X_cols = [np.ones(len(s_cond))]
-    X_cols += [(s_cond == k).astype(float) for k in chosen[1:]]
+    cond_cols = np.column_stack([(s_cond == k).astype(float) for k in chosen[1:]])
+    nuisance = [np.ones(len(s_cond))]
     if design == "paired":
-        X_cols += [(s_donor == d).astype(float) for d in donors[1:]]
-    X = np.column_stack(X_cols)
+        nuisance += [(s_donor == d).astype(float) for d in donors[1:]]
+    nuisance = np.column_stack(nuisance)
+    cov_cols, result.covariates, result.covariate_notes = _covariate_columns(
+        cov_values, nuisance, cond_cols, s_cond, [f"{d} ({c})" for d, c in zip(s_donor, s_cond)])
+    X = np.column_stack([nuisance[:, :1], cond_cols, nuisance[:, 1:], cov_cols])
     Y = transform_props(counts, transform)
     fit = moderated_test(Y, X, list(range(1, len(chosen))), robust=robust)
 
@@ -677,6 +732,108 @@ def composition_test(
     cell_fdr = _bh(cell_level_pvals(cell_counts))
     result.n_significant_cell_level = int(np.nansum(cell_fdr < FDR))
     return result
+
+
+def _sample_values(values: pd.Series, codes: np.ndarray, n: int, name: str,
+                   names: list[str]) -> np.ndarray:
+    """One value per sample from its cells' values; refuses a column missing for some
+    cells or varying within a sample (as pseudobulk DE does)."""
+    v = values.to_numpy()
+    missing = pd.isna(v)
+    if missing.any():
+        raise CompositionError(
+            f"Covariate '{name}' is missing for {int(missing.sum()):,} of the cells: a covariate "
+            "needs a value for every sample.")
+    frame = pd.DataFrame({"s": codes, "v": v})
+    k = frame.groupby("s")["v"].nunique()
+    if (k > 1).any():
+        bad = names[int(k.index[np.argmax(k.to_numpy() > 1)])].replace(SEP, " ")
+        raise CompositionError(
+            f"Covariate '{name}' varies within a sample ({bad} has {int(k.max())} values): a "
+            "covariate must be one value per sample (sex, batch, the animal), not per cell.")
+    return frame.drop_duplicates("s").set_index("s")["v"].reindex(range(n)).to_numpy()
+
+
+def _pairs(obs: pd.DataFrame, s_cond: np.ndarray, s_donor: np.ndarray, chosen: list[str],
+           sample_key: str, sides: dict, donor_key: str | None, condition_key: str,
+           group_key: str) -> set[str]:
+    """The sample values present in every condition (the pairs a paired test can use), or
+    CompositionError saying why there are too few and what to do instead."""
+    full = {d for d in set(s_donor) if set(s_cond[s_donor == d]) == set(chosen)}
+    if len(full) >= paired_design.MIN_PAIRS_TEST:
+        return full
+    if any(len(set(s_cond[s_donor == d])) > 1 for d in set(s_donor)):
+        raise CompositionError(
+            f"Only {len(full)} '{sample_key}' value{' is' if len(full) == 1 else 's are'} in every "
+            f"condition: pairing needs at least {paired_design.MIN_PAIRS_TEST}. Test unpaired "
+            "(paired false), or compare two conditions that more of them share.")
+    rep = repeated_donors(obs, sample_key, list(sides.values()), donor_key,
+                          exclude={condition_key, group_key})
+    who = f"'{rep['donor_key']}'" if rep else "the donor or animal column"
+    raise CompositionError(
+        f"No '{sample_key}' value is in more than one condition: each is one sample of one "
+        f"condition, so there is nothing to pair. To pair by {who}, use it as the sample column "
+        f"with paired true, or keep '{sample_key}' and add {who} as a covariate (that blocks on it).")
+
+
+def _covariate_columns(cov: dict[str, np.ndarray], nuisance: np.ndarray, cond_cols: np.ndarray,
+                       s_cond: np.ndarray, sample_names: list[str]
+                       ) -> tuple[np.ndarray, list[str], list[str]]:
+    """(design columns, covariates used, notes) for per-sample ``cov`` values: factors
+    as dummies, numbers with more than MAX_NUMERIC_LEVELS values as one scaled slope.
+    Refuses a covariate confounded with the condition or partly collinear."""
+    from scview.core.confounding import one_level_samples
+    from scview.core.pseudobulk import MAX_NUMERIC_LEVELS
+
+    def rank(M: np.ndarray) -> int:
+        return int(np.linalg.matrix_rank(M)) if M.size else 0
+
+    base = nuisance
+    cols: list[np.ndarray] = []
+    used: list[str] = []
+    notes: list[str] = []
+    for name, raw in cov.items():
+        s = pd.Series(raw)
+        if s.nunique() < 2:
+            notes.append(f"'{name}' has one value in these samples: left out.")
+            continue
+        numeric = (pd.api.types.is_numeric_dtype(s) and not pd.api.types.is_bool_dtype(s)
+                   and s.nunique() > MAX_NUMERIC_LEVELS)
+        if numeric:
+            x = s.to_numpy(dtype=np.float64)
+            block = ((x - x.mean()) / x.std())[:, None]
+        else:
+            levels = sorted(s.astype(str).unique())
+            codes = pd.Categorical(s.astype(str), categories=levels).codes
+            block = (codes[:, None] == np.arange(1, len(levels))[None, :]).astype(np.float64)
+        gain = rank(np.column_stack([base, block])) - rank(base)
+        if gain == 0:
+            notes.append(f"'{name}' is constant within each paired sample value, which the paired "
+                         "design already holds: left out." if nuisance.shape[1] > 1 else
+                         f"'{name}' adds nothing the design does not hold: left out.")
+            continue
+        if gain < block.shape[1]:
+            raise CompositionError(
+                f"Covariate '{name}' is partly collinear with the pairs or the other covariates "
+                "(some of its values occur with one sample value or one level only): leave it "
+                "out or merge its rare values.")
+        with_cond = np.column_stack([base, block, cond_cols])
+        if rank(with_cond) < rank(np.column_stack([base, block])) + cond_cols.shape[1]:
+            side = {k: sorted(set(s.astype(str)[s_cond == k]))[:4] for k in dict.fromkeys(s_cond)}
+            shown = "; ".join(f"{k}: {', '.join(v)}" for k, v in side.items())
+            raise CompositionError(
+                f"Covariate '{name}' is confounded with the condition ({shown}): the two cannot "
+                "be separated, so it cannot be in the design.")
+        base = np.column_stack([base, block])
+        cols.append(block)
+        used.append(name)
+        if not numeric:
+            for value, who in one_level_samples(s.astype(str), sample_names):
+                notes.append(f"'{name}' value '{value}' is held by one sample ({who}): as a "
+                             "covariate it fits that sample exactly, so the condition is "
+                             "estimated as if that sample were left out.")
+    C = np.column_stack(cols) if cols else np.zeros((len(s_cond), 0))
+    return C, used, notes
 
 
 def _finite(v) -> float | None:
