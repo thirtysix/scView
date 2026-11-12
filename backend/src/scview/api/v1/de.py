@@ -205,6 +205,9 @@ class DEResponse(BaseModel):
     replicate_warnings: list[str] = []
     # /de/compare: the two sides are also different batches (core/confounding.py).
     confounding: dict | None = None
+    # Pseudobulk: genes at adjusted p < 0.05, the smallest adjusted p, nominal hits vs
+    # chance, and a note when none is significant (core/pseudobulk.py significance).
+    significance: dict | None = None
     # /de/compare, cell-level: a technology or batch value on one side only, holding a
     # fair share of its cells (core/confounding.py one_sided_levels).
     technology_warnings: list[str] = []
@@ -1022,6 +1025,7 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
         covariates=res.covariates,
         covariate_notes=res.covariate_notes,
         replicate_warnings=rep_warnings,
+        significance=pseudobulk.significance(res.genes),
     )
 
 

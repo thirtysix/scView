@@ -773,6 +773,11 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
                 {(result.dropped_samples?.length ?? 0) > 0 &&
                   ` Left out (under 10 cells): ${result.dropped_samples!.join(", ")}.`}
                 {(result.covariate_notes ?? []).map((n) => ` ${n}`).join("")}
+                {result.significance?.note && (
+                  <span className="mt-0.5 block" data-testid="de-none-significant">
+                    {result.significance.note}
+                  </span>
+                )}
               </span>
             ) : refLabel !== "rest" && (
               <span

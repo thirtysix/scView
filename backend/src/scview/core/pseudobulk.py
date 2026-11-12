@@ -645,6 +645,38 @@ def method_caution(method: str, n_a: int, n_b: int) -> str | None:
             "read DESeq2's padj as optimistic.")
 
 
+SIG_PADJ = 0.05
+
+
+def significance(rows: list[tuple[str, float, float, float]]) -> dict:
+    """How far a run got (``rows``: gene, log2FC, p, adjusted p): genes at adjusted p
+    < 0.05, the smallest adjusted p and its gene, and genes at nominal p < 0.05 against
+    the number chance alone gives. ``note`` (0 significant only) makes "0 genes" readable:
+    nothing came close, or many nominal hits that do not survive the correction."""
+    p = np.array([r[2] for r in rows], dtype=np.float64)
+    q = np.array([r[3] for r in rows], dtype=np.float64)
+    ok = np.isfinite(q)
+    n = int(len(rows))
+    out: dict = {"n_tested": n, "n_significant": int(np.sum(q[ok] < SIG_PADJ)),
+                 "min_padj": None, "min_padj_gene": None,
+                 "n_nominal": int(np.sum(p[np.isfinite(p)] < SIG_PADJ)),
+                 "n_nominal_expected": round(SIG_PADJ * n, 1), "note": None}
+    if ok.any():
+        i = int(np.flatnonzero(ok)[np.argmin(q[ok])])
+        out["min_padj"] = float(q[i])
+        out["min_padj_gene"] = str(rows[i][0])
+    if out["n_significant"] == 0 and n:
+        nom, exp = out["n_nominal"], SIG_PADJ * n
+        smallest = (f"the smallest adjusted p is {out['min_padj']:.2g} ({out['min_padj_gene']})"
+                    if out["min_padj"] is not None else "no gene has an adjusted p")
+        chance = ("about what chance alone gives" if nom <= 1.5 * exp else
+                  f"more than the {exp:,.0f} chance alone gives, so there is signal the "
+                  "correction over every gene does not let through at this number of samples")
+        out["note"] = (f"No gene reaches adjusted p < {SIG_PADJ:g}: {smallest}. {nom:,} of "
+                       f"{n:,} genes have p < {SIG_PADJ:g} before adjustment, {chance}.")
+    return out
+
+
 def summary_params(res: PseudobulkResult, label: str) -> dict:
     """What a run's DE store entry keeps beside its comparison (its params), and
     what the co-pilot's line reads."""

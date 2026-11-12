@@ -969,6 +969,9 @@ async def differential_expression(
     }
     if not out.get("covariates"):
         out.pop("covariates", None)
+    sig_note = (r.get("significance") or {}).get("note")
+    if sig_note and not up and not down:
+        out["none_significant"] = sig_note
     if (out["method"] != "pseudobulk" and not r.get("underreplicated")
             and (r.get("n_donors_a") or 0) >= 2 and (r.get("n_donors_b") or 0) >= 2):
         # The UI's caption says the same: a cell-level test treats cells as independent.
