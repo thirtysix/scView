@@ -15,6 +15,10 @@ All notable changes to scView are documented here. The format is based on
   scores also appear in Color by (with a violin by group), the histogram's Values, sessions and the h5ad export,
   and the replay script recomputes score_genes and AUCell scores exactly.
 - MCP: `score_gene_set` saves the score when given a `name`; new `remove_saved_score`.
+- ATAC input on mouse mm9 (NCBIM37) is recognised like hg19: from the reference the file names, the fragments
+  header, or peaks past mm10's chromosome ends (mm9's chr7 runs 7 Mb longer). It is recorded as mm9, and gene
+  activity, nearest genes, motifs, peak-gene links and TSS enrichment say they need mm10 instead of reading the
+  wrong sequence.
 
 ### Changed
 - Error messages in the older panels (Gene Expression, Gene Sets, Trajectory, Observations, the co-pilot and

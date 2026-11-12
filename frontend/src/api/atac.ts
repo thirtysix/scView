@@ -78,7 +78,7 @@ export interface AtacInfo {
   nnz?: number;
   genome?: string | null;
   genome_assumed?: boolean;
-  /** Why gene activity, motifs, links and TSS enrichment are off (peaks on hg19), else absent */
+  /** Why gene activity, motifs, links and TSS enrichment are off (peaks on hg19 or mm9), else absent */
   genome_note?: string;
   source?: string;
   computed?: string[];
