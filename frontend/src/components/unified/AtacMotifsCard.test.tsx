@@ -183,8 +183,8 @@ describe("AtacMotifsCard", () => {
   });
 
   it("explains itself on a genome it has no sequence for", async () => {
-    api.getMotifState.mockResolvedValue({ available: false, reason: "scView has genome sequence for GRCh38 and mm10, not 'dm6'." });
+    api.getMotifState.mockResolvedValue({ available: false, reason: "This ATAC input is on a fly (Drosophila) genome (dm6), and scView has gene positions and genome sequence for GRCh38 (human) and mm10 or mm39 (mouse) only." });
     renderCard();
-    expect(await screen.findByText(/not 'dm6'/)).toBeTruthy();
+    expect(await screen.findByText(/genome \(dm6\)/)).toBeTruthy();
   });
 });

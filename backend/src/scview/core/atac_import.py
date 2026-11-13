@@ -232,7 +232,7 @@ class UnitPeaks:
     genome: str | None
     genome_assumed: bool = False
     note: str | None = None
-    genome_note: str | None = None  # why genome-dependent steps are off (hg19, mm9, mm39)
+    genome_note: str | None = None  # why genome-dependent steps are off (hg19, mm9, other species)
 
 
 def infer_genome(gene_ids) -> str | None:
@@ -461,17 +461,25 @@ def plan_unit(unit: IngestUnit, workdir: str | Path | None = None) -> UnitPeaks 
 def check_build(plan: UnitPeaks | None) -> UnitPeaks | None:
     """hg19 / mm9 / mm39 input recorded as ``hg19`` / ``mm9`` / ``mm39`` (``core/genome_build.py``):
     a file that names that build, or, when the genome was only assumed (GRCh38 or mm10 from Ensembl
-    ids, or none), peaks past GRCh38's / mm10's chromosome ends. Genome-dependent steps then refuse
-    it; the rest works."""
+    ids, or none), peaks past GRCh38's / mm10's chromosome ends. Input whose chromosomes no human
+    or mouse build has is recorded as ``other``. hg19, mm9, other species and unknown names get the
+    note genome-dependent steps refuse them with; the rest works. mm39 is a build scView has."""
     if plan is None or plan.rows is None:
         return plan
+    parsed = [p for p in (parse_interval(s) for s in plan.intervals) if p]
     old = genome_build.old_build(plan.genome)
     if not old and (plan.genome is None or (plan.genome_assumed and plan.genome in ("GRCh38", "mm10"))):
-        found = genome_build.from_intervals(parse_interval(s) for s in plan.intervals)
+        found = genome_build.from_intervals(parsed)
         if found and plan.genome in (None, genome_build.NEWER[found]):
             old = found
     if old:
-        plan.genome, plan.genome_assumed, plan.genome_note = old, False, genome_build.REFUSALS[old]
+        plan.genome, plan.genome_assumed = old, False
+    other = None
+    if plan.genome is None or plan.genome_assumed:
+        other = genome_build.other_from_chroms([p[0] for p in parsed], [p[2] for p in parsed])
+        if other:
+            plan.genome, plan.genome_assumed = genome_build.OTHER, False
+    plan.genome_note = genome_build.note(plan.genome, genome_build.other_sentence(other) if other else None)
     return plan
 
 
@@ -599,8 +607,9 @@ def dataset_state(adata, data_dir: str | Path, dataset_id: str) -> dict[str, Any
     if UNS_KEY not in adata.uns or not modality_store.store_path(data_dir, dataset_id, STORE).exists():
         return None
     info = read_info(adata) or {}
+    note = genome_build.note(info.get("genome"), info.get("genome_note"))  # none for mm39 recorded by v0.76
     return {"n_peaks": info.get("n_peaks"), "genome": info.get("genome"), "computed": info.get("computed") or [],
-            **({"genome_note": info["genome_note"]} if info.get("genome_note") else {})}
+            **({"genome_note": note} if note else {})}
 
 
 def provenance_params(info: dict[str, Any]) -> dict[str, Any]:

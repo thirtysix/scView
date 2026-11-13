@@ -21,21 +21,31 @@ GENES = [("GENEA", "ENSG00000000001", "chr1", 10_001, 20_000, "+"),
          ("GENEB", "ENSG00000000002", "chr1", 50_001, 60_000, "-"),
          ("GENEC", "ENSG00000000003", "chr2", 10_001, 20_000, "+"),
          ("GENED", "ENSG00000000004", "chr2", 50_001, 60_000, "-")]
+# build="mm39": the same layout moved past mm10's chromosome ends (chr8 129.40 Mb, chr17 94.99 Mb)
+# and inside mm39's (130.13, 95.29 Mb), with mouse gene ids: an mm39 peak set mm10 cannot hold.
+MM39_PLACES = {"chr1": ("chr8", 129_440_000), "chr2": ("chr17", 95_000_000)}
 
 
-def gtf_text() -> str:
+def genes_of(build: str = "GRCh38") -> list[tuple[str, str, str, int, int, str]]:
+    if build != "mm39":
+        return GENES
+    return [(name, "ENSMUSG" + gid[4:], MM39_PLACES[chrom][0], start + MM39_PLACES[chrom][1],
+             end + MM39_PLACES[chrom][1], strand) for name, gid, chrom, start, end, strand in GENES]
+
+
+def gtf_text(build: str = "GRCh38") -> str:
     lines = ["##description: tiny"]
-    for name, gid, chrom, start, end, strand in GENES:
+    for name, gid, chrom, start, end, strand in genes_of(build):
         lines.append(f'{chrom}\ttest\tgene\t{start}\t{end}\t.\t{strand}\t.\t'
                      f'gene_id "{gid}.1"; gene_type "protein_coding"; gene_name "{name}";')
     return "\n".join(lines) + "\n"
 
 
-def peak_table() -> pd.DataFrame:
+def peak_table(build: str = "GRCh38") -> pd.DataFrame:
     """Peaks: promoter (2 kb upstream side), gene body, distal, for each gene; then
     background peaks every 100 kb on chr3 (open in both groups at random)."""
     rows = []
-    for name, _gid, chrom, start, end, strand in GENES:
+    for name, _gid, chrom, start, end, strand in genes_of(build):
         s0 = start - 1
         up = s0 - 1_000 if strand == "+" else end + 500  # within 2 kb upstream
         rows.append((chrom, up, up + 500, name, "promoter"))
@@ -49,14 +59,15 @@ def peak_table() -> pd.DataFrame:
     return df
 
 
-def matrices(n_per: int = 40, seed: int = 0) -> tuple[sp.csr_matrix, sp.csr_matrix, list[str], pd.DataFrame]:
+def matrices(n_per: int = 40, seed: int = 0,
+             build: str = "GRCh38") -> tuple[sp.csr_matrix, sp.csr_matrix, list[str], pd.DataFrame]:
     """(gene counts, peak counts, barcodes, peak table): cells x features, group A then B."""
     rng = np.random.default_rng(seed)
     n = 2 * n_per
     genes = rng.poisson(0.2, (n, len(GENES))).astype(np.float32)
     genes[:n_per, :2] += rng.poisson(8, (n_per, 2))
     genes[n_per:, 2:] += rng.poisson(8, (n_per, 2))
-    table = peak_table()
+    table = peak_table(build)
     peaks = rng.poisson(0.5, (n, len(table))).astype(np.float32)
     marked = table["gene"].isin(["GENEA", "GENEB"]).to_numpy()
     other = table["gene"].isin(["GENEC", "GENED"]).to_numpy()
@@ -71,12 +82,13 @@ def matrices(n_per: int = 40, seed: int = 0) -> tuple[sp.csr_matrix, sp.csr_matr
 
 
 def write_tenx_h5(path: str | Path, n_per: int = 40, seed: int = 0, *, genome: str = "GRCh38",
-                  peaks_only: bool = False, extra_peak: bool = False) -> Path:
-    """A Cell Ranger ARC style .h5: genes first, then peaks (``peaks_only``: no genes)."""
-    g, p, barcodes, table = matrices(n_per, seed)
-    names = [x[0] for x in GENES]
-    ids = [x[1] for x in GENES]
-    intervals = [f"{x[2]}:{x[3] - 1}-{x[3]}" for x in GENES]
+                  peaks_only: bool = False, extra_peak: bool = False, build: str = "GRCh38") -> Path:
+    """A Cell Ranger ARC style .h5: genes first, then peaks (``peaks_only``: no genes).
+    ``build="mm39"``: positions past mm10's ends (``MM39_PLACES``); name it with ``genome``."""
+    g, p, barcodes, table = matrices(n_per, seed, build)
+    names = [x[0] for x in genes_of(build)]
+    ids = [x[1] for x in genes_of(build)]
+    intervals = [f"{x[2]}:{x[3] - 1}-{x[3]}" for x in genes_of(build)]
     peaks = table["name"].tolist()
     if extra_peak:
         peaks = peaks[:-1] + ["chr4:1-500"]
