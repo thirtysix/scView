@@ -342,11 +342,11 @@ function TissueLine({ tissue }: { tissue: MarkerDbTissue }) {
         <>
           Best types from {tissue.organs.join(" + ")} +{" "}
           <Help id="markerdb.tissue">types found everywhere</Help> ({tissue.n_types_left_out.toLocaleString()} left
-          out; tissue from {tissue.from}).
+          out). Tissue: {tissue.from}.
         </>
       ) : (
         <>
-          Tissue {tissue.organs.join(" + ")} from {tissue.from}, but {tissue.note ?? "no type was left out"}.
+          Tissue: {tissue.from}, but {tissue.note ?? "no type was left out"}.
         </>
       )}
     </p>
