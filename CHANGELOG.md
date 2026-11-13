@@ -6,6 +6,52 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+Joint embeddings get a pipeline run's memory protection; spatial imports leave off-tissue spots out; marker
+database suggestions keep to the tissue; NMF programs and chromVAR motifs are kept as scores; two libraries of one
+sample that disagree are flagged. Found by re-analysing published studies (kidney, fat, heart Visium) through
+scView's MCP.
+
+### Added
+- QC per sample flags two libraries of one sample that disagree in cell-type make-up (or depth) more than
+  different samples usually do: a "Libraries differ" caution with the numbers. Also in the API
+  (`GET /qc/libraries`) and the MCP (`library_concordance`).
+- A drawn NMF program's usage and a motif's chromVAR z are saved as cell columns (`program_k<k>_<n>`,
+  `chromvar_<motif>_<id>`), offered in Compare with the other scores, and say when they came from an earlier run.
+- The joint embedding plan gives a memory and time estimate, and says up front when the run cannot fit even with
+  every other dataset closed. A running joint embedding can be cancelled.
+- The joint embedding plan lists the annotation columns it leaves out and why (only in some datasets, recomputed,
+  an id per cell).
+
+### Changed
+- Marker database check: suggested cell types keep to the dataset's tissue (read from its title or set on the
+  card; also `tissue` in the API and MCP). On a kidney dataset, 12 suggestions from other organs (colonocyte and
+  the like) are gone, and no verdict changed.
+- Joint datasets keep numeric annotations every source has (in_tissue, % mito, an author's deconvolution shares),
+  not only categories.
+- Spatial .h5ad imports, CELLxGENE Visium slides included, leave out spots marked off-tissue (`in_tissue` 0), as
+  the Space Ranger reader already did: 713 of 4,992 spots on a Kuppe 2022 heart slide, all empty, which made
+  housekeeping genes look spatially patterned. Datasets imported earlier keep their spots; Data Assessment, Moran's
+  I, domains, co-occurrence and spot composition say how many off-tissue spots they still hold.
+- Public dataset search matches part of an assay, tissue or disease name ("Visium") when no name matches whole.
+- Drawing the same score again saves nothing new; the same values from a later run are saved again so the record
+  names that run.
+- Captions name what a layer holds ("Log-normalized (raw)", "Counts (raw)"), not its storage key.
+- ATAC input on mouse mm39 (GRCm39) is recognised from its names and chromosome ends and refused like mm9: the
+  genome steps need mm10.
+
+### Fixed
+- A joint embedding of 8 Visium slides (39,936 spots) killed a 10 GB backend. The joint run now reserves its
+  memory like a pipeline run, waits behind earlier runs, and stops a step that cannot fit before it starts, with
+  a plain message (the half-made joint dataset is removed; the sources are never changed). It also holds far less:
+  the source copies are let go after the merge and only the images scView draws are kept. The same 8 slides now
+  finish in 6 GB.
+- Saving a dataset's analysis record is now written to a copy and swapped in, so a backend killed mid-save no
+  longer leaves an unreadable dataset.
+- The dataset title of Kang's h5ad (stored as a list of one) is read, so its tissue is known.
+- CELLxGENE spatial files no longer log a second, made-up library.
+- Small API fixes: `within_value` takes one value or a list everywhere, `n_donors_column` is accepted, and
+  `get_markers` says why there is no result id.
+
 ## [0.75.1] - 2026-11-13
 
 ### Fixed
