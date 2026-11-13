@@ -370,6 +370,7 @@ def test_a_dataset_v076_recorded_as_mm39_works_without_reimport(tmp_path):
                          list(a.obs_names), ["chr8:1-500"], atac_import.feature_attrs(["chr8:1-500"]),
                          {"genome": "mm39", "genome_note": old})
     assert "genome_note" not in atac_import.dataset_state(a, tmp_path, "d")
+    assert "genome_note" not in atac.summary(a)["info"]  # what the Accessibility tab shows
     lines, _ = atac.grounding_lines(a)
     assert not any("mm39 (GRCm39)" in line for line in lines)
     af._write_state(tmp_path, "d", {"genome": "mm39", "genome_note": old})
@@ -377,6 +378,7 @@ def test_a_dataset_v076_recorded_as_mm39_works_without_reimport(tmp_path):
     # an hg19 record keeps its refusal, in today's words
     atac_import.write_info(a, {"n_peaks": 1, "genome": "hg19", "genome_note": "old words"})
     assert atac_import.dataset_state(a, tmp_path, "d")["genome_note"] == genome_build.HG19_REFUSAL
+    assert atac.summary(a)["info"]["genome_note"] == genome_build.HG19_REFUSAL
 
 
 def test_an_assumed_mm10_with_peaks_past_its_ends_becomes_mm39():

@@ -232,7 +232,7 @@ class UnitPeaks:
     genome: str | None
     genome_assumed: bool = False
     note: str | None = None
-    genome_note: str | None = None  # why genome-dependent steps are off (hg19, mm9, mm39)
+    genome_note: str | None = None  # why genome-dependent steps are off (hg19, mm9, other species)
 
 
 def infer_genome(gene_ids) -> str | None:

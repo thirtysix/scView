@@ -1573,8 +1573,10 @@ def summary(adata, groupby: str | None = None, cells_fingerprint: str | None = N
     info = atac_import.read_info(adata) or {}
     lsi = info.get("lsi")
     w = info.get("wnn")
-    out: dict[str, Any] = {"info": {k: v for k, v in info.items() if k not in ("lsi", "wnn", "activity")},
-                           "lsi": None, "wnn": None, "activity": info.get("activity")}
+    shown = {k: v for k, v in info.items() if k not in ("lsi", "wnn", "activity", "genome_note")}
+    if note := genome_build.note(info.get("genome"), info.get("genome_note")):  # none for mm39 recorded by v0.76
+        shown["genome_note"] = note
+    out: dict[str, Any] = {"info": shown, "lsi": None, "wnn": None, "activity": info.get("activity")}
     if lsi and OBSM_LSI in adata.obsm:
         out["lsi"] = {**lsi, "stale": _stale(lsi, cells_fingerprint)}
         out["lsi"]["clusters_column"] = OBS_CLUSTERS if OBS_CLUSTERS in adata.obs.columns else None
