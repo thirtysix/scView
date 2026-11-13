@@ -546,3 +546,37 @@ def test_preflight_estimates_the_step():
     set_rho = preflight.estimate_run(preflight.header_from_adata(a), steps=["ambient_correction"],
                                      params=PipelineParams(ambient_rho=0.1))
     assert set_rho.seconds[1] < est.seconds[1]  # no estimate, no quick clustering
+
+
+def test_counts_are_read_in_place_not_copied():
+    # a CELLxGENE-shaped file: counts in .raw beside log values in X, same genes
+    counts = sp.random(300, 50, density=0.2, format="csr", random_state=1, dtype=np.float32)
+    counts.data = np.ceil(counts.data * 10)
+    a = ad.AnnData(X=counts.copy(), var=pd.DataFrame(index=[f"g{i}" for i in range(50)]))
+    a.raw = a.copy()
+    a.X = a.X.log1p() if hasattr(a.X, "log1p") else np.log1p(a.X)
+    M, where = ambient.counts_matrix(a)
+    assert where == ".raw"
+    assert np.shares_memory(M.data, a.raw.X.data)
+
+
+def test_concurrent_first_calls_diagnose_once(monkeypatch):
+    import threading
+    import time
+
+    a = _adata(0.1)
+    calls = []
+
+    def slow(adata, column=None):
+        calls.append(1)
+        time.sleep(0.3)
+        return {"markers": {"groups": {}}}
+
+    monkeypatch.setattr(ambient, "diagnose", slow)
+    out = []
+    threads = [threading.Thread(target=lambda: out.append(ambient.diagnose_cached(a))) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(calls) == 1 and len(out) == 4

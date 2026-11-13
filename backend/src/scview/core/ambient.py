@@ -62,6 +62,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import math
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -551,7 +552,9 @@ def counts_matrix(adata):
     if ORIGINAL_LAYER in adata.layers and looks_like_counts(adata.layers[ORIGINAL_LAYER]):
         return adata.layers[ORIGINAL_LAYER], f"layers['{ORIGINAL_LAYER}']"
     try:
-        return find_counts(adata)
+        # read only: every caller here only reads, and a copy of .raw cut to X's genes cost
+        # +1.8 GB on a 39k-nuclei kidney file, four times at once when Data Assessment opened
+        return find_counts(adata, read_only=True)
     except ValueError:
         raise AmbientError("Ambient RNA needs raw counts (layers['counts'], .raw or X), and this "
                            "dataset has none.") from None
@@ -889,13 +892,23 @@ def _cache_key(adata, column: str | None) -> tuple:
             id(adata.X), ORIGINAL_LAYER in adata.layers)
 
 
+# One diagnosis at a time: Data Assessment asks for it from the ambient card, cluster QC, the
+# QC report and the co-pilot's insight at once, and each first call made its own (the
+# 39k-nuclei kidney file went past 6 GB that way). Later callers wait and read the cache.
+_DIAGNOSE_LOCK = threading.Lock()
+
+
 def diagnose_cached(adata, column: str | None = None) -> dict:
     """``diagnose``, answered again from memory while nothing it reads has changed."""
-    key = _cache_key(adata, column)
-    hit = _CACHE.get(adata, key)
-    if hit is None:
-        hit = diagnose(adata, column)
-        _CACHE.put(adata, hit, key)
+    hit = _CACHE.get(adata, _cache_key(adata, column))
+    if hit is not None:
+        return hit
+    with _DIAGNOSE_LOCK:
+        key = _cache_key(adata, column)
+        hit = _CACHE.get(adata, key)
+        if hit is None:
+            hit = diagnose(adata, column)
+            _CACHE.put(adata, hit, key)
     return hit
 
 
