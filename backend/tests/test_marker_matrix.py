@@ -159,8 +159,11 @@ def test_the_raw_layer_is_labelled_counts_when_it_holds_counts():
         adaptor = AnnDataAdaptor("unused.h5ad")
         adaptor._adata = adata
         assert adaptor.layer_label("raw") == label
-        out = adaptor.expression_by_group(["G0"], "cell_type")
+        out = adaptor.expression_by_group(["G0"], "cell_type", layer="raw")
         assert out["layer"] == "raw" and out["layer_label"] == label
+    # with counts in .raw the default is the log-normalised X (anndata_adaptor.default_expression_layer)
+    adaptor._adata = cellxgene()
+    assert adaptor.expression_by_group(["G0"], "cell_type")["layer"] == "X"
 
 
 def test_the_replay_helper_skips_counts_in_raw():
