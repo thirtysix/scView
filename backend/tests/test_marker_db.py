@@ -642,6 +642,14 @@ async def test_status_and_check_endpoints(client, dataset_manager, test_settings
     assert {s["name"] for s in st["sources"] if s["downloaded"]} == {"panglao", "cellmarker2", "act"}
     r = await client.post(f"{API}/datasets/{did}/annotation/marker-db/check", json={"column": "nope"})
     assert r.status_code == 404
+    # The tissue hint: suggestions keep to it, the reply says from where
+    assert body["tissue"]["organs"] == [] and body["tissue"]["from"].startswith("no tissue known")
+    r = await client.post(f"{API}/datasets/{did}/annotation/marker-db/check", json={"column": "lab", "tissue": "kidney"})
+    assert r.status_code == 200, r.text
+    t = r.json()["tissue"]
+    assert t["organs"] == ["kidney"] and t["from"] == "the tissue given ('kidney')" and "n_types_left_out" in t
+    r = await client.post(f"{API}/datasets/{did}/annotation/marker-db/check", json={"column": "lab", "tissue": "x" * 201})
+    assert r.status_code == 422
 
 
 async def test_mcp_tool_runs_the_check_and_gives_the_evidence_its_marker_lines(
@@ -667,6 +675,9 @@ async def test_mcp_tool_runs_the_check_and_gives_the_evidence_its_marker_lines(
     assert rows["B"]["verdict_text"] == "supported" and "CD79A" in rows["B"]["overlap"]
     assert rows["T-cells"]["suggestions"].startswith("NK cells")
     assert r["labels"]["n_total"] == 4
+    assert r["tissue"]["organs"] == []
+    k = await _call("marker_db_check", {"dataset_id": did, "column": "lab", "tissue": "kidney"})
+    assert k["tissue"]["organs"] == ["kidney"] and k["tissue"]["from"] == "the tissue given ('kidney')"
     monkeypatch.setattr(mdb, "marker_db_dir", lambda: tmp_data_dir / "marker_db")
     db, _ = CE._on_disk()
     assert db is not None  # the evidence's marker lines now have their databases

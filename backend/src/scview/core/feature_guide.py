@@ -78,7 +78,8 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Data Assessment > Annotation cross-check", "", "agreement between two annotations"),
     ("Data Assessment > Annotation cross-check > Marker database check", "",
      "each label against PanglaoDB, CellMarker and ACT: supported, weak, no database support or not in "
-     "database, and the 3 database types its markers fit best; downloads the databases on first use"),
+     "database, and the 3 database types its markers fit best (of the dataset's tissue and of every tissue, when "
+     "the tissue is known or given); downloads the databases on first use"),
     ("Unified View", "", "linked scatter (UMAP/tSNE/PCA) with analysis tabs beside it"),
     ("Unified View > Embedding > Tissue", "spatial",
      "spots, bins or cells on the tissue image (Visium, Visium HD); Section, Image on/off; colours, lasso as on UMAP"),

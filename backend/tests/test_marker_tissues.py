@@ -10,6 +10,7 @@ from __future__ import annotations
 import gzip
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -53,6 +54,8 @@ def test_everywhere_lineage_by_cell_ontology(installed):
 def test_dataset_tissue_from_hint_obs_column_or_title():
     a = _cells()
     assert mt.dataset_tissue(a) == (set(), "no tissue known (give one to restrict the database types)")
+    a.uns["about_title"] = np.array(["IFN-beta treated and control PBMCs from 8 donors"])  # as Kang's h5ad holds it
+    assert mt.dataset_tissue(a)[0] == {"blood"}
     a.uns["about_title"] = "Single-nucleus kidney atlas"
     assert mt.dataset_tissue(a)[0] == {"kidney"}
     a.obs["tissue"] = pd.Categorical(["cortex of kidney"] * a.n_obs)
@@ -114,3 +117,50 @@ def test_the_pipeline_passes_the_tissue_hint(installed, monkeypatch):
 
 def test_no_raw_files_restrict_nothing(tmp_path):
     assert mt.load(Path(tmp_path)) == {}
+
+
+def test_check_suggestions_keep_to_the_tissue_and_verdicts_do_not(installed, monkeypatch):
+    """The marker database check's top-3 suggestions keep to the dataset's tissue (on kidney an
+    intercalated-cell cluster was offered Colonocyte); a label's own verdict is unchanged."""
+    db = mdb.load(installed)
+    a = _cells(extra={"NK cells": ["NKG7", "GNLY", "KLRD1", "NCAM1", "PRF1", "GZMB"]})
+    before = mdb.check(a, "lab", "human", db)
+    by = {r["label"]: r for r in before["labels"]}
+    assert by["T-cells"]["suggestions"][0]["cell_type"] == "NK cells"
+    assert before["tissue"] == {"organs": [], "from": "no tissue known (give one to restrict the database types)"}
+    # NK cells described in the colon only (made up, as a colonocyte), B and T cells immune
+    sdb = db.species("human", db.view("suggest", "human"))
+    index: dict = {}
+    for t, organ in (("NK cells", "gut"), ("B cells", "immune"), ("T cells", "immune")):
+        for part, name in sdb.types[t]["members"]:
+            index.setdefault(part, {}).setdefault("human", {})[name] = {organ: 5}
+    monkeypatch.setattr(mt, "load", lambda dest: index)
+    after = mdb.check(a, "lab", "human", db, tissue="kidney")
+    assert after["tissue"]["organs"] == ["kidney"] and after["tissue"]["n_types_left_out"] == 1
+    assert after["tissue"]["from"] == "the tissue given ('kidney')"
+    by2 = {r["label"]: r for r in after["labels"]}
+    assert all(s["cell_type"] != "NK cells" for r in after["labels"] for s in r["suggestions"])
+    assert by2["B"]["suggestions"][0]["cell_type"] == "B cells"  # immune types stay
+    assert by2["Zorblax"]["suggestions"][0]["cell_type"] == "T cells"
+    keys = ("verdict", "db_type", "p", "overlap")
+    for r in before["labels"]:  # verdicts on the label's own name: unchanged, the gut type's too
+        assert {k: by2[r["label"]][k] for k in keys} == {k: r[k] for k in keys}
+    assert by2["NK cells"]["verdict"] == "supported" and by2["NK cells"]["db_type"] == "NK cells"
+    # the data's own tissue column, a hint for the gut, and a hint that names no organ
+    a.obs["tissue"] = "kidney"
+    own = mdb.check(a, "lab", "human", db)
+    assert own["tissue"]["from"] == "obs 'tissue' (kidney)" and own["tissue"]["n_types_left_out"] == 1
+    gut = mdb.check(a, "lab", "human", db, tissue="colon")
+    assert {r["label"]: r for r in gut["labels"]}["T-cells"]["suggestions"][0]["cell_type"] == "NK cells"
+    assert gut["tissue"]["n_types_left_out"] == 0
+    a.obs = a.obs.drop(columns="tissue")
+    none = mdb.check(a, "lab", "human", db, tissue="tumour")
+    assert none["tissue"] == {"organs": [], "from": "'tumour' names no organ known here"}
+    assert {r["label"]: r for r in none["labels"]}["T-cells"]["suggestions"][0]["cell_type"] == "NK cells"
+
+
+def test_check_without_raw_files_says_so(installed, monkeypatch):
+    monkeypatch.setattr(mt, "load", lambda dest: {})
+    res = mdb.check(_cells(), "lab", "human", mdb.load(installed), tissue="kidney")
+    assert res["tissue"]["organs"] == ["kidney"] and "no type left out" in res["tissue"]["note"]
+    assert "n_types_left_out" not in res["tissue"]

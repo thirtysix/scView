@@ -232,7 +232,7 @@ class UnitPeaks:
     genome: str | None
     genome_assumed: bool = False
     note: str | None = None
-    genome_note: str | None = None  # why genome-dependent steps are off (hg19, mm9)
+    genome_note: str | None = None  # why genome-dependent steps are off (hg19, mm9, mm39)
 
 
 def infer_genome(gene_ids) -> str | None:
@@ -459,9 +459,9 @@ def plan_unit(unit: IngestUnit, workdir: str | Path | None = None) -> UnitPeaks 
 
 
 def check_build(plan: UnitPeaks | None) -> UnitPeaks | None:
-    """hg19 / mm9 input recorded as ``hg19`` / ``mm9`` (``core/genome_build.py``): a file that
-    names the older build, or, when the genome was only assumed (GRCh38 or mm10 from Ensembl ids,
-    or none), peaks past the newer build's chromosome ends. Genome-dependent steps then refuse
+    """hg19 / mm9 / mm39 input recorded as ``hg19`` / ``mm9`` / ``mm39`` (``core/genome_build.py``):
+    a file that names that build, or, when the genome was only assumed (GRCh38 or mm10 from Ensembl
+    ids, or none), peaks past GRCh38's / mm10's chromosome ends. Genome-dependent steps then refuse
     it; the rest works."""
     if plan is None or plan.rows is None:
         return plan

@@ -1196,7 +1196,31 @@ def _species(adata, species: str | None) -> tuple[str, str | None]:
     return "human", "The species could not be told from the gene names; human database rows are used."
 
 
-def _label_row(sc_: Scorer, sc_suggest: Scorer, label: str, markers: list[str]) -> dict:
+def tissue_names(db: MarkerDB, sc_: Scorer, adata, tissue: str = "") -> tuple[list[str], dict]:
+    """The types of ``sc_`` that may compete for a dataset of a known tissue, and what that rests
+    on: ``tissue`` (the user's hint), else the data's own (``marker_tissues.dataset_tissue``); the
+    types of that tissue, of every tissue (immune, blood, vessels, stroma) or of no named tissue
+    stay (``core/marker_tissues.py``). Every open type when no tissue is known."""
+    from scview.core import marker_tissues
+
+    names = sc_.open_names
+    want, source = marker_tissues.dataset_tissue(adata, tissue)
+    info: dict[str, Any] = {"organs": sorted(want), "from": source}
+    if want:
+        index = marker_tissues.load(db.dest)
+        if index:
+            types, sp = sc_.sdb.types, sc_.sdb.species
+            names = [t for t in names
+                     if marker_tissues.allowed(marker_tissues.type_organs(types[t], index, sp), want,
+                                               marker_tissues.everywhere_lineage(types[t]["cl"], db.ontology))]
+            info["n_types_left_out"] = len(sc_.open_names) - len(names)
+        else:
+            info["note"] = "the databases' raw files are not on disk: no type left out"
+    return names, info
+
+
+def _label_row(sc_: Scorer, sc_suggest: Scorer, label: str, markers: list[str],
+               suggest_names: list[str] | None = None) -> dict:
     Q = sc_.query(markers)
     matched, how = sc_.sdb.matcher.match(label, "C")
     row: dict[str, Any] = {
@@ -1206,7 +1230,7 @@ def _label_row(sc_: Scorer, sc_suggest: Scorer, label: str, markers: list[str]) 
                   "how_text": HOW_TEXT.get(how) if matched else None,
                   "via_parent": how == "cl-ancestor"},
         "db_type": None, "cl_id": None, "sources": [], "p": None, "overlap": [], "n_db_genes": 0,
-        "suggestions": sc_suggest.suggest(Q),
+        "suggestions": sc_suggest.suggest(Q, names=suggest_names),
     }
     if not Q:
         row["verdict"] = "no_markers"
@@ -1229,9 +1253,14 @@ def _label_row(sc_: Scorer, sc_suggest: Scorer, label: str, markers: list[str]) 
     return row
 
 
-def check(adata, column: str, species: str | None = None, db: MarkerDB | None = None) -> dict:
+def check(adata, column: str, species: str | None = None, db: MarkerDB | None = None,
+          tissue: str = "") -> dict:
     """Database support for each label of ``column`` and the 3 best database types for
-    its cells (call in a worker thread; reads the dataset, changes nothing)."""
+    its cells (call in a worker thread; reads the dataset, changes nothing).
+
+    The suggestions keep to the dataset's tissue as the marker-score annotator does
+    (``tissue_names``: the hint ``tissue``, else the data's own); a label's verdict is on the
+    type it names, whatever its tissue."""
     t0 = time.monotonic()
     if column not in adata.obs.columns:
         raise KeyError(column)
@@ -1247,8 +1276,9 @@ def check(adata, column: str, species: str | None = None, db: MarkerDB | None = 
     measured = measured_genes(adata)
     sc_ = Scorer(sdb, measured)
     sc_suggest = sc_ if suggest_from == verdict_from else Scorer(db.species(sp, suggest_from), measured)
+    suggest_names, tissue_info = tissue_names(db, sc_suggest, adata, tissue)
     markers = _markers_for(adata, column)
-    labels = [_label_row(sc_, sc_suggest, g, markers.get(g, [])) for g in groups]
+    labels = [_label_row(sc_, sc_suggest, g, markers.get(g, []), suggest_names) for g in groups]
     counts = Counter(r["verdict"] for r in labels)
     return {
         "column": column,
@@ -1262,6 +1292,7 @@ def check(adata, column: str, species: str | None = None, db: MarkerDB | None = 
         "cellmarker": SOURCES[db.cellmarker].label if db.cellmarker else None,
         "verdict_sources": db.labels(verdict_from),
         "suggestion_sources": db.labels(suggest_from),
+        "tissue": tissue_info,
         "sources": [s for s in status(db.dest)["sources"] if s["downloaded"] and s["needed"]],
         "params": {"top_db_genes": TOP_DB, "group_markers": N_MARKERS, "min_db_genes": MIN_DB_GENES,
                    "suggestions": N_SUGGEST},
@@ -1278,25 +1309,12 @@ def annotate(adata, groupby: str, species: str | None = None, db: MarkerDB | Non
     When the dataset's tissue is known (``tissue``, the user's hint, else the data's own: see
     ``marker_tissues.dataset_tissue``) only the types of that tissue, of every tissue (immune,
     blood, vessels, stroma) or of no named tissue compete (``core/marker_tissues.py``)."""
-    from scview.core import marker_tissues
-
     db = db or get_db()
     sp, _ = _species(adata, species)
     parts = db.view("annotate", sp)
     sdb = db.species(sp, parts)
     sc_ = Scorer(sdb, measured_genes(adata))
-    names = sc_.open_names
-    want, source = marker_tissues.dataset_tissue(adata, tissue)
-    tissue_info: dict[str, Any] = {"organs": sorted(want), "from": source}
-    if want:
-        index = marker_tissues.load(db.dest)
-        if index:
-            names = [t for t in sc_.open_names
-                     if marker_tissues.allowed(marker_tissues.type_organs(sdb.types[t], index, sp), want,
-                                               marker_tissues.everywhere_lineage(sdb.types[t]["cl"], db.ontology))]
-            tissue_info["n_types_left_out"] = len(sc_.open_names) - len(names)
-        else:
-            tissue_info["note"] = "the databases' raw files are not on disk: no type left out"
+    names, tissue_info = tissue_names(db, sc_, adata, tissue)
     markers = _markers_for(adata, groupby)
     mapping: dict[str, str] = {}
     for g in _group_names(adata, groupby):
