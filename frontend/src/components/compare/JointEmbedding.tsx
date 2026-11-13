@@ -641,7 +641,7 @@ export function UnitFilteringNote({
           : `Each with the QC a single run would use (per-sample MAD outliers${floor ? `, at least ${floor} genes per cell` : ""}), ` +
             `before merging: near-empty cells would otherwise make clusters of their own. ` +
             (on
-              ? `${removed.toLocaleString()} cells go in all.`
+              ? `${removed.toLocaleString()} cells are removed in all.`
               : "Off: every cell of every dataset joins.")}
       </p>
       <ul className={`mt-1 space-y-0.5 ${rows.length > PICKER_OPEN_MAX ? "max-h-40 overflow-y-auto pr-1" : ""}`}>

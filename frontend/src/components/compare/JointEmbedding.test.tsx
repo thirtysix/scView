@@ -184,7 +184,7 @@ describe("the joint run's filtering of datasets scView never filtered", () => {
     const box = screen.getByRole("checkbox", { name: "Filter the datasets scView has not filtered" });
     expect(box).toBeChecked();
     expect(screen.getByTestId("unit-filtering")).toHaveTextContent("at least 100 genes per cell");
-    expect(screen.getByTestId("unit-filtering")).toHaveTextContent("708 cells go in all.");
+    expect(screen.getByTestId("unit-filtering")).toHaveTextContent("708 cells are removed in all.");
     fireEvent.click(box);
     expect(onChange).toHaveBeenCalledWith(false);
     rerender(<UnitFilteringNote rows={rows} on={false} onChange={onChange} />);
