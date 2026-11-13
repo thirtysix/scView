@@ -92,4 +92,16 @@ describe("MarkerPlot colour scale and dot sizes", () => {
     act(() => useObsRevisionStore.getState().bump("ds1", "leiden"));
     await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(2));
   });
+
+  it("names what the layer holds, as the server words it, not its key", async () => {
+    apiFetch.mockResolvedValue({ ...body, layer_label: "Log-normalized (raw)" });
+    const { container, unmount } = renderPlot("dotplot");
+    await screen.findByTestId("plot");
+    expect(container).toHaveTextContent("Layer: Log-normalized (raw).");
+    unmount();
+    apiFetch.mockResolvedValue(body); // an older server: the key, as before
+    const again = renderPlot("dotplot");
+    await screen.findByTestId("plot");
+    expect(again.container).toHaveTextContent("Layer: raw.");
+  });
 });

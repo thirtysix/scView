@@ -1281,8 +1281,8 @@ async def expression_by_group(
     Groups come a page at a time (at most limit, fewer when many genes): next_offset gives the
     next page."""
     d = await _get(f"{_ds(dataset_id)}/expression/by-group", genes=genes, groupby=groupby, layer=layer)
-    out = {"dataset_id": dataset_id, "groupby": d["groupby"], "layer": d["layer"], "genes": d["genes"],
-           "n_groups": len(d["groups"]), "offset": offset,
+    out = {"dataset_id": dataset_id, "groupby": d["groupby"], "layer": d["layer"],
+           **pick(d, "layer_label"), "genes": d["genes"], "n_groups": len(d["groups"]), "offset": offset,
            "note": "mean[i][j] and fraction[i][j] are group i, gene j"}
     missing = [x for x in genes if x not in d["genes"]]
     if missing:
@@ -1685,6 +1685,10 @@ async def plot(
             raise ToolError(f"Gene '{g}' is not in the expression layer.")
         return adaptor.get_expression([g], layer=lay)[:, 0]
 
+    def _layer_words() -> str:
+        # What the values are ("Log-normalized (raw)", "Counts (raw)"), not the bare key.
+        return adaptor.layer_label(lay or adaptor.default_expression_layer())
+
     def _draw() -> tuple[bytes, str]:
         n = adaptor.n_cells()
         rows_ = plots.sample(n)
@@ -1709,7 +1713,7 @@ async def plot(
                     raise ToolError(column_message(color_by, list(adaptor.adata.obs.columns)))
                 label = color_by
             elif gene:
-                values, label = _values_of_gene(gene), gene
+                values, label = _values_of_gene(gene), f"{gene}, {_layer_words()}"
             # A published embedding can leave cells out (NaN coordinates: CELLxGENE sets often
             # do): draw the placed cells only, sampled among themselves, and say how many.
             placed = np.flatnonzero(np.isfinite(np.asarray(xy, dtype=float)).all(axis=1))
@@ -1752,8 +1756,7 @@ async def plot(
                 f" (random {len(rows_):,} drawn)" if rows_ is not None else "")
         if rows_ is not None:
             values, groups = values[rows_], groups.iloc[rows_]
-        return plots.violin(values, groups, f"{gene} by {by}{scope}",
-                            f"{gene} ({lay or adaptor.default_expression_layer()})", note), note
+        return plots.violin(values, groups, f"{gene} by {by}{scope}", f"{gene}, {_layer_words()}", note), note
 
     try:
         png, note = await asyncio.to_thread(_draw)

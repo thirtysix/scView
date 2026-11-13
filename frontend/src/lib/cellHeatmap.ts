@@ -18,6 +18,8 @@ export type CellScale = "zscore" | "none";
 export interface HeatmapCellsMeta {
   groupby: string;
   layer: string;
+  /** What the layer's values are ("Log-normalized (raw)", "Counts (raw)"; absent from older servers) */
+  layer_label?: string;
   genes: string[];
   missing_genes: string[];
   groups: string[];
