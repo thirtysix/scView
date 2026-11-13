@@ -6,6 +6,16 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.75.1] - 2026-11-13
+
+### Fixed
+- Split by a column, then resizing the window, could grey the grid out with "GPU context lost", and Retry did not
+  bring it back. The GPU was fine: the grid's plot was rebuilt with drawing layers the old plot had already used,
+  which deck.gl refuses. Each rebuilt plot now gets its own layers, in the split grid and the main plot alike.
+- "GPU context lost" now appears only when the browser really drops the graphics context. When the browser
+  refuses the page a new one (after a GPU reset it blames on the page), the overlay asks for a page reload instead
+  of offering a Retry that cannot work.
+
 ## [0.75.0] - 2026-11-13
 
 Scores are kept and offered in Compare; marker genes no longer rank raw counts on CELLxGENE files; cluster QC
