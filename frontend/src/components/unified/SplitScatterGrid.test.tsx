@@ -169,6 +169,11 @@ describe("SplitScatterGrid", () => {
     renderGrid();
     await screen.findByTestId("deck");
     expect(screen.getByTestId("embedding-caveat")).toHaveTextContent("UMAP: gaps between clusters");
+    // A narrow header wraps to a second row and the caveat clips, so "Cluster distances"
+    // never draws over the pager's "Per page" (the header used to be one fixed-height row).
+    expect(screen.getByTestId("grid-header").className).toMatch(/\bflex-wrap\b/);
+    expect(screen.getByTestId("grid-header").className).not.toMatch(/(^|\s)h-8(\s|$)/);
+    expect(screen.getByTestId("embedding-caveat").className).toMatch(/\boverflow-hidden\b/);
   });
 
   it("links the cameras: panning one panel moves them all", async () => {

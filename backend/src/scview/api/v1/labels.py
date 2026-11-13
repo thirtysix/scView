@@ -17,7 +17,9 @@ from pydantic import BaseModel
 from scview.core import cell_ontology
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import dataset_edit, edit_room, editable, save_edit, uns_snapshot
-from scview.core.user_labels import UNASSIGNED, LabelError, label_cells, restore, user_columns
+from scview.core.user_labels import (
+    COMBINE_SEPARATOR, UNASSIGNED, LabelError, combine_columns, label_cells, restore, user_columns,
+)
 from scview.dependencies import get_dataset_manager
 
 logger = logging.getLogger(__name__)
@@ -33,6 +35,12 @@ class LabelRequest(BaseModel):
     # A Cell Ontology term the user picked for the label (core/cell_ontology.py); None
     # leaves the label's term as it is.
     ontology_id: str | None = None
+
+
+class CombineRequest(BaseModel):
+    columns: list[str]  # 2 to 4 obs columns, in the order their values are joined
+    name: str  # the new user annotation column
+    separator: str = COMBINE_SEPARATOR
 
 
 class PreviousGroup(BaseModel):
@@ -150,3 +158,16 @@ async def undo_label_selection(
         return out
 
     return await _edit_and_save(dm, dataset_id, edit)
+
+
+@router.post("/datasets/{dataset_id}/labels/combine")
+async def combine_label_columns(
+    dataset_id: str,
+    body: CombineRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """A new user annotation column from two to four obs columns, each cell's values
+    joined ("HFD01 | ING"): a sample id from donor and depot in one call. A cell
+    missing a value in any of them gets none."""
+    return await _edit_and_save(
+        dm, dataset_id, lambda adata: combine_columns(adata, body.columns, body.name, body.separator))

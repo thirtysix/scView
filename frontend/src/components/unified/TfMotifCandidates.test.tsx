@@ -184,6 +184,24 @@ describe("TfMotifCandidates", () => {
     expect(onGeneClick).not.toHaveBeenCalled();
   });
 
+  it("asks for a mouse TF as the dataset spells it, not upper-cased", async () => {
+    getTfMotifStatus.mockResolvedValue(status(true));
+    getLastTfMotifs.mockResolvedValue({
+      ...RESULT, activity: { available: true, hint: null, network: "CollecTRI" },
+      groups: [{ ...RESULT.groups[0]!, rows: [row({
+        motif: "GATA1", tfs: ["GATA1"], activity_agrees: true,
+        tf_expressed: { gene: "Gata1", pct: 0.6, logfc: 2.1, expressed: true } })] }],
+    });
+    getActivityCells.mockResolvedValue({ network: "collectri", source: "Gata1", n_targets: 30, scores: [1, 2] });
+    const onScore = vi.fn();
+    render(<TfMotifCandidates groupByColumn="" setGroupByColumn={() => {}} onScore={onScore} onGeneClick={vi.fn()} />);
+    const table = await screen.findByTestId("tf-motif-table");
+    fireEvent.click(within(table).getAllByRole("row")[1]!);
+    await waitFor(() => expect(onScore).toHaveBeenCalled());
+    expect(getActivityCells).toHaveBeenCalledWith("d1", "collectri", "Gata1");
+    expect(getActivityCells).not.toHaveBeenCalledWith("d1", "collectri", "GATA1");
+  });
+
   it("says when the species is unknown, and shows a server refusal", async () => {
     getTfMotifStatus.mockResolvedValue({ ...status(true), dataset: { species: "unknown", assembly: null, prepared: false } });
     render(<TfMotifCandidates groupByColumn="cell_type" setGroupByColumn={() => {}} onScore={vi.fn()} />);

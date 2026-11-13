@@ -23,7 +23,8 @@ const LIST = {
   keep_superseded: 3, max_bytes: 200_000_000, total_bytes: 6144,
   results: [
     row({ id: "m1", label: "Markers of 'leiden' (t-test)" }),
-    row({ id: "m2", label: "Markers of 'cluster' (wilcoxon)", key: "cluster", stale: true }),
+    row({ id: "m2", label: "Markers of 'cluster' (wilcoxon)", key: "cluster", stale: true,
+          stale_reason: "neighbours rebuilt after this result" }),
     row({ id: "d1", kind: "de", key: "x", label: "CD14 Mono: STIM vs CTRL (Wilcoxon)", status: "primary" }),
   ],
 };
@@ -41,6 +42,10 @@ describe("ResultsList", () => {
     expect(items).toHaveLength(3);
     expect(within(items[1]!).getByText("earlier data")).toBeInTheDocument();
     expect(within(items[0]!).queryByText("earlier data")).toBeNull();
+    // The reason, on the stale row only.
+    expect(within(items[1]!).getByTestId("stale-reason")).toHaveTextContent(
+      "Earlier data: neighbours rebuilt after this result.");
+    expect(within(items[0]!).queryByTestId("stale-reason")).toBeNull();
     expect(screen.getByText(/3 stored, 6.14 kB of 200 MB/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "DE" }));
     expect(screen.getAllByTestId("stored-result")).toHaveLength(1);

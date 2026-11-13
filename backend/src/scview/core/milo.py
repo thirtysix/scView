@@ -805,8 +805,19 @@ def remember(adaptor, result: MiloResult) -> None:
             _last[adaptor] = result
     except TypeError:  # not weak-referenceable (a test double)
         return
-    results_store.keep(adaptor, "milo", result, key=f"{result.condition_key}|{result.sample_key}",
-                       label=f"Milo neighbourhoods: {' vs '.join(reversed(result.conditions))}")
+    how = run_settings(result)
+    results_store.keep(adaptor, "milo", result,
+                       key=f"{result.condition_key}|{result.sample_key}|{how}",
+                       label=f"Milo neighbourhoods: {' vs '.join(reversed(result.conditions))} ({how})")
+
+
+def run_settings(result: MiloResult) -> str:
+    """What tells two Milo runs of one comparison apart (Wilson 2022: k=30, k=30 + assay and
+    k=50 shared one label and superseded each other): k, the representation, covariates."""
+    parts = [f"k={result.n_neighbors}" if result.n_neighbors else "k=?", str(result.representation)]
+    if result.covariates:
+        parts.append("+ " + ", ".join(result.covariates))
+    return ", ".join(parts)
 
 
 def last_result(adaptor) -> MiloResult | None:

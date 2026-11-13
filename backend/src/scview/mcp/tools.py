@@ -817,6 +817,25 @@ async def set_labels(
 
 
 @tool(WRITE)
+async def combine_columns(
+    dataset_id: DatasetId,
+    columns: Annotated[list[str], Field(min_length=2, max_length=4, description=(
+        "Two to four obs columns, in the order their values are joined (e.g. ['donor_id', 'depot']).")
+    )],
+    name: Annotated[str, Field(min_length=1, description="Name of the new user annotation column.")],
+    separator: Annotated[str, Field(min_length=1, max_length=5, description=(
+        "Text between the values."))] = " | ",
+) -> str:
+    """Make a new annotation column whose value is each cell's values of 2-4 columns joined
+    ("HFD01 | ING"): a sample id from donor AND depot (or day, library) in one call, instead
+    of one set_labels call per pair. A cell missing a value in any column gets none. Saved with
+    the dataset; set_labels can edit it afterwards."""
+    r = await _post(f"{_ds(dataset_id)}/labels/combine",
+                    {"columns": columns, "name": name, "separator": separator})
+    return dumps({"dataset_id": dataset_id, **r})
+
+
+@tool(WRITE)
 async def subcluster(
     dataset_id: DatasetId,
     column: Annotated[str, Field(description="Obs column of the groups.")],
@@ -852,6 +871,7 @@ def _de_warnings(r: dict[str, Any]) -> list[str]:
                  f"(median counts {num(ts.get('median_a'))} vs {num(ts.get('median_b'))})")
     if r.get("dropped_samples"):
         w.append(f"samples left out: {', '.join(map(str, r['dropped_samples'][:10]))}")
+    w += [f"technology: {x}" for x in r.get("technology_warnings") or []]
     w += [f"replicates: {x}" for x in r.get("replicate_warnings") or []]
     w += [f"covariate: {x}" for x in r.get("covariate_notes") or []]
     return w
@@ -878,6 +898,9 @@ async def differential_expression(
     covariates: Annotated[list[str] | None, Field(max_length=4, description=(
         "Pseudobulk: per-sample obs columns in the design before the condition (sex, batch, age); "
         "refused when one varies within a sample or is confounded with the condition."))] = None,
+    numeric_covariates: Annotated[list[str] | None, Field(max_length=4, description=(
+        "Pseudobulk: covariates read as numbers, one slope each (an age; text such as "
+        "'54-year-old stage' is read as 54). Added to covariates."))] = None,
     donor_key: Annotated[str | None, Field(description=(
         "Pseudobulk: the person column the replicate column's samples nest in, for the "
         "repeated-donor warning (default: detected)."))] = None,
@@ -899,10 +922,11 @@ async def differential_expression(
                                 "replicate_key": replicate_key, "method": method, "pb_method": pb_method}
         if min_pct is not None:
             body["min_pct"] = min_pct
-        if covariates or donor_key:
+        if covariates or donor_key or numeric_covariates:
             if method != "pseudobulk":
-                raise ToolError("covariates and donor_key are for method='pseudobulk'.")
-            body.update({"covariates": covariates, "donor_key": donor_key})
+                raise ToolError("covariates, numeric_covariates and donor_key are for method='pseudobulk'.")
+            body.update({"covariates": covariates, "donor_key": donor_key,
+                         "numeric_covariates": numeric_covariates})
         r = await _post(f"{_ds(dataset_id)}/de/compare", body)
     else:
         if method == "pseudobulk":
@@ -949,6 +973,11 @@ async def differential_expression(
     }
     if not out.get("covariates"):
         out.pop("covariates", None)
+    if r.get("fold_change_note"):
+        out["fold_change_note"] = r["fold_change_note"]
+    sig_note = (r.get("significance") or {}).get("note")
+    if sig_note and not up and not down:
+        out["none_significant"] = sig_note
     if (out["method"] != "pseudobulk" and not r.get("underreplicated")
             and (r.get("n_donors_a") or 0) >= 2 and (r.get("n_donors_b") or 0) >= 2):
         # The UI's caption says the same: a cell-level test treats cells as independent.
@@ -972,13 +1001,17 @@ async def compare_de_results(
     result_b: Annotated[str, Field(description="Another result_id (e.g. pseudobulk on the same comparison).")],
     padj_max: Annotated[float, Field(gt=0, le=1, description="Significant at adjusted p at most this.")] = 0.05,
     lfc_min: Annotated[float, Field(ge=0, le=20, description="And |log2FC| at least this.")] = 0.25,
+    common_tested_only: Annotated[bool, Field(description=(
+        "Count only the genes both results tested (the cell-level detection cut-off and the "
+        "pseudobulk count filter keep different genes)."))] = False,
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
     """Compare two DE results' significant genes (the DE overlap the UI draws): how many each
     calls, how many both call, their sign agreement, and the top genes only one of them calls
     (largest |log2FC| first). Use case: cell-level Wilcoxon vs donor-level pseudobulk."""
     d = await _post(f"{_ds(dataset_id)}/de/overlap", {
-        "result_ids": [result_a, result_b], "direction": "both", "padj_max": padj_max, "lfc_min": lfc_min})
+        "result_ids": [result_a, result_b], "direction": "both", "padj_max": padj_max, "lfc_min": lfc_min,
+        "restrict_to_common_tested": common_tested_only})
     n = clamp(limit)
     sets = d.get("sets") or []
     pair = (d.get("pairs") or [{}])[0]
@@ -1002,7 +1035,7 @@ async def compare_de_results(
         "only_a": genes((0,)), "only_b": genes((1,)),
         "note": "lfc_* is null where that result did not test the gene (under its detection "
                 "cut-off or the pseudobulk count filter).",
-        "notes": d.get("notes") or [],
+        "notes": [_api_words(x) for x in d.get("notes") or []],
     }
     if disc:
         out["discordant_genes"] = [g["gene"] for g in (d.get("discordant") or {}).get("genes", [])[:n]]
@@ -1058,7 +1091,9 @@ async def composition_test(
     reference: Annotated[str | None, Field(description="Baseline condition (default: the first).")] = None,
     transform: Annotated[Literal["logit", "asin"], Field(description=(
         "Scale the per-sample shares are tested on: logit (propeller's default) or arcsine square root."))] = "logit",
-    paired: Annotated[bool | None, Field(description="Default: paired when every donor is in every condition.")] = None,
+    paired: Annotated[bool | None, Field(description=(
+        "Default: paired when every donor is in every condition. True: pair the sample values found "
+        "in every condition and leave the others out (the result says how many)."))] = None,
     exclude_samples: Annotated[list[str] | None, Field(description=(
         "Values of the sample column to leave out (e.g. one donor's samples, for a leave-one-out)."))] = None,
     within_column: Annotated[str | None, Field(description=(
@@ -1067,6 +1102,9 @@ async def composition_test(
         "The subset's value(s) of within_column (e.g. ['Immune']: T cells among immune cells)."))] = None,
     donor_key: Annotated[str | None, Field(description=(
         "Person column the samples nest in, for the repeated-donor warning (default: detected)."))] = None,
+    covariates: Annotated[list[str] | None, Field(max_length=4, description=(
+        "Per-sample obs columns in the design before the condition (sex, batch; the animal column "
+        "blocks on the animal when the condition varies within it, e.g. depot)."))] = None,
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
     """Do cell types make up different shares of the cells between conditions, with donors as
@@ -1075,13 +1113,19 @@ async def composition_test(
     body = {"condition_key": condition_key, "group_key": group_key, "sample_key": sample_key,
             "conditions": conditions, "reference": reference, "transform": transform, "paired": paired,
             "exclude_samples": exclude_samples, "within_column": within_column,
-            "within_value": within_value, "donor_key": donor_key}
+            "within_value": within_value, "donor_key": donor_key, "covariates": covariates}
     d = await _post(f"{_ds(dataset_id)}/composition/test", body)
     groups = [_flat(g) for g in d.pop("groups", []) or []]
     d.pop("samples", None)  # per-sample shares: in get_result's table
     cols = list(dict.fromkeys(k for g in groups for k in g))
     out = {"dataset_id": dataset_id, **d, "groups": table(groups, cols, clamp(limit))}
     return dumps(out, _max_chars(limit))
+
+
+def _api_words(note: str) -> str:
+    """A DE overlap note in this tool's terms: the UI's checkbox is an argument here."""
+    return note.replace('tick "only genes tested in all" to count only those',
+                        "pass common_tested_only=true to count only those")
 
 
 def _flat(d: dict[str, Any], prefix: str = "") -> dict[str, Any]:
@@ -1467,7 +1511,7 @@ async def list_results(
     id, kind, label, and whether computed on an earlier version of the data (stale)."""
     d = await _get(f"{_ds(dataset_id)}/results", kind=kind)
     res = d.get("results") or []
-    return dumps({"dataset_id": dataset_id, **rows(res, ["id", "kind", "label", "created_at", "stale", "status"],
+    return dumps({"dataset_id": dataset_id, **rows(res, ["id", "kind", "label", "created_at", "stale", "stale_reason", "status"],
                                                    clamp(limit))}, _max_chars(limit))
 
 
@@ -1482,7 +1526,7 @@ async def get_result(
     """A stored result's parameters and its table's rows (from offset, limit of them)."""
     meta = await _get(f"{_ds(dataset_id)}/results/{result_id}")
     out: dict[str, Any] = {"dataset_id": dataset_id, **pick(meta, "id", "kind", "label", "created_at",
-                                                            "stale", "params")}
+                                                            "stale", "stale_reason", "params")}
     try:
         df = await _de_table(dataset_id, result_id)
     except ToolError as e:

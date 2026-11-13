@@ -372,6 +372,29 @@ describe("UnifiedDESubtab cell-level method", () => {
     expect(screen.getByText(/design ~cell_type \+ condition/)).toBeTruthy();
   });
 
+  it("says why no gene is significant, warns on a one-sided technology and explains huge fold changes", async () => {
+    computeDECompare.mockResolvedValue({
+      n_selected: 100, n_rest: 100, label: "DKD", genes: [], method: "pseudobulk", replicate_key: "donor_id",
+      n_samples_a: 5, n_samples_b: 6, design: "~condition", counts_source: "X",
+      significance: { n_tested: 100, n_significant: 0, min_padj: 0.69, min_padj_gene: "PCK1", n_nominal: 4,
+                      n_nominal_expected: 5, note: "No gene reaches adjusted p < 0.05: the smallest adjusted p is 0.69 (PCK1)." },
+    });
+    useDESettingsStore.getState().update({ mode: "groups", test: "pseudobulk", replicateKey: "ind", splitBy: "stim",
+      groupA: "STIM", groupB: "CTRL" });
+    renderDE();
+    fireEvent.click(screen.getByRole("button", { name: /compute de/i }));
+    expect((await screen.findByTestId("de-none-significant")).textContent).toContain("smallest adjusted p is 0.69");
+    computeDECompare.mockResolvedValue({
+      n_selected: 100, n_rest: 100, label: "DKD", genes: [], method: "wilcoxon", replicate_key: "donor_id",
+      technology_warnings: ["'assay' value '10x 3' v3' is only in CTRL (37% of its cells)."],
+      fold_change_note: "3 genes have |log2FC| of 20 or more: (almost) absent on one side.",
+    });
+    useDESettingsStore.getState().update({ test: "wilcoxon" });
+    fireEvent.click(screen.getByRole("button", { name: /compute de/i }));
+    expect((await screen.findByTestId("de-technology-caution")).textContent).toContain("only in CTRL");
+    expect(screen.getByTestId("de-fold-change-note").textContent).toContain("absent on one side");
+  });
+
   it("shows a logistic regression by coefficient, without p-values", async () => {
     computeDE.mockResolvedValue(LOGREG);
     useDESettingsStore.getState().update({ cellMethod: "logreg" });

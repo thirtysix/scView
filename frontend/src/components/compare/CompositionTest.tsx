@@ -18,7 +18,7 @@ import {
 import { downloadCsv } from "@/lib/csv";
 import { replicateColumns } from "@/lib/de";
 import { formatPValue, prettyObsLabel } from "@/lib/formatting";
-import { rankGroupingColumns, rankOptionsFor } from "@/lib/obsColumns";
+import { isCategoricalDtype, rankGroupingColumns, rankOptionsFor } from "@/lib/obsColumns";
 import type { DonorPoint } from "@/lib/donorPlot";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useViewStore } from "@/stores/viewStore";
@@ -60,6 +60,7 @@ export function CompositionTest({ datasetId, info, defaultCondition, defaultGrou
   const [transform, setTransform] = useState<"logit" | "asin">("logit");
   const [pairing, setPairing] = useState<"auto" | "paired" | "unpaired">("auto");
   const [robust, setRobust] = useState(true);
+  const [covariate, setCovariate] = useState(""); // "" = none
   // Shares among a subset of the cells (T cells among immune cells), and samples left out.
   const [withinCol, setWithinCol] = useState("");
   const [withinVal, setWithinVal] = useState("");
@@ -94,6 +95,18 @@ export function CompositionTest({ datasetId, info, defaultCondition, defaultGrou
     () => cols.find((c) => c.name === conditionKey)?.values ?? [],
     [cols, conditionKey],
   );
+  // As Milo's: a per-sample column (sex, batch, the animal) to adjust for.
+  const covariateOptions = useMemo(
+    () =>
+      cols.filter(
+        (c) =>
+          isCategoricalDtype(c.dtype) &&
+          c.n_unique >= 2 &&
+          c.n_unique <= 50 &&
+          ![conditionKey, groupKey, sampleKey, result?.sample_key].includes(c.name),
+      ),
+    [cols, conditionKey, groupKey, sampleKey, result?.sample_key],
+  );
 
   // Defaults once the columns are known: cell types / clusters as the groups,
   // the most condition-like column as the condition.
@@ -121,8 +134,9 @@ export function CompositionTest({ datasetId, info, defaultCondition, defaultGrou
   }, [conditionKey, conditionValues]);
   usePrefillSample(defaultSample, conditionKey, sampleOptions, setSampleKey);
 
-  // Whether the samples pair up depends on the columns: back to auto.
+  // Whether the samples pair up depends on the columns: back to auto, and no covariate.
   useEffect(() => setPairing("auto"), [conditionKey, sampleKey]);
+  useEffect(() => setCovariate(""), [conditionKey, groupKey, sampleKey]);
   // Left-out samples are values of the sample column: a new column starts with none.
   useEffect(() => setLeftOut((s) => (s.length ? [] : s)), [conditionKey, sampleKey]);
 
@@ -163,6 +177,7 @@ export function CompositionTest({ datasetId, info, defaultCondition, defaultGrou
       ...(robust ? {} : { robust: false }),
       ...(withinCol && withinVal ? { within_column: withinCol, within_value: withinVal } : {}),
       ...(leftOut.length ? { exclude_samples: leftOut } : {}),
+      ...(covariate ? { covariates: [covariate] } : {}),
     })
       .then((r) => !cancelled && setResult(r))
       .catch((e) => {
@@ -176,7 +191,7 @@ export function CompositionTest({ datasetId, info, defaultCondition, defaultGrou
     };
   }, [
     datasetId, conditionKey, groupKey, sampleKey, excluded, included, reference, transform, pairing,
-    robust, conditionValues, withinCol, withinVal, leftOut,
+    robust, conditionValues, withinCol, withinVal, leftOut, covariate,
   ]);
 
   const rows = useMemo(() => (result ? sortedGroups(result) : []), [result]);
@@ -320,7 +335,7 @@ export function CompositionTest({ datasetId, info, defaultCondition, defaultGrou
             <span className="mb-1 block">Design</span>
             <select
               aria-label="Design"
-              title="Paired blocks on the sample column: each donor is compared with itself across conditions"
+              title="Paired blocks on the sample column: each donor is compared with itself across conditions, and donors missing a condition are left out"
               value={pairing}
               onChange={(e) => setPairing(e.target.value as "auto" | "paired" | "unpaired")}
               className={selectCls}
@@ -343,6 +358,23 @@ export function CompositionTest({ datasetId, info, defaultCondition, defaultGrou
             >
               <option value="robust">Robust eBayes (default)</option>
               <option value="plain">Plain eBayes</option>
+            </select>
+          </label>
+          <label className="text-xs font-medium text-slate-500">
+            <span className="mb-1 block">Covariate</span>
+            <select
+              aria-label="Composition covariate"
+              title="A per-sample column (sex, batch, the animal) to adjust for"
+              value={covariate}
+              onChange={(e) => setCovariate(e.target.value)}
+              className={selectCls}
+            >
+              <option value="">None</option>
+              {covariateOptions.map((c) => (
+                <option key={c.name} value={c.name}>
+                  {prettyObsLabel(c.name)}
+                </option>
+              ))}
             </select>
           </label>
         </div>
@@ -581,6 +613,9 @@ export function CompositionTest({ datasetId, info, defaultCondition, defaultGrou
             <p className="mt-2 text-xs text-slate-500">
               {describeTest(result)} Shares are the mean over each condition&apos;s samples.
               {result.notes.map((n) => ` ${n}`)}
+              {(result.covariates ?? []).length > 0 &&
+                ` Adjusted for ${result.covariates!.map(prettyObsLabel).join(", ")}.`}
+              {(result.covariate_notes ?? []).map((n) => ` ${n}`)}
               {result.dropped_samples.length > 0 &&
                 ` Left out (under 10 cells): ${result.dropped_samples.join(", ")}.`}
             </p>

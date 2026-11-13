@@ -198,6 +198,27 @@ describe("CompositionTest", () => {
     expect(last).not.toHaveProperty("paired");
   });
 
+  it("sends a covariate and says it was adjusted for", async () => {
+    const info = {
+      ...KANG_INFO,
+      obs_columns: [...KANG_INFO.obs_columns, { name: "sex", dtype: "category", n_unique: 2, values: ["F", "M"] }],
+    };
+    render(<CompositionTest datasetId="kang" info={info} />);
+    await screen.findByText("1 of 3 groups shift (FDR < 0.05)");
+    const pick = screen.getByLabelText("Composition covariate");
+    // Not the condition, groups or replicate column.
+    const offered = Array.from((pick as HTMLSelectElement).options).map((o) => o.value);
+    expect(offered).toContain("sex");
+    expect(offered).not.toContain("stim");
+    expect(offered).not.toContain("Donor");
+    testComposition.mockResolvedValue({ ...RESULT, covariates: ["sex"], covariate_notes: ["'sex' note."] });
+    fireEvent.change(pick, { target: { value: "sex" } });
+    await waitFor(() =>
+      expect(testComposition).toHaveBeenLastCalledWith("kang", expect.objectContaining({ covariates: ["sex"] })),
+    );
+    expect(await screen.findByText(/Adjusted for sex\. 'sex' note\./)).toBeInTheDocument();
+  });
+
   it("exports the table as CSV", async () => {
     render(<CompositionTest datasetId="kang" info={KANG_INFO} />);
     await screen.findByText("1 of 3 groups shift (FDR < 0.05)");

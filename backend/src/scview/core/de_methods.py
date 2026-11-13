@@ -108,6 +108,25 @@ def logfoldchanges(M, in_a: np.ndarray, uns: dict) -> np.ndarray:
     return np.log2((expm1(mean_a) + 1e-9) / (expm1(mean_b) + 1e-9))
 
 
+# scanpy's fold change adds 1e-9 to each side's mean (``logfoldchanges``): a gene at
+# about 0 on one side gets |log2FC| of 20 to 35 (Emont 2022: 25 for near-absent genes),
+# set by that 1e-9, not by a ratio. Kept as scanpy has it, and said.
+ONE_SIDED_LFC = 20.0
+
+
+def one_sided_note(lfcs) -> str | None:
+    """A note when some fold changes are that large: those genes are (almost) absent on
+    one side, so read them by detection, not by their fold change."""
+    v = np.abs(np.asarray([x for x in lfcs if x is not None], dtype=np.float64))
+    n = int(np.sum(v[np.isfinite(v)] >= ONE_SIDED_LFC))
+    if not n:
+        return None
+    return (f"{n:,} gene{'s have' if n != 1 else ' has'} |log2FC| of {ONE_SIDED_LFC:g} or more: "
+            "(almost) absent on one side. As in scanpy, the fold change adds 1e-9 to each side's "
+            "mean, so for these it measures that 1e-9, not a ratio: read them as found on one "
+            "side only.")
+
+
 def _ranked_test(test, method: str) -> MethodResult:
     """Wilcoxon or Welch t-test of ``test`` (obs ``_de_group`` = selection / rest):
     scanpy's, by blocks of genes (``core/rank_genes.py``, bit for bit). ``test`` holds

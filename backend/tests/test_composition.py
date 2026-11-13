@@ -232,8 +232,10 @@ def test_pairing_follows_the_donors():
     partial = T2_SAMPLES[:7] + ["B__d9"]
     r = composition_test(_obs(partial, T2), "cond", "donor", "group")
     assert r.design == "unpaired" and "independent" in r.notes[0]
-    with pytest.raises(CompositionError, match="every 'donor'"):
-        composition_test(_obs(partial, T2), "cond", "donor", "group", paired=True)
+    # Asked to pair: the donors in every condition are paired, the rest left out (was an error).
+    r = composition_test(_obs(partial, T2), "cond", "donor", "group", paired=True)
+    assert r.design == "paired" and r.pairing["n_pairs"] == 3 and r.pairing["n_dropped"] == 2
+    assert any("2 left out because they lack a condition" in n for n in r.notes)
 
 
 def test_paired_donors_get_a_signed_rank_test_on_their_shares():

@@ -200,6 +200,76 @@ def label_cells(
     return out
 
 
+COMBINE_SEPARATOR = " | "
+MAX_COMBINED = 4  # columns combined in one call
+COMBINE_TOP = 10  # values listed in the answer
+
+
+def combine_columns(adata, columns: list[str], name: object,
+                    separator: str = COMBINE_SEPARATOR) -> dict[str, Any]:
+    """A new user annotation column ``name`` whose value is each cell's values of
+    ``columns`` joined by ``separator`` ("HFD01 | ING": a mouse x depot sample id
+    in one call instead of one labelling per pair). A cell missing any of them
+    gets no value. Validated before ``adata`` changes."""
+    cols = list(dict.fromkeys(str(c) for c in columns or []))
+    if len(cols) < 2:
+        raise LabelError("Pick at least two columns to combine.")
+    if len(cols) > MAX_COMBINED:
+        raise LabelError(f"Combine at most {MAX_COMBINED} columns at once.")
+    missing = [c for c in cols if c not in adata.obs.columns]
+    if missing:
+        raise LabelError(f"Column '{missing[0]}' not found.", status=404)
+    if not isinstance(separator, str) or not separator or len(separator) > 5 or any(
+            unicodedata.category(ch) in _BAD_CATEGORIES for ch in separator):
+        raise LabelError("The separator must be 1 to 5 visible characters.")
+    column = clean_column_name(name, adata.obs.columns)
+
+    parts = [adata.obs[c].astype(str).where(adata.obs[c].notna()) for c in cols]
+    gone = pd.concat([p.isna() for p in parts], axis=1).any(axis=1).to_numpy()
+    joined = parts[0].fillna("")
+    for p in parts[1:]:
+        joined = joined + separator + p.fillna("")
+    values = joined.where(~gone)
+    n_values = int(values.nunique(dropna=True))
+    if n_values > MAX_LABELS:
+        raise LabelError(
+            f"The combination has {n_values:,} values (at most {MAX_LABELS}): one of the "
+            "columns looks per-cell, not a grouping.")
+    if n_values == 0:
+        raise LabelError("No cell has a value in every one of these columns.")
+    too_long = [v for v in values.dropna().unique() if len(v) > LABEL_MAX]
+    if too_long:
+        raise LabelError(f"A combined value is too long (max {LABEL_MAX} characters): "
+                         f"'{too_long[0][:40]}...'.")
+
+    # Category order: the first column's order, then the next one's, and so on.
+    def order(c: str) -> list[str]:
+        s = adata.obs[c]
+        if isinstance(s.dtype, pd.CategoricalDtype):
+            return [str(v) for v in s.cat.categories]
+        return sorted(set(s.dropna().astype(str)))
+
+    present = set(values.dropna())
+    rank = {c: {v: i for i, v in enumerate(order(c))} for c in cols}
+    codes = pd.DataFrame({c: p.map(rank[c]) for c, p in zip(cols, parts)})
+    first = codes[~gone].assign(v=values[~gone]).drop_duplicates("v").sort_values(cols)["v"]
+    cats = [v for v in first if v in present]
+    adata.obs[column] = pd.Categorical(values, categories=cats)
+    _set_user_columns(adata, [*user_columns(adata), column])
+    _record(adata, "combine_columns", {"column": column, "columns": cols, "separator": separator,
+                                       "n_labels": len(cats)})
+    counts = adata.obs[column].value_counts()
+    out = {
+        "column": column, "columns": cols, "separator": separator, "n_labels": len(cats),
+        "n_cells": int((~gone).sum()), "n_missing": int(gone.sum()),
+        "values": [{"value": str(k), "n_cells": int(v)} for k, v in counts.head(COMBINE_TOP).items()],
+    }
+    if len(cats) > UI_MAX_GROUPS:
+        out["note"] = (f"'{column}' has {len(cats)} values: the UI's group pickers list columns of at "
+                       f"most {UI_MAX_GROUPS}, so they leave it out; filters and tests still take it.")
+    return out
+
+
 def restore(
     adata, column: str, previous: list[dict[str, Any]], created: bool
 ) -> dict[str, Any]:

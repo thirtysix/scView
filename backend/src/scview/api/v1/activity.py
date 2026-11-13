@@ -272,6 +272,15 @@ async def activity_summary(
     return await _in_thread(_run, reading=(dm, dataset_id, adaptor, adata, network, _net_dir(settings)))
 
 
+def source_named(sources: list[str], name: str) -> str | None:
+    """``name`` as the network spells it: exact, else the one source equal ignoring case
+    (a JASPAR TF "GATA1" is "Gata1" in mouse CollecTRI); None for no or several matches."""
+    if name in sources:
+        return name
+    hits = [s for s in sources if s.upper() == name.upper()]
+    return hits[0] if len(hits) == 1 else None
+
+
 @router.get("/datasets/{dataset_id}/activity/{network}/cells")
 async def activity_cells(
     dataset_id: str,
@@ -292,15 +301,16 @@ async def activity_cells(
 
     def _run(room: int) -> dict:
         model, matrix = _model(adata, network, _net_dir(settings), species, room=room)
-        if source not in model.net.sources:
+        name = source_named(model.net.sources, source)
+        if name is None:
             raise HTTPException(
                 status_code=404,
                 detail=f"'{source}' is not scored on this dataset ({s.label} sources need "
                 f"at least {activity.TMIN} targets among its genes).",
             )
-        j = model.net.sources.index(source)
-        return {"network": s.name, "source": source, "n_targets": int(model.net.n_targets[j]),
-                "scores": _round(model.source(source)), "matrix_source": matrix}
+        j = model.net.sources.index(name)
+        return {"network": s.name, "source": name, "n_targets": int(model.net.n_targets[j]),
+                "scores": _round(model.source(name)), "matrix_source": matrix}
 
     out = await _in_thread(_run, reading=(dm, dataset_id, adaptor, adata, network, _net_dir(settings)))
     if save:

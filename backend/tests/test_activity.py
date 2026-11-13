@@ -365,6 +365,20 @@ async def test_cells_endpoint_colours_by_one_source(client, dataset_manager, net
     assert len(body["scores"]) == a.n_obs and body["n_targets"] > 0
     r = await client.get(f"{API}/datasets/{did}/activity/collectri/cells", params={"source": "SMALLTF"})
     assert r.status_code == 404 and "at least 5 targets" in r.json()["detail"]
+    # A source asked in another case is the network's own (mouse "Gata1" vs JASPAR "GATA1").
+    r = await client.get(f"{API}/datasets/{did}/activity/collectri/cells", params={"source": "Stat1"})
+    assert r.status_code == 200, r.text
+    assert r.json()["source"] == "STAT1"
+
+
+def test_source_named_matches_case_only_when_unique():
+    from scview.api.v1.activity import source_named
+
+    assert source_named(["Gata1", "Stat1"], "GATA1") == "Gata1"
+    assert source_named(["Gata1"], "Gata1") == "Gata1"
+    assert source_named(["Gata1", "GATA1"], "gata1") is None  # two: no guess
+    assert source_named(["Gata1", "GATA1"], "GATA1") == "GATA1"  # exact wins
+    assert source_named(["Stat1"], "Gata1") is None
 
 
 async def test_de_endpoint_ranks_sources_on_the_statistic(client, dataset_manager, networks):

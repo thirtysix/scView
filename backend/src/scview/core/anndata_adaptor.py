@@ -682,11 +682,15 @@ class AnnDataAdaptor:
         """
         layers: list[dict] = []
 
-        # raw (log-normalized, all genes)
+        # raw (log-normalized, all genes; an upload's .raw can hold counts instead)
         if self.adata.raw is not None:
+            try:
+                counts = _looks_like_counts(self.adata.raw.X)
+            except Exception:  # noqa: BLE001 - an unreadable .raw: no claim about it
+                counts = False
             layers.append({
                 "key": "raw",
-                "label": "Log-normalized (raw)",
+                "label": "Counts (raw)" if counts else "Log-normalized (raw)",
                 "n_genes": len(self.adata.raw.var_names),
             })
 
@@ -741,10 +745,30 @@ class AnnDataAdaptor:
         }
 
     def default_expression_layer(self) -> str:
-        """Return the default layer key — prefers 'raw' if available, else 'X'."""
-        if self.adata.raw is not None:
-            return "raw"
-        return "X"
+        """The default layer key: 'raw' when there is one, else 'X'; but 'X' when .raw
+        holds raw counts beside a log-normalised X of (nearly) the same genes, as a
+        CELLxGENE file does. Plots on counts track library depth (Wilson 2022: per-donor
+        dot plots and violins on counts ranked donors by depth); log-normalised values
+        are what the per-donor box, DE and markers read."""
+        raw = self.adata.raw
+        if raw is None:
+            return "X"
+        key = (id(raw.X), id(self.adata.X))
+        cached = getattr(self, "_default_layer", None)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        layer = "raw"
+        try:
+            X = self.adata.X
+            if (_looks_like_counts(raw.X) and X is not None and self.adata.n_vars >= 0.9 * raw.n_vars
+                    and not _looks_like_counts(X) and not scaling.holds_scaled(X, rows=200)):
+                head = _dense_rows(X[: min(200, X.shape[0])])
+                if head.size and head.min() >= 0:
+                    layer = "X"
+        except Exception:  # noqa: BLE001 - an unreadable matrix: keep the old default
+            layer = "raw"
+        self._default_layer = (key, layer)
+        return layer
 
     # ------------------------------------------------------------------
     # Gene names and expression
