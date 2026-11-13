@@ -13,6 +13,15 @@ export interface MoranRow {
   z: number | null;
   pval: number | null;
   pval_adj: number | null;
+  /** Several sections: each section's own values (a section where the gene is constant is absent) */
+  by_library?: Record<string, MoranSectionValues>;
+}
+
+export interface MoranSectionValues {
+  I: number | null;
+  z: number | null;
+  pval: number | null;
+  pval_adj: number | null;
 }
 
 export interface MoranResult {
@@ -27,6 +36,12 @@ export interface MoranResult {
   matrix_source: string;
   unit: "spot" | "bin" | "cell";
   n_constant: number;
+  /** The section the run was on, or "all" */
+  library_id: string;
+  /** "section": several sections pooled, each centred on its own mean; "global": one section */
+  centring: "section" | "global";
+  /** Several sections: each one's size */
+  sections: { library_id: string; n_obs: number }[];
   notes: string[];
   /** Rows sent (highest I first); the CSV has every gene */
   rows_shown: number;
@@ -45,10 +60,14 @@ export interface MoranRunBody {
   layer?: string | null;
 }
 
-/** The last run on the dataset, or null when none has run (allow_empty, so no 404). */
-export async function getSpatialAutocorr(datasetId: string): Promise<MoranResult | null> {
+/**
+ * The last run on the dataset, or null when none has run (allow_empty, so no 404). With
+ * `libraryId`: the last run on that section ("all": over every section).
+ */
+export async function getSpatialAutocorr(datasetId: string, libraryId?: string): Promise<MoranResult | null> {
+  const section = libraryId ? `&library_id=${encodeURIComponent(libraryId)}` : "";
   try {
-    return await apiFetch<MoranResult | null>(`/datasets/${datasetId}/spatial/autocorr?allow_empty=true`);
+    return await apiFetch<MoranResult | null>(`/datasets/${datasetId}/spatial/autocorr?allow_empty=true${section}`);
   } catch (e) {
     if (e instanceof Error && /API error 404/.test(e.message)) return null;
     throw e;

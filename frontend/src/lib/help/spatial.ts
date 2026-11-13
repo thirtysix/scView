@@ -20,7 +20,9 @@ export const SPATIAL_HELP: Record<string, string> = {
   "spatial.genes":
     "Which genes to test. Variable genes uses the genes the pipeline marked as highly variable (every gene when none are marked) and is quicker. All genes can also find patterns in genes that vary little between cells, and takes longer.",
   "spatial.section":
-    "Test one tissue section, or all of them together. With all sections, neighbours are still found within each section, never across sections, and each gene gets one Moran's I.",
+    "Test one tissue section, or all of them together. With all sections, neighbours are found within each section and each section is centred on its own mean, so a gene that is only higher on one slide does not count as a pattern. Each section's own I is shown beside the pooled one.",
+  "spatial.by-section":
+    "Moran's I of the gene within each section alone, the same value a run on that section gives. A pooled I carried by one or two sections shows here.",
   "spatial.table":
     "A high Moran's I with a small adjusted p means the gene is high in some areas of the tissue and low in others. Click a gene to colour the tissue by it and see where.",
 
@@ -55,6 +57,10 @@ export const SPATIAL_HELP: Record<string, string> = {
     "The labels whose local mix defines a niche, usually cell types. Places with the same mix of these labels around them form one niche, whatever the label of the cell itself.",
   "domains.niche-window":
     "How many nearest spots, bins or cells (itself included) make up each window whose mix of labels is compared. A small window describes the immediate surroundings; a large one the wider region.",
+  "domains.niche-shares":
+    "Which shares from Spot composition describe each spot. Cell shares estimate how many cells of each type the spot holds; RNA shares how much of its RNA each type made. Cell shares are closest to cell2location's abundances.",
+  "domains.niche-spot-window":
+    "1 groups each spot by its own shares. A larger window first averages the shares over that many nearest spots (itself included), which smooths noisy spots but blurs the edges between niches.",
   "domains.niche-count":
     "How many niches to find. Compare a few values and keep the niches that make sense in the tissue.",
   "domains.niche-heatmap":
@@ -68,6 +74,8 @@ export const SPATIAL_HELP: Record<string, string> = {
     "The longest distance to score, in the unit shown; the distances then run evenly up to it. Left empty, squidpy's default range is used, which on a large section starts far above a cell's size: set a value to look at close neighbours.",
   "domains.cooccur-near":
     "The label the curves are measured from. Each line is a label: above 1 at a distance, it is found within that distance of this label more often than among all pairs at that range. The thicker line is the label with itself.",
+  "domains.cooccur-section":
+    "All sections combined, or one section's own curves. Combined, each section is scored against its own label shares first, so labels that are simply common on the same slides do not look close together.",
   "domains.cooccur-heatmap":
     "The distance at which the labels-by-labels heatmap below is drawn. Short distances show which labels sit close together; longer ones show which share broader regions.",
 

@@ -76,6 +76,8 @@ export function SpatialDomainsSubtab({
   const [enrichColumn, setEnrichColumn] = useState("");
   const [nicheLabel, setNicheLabel] = useState("");
   const [nicheWindow, setNicheWindow] = useState(20);
+  const [spotWindow, setSpotWindow] = useState(1);
+  const [nicheShares, setNicheShares] = useState<"cells" | "rna">("cells");
   const [nicheCount, setNicheCount] = useState(8);
 
   useEffect(() => {
@@ -164,13 +166,18 @@ export function SpatialDomainsSubtab({
       () => null,
     );
   };
+  // On spots that mix cells, niches come from the saved spot composition's shares.
+  const fromShares = info?.niches_allowed.source === "spot_composition";
   const startNiches = () => {
     const column = info?.free_niche_column ?? "spatial_niche"; // a new column each run: nothing is replaced
+    const body = fromShares
+      ? { source: "spot_composition" as const, shares: nicheShares, k_window: spotWindow, n_niches: nicheCount, column }
+      : { source: "labels" as const, label_column: nichePick, k_window: nicheWindow, n_niches: nicheCount, column };
     void run.start(
       datasetId,
       "niches",
       "Composition niches",
-      (h) => runNiches(datasetId, { label_column: nichePick, k_window: nicheWindow, n_niches: nicheCount, column }, h),
+      (h) => runNiches(datasetId, body, h),
       (r: NichesResult) => r.column ?? null,
     );
   };
@@ -338,10 +345,19 @@ export function SpatialDomainsSubtab({
         <div className="text-xs font-medium text-slate-700">
           <HoverTip
             width={300}
-            tip={<>
-              Each {unit}&apos;s window is its nearest {units} in the section (itself included); {units} whose windows hold
-              the same mix of labels form one niche (k-means, Schurch et al. 2020, Cell).
-            </>}
+            tip={
+              fromShares ? (
+                <>
+                  Each {unit}&apos;s cell-type shares from Spot composition; {units} with the same mix of cell types form one
+                  niche (k-means, as Kuppe et al. 2022, Nature, did with cell2location shares).
+                </>
+              ) : (
+                <>
+                  Each {unit}&apos;s window is its nearest {units} in the section (itself included); {units} whose windows
+                  hold the same mix of labels form one niche (k-means, Schurch et al. 2020, Cell).
+                </>
+              )
+            }
           >
             Composition niches
           </HoverTip>
@@ -354,27 +370,58 @@ export function SpatialDomainsSubtab({
           <>
             {info?.niches_allowed.note && <p className="text-[11px] leading-snug text-amber-700">{info.niches_allowed.note}</p>}
             <div className="flex flex-wrap items-end gap-2 text-xs">
-              <label className={FIELD}>
-                <Help id="domains.niche-labels">Labels</Help>
-                <select value={nichePick} onChange={(e) => setNicheLabel(e.target.value)} className={INPUT}>
-                  {columns.map((c) => (
-                    <option key={c.name} value={c.name}>
-                      {prettyObsLabel(c.name)} ({c.n_unique})
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className={FIELD}>
-                <Help id="domains.niche-window">Window</Help>
-                <input
-                  type="number"
-                  min={2}
-                  max={200}
-                  value={nicheWindow}
-                  onChange={(e) => setNicheWindow(num(e.target.value, nicheWindow))}
-                  className={`${INPUT} w-14`}
-                />
-              </label>
+              {fromShares ? (
+                <>
+                  <label className={FIELD}>
+                    <Help id="domains.niche-shares">Shares</Help>
+                    <select
+                      value={nicheShares}
+                      onChange={(e) => setNicheShares(e.target.value as "cells" | "rna")}
+                      className={INPUT}
+                      aria-label="Niche shares"
+                    >
+                      <option value="cells">Cell shares</option>
+                      <option value="rna">RNA shares</option>
+                    </select>
+                  </label>
+                  <label className={FIELD}>
+                    <Help id="domains.niche-spot-window">Window</Help>
+                    <input
+                      type="number"
+                      min={1}
+                      max={200}
+                      value={spotWindow}
+                      onChange={(e) => setSpotWindow(num(e.target.value, spotWindow))}
+                      className={`${INPUT} w-14`}
+                      aria-label="Niche window"
+                    />
+                  </label>
+                </>
+              ) : (
+                <>
+                  <label className={FIELD}>
+                    <Help id="domains.niche-labels">Labels</Help>
+                    <select value={nichePick} onChange={(e) => setNicheLabel(e.target.value)} className={INPUT}>
+                      {columns.map((c) => (
+                        <option key={c.name} value={c.name}>
+                          {prettyObsLabel(c.name)} ({c.n_unique})
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className={FIELD}>
+                    <Help id="domains.niche-window">Window</Help>
+                    <input
+                      type="number"
+                      min={2}
+                      max={200}
+                      value={nicheWindow}
+                      onChange={(e) => setNicheWindow(num(e.target.value, nicheWindow))}
+                      className={`${INPUT} w-14`}
+                    />
+                  </label>
+                </>
+              )}
               <label className={FIELD}>
                 <Help id="domains.niche-count">Niches</Help>
                 <input
@@ -386,7 +433,7 @@ export function SpatialDomainsSubtab({
                   className={`${INPUT} w-14`}
                 />
               </label>
-              <button type="button" disabled={busy || !nichePick} onClick={startNiches} className={SOLID}>
+              <button type="button" disabled={busy || (!fromShares && !nichePick)} onClick={startNiches} className={SOLID}>
                 Find niches
               </button>
             </div>
@@ -651,8 +698,18 @@ function NicheHeatmap({
         <Help id="domains.niche-heatmap">
           {result.n_niches} niches in &quot;{column}&quot;
         </Help>
-        : the mean share of each {prettyObsLabel(result.label_column ?? "")} label in the windows of each niche (the {result.k_window}{" "}
-        nearest).
+        {result.source === "spot_composition" ? (
+          <>
+            : the mean {result.shares === "rna" ? "RNA" : "cell"} share of each cell type in the {units} of each niche, from Spot
+            composition against {result.reference?.name ?? "its reference"}
+            {(result.k_window ?? 1) > 1 ? ` (averaged over the ${result.k_window} nearest)` : ""}.
+          </>
+        ) : (
+          <>
+            : the mean share of each {prettyObsLabel(result.label_column ?? "")} label in the windows of each niche (the{" "}
+            {result.k_window} nearest).
+          </>
+        )}
       </Caption>
       {result.notes?.map((n) => (
         <p key={n} className="text-[11px] text-amber-700">

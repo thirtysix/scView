@@ -211,6 +211,29 @@ describe("CoOccurrenceCard", () => {
     expect(drawn.filter((p) => p.data[0]?.type === "heatmap").at(-1)?.data[0]?.z?.[0]).toEqual([1.5, 0.5]);
   });
 
+  it("over several sections says how they were combined and shows one section's own curves", async () => {
+    // QA (Kuppe 2022): pooled over 8 slides, Fibroblast|Myeloid rose to 1.71 at 4 mm from slide composition.
+    const several = {
+      ...saved, libraries: ["s1", "s2"], sections_combined: "within_sections", section: null,
+      sections: [{ library_id: "s1", pairs: 1200 }, { library_id: "s2", pairs: 800 }],
+    };
+    getCoOccurrence.mockImplementation((_d: string, p: { section?: string }) =>
+      Promise.resolve(info({ result: (p.section
+        ? { ...several, section: p.section, occ: [[[1, 1], [0.4, 0.6]], [[0.4, 0.6], [1, 1]]] }
+        : several) as CoOccurrenceInfo["result"] })));
+    render(<CoOccurrenceCard columns={columns} labelDefault="clusters" />);
+    await screen.findByTestId("cooccurrence-results");
+    expect(screen.getByTestId("cooccurrence-curves").textContent).toContain(
+      "2 sections: each scored against its own label shares, then combined");
+    const label = screen.getByText("Section");
+    expect(await hoverTip(label)).toBe(SPATIAL_HELP["domains.cooccur-section"]);
+    unhover(label);
+    fireEvent.change(screen.getByLabelText("Co-occurrence section"), { target: { value: "s2" } });
+    await waitFor(() => expect(getCoOccurrence).toHaveBeenLastCalledWith("d1", expect.objectContaining({ section: "s2" })));
+    await waitFor(() => expect(screen.getByTestId("cooccurrence-curves").textContent).toContain("Section s2 alone"));
+    expect(drawn.filter((p) => p.data[0]?.type === "scatter").at(-1)?.data[1]?.y).toEqual([0.4, 0.6]);
+  });
+
   it("says when a saved run no longer fits", async () => {
     getCoOccurrence.mockResolvedValue(
       info({ result: { ...saved, stale: true, stale_reason: "The labels in 'clusters' changed since this ran: run it again." } as CoOccurrenceInfo["result"] }),
