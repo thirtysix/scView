@@ -1,5 +1,7 @@
 /** Help for the QC cards outside Unified View (Data Assessment). Keys: `<card>.<thing>`. */
 export const QC_HELP: Record<string, string> = {
+  "markerdb.tissue":
+    "Database types described only in other organs are left out of the best types, so a kidney cluster is not offered a colon type. Immune, blood, vessel and stromal types, and types described across many tissues, stay. A label's own verdict is not affected.",
   "evidence.section":
     "Why each cluster was labelled or flagged, from the numbers scView's own rules read. Plain evidence, never a probability: a probability model was tested on benchmark clusters and did worse than these rules.",
   "evidence.markers":

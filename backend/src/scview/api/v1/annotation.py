@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from scview.core import annotation_confidence as conf
 from scview.core import annotation_crosscheck as xc
@@ -282,6 +282,9 @@ class MarkerDbCheckRequest(BaseModel):
     species: Literal["human", "mouse"] | None = None
     # Try a source whose download failed a moment ago again now
     retry: bool = False
+    # The dataset's tissue ("kidney"): suggestions keep to its types and those of every tissue.
+    # Empty: the data's own tissue column, else its title (core/marker_tissues.dataset_tissue)
+    tissue: str = Field("", max_length=200)
 
 
 def _marker_db_dest(settings: Settings) -> Path:
@@ -339,7 +342,8 @@ async def marker_db_check(
 ):
     """Each label of ``column``: its database type(s) and how the name matched, the
     verdict (supported / no database support / too few database markers / not in
-    database), p, overlapping genes, and the 3 best database types for its cells.
+    database), p, overlapping genes, and the 3 best database types for its cells (of the
+    dataset's tissue and of every tissue, when the tissue is known: ``tissue`` says which).
     Downloads the databases on first use. Changes nothing."""
     adata = (await _adaptor(dm, dataset_id)).adata
     if body.column not in adata.obs.columns:
@@ -348,7 +352,7 @@ async def marker_db_check(
     def _run():
         db = mdb.get_db(_marker_db_dest(settings), auto_download=settings.MARKER_DB_AUTO_DOWNLOAD,
                         retry=body.retry)
-        return mdb.check(adata, body.column, body.species, db)
+        return mdb.check(adata, body.column, body.species, db, tissue=body.tissue)
 
     try:
         # a download on first use, markers when none are stored: off the loop
