@@ -132,6 +132,7 @@ async def test_cancel_reaches_a_joint_run_and_removes_it(client, tmp_data_dir, d
     kind, data = _events(r.text)[-1]
     assert kind == "error" and data["status"] == "cancelled"
     assert "Cancelled before scaling" in data["error"]
+    assert "joint dataset was not kept" in data["error"] and "as it was before" not in data["error"]
     assert _left_behind(dataset_manager, tmp_data_dir) == []
 
 

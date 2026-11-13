@@ -208,6 +208,9 @@ async def run_integration(
                     yield _sse(event, data)
             if not saved():
                 why = ended.get("stop_reason") or "The run ended before it finished."
+                if ended.get("status") == "cancelled":  # the pipeline's sentence speaks of a source dataset
+                    why = (why.split(":")[0] + ": the joint dataset was not kept; the source datasets "
+                           "are unchanged.")
                 yield _sse("error", {"error": f"The joint embedding did not finish. {why}",
                                      "status": ended.get("status")})
                 return
