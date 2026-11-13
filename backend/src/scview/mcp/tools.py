@@ -859,8 +859,9 @@ async def marker_db_check(
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
     """The UI's marker database check (PanglaoDB, CellMarker, ACT): for each label of a column, its
-    database type matched by name, the verdict (supported / weak support / no database support /
-    too few database markers / not in database) with p and the overlapping genes, and the 3
+    database type matched by name, the verdict (supported / weak support, also for one shared gene
+    whatever its p / no database support / too few database markers / not in database) with p and
+    the overlapping genes, and the 3
     database types the group's top 25 markers fit best, of the dataset's tissue and of every tissue
     when the tissue is known ('tissue' in the reply says which). Changes nothing in the dataset. The
     databases are downloaded on first use (about a minute); after that cluster_evidence also
