@@ -1736,7 +1736,8 @@ def grounding_lines(adata, data_dir: str | Path | None = None) -> tuple[list[str
     if not info:
         return [], ""
     lsi = info.get("lsi") or {}
-    detail = f"{info.get('n_peaks', 0):,} peaks on {info.get('genome') or 'an unnamed genome'}"
+    on = "another species or build" if info.get("genome") == genome_build.OTHER else info.get("genome") or "an unnamed genome"
+    detail = f"{info.get('n_peaks', 0):,} peaks on {on}"
     lines = ["\n## Chromatin accessibility (10x Multiome ATAC)",
              f"- ATAC import: {detail}; {info.get('nnz', 0):,} non-zero values on disk; computed: "
              f"{', '.join(info.get('computed') or []) or 'nothing yet'} [{TAG}]"]

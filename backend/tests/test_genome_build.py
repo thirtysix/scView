@@ -519,6 +519,15 @@ def test_import_records_other_species_with_one_note():
         gene_annotation.canonical_genome(genome_build.OTHER)
 
 
+def test_copilot_facts_name_another_species_once():
+    a = mf.as_anndata()
+    note = genome_build.other_sentence("a genome with chromosomes up to chr25 (human has 22, mouse 19)")
+    atac_import.write_info(a, {"n_peaks": 3, "genome": genome_build.OTHER, "genome_note": note})
+    lines, _ = atac.grounding_lines(a)
+    assert any("3 peaks on another species or build" in line for line in lines)
+    assert sum(note in line for line in lines) == 1
+
+
 def test_fragments_of_another_species(tmp_path):
     fish = sorted([(c, i * 10, i * 10 + 50, "AAAC-1", 1) for c in ("chr1", "chr25") for i in range(200)],
                   key=lambda x: (x[0], x[1]))

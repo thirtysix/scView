@@ -105,6 +105,14 @@ describe("AccessibilitySubtab", () => {
     expect((await screen.findByTestId("atac-genome-note")).textContent).toBe(note);
   });
 
+  it("names input told by its chromosomes as another species or build, with its note", async () => {
+    const note = "This ATAC input is on a genome with chromosomes up to chr25 (human has 22, mouse 19), and ...";
+    api.getAtac.mockResolvedValue({ ...BASE, info: { ...BASE.info, genome: "other", genome_note: note } });
+    renderTab();
+    expect((await screen.findByTestId("atac-genome-note")).textContent).toBe(note);
+    expect(screen.getByText(/on another species or build/)).toBeTruthy();
+  });
+
   it("has no genome note on GRCh38", async () => {
     renderTab();
     await screen.findByTestId("atac-plan");
