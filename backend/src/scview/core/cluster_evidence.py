@@ -163,7 +163,8 @@ def qc_line(row: cluster_qc.ClusterQC, typical: dict[str, float]) -> Line:
         text += ". Cluster QC flags it " + ", ".join(FLAG_WORDS.get(f, f.replace("_", " ")) for f in row.flags) + "."
     else:
         text += ". No cluster QC flag."
-    return Line(kind="qc", text=text, fired=any(f in _DAMAGE for f in row.flags))
+    # nuclei_mito is a caution read from these numbers: the line is why it fired
+    return Line(kind="qc", text=text, fired=any(f in (*_DAMAGE, "nuclei_mito") for f in row.flags))
 
 
 def doublet_line(row: cluster_qc.ClusterQC, rows: dict[str, cluster_qc.ClusterQC]) -> Line | None:

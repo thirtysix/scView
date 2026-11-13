@@ -57,8 +57,11 @@ def test_mito_in_nuclei_is_seen_where_the_median_cell_has_none():
     for k in "0123":
         assert rows[k].flags == []
     # The evidence line says how many cells have mito reads, not "0.0% vs 0.0%"
-    qc = cluster_evidence.qc_line(rows["4"], report.typical).text
+    line = cluster_evidence.qc_line(rows["4"], report.typical)
+    qc = line.text
     assert "mito reads in" in qc and "0.0% vs 0.0%" not in qc and "mito RNA in nuclei" in qc
+    assert line.fired  # the evidence card opens on it
+    assert not cluster_evidence.qc_line(rows["0"], report.typical).fired
     lines, _ = cluster_qc.grounding_block(report)
     assert any("Mitochondrial RNA in nuclei" in ln for ln in lines)
     # Not a damage flag: the annotator does not label it Low-quality cells itself
