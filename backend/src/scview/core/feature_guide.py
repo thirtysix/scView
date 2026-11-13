@@ -101,7 +101,9 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
      "protein UMAPs (in the embedding menu), WNN clusters"),
     ("Unified View > Accessibility", "ATAC",
      "only with 10x Multiome peaks (a 10x .h5 or folder, .h5ad with Peaks features, .h5mu): QC, LSI with its "
-     "depth check, ATAC UMAP and clusters"),
+     "depth check, ATAC UMAP and clusters. Gene activity, nearest genes, motifs, peak-gene links and TSS "
+     "enrichment need the genome: GRCh38 (human), mm10 or mm39 (mouse, e.g. 10x GRCm39-2024-A); hg19, mm9 "
+     "and other species get a note saying so, and RNA work is unaffected"),
     ("Unified View > Accessibility > Joint RNA + ATAC (WNN)", "",
      "Seurat's weighted nearest neighbours on RNA PCs and LSI 2:50: per-cell RNA weight by group, WNN UMAP, clusters"),
     ("Unified View > Accessibility > Gene activity", "peak-based",

@@ -99,7 +99,7 @@ describe("AccessibilitySubtab", () => {
   });
 
   it("says when the peaks are on hg19, and nothing on GRCh38", async () => {
-    const note = "This ATAC input is on hg19 (GRCh37), and scView has gene positions for GRCh38 and mm10 only.";
+    const note = "This ATAC input is on hg19 (GRCh37), and scView has gene positions for GRCh38 (human) and mm10 or mm39 (mouse) only.";
     api.getAtac.mockResolvedValue({ ...BASE, info: { ...BASE.info, genome: "hg19", genome_note: note } });
     renderTab();
     expect((await screen.findByTestId("atac-genome-note")).textContent).toBe(note);
