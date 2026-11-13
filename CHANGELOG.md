@@ -6,6 +6,8 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.77.0] - 2026-11-14
+
 Spatial statistics over several sections compare each section with itself; joint embeddings filter unfiltered
 datasets and take up to 32; per-sample QC gets a genes floor; mouse ATAC on mm39 works; large datasets survive a
 crash mid-edit. Found by re-analysing a published heart Visium study (Kuppe 2022) through scView's MCP.
