@@ -158,6 +158,7 @@ async def get_dataset(dataset_id: DatasetId) -> str:
     large = d.get("large")
     out["large_mode"] = bool(large) if not isinstance(large, dict) else bool(large.get("large", True))
     out["modalities"] = [k for k in ("protein", "atac", "perturbation", "spatial") if d.get(k)]
+    out.update(_spatial_summary(d))
     if d.get("status") == "ready":
         try:
             recipe = await api.get(f"{_ds(dataset_id)}/recipe")
@@ -180,6 +181,32 @@ async def get_dataset(dataset_id: DatasetId) -> str:
     if left:
         out["column_values_left_out"] = f"{', '.join(left)}: describe_column lists them"
     return dumps(out, 10**9)
+
+
+MAX_SECTIONS_LISTED = 40
+
+
+def _spatial_summary(d: dict[str, Any]) -> dict[str, Any]:
+    """A spatial dataset's positions as plot and the spatial tools take them: ``spatial`` among
+    the embeddings, its sections (library_id) with their spots, the off-tissue spots left out
+    at import (as get_recipe records it), and a spatial assay imported without positions."""
+    out: dict[str, Any] = {}
+    sp = d.get("spatial")
+    if isinstance(sp, dict):
+        embs = list(d.get("available_embeddings") or [])
+        if "spatial" not in embs:
+            out["available_embeddings"] = [*embs, "spatial"]
+        libs = sp.get("libraries") or []
+        out["spatial"] = {**pick(sp, "technology", "unit", "library_column"), "n_sections": len(libs),
+                          "sections": [[lib.get("id"), lib.get("n_obs")] for lib in libs[:MAX_SECTIONS_LISTED]]}
+        if len(libs) > MAX_SECTIONS_LISTED:
+            out["spatial"]["sections_shown"] = f"{MAX_SECTIONS_LISTED} of {len(libs)}"
+    if isinstance(d.get("off_tissue"), dict):
+        out["off_tissue"] = pick(d["off_tissue"], "removed", "kept", "column", "off_tissue", "kept_reason")
+    note = (d.get("public_source") or {}).get("about_spatial_note")
+    if note:
+        out["spatial_note"] = note
+    return out
 
 
 def _runs(steps: list[Any]) -> list[str]:
@@ -1671,9 +1698,12 @@ async def _adaptor(dataset_id: str):
 async def plot(
     dataset_id: DatasetId,
     kind: Annotated[Literal["embedding", "violin", "dotplot"], Field(description=(
-        "embedding: cells on a UMAP/tSNE/PCA coloured by color_by or gene; violin: one gene by "
-        "groupby; dotplot: genes x groupby (size = share expressing, colour = mean)."))] = "embedding",
-    embedding: Annotated[str, Field(description="obsm key, e.g. X_umap (default), X_tsne, X_pca.")] = "X_umap",
+        "embedding: cells on a UMAP/tSNE/PCA, or spots on the tissue (embedding 'spatial'), coloured "
+        "by color_by or gene; violin: one gene by groupby; dotplot: genes x groupby (size = share "
+        "expressing, colour = mean)."))] = "embedding",
+    embedding: Annotated[str, Field(description=(
+        "obsm key, e.g. X_umap (default), X_tsne, X_pca, or spatial: the tissue positions (each "
+        "section drawn on its own, side by side; see section)."))] = "X_umap",
     color_by: Annotated[str | None, Field(description="Obs column to colour by (embedding).")] = None,
     gene: Annotated[str | None, Field(description="Gene to colour by (embedding) or to plot (violin).")] = None,
     groupby: Annotated[str, Field(description="Groups (violin, dotplot; default: the active clustering).")] = "",
@@ -1685,9 +1715,17 @@ async def plot(
     within_value: Annotated[str | list[str] | None, Field(description=(
         "Only one subgroup: its value (e.g. CD14 Monocyte), or a list of values whose cells are "
         "pooled."))] = None,
+    section: Annotated[str | list[str] | None, Field(description=(
+        "Spatial: the section to draw alone (a library_id, get_dataset lists them), or a list drawn "
+        "side by side. Default: every section side by side (at most 12, the caption says how many)."))] = None,
+    section_column: Annotated[str | None, Field(description=(
+        "Spatial: the obs column whose values are the sections (default library_id; e.g. the joint "
+        "dataset's 'dataset')."))] = None,
 ) -> list:
-    """A PNG figure of the dataset (at most 1600 px, under 300 KB). A dataset over 50,000 cells
-    is drawn from a random 50,000 (said in the caption). The same views are in the browser UI."""
+    """A PNG figure of the dataset (at most 1600 px, under 300 KB): an embedding (UMAP, tSNE,
+    PCA, or the tissue: embedding='spatial', sections side by side or one with section), a
+    violin or a dot plot. A dataset over 50,000 cells is drawn from a random 50,000 (said in
+    the caption). The same views are in the browser UI."""
     if isinstance(within_value, list) and not within_value:
         within_value = None
     if (within_column is None) != (within_value is None):
@@ -1743,7 +1781,11 @@ async def plot(
                 xy = adaptor.get_embedding(embedding)[:, :2]
             except KeyError:
                 names = [e["name"] for e in adaptor.available_embeddings()]
+                names += ["spatial"] if "spatial" in adaptor.adata.obsm else []
                 raise ToolError(f"No embedding '{embedding}'; this dataset has: {', '.join(names) or 'none'}.")
+            tissue = embedding in TISSUE_KEYS
+            panel, order, section_note = (_sections(adaptor, section, section_column) if tissue
+                                          else (None, [], ""))
             if color_by and gene:
                 raise ToolError("Colour by an obs column or a gene, not both.")
             values: Any = None
@@ -1759,9 +1801,15 @@ async def plot(
             # A published embedding can leave cells out (NaN coordinates: CELLxGENE sets often
             # do): draw the placed cells only, sampled among themselves, and say how many.
             placed = np.flatnonzero(np.isfinite(np.asarray(xy, dtype=float)).all(axis=1))
-            if len(placed) == 0:
+            if panel is not None:  # only the sections drawn: the others' spots are left out, not greyed
+                rows_, note = _section_rows(placed, panel, order, f"{_unit(adaptor)}s", embedding)
+                if focus is not None and not focus[rows_].any():
+                    raise ToolError(f"No cell with {within_column} = '{within_value}' is in the sections drawn.")
+                if focus is not None:
+                    note += f"; {int(focus[rows_].sum()):,} drawn with {within_column} = {within_value}"
+            elif len(placed) == 0:
                 raise ToolError(f"No cell has a position on '{embedding}' (every coordinate is missing).")
-            if len(placed) < n:
+            elif len(placed) < n:
                 pick_ = plots.sample(len(placed))
                 rows_ = placed if pick_ is None else placed[pick_]
                 note = (f"{len(placed):,} of {n:,} cells placed on {embedding} ({n - len(placed):,} have "
@@ -1777,10 +1825,19 @@ async def plot(
             if rows_ is not None:
                 xy = xy[rows_]
                 focus = focus[rows_] if focus is not None else None
+                panel = panel[rows_] if panel is not None else None
                 if values is not None:
                     values = values.iloc[rows_] if isinstance(values, pd.Series) else values[rows_]
             title = (f"{embedding} coloured by {label}" if label else embedding) + scope
-            return plots.embedding(np.asarray(xy, dtype=float), values, title, label, note, focus), note
+            note += section_note
+            xy = np.asarray(xy, dtype=float)
+            if panel is not None and len(order) > 1:
+                if isinstance(values, pd.Series):
+                    values = values.reset_index(drop=True)
+                return plots.sections(xy, values, panel, order, title, label, note, focus), note
+            if panel is not None:
+                title += f", section {order[0]}"
+            return plots.embedding(xy, values, title, label, note, focus, tissue=tissue), note
         if not gene:
             raise ToolError("A violin plot needs a gene.")
         by = groupby or adaptor.active_clustering_column() or ""
@@ -1807,6 +1864,76 @@ async def plot(
     except Exception as e:  # a refusal on a large dataset, a bad column type
         raise ToolError(f"Could not draw the plot: {e}") from None
     return [Image(data=png, format="png"), TextContent(type="text", text=f"{kind}: {note}, {len(png):,} bytes")]
+
+
+TISSUE_KEYS = ("spatial", "X_spatial")
+
+
+def _unit(adaptor) -> str:
+    from scview.core import spatial
+
+    try:
+        return spatial.technology(adaptor.adata)["unit"]
+    except Exception:  # noqa: BLE001 - only the caption's word
+        return "cell"
+
+
+def _section_rows(placed: np.ndarray, panel: np.ndarray, order: list[str],
+                  unit: str, embedding: str) -> tuple[np.ndarray, str]:
+    """The rows drawn for these sections (their placed rows, a random MAX_POINTS of them
+    when more) and the caption's count."""
+    inside = np.flatnonzero(np.isin(panel, order))
+    rows = placed[np.isin(panel[placed], order)]
+    if len(rows) == 0:
+        raise ToolError(f"No {unit[:-1]} of these sections has a position on '{embedding}'.")
+    pick_ = plots.sample(len(rows))
+    note = (f"{len(rows):,} {unit}" if pick_ is None else f"random {len(pick_):,} of the {len(rows):,} {unit}")
+    if len(rows) < len(inside):
+        note += f" ({len(inside) - len(rows):,} without a position, not drawn)"
+    return (rows if pick_ is None else rows[pick_]), note
+
+
+def _sections(adaptor, section: str | list[str] | None,
+              column: str | None) -> tuple[np.ndarray | None, list[str], str]:
+    """Each row's section (``column``, default library_id), the sections to draw and the
+    caption's words; no sections (None) on a dataset with one. Sections share pixel
+    coordinates, so drawn in one frame they lie on top of each other: never pooled."""
+    from scview.core import spatial
+
+    col = column or spatial.LIBRARY_COLUMN
+    obs = adaptor.adata.obs
+    if col not in obs.columns:
+        if column:
+            raise ToolError(column_message(column, list(obs.columns)))
+        if section:
+            raise ToolError(f"This dataset has one section (no {col} column): leave section out.")
+        return None, [], ""
+    values = obs[col]
+    labels = values.astype(str).where(values.notna(), "").to_numpy(dtype=object)
+    present = {x for x in labels if x}
+    if isinstance(values.dtype, pd.CategoricalDtype):
+        names = [str(c) for c in values.cat.categories if str(c) in present]
+    else:
+        names = sorted(present)
+    if section is None:
+        if len(names) <= 1:
+            return None, [], ""
+        wanted = names
+    else:
+        wanted = [section] if isinstance(section, str) else list(dict.fromkeys(str(x) for x in section))
+        missing = [w for w in wanted if w not in present]
+        if missing:
+            shown = ", ".join(names[:40]) + (f" and {len(names) - 40} more" if len(names) > 40 else "")
+            raise ToolError(f"No section {', '.join(map(repr, missing))} in {col}; its sections: {shown}.")
+    drawn = wanted[:plots.MAX_PANELS]
+    if len(drawn) == 1:
+        return labels, drawn, f"; section {drawn[0]}, one of {len(names)} ({col})"
+    note = f"; {len(drawn)} of {len(names)} sections ({col})"
+    if section is not None and len(wanted) > len(drawn):
+        note += f", the first {len(drawn)} of the {len(wanted)} asked for"
+    if len(drawn) < len(names):
+        note += "; pass section for the others"
+    return labels, drawn, note
 
 
 async def _dotplot_within(dataset_id: str, genes: list[str], groupby: str, layer: str,

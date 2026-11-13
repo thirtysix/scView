@@ -105,10 +105,11 @@ def _label_spots(xy: np.ndarray, codes: np.ndarray, names: list[str]) -> list[tu
 
 
 def embedding(xy: np.ndarray, values: pd.Series | np.ndarray | None, title: str,
-              color_label: str, caption: str, focus: np.ndarray | None = None) -> bytes:
+              color_label: str, caption: str, focus: np.ndarray | None = None, tissue: bool = False) -> bytes:
     """Cells on two embedding dimensions, coloured by a category (legend, and labels on
     the groups) or a number (colour bar). ``focus`` (a mask): only those cells are
-    coloured, the others drawn grey beneath them."""
+    coloured, the others drawn grey beneath them. ``tissue``: positions on a section,
+    y downwards as in its image."""
     fig = _figure(8.5, 7)
     ax = fig.add_subplot(1, 1, 1)
     size = max(0.5, min(12.0, 30000.0 / max(len(xy), 1)))
@@ -158,9 +159,85 @@ def embedding(xy: np.ndarray, values: pd.Series | np.ndarray | None, title: str,
     ax.set_xticks([])
     ax.set_yticks([])
     ax.set_aspect("equal", adjustable="datalim")
+    if tissue:
+        ax.invert_yaxis()
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
     fig.text(0.01, 0.005, caption, fontsize=8, color="#555555")
+    return _png(fig)
+
+
+MAX_PANELS = 12  # sections side by side in one figure
+
+
+def sections(xy: np.ndarray, values: pd.Series | np.ndarray | None, panel: np.ndarray, order: list[str],
+             title: str, color_label: str, caption: str, focus: np.ndarray | None = None) -> bytes:
+    """Tissue sections side by side, each on its own axes (their positions overlap: each
+    section has its own pixel frame), one colour scale or legend for all. ``panel`` names
+    each row's section; ``order`` the sections drawn, in that order."""
+    import math
+
+    n = len(order)
+    ncol = min(4, max(1, math.ceil(math.sqrt(n))))
+    nrow = math.ceil(n / ncol)
+    cats = None
+    colours: list = []
+    legend = values is not None and is_categorical(values)
+    if legend:  # the groups present among the coloured cells, one colour each across the sections
+        base = values.astype("category").reset_index(drop=True)
+        coloured = base if focus is None else base[focus]
+        cats = base.cat.set_categories([c for c in base.cat.categories if (coloured == c).any()])
+        colours = _palette(len(cats.cat.categories))
+    fig = _figure(3.3 * ncol + (2.2 if legend or values is not None else 0.4), 3.3 * nrow + 0.9)
+    vmin = vmax = None
+    if values is not None and not legend:
+        v_all = np.asarray(values, dtype=np.float64)
+        shown = v_all[focus] if focus is not None else v_all
+        finite = shown[np.isfinite(shown)]
+        vmin, vmax = (float(finite.min()), float(finite.max())) if len(finite) else (0.0, 1.0)
+    sc = None
+    for k, name in enumerate(order):
+        ax = fig.add_subplot(nrow, ncol, k + 1)
+        rows = np.flatnonzero(panel == name)
+        size = max(0.5, min(10.0, 6000.0 / max(len(rows), 1)))
+        if focus is not None:  # the other cells grey beneath
+            others = rows[~focus[rows]]
+            ax.scatter(xy[others, 0], xy[others, 1], s=size, c="#d9d9d9", linewidths=0, rasterized=True)
+        draw = rows if focus is None else rows[focus[rows]]
+        if values is None:
+            ax.scatter(xy[draw, 0], xy[draw, 1], s=size, c="#4a6fa5", linewidths=0, rasterized=True)
+        elif len(draw):
+            if legend:
+                order_ = draw[np.random.default_rng(SEED).permutation(len(draw))]
+                codes = cats.cat.codes.to_numpy()[order_]
+                rgba = np.array([colours[c] if c >= 0 else (0.8, 0.8, 0.8) for c in codes], dtype=float).reshape(-1, 3)
+                ax.scatter(xy[order_, 0], xy[order_, 1], s=size, c=rgba, linewidths=0, rasterized=True)
+            else:
+                v = np.asarray(values, dtype=np.float64)[draw]
+                o = np.argsort(np.nan_to_num(v, nan=-np.inf))
+                sc = ax.scatter(xy[draw[o], 0], xy[draw[o], 1], s=size, c=v[o], cmap="viridis", vmin=vmin,
+                                vmax=vmax, linewidths=0, rasterized=True)
+        ax.set_title(f"{name} ({len(rows):,})", fontsize=9)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_aspect("equal", adjustable="datalim")
+        ax.invert_yaxis()
+        for side in ("top", "right"):
+            ax.spines[side].set_visible(False)
+    if legend:
+        names = [str(c) for c in cats.cat.categories]
+        if len(names) <= MAX_LEGEND:
+            from matplotlib.lines import Line2D
+
+            handles = [Line2D([], [], marker="o", ls="", color=colours[i], label=nm) for i, nm in enumerate(names)]
+            fig.legend(handles=handles, title=color_label, loc="center left", bbox_to_anchor=(0.995, 0.5),
+                       fontsize=8, title_fontsize=9, frameon=False, markerscale=1.2)
+        else:
+            caption += f" {len(names)} groups: no legend."
+    elif sc is not None:
+        fig.colorbar(sc, ax=fig.axes, shrink=0.6, label=color_label)
+    fig.suptitle(title, fontsize=11)
+    fig.text(0.01, 0.003, caption, fontsize=8, color="#555555")
     return _png(fig)
 
 
