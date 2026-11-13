@@ -94,6 +94,21 @@ def test_a_motif_keeps_its_nan_and_is_replaced_by_the_same_motif_from_any_run():
     assert _motif(a, "MA0003.1", "c2", np.zeros(4)) == "chromvar_GENEA_NOPE_MA0003.1"
 
 
+def test_already_saved_needs_the_same_score_method_and_values():
+    a = _small()
+    vals = [np.nan, -1.5, 0.0, 2.0]
+    col = _motif(a, "MA0002.1", "c1", vals)
+    same = {"kind": "chromvar", "name": "GENEA::NOPE", "method": "chromVAR deviation z",
+            "extra": {"motif_id": "MA0002.1", "run_id": "c1"}}
+    assert saved_scores.already_saved(a, values=vals, **same) == col  # NaN where NaN
+    assert saved_scores.already_saved(a, values=[np.nan, -1.5, 0.0, 2.5], **same) is None
+    assert saved_scores.already_saved(a, values=vals, **{**same, "method": "other"}) is None
+    assert saved_scores.already_saved(a, values=vals, **{**same, "extra": {"motif_id": "MA0003.1"}}) is None
+    g = saved_scores.save(a, kind="geneset", name="s", values=np.ones(4), method="aucell", genes=["A", "B"])
+    assert saved_scores.already_saved(a, kind="geneset", name="s", values=np.ones(4), method="aucell", genes=["A", "B"]) == g
+    assert saved_scores.already_saved(a, kind="geneset", name="s", values=np.ones(4), method="aucell", genes=["A"]) is None
+
+
 def test_a_program_or_motif_without_its_run_is_refused():
     with pytest.raises(saved_scores.SavedScoreError, match="run_id and program"):
         saved_scores.save(_small(), kind="program", name="P1", values=np.zeros(4), extra={"run_id": "r"})
@@ -244,13 +259,16 @@ async def test_drawing_a_motif_with_save_keeps_its_z(client, dataset_manager, an
     want = np.array([np.nan if v is None else v for v in body["values"]], dtype=np.float64)
     np.testing.assert_allclose(got, want, atol=1e-3, equal_nan=True)
     assert (got < 0).any() and (got > 0).any()  # signed: the colour scale centres on 0
-    # The same motif again replaces it; without save nothing is written.
+    # The same motif drawn again: the same column, nothing written or recorded again;
+    # without save nothing is written.
+    n_steps = len(provenance.read_provenance(dataset_manager.get_dataset(did).adata)["history"])
     again = (await client.get(url, params={"motif_id": "MA0002.1", "save": "true"})).json()
-    assert again["saved_column"] == col
+    assert again["saved_column"] == col and again["save_note"] is None
+    assert len(provenance.read_provenance(dataset_manager.get_dataset(did).adata)["history"]) == n_steps
     assert (await client.get(url, params={"motif_id": "MA0001.1"})).json().get("saved_column") is None
     assert list((await client.get(f"{API}/datasets/{did}/scores")).json()["scores"]) == [col]
     steps = [h["step"] for h in provenance.read_provenance(dataset_manager.get_dataset(did).adata)["history"]]
-    assert steps[-2:] == ["save_score", "save_score"]
+    assert steps[-2:] == ["atac_chromvar", "save_score"]
     assert replay_script.describe(dataset_manager.get_dataset(did).adata)[-1]["status"] == replay_script.EXACT
     r = await client.delete(f"{API}/datasets/{did}/scores/{col}")
     assert r.status_code == 200 and r.json()["kind"] == "chromvar"

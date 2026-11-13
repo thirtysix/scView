@@ -152,6 +152,26 @@ def _recorded(record) -> None:
         logger.warning("Could not record a saved score's provenance: %s", e)
 
 
+def already_saved(adata, *, kind: str, name: str, values, method: str | None = None,
+                  network: str | None = None, extra: dict[str, Any] | None = None,
+                  genes: list[str] | None = None, **_: Any) -> str | None:
+    """The column that already holds exactly this score (same score, method, genes and
+    values, NaN where NaN), or None. Drawing the same program or motif again then saves
+    nothing and records no step. Takes ``save``'s keywords."""
+    if kind not in KINDS:
+        return None
+    ident = {"name": str(name), "network": network, **(extra or {})}
+    for col, entry in record(adata).items():
+        if not _same(entry, kind, ident) or entry.get("method") != method:
+            continue
+        if genes is not None and entry.get("genes") != [str(g) for g in genes][:MAX_GENES_RECORDED]:
+            return None
+        v = np.asarray(values, dtype=np.float32).ravel()
+        have = np.asarray(adata.obs[col], dtype=np.float32)
+        return col if v.shape == have.shape and np.array_equal(v, have, equal_nan=True) else None
+    return None
+
+
 def save(adata, *, kind: str, name: str, values, method: str | None = None,
          genes: list[str] | None = None, genes_missing: list[str] | None = None,
          source: str | None = None, network: str | None = None,
