@@ -11,6 +11,7 @@ import shutil
 import dataclasses
 import itertools
 import unicodedata
+import uuid
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -862,21 +863,31 @@ class DatasetManager:
             return False
         target = self.derived_h5ad_path(dataset_id, adaptor.h5ad_path)
         uns_history.before_save(dataset_id, adata)
-        if Path(adaptor.h5ad_path) == target and target.exists():
-            import h5py
-            from anndata.io import write_elem
+        # Edited on a copy and swapped in: a kill mid-write (an OOM) must not leave the only
+        # copy of the dataset as a broken HDF5 file. Copying is a plain file copy, far cheaper
+        # than writing the whole AnnData again.
+        partial = target.with_name(f".{target.name}.{uuid.uuid4().hex[:8]}.part")  # one per writer
+        try:
+            if Path(adaptor.h5ad_path) == target and target.exists():
+                import h5py
+                from anndata.io import write_elem
 
-            with h5py.File(target, "a") as f:
-                if "uns" not in f:
-                    write_elem(f, "uns", {})
-                group = f["uns"]
-                for key in keys:
-                    if key in group:
-                        del group[key]
-                    write_elem(group, key, adata.uns[key])
-        else:
-            adata.write_h5ad(target, compression="gzip")
-            adaptor.h5ad_path = str(target)
+                shutil.copyfile(target, partial)
+                with h5py.File(partial, "a") as f:
+                    if "uns" not in f:
+                        write_elem(f, "uns", {})
+                    group = f["uns"]
+                    for key in keys:
+                        if key in group:
+                            del group[key]
+                        write_elem(group, key, adata.uns[key])
+                os.replace(partial, target)
+            else:
+                adata.write_h5ad(partial, compression="gzip")
+                os.replace(partial, target)
+                adaptor.h5ad_path = str(target)
+        finally:
+            partial.unlink(missing_ok=True)
         return True
 
     def saved_in_place(self, dataset_id: str, adaptor: AnnDataAdaptor, path: str) -> None:
