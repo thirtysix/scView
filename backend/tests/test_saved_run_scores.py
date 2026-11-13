@@ -104,6 +104,8 @@ def test_already_saved_needs_the_same_score_method_and_values():
     assert saved_scores.already_saved(a, values=[np.nan, -1.5, 0.0, 2.5], **same) is None
     assert saved_scores.already_saved(a, values=vals, **{**same, "method": "other"}) is None
     assert saved_scores.already_saved(a, values=vals, **{**same, "extra": {"motif_id": "MA0003.1"}}) is None
+    # The same values from a later run: saved again, so the record names that run.
+    assert saved_scores.already_saved(a, values=vals, **{**same, "extra": {"motif_id": "MA0002.1", "run_id": "c2"}}) is None
     g = saved_scores.save(a, kind="geneset", name="s", values=np.ones(4), method="aucell", genes=["A", "B"])
     assert saved_scores.already_saved(a, kind="geneset", name="s", values=np.ones(4), method="aucell", genes=["A", "B"]) == g
     assert saved_scores.already_saved(a, kind="geneset", name="s", values=np.ones(4), method="aucell", genes=["A"]) is None

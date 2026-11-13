@@ -166,6 +166,8 @@ def already_saved(adata, *, kind: str, name: str, values, method: str | None = N
             continue
         if genes is not None and entry.get("genes") != [str(g) for g in genes][:MAX_GENES_RECORDED]:
             return None
+        if kind in _RUN_FLAGS and entry.get("run_id") != ident.get("run_id"):
+            return None  # a later run's motif: its record names that run
         v = np.asarray(values, dtype=np.float32).ravel()
         have = np.asarray(adata.obs[col], dtype=np.float32)
         return col if v.shape == have.shape and np.array_equal(v, have, equal_nan=True) else None
