@@ -21,7 +21,7 @@ vi.mock("@/api/pipelineRun", async (importOriginal) => ({
   cancelPipelineRun,
 }));
 
-import { DroppedColumns, JointEmbedding } from "./JointEmbedding";
+import { DroppedColumns, JointEmbedding, defaultJointName } from "./JointEmbedding";
 
 const ds = (id: string): DatasetInfo => ({
   id,
@@ -110,6 +110,33 @@ describe("JointEmbedding dataset picker", () => {
     resolve([]);
     expect(await screen.findByText(/No ready datasets/)).toBeInTheDocument();
     expect(screen.queryByText(/Loading datasets/)).toBeNull();
+  });
+
+  it("stays usable with 28 datasets: it scrolls, filters, selects what is shown, and counts", async () => {
+    const many = Array.from({ length: 30 }, (_, i) => ds(i < 28 ? `slide_${i}` : `other_${i}`));
+    listDatasets.mockResolvedValue(many);
+    planIntegration.mockResolvedValue({ ...PLAN, datasets: [] });
+    render(<JointEmbedding />);
+    const picker = await screen.findByTestId("joint-picker");
+    expect(picker.className).toContain("overflow-y-auto");
+    expect(within(picker).getAllByRole("checkbox")).toHaveLength(30);
+    fireEvent.change(screen.getByLabelText("Filter datasets"), { target: { value: "SLIDE" } });
+    expect(within(picker).getAllByRole("checkbox")).toHaveLength(28);
+    fireEvent.click(screen.getByText("Select shown"));
+    expect(screen.getByTestId("joint-picked")).toHaveTextContent("28 of 30 selected");
+    expect(within(picker).getAllByRole("checkbox").every((b) => (b as HTMLInputElement).checked)).toBe(true);
+    fireEvent.change(screen.getByLabelText("Filter datasets"), { target: { value: "other" } });
+    expect(within(picker).getAllByRole("checkbox")).toHaveLength(30); // selected ones stay in view
+    fireEvent.click(screen.getByText("Clear"));
+    expect(screen.getByTestId("joint-picked")).toHaveTextContent("0 of 30 selected");
+  });
+});
+
+describe("defaultJointName", () => {
+  it("names a few datasets in full and many by the first three and a count", () => {
+    expect(defaultJointName(["a"])).toBe("");
+    expect(defaultJointName(["a", "b"])).toBe("joint: a + b");
+    expect(defaultJointName(Array.from({ length: 28 }, (_, i) => `s${i}`))).toBe("joint: s0 + s1 + s2 + 25 more");
   });
 });
 
