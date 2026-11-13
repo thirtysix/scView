@@ -26,7 +26,8 @@ import { ScatterExportMenu, type AllPanelsExport, type FigureFormat } from "@/co
 import { EmbeddingCaveat } from "@/components/plots/EmbeddingCaveat";
 import { GridPager } from "@/components/common/GridPager";
 import { GpuLostOverlay } from "@/components/common/GpuLostOverlay";
-import { isContextCreationFailure } from "@/lib/webgl";
+import { isContextCreationFailure, isContextLoss } from "@/lib/webgl";
+import { useDeckMount } from "@/hooks/useDeckMount";
 import {
   centroidLabelLayers,
   labelViewOf,
@@ -374,10 +375,9 @@ export function MultiPanelScatter({
 
   // --- WebGL: release the context on unmount (opening a grid creates one) ---
   const deckRef = useRef<DeckGLRef>(null);
-  const [gpuError, setGpuError] = useState(false);
+  const [gpuError, setGpuError] = useState<Error | null>(null);
   // While the download menu is open the grid sits above the legend floated over it.
   const [menuOpen, setMenuOpen] = useState(false);
-  const [renderKey, setRenderKey] = useState(0);
   useEffect(() => {
     const el = areaRef.current;
     return () => {
@@ -388,14 +388,13 @@ export function MultiPanelScatter({
       gl?.getExtension("WEBGL_lose_context")?.loseContext();
     };
   }, []);
-  const [gpuBlocked, setGpuBlocked] = useState(false);
   const handleGpuError = useCallback((err: Error) => {
     console.error("[MultiPanelScatter] GPU error:", err);
-    if (err.message?.toLowerCase().includes("context")) {
-      setGpuError(true);
-      if (isContextCreationFailure(err)) setGpuBlocked(true);
-    }
+    // Only a lost or refused context; a layer error leaves the other layers drawing
+    if (isContextLoss(err)) setGpuError((prev) => prev ?? err);
   }, []);
+  // A new Deck on every mount (a resize can measure the area at 0 and unmount it), with fresh layers
+  const deck = useDeckMount(ready && viewStates != null && views.length > 0 && !gpuError, layers);
 
   // --- Downloads: the page as on screen, or every panel on one sheet ---
   // One legend per panel (compare colourings): a page carries its own panels' legends.
@@ -584,7 +583,7 @@ export function MultiPanelScatter({
           onPng={downloadPng}
           onFigure={downloadFigure}
           label="Download grid"
-          disabled={!ready || !viewState || gpuError}
+          disabled={!ready || !viewState || gpuError != null}
           onOpenChange={setMenuOpen}
           pageNote={paged ? `This page, ${pagePanelsText(nPanels, perPage, page).toLowerCase()}.` : undefined}
           allPanels={allPanels}
@@ -603,12 +602,12 @@ export function MultiPanelScatter({
         <div ref={areaRef} className="relative m-2 min-w-0 flex-1">
           {ready && viewStates && views.length > 0 && !gpuError && (
             <DeckGL
-              key={renderKey}
+              key={deck.key}
               ref={deckRef}
               views={views}
               viewState={viewStates}
               onViewStateChange={handleViewStateChange}
-              layers={layers}
+              layers={deck.layers}
               layerFilter={layerFilter}
               onHover={handleHover}
               onError={handleGpuError}
@@ -673,12 +672,8 @@ export function MultiPanelScatter({
           )}
           {gpuError && (
             <GpuLostOverlay
-              blocked={gpuBlocked}
-              onRetry={() => {
-                setGpuError(false);
-                setGpuBlocked(false);
-                setRenderKey((k) => k + 1);
-              }}
+              blocked={isContextCreationFailure(gpuError)}
+              onRetry={() => setGpuError(null)}
             />
           )}
         </div>

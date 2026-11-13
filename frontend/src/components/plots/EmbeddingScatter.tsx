@@ -6,7 +6,8 @@ import { mapCategoryToColor, mapValueToColor, type AnyColormapName } from "@/lib
 import { useSettingsStore } from "@/stores/settingsStore";
 import { RotateCcw } from "lucide-react";
 import { GpuLostOverlay } from "@/components/common/GpuLostOverlay";
-import { isContextCreationFailure } from "@/lib/webgl";
+import { isContextCreationFailure, isContextLoss } from "@/lib/webgl";
+import { useDeckMount } from "@/hooks/useDeckMount";
 import { downloadDeckPng, type ScatterLegend } from "@/lib/scatterExport";
 import {
   buildScatterSvg,
@@ -348,7 +349,7 @@ export function EmbeddingScatter({
 
   const handleGpuError = useCallback((error: Error) => {
     console.error("[EmbeddingScatter] GPU error:", error);
-    if (error.message?.toLowerCase().includes("context")) {
+    if (isContextLoss(error)) {
       setContextLost(true);
       if (isContextCreationFailure(error)) setContextBlocked(true);
     }
@@ -829,6 +830,8 @@ export function EmbeddingScatter({
     () => [...imageLayers, ...pointLayers, ...outlineLayers, ...labelLayers, ...(overlayLayers ?? [])],
     [imageLayers, pointLayers, outlineLayers, labelLayers, overlayLayers],
   );
+  // Each mounted Deck gets its own layer instances (a remount, e.g. Retry, cannot reuse the last Deck's)
+  const deck = useDeckMount(viewState != null && !contextLost, layers);
 
   // One-off high-resolution redraw on click; see downloadDeckPng.
   const downloadPng = useCallback(() => {
@@ -951,12 +954,12 @@ export function EmbeddingScatter({
       {keyboardOverlay}
       {viewState && !contextLost && (
         <DeckGL
-          key={renderKey}
+          key={`${renderKey}-${deck.key}`}
           ref={deckRef}
           views={views}
           viewState={{ ...viewState }}
           onViewStateChange={handleViewStateChange}
-          layers={layers}
+          layers={deck.layers}
           onHover={handleHover}
           onClick={handleClick}
           onError={handleGpuError}

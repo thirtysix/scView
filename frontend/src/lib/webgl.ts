@@ -27,3 +27,12 @@ export function canCreateWebGL(): boolean {
 export function isContextCreationFailure(err: Error | null | undefined): boolean {
   return /context creation failed/i.test(err?.message ?? "");
 }
+
+/**
+ * deck.gl's errors for a lost or refused WebGL context. Not a bare "context"
+ * match: a layer error names its layer, and the split grid's grey background
+ * layer is called `split-context`.
+ */
+export function isContextLoss(err: Error | null | undefined): boolean {
+  return /webgl context|context (is )?lost|context creation failed/i.test(err?.message ?? "");
+}
