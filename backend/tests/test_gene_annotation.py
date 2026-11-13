@@ -39,14 +39,24 @@ def test_parse_keeps_genes_only_with_zero_based_coordinates(tmp_path):
 
 @pytest.mark.parametrize("name,expected", [
     ("GRCh38", "GRCh38"), ("GRCh38-2020-A", "GRCh38"), ("hg38", "GRCh38"), ("mm10-2020-A", "mm10"), ("GRCm38", "mm10"),
+    ("mm39", "mm39"), ("GRCm39", "mm39"), ("GRCm39-2024-A", "mm39"), ("refdata-cellranger-arc-GRCm39-2024-A", "mm39"),
+    ("refdata-cellranger-arc-mm10-2020-A-2.0.0", "mm10"), ("refdata-gex-GRCh38-2024-A", "GRCh38"),
 ])
 def test_genome_names(name, expected):
     assert ga.canonical_genome(name) == expected
 
 
+def test_mm39_release_is_gencode_vm33():
+    r = ga.RELEASES["mm39"]  # the annotation 10x built GRCm39-2024-A from
+    assert r.source == "GENCODE vM33 basic" and "release_M33/gencode.vM33.basic.annotation.gtf.gz" in r.url
+    assert len(r.sha256) == 64
+
+
 def test_other_genome_says_which():
-    with pytest.raises(ga.AnnotationError, match="not 'danRer11'"):
+    with pytest.raises(ga.AnnotationError, match=r"on a zebrafish genome \(danRer11\).*RNA analysis .* work as usual"):
         ga.canonical_genome("danRer11")
+    with pytest.raises(ga.AnnotationError, match="'Foo-1', a reference scView does not know.*mm10 or mm39"):
+        ga.canonical_genome("Foo-1")
     with pytest.raises(ga.AnnotationError, match=r"on hg19 \(GRCh37\)"):  # core/genome_build.py
         ga.canonical_genome("hg19")
 

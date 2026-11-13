@@ -49,7 +49,8 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Data Assessment", "QC + pipeline",
      "QC plots and the guided pipeline: QC, normalise, HVG, PCA, batch correction, "
      "clustering, UMAP, markers, enrichment; optional ambient RNA correction, doublet "
-     "detection (Scrublet or scDblFinder-style), regress-out"),
+     "detection (Scrublet or scDblFinder-style), regress-out; a note when a file's curated cell_type "
+     "seems to have lost the authors' meaning for some labels (cross-tab against the author column)"),
     ("Data Assessment > Sequencing QC (Cell Ranger)", "", "Cell Ranger metrics, barcode ranks"),
     ("Data Assessment > Ambient RNA", "", "soup from empty droplets, contamination estimate"),
     ("Data Assessment > Cluster QC", "",
@@ -62,7 +63,9 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Data Assessment > QC Distributions > QC per sample", "",
      "each sample's cells and median genes, UMIs and % mito with flags; a sample sequenced as two or more "
      "libraries is flagged 'Libraries differ' when its libraries' cell-type mix (or depth) differs more than "
-     "different samples alike in condition, tissue and sex do (one library may hold another sample's cells)"),
+     "different samples alike in condition, tissue and sex do (one library may hold another sample's cells); "
+     "in MAD mode each sample's thresholds, its genes cut never below a floor (200 genes for cells, 100 for "
+     "spots; the Filtering step's 'Min genes/cell floor'), marked where the floor set it"),
     ("Data Assessment > QC states: RP share vs mito", "", "damaged or stressed cells per type"),
     ("Data Assessment > Cluster QC > Evidence per cluster", "",
      "why each cluster was labelled or flagged, in words, never a probability: its markers against random genes "
@@ -101,7 +104,9 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
      "protein UMAPs (in the embedding menu), WNN clusters"),
     ("Unified View > Accessibility", "ATAC",
      "only with 10x Multiome peaks (a 10x .h5 or folder, .h5ad with Peaks features, .h5mu): QC, LSI with its "
-     "depth check, ATAC UMAP and clusters"),
+     "depth check, ATAC UMAP and clusters. Gene activity, nearest genes, motifs, peak-gene links and TSS "
+     "enrichment need the genome: GRCh38 (human), mm10 or mm39 (mouse, e.g. 10x GRCm39-2024-A); hg19, mm9 "
+     "and other species get a note saying so, and RNA work is unaffected"),
     ("Unified View > Accessibility > Joint RNA + ATAC (WNN)", "",
      "Seurat's weighted nearest neighbours on RNA PCs and LSI 2:50: per-cell RNA weight by group, WNN UMAP, clusters"),
     ("Unified View > Accessibility > Gene activity", "peak-based",
@@ -140,14 +145,16 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Unified View > Clonotypes", "TCR/BCR", "TCR/BCR repertoire"),
     ("Unified View > Perturbation", "CRISPR, Mixscape", "CRISPR guide calls, Mixscape"),
     ("Unified View > Spatial genes", "Moran's I",
-     "spatially variable genes (Moran's I) on Visium spots, Visium HD bins or imaging cells; click a gene to colour the "
-     "tissue"),
+     "spatially variable genes (Moran's I) on Visium spots, Visium HD bins or imaging cells, one section or all (then "
+     "within each section, with each section's own I); click a gene to colour the tissue"),
     ("Unified View > Domains", "niches",
      "spatial domains (clustering that sees each spot's, bin's or cell's neighbours; k chosen or suggested by stability), "
-     "neighbourhood enrichment between labels, composition niches; colours the tissue"),
+     "neighbourhood enrichment between labels, composition niches (from labels, or on Visium spots from Spot "
+     "composition's cell-type shares); colours the tissue"),
     ("Unified View > Domains > Co-occurrence", "squidpy",
      "how much more often one label is found within each distance of another than among all pairs at that range (score "
-     "above 1), with a score-by-distance plot per label and a labels-by-labels heatmap; nearby is not interacting"),
+     "above 1), with a score-by-distance plot per label and a labels-by-labels heatmap, several sections each scored "
+     "against its own label shares (one section's curves on request); nearby is not interacting"),
     ("Unified View > Traits", "GWAS",
      "GWAS Catalog traits linked to each group's markers (leads, not causal genes); one gene's traits"),
     ("Unified View > Velocity", "",
@@ -191,7 +198,8 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Marker Genes", "", "marker table, dot plot and heatmap of the top markers per group"),
     ("Trajectory", "", "PAGA, pseudotime and the genes that change along it"),
     ("Compare > Joint embedding", "Harmony, Scanorama, BBKNN",
-     "merge 2+ library datasets, corrected with Harmony, Scanorama or BBKNN"),
+     "merge 2 to 32 library datasets, corrected with Harmony, Scanorama or BBKNN; datasets scView never "
+     "filtered are filtered first with a single run's QC (the plan lists what each loses; it can be switched off)"),
     ("Compare > Composition > Between conditions", "",
      "cell-type proportions between conditions, donors as replicates"),
     ("Compare > Composition > Neighbourhoods (Milo)", "", "neighbourhood differential abundance"),

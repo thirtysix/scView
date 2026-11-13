@@ -32,6 +32,7 @@ import { PublicSourceCard } from "@/components/panels/PublicSourceCard";
 import { PreflightRunNote } from "@/components/common/PreflightNote";
 import { FastLeidenInfo } from "@/components/common/FastLeidenInfo";
 import { TargetedPanelNote, type TargetedPanelInfo } from "@/components/qc/TargetedPanelNote";
+import { LabelCurationNote, type LabelCuration } from "@/components/qc/LabelCurationNote";
 import { DoubletMethodInfo } from "@/components/qc/DoubletMethodInfo";
 import { DOUBLET_METHOD_LABELS, DOUBLET_METHODS } from "@/lib/doubletMethods";
 import { FAST_LEIDEN, FULL_LEIDEN, LEIDEN_ITERATION_LABELS } from "@/lib/fastLeiden";
@@ -121,6 +122,8 @@ interface AssessmentResponse extends PreprocessingState {
   species?: SpeciesCall;
   /** A targeted panel's path (Xenium, CosMx, MERSCOPE); null for any other dataset. */
   targeted_panel?: TargetedPanelInfo | null;
+  /** Curated cell types beside the authors' labels: mappings that look wrong (null: no such pair). */
+  label_curation?: LabelCuration | null;
   /** How scView last normalised it for HVG/PCA ("log" | "pearson_residuals"); null if never. */
   normalization_method?: string | null;
   /** How scView last filtered it ("fixed" for runs before MAD mode); null if never. */
@@ -230,6 +233,8 @@ interface ParamConfig {
   panelOnly?: boolean;
   /** Shown for Visium HD bins only */
   gridOnly?: boolean;
+  /** 0 is a value of its own (off), not "back to the default". */
+  zeroAllowed?: boolean;
 }
 
 const QC_MODE_OPTION_LABELS: Record<string, string> = {
@@ -294,6 +299,21 @@ const STEP_PARAMS: Record<string, ParamConfig[]> = {
       default: 0,
       mode: "mad",
       panelOnly: true,
+    },
+    {
+      param: "qc_genes_floor",
+      label: "Min genes/cell floor",
+      type: "number",
+      min: 0,
+      max: 5000,
+      step: 50,
+      default: null,
+      placeholder: "200 cells, 100 spots",
+      zeroAllowed: true,
+      mode: "mad",
+      help:
+        "No sample's genes cut goes below this, so a sample with many near-empty cells (whose MADs are wide) " +
+        "still loses them. Empty: 200 for cells, 100 for spots, none on bins and targeted panels. 0 turns it off.",
     },
     { param: "min_genes", label: "Min genes/cell", type: "number", min: 0, max: 5000, step: 50, default: 200, mode: "fixed" },
     { param: "max_genes", label: "Max genes/cell (0 = off)", type: "number", min: 0, max: 20000, step: 100, default: 0, mode: "fixed" },
@@ -447,6 +467,8 @@ export function filterThresholds(
     qc_sample_column: String(value("qc_sample_column") ?? ""),
     // Only a floor the user set is sent: a panel's own default is the backend's.
     qc_counts_floor: set?.qc_counts_floor != null ? Number(set.qc_counts_floor) : undefined,
+    // Likewise the genes floor: unset, the backend picks the data's (200 cells, 100 spots).
+    qc_genes_floor: set?.qc_genes_floor != null ? Number(set.qc_genes_floor) : undefined,
     qc_mito_mode: set?.qc_mito_mode === "per_type" ? "per_type" : "global",
     qc_mito_type_column: String(set?.qc_mito_type_column ?? ""),
     qc_mito_type_floor: Boolean(set?.qc_mito_type_floor ?? false),
@@ -1235,6 +1257,7 @@ export function DataAssessmentPanel() {
             )}
             <SpeciesNote call={state.species} />
             <TargetedPanelNote info={state.targeted_panel} />
+            <LabelCurationNote info={state.label_curation} />
           </div>
 
           {/* "Explain this data": written QC report from the assessment facts */}
@@ -1707,9 +1730,10 @@ export function DataAssessmentPanel() {
                                         min={pc.min}
                                         max={pc.max}
                                         step={pc.step}
-                                        onChange={(e) =>
-                                          setStepParam(step.key, pc.param, parseFloat(e.target.value) || pc.default)
-                                        }
+                                        onChange={(e) => {
+                                          const v = parseFloat(e.target.value);
+                                          setStepParam(step.key, pc.param, pc.zeroAllowed && v === 0 ? 0 : v || pc.default);
+                                        }}
                                         disabled={running || unused}
                                         className="w-full rounded border border-slate-200 px-2 py-1 text-xs text-slate-700 focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-100 disabled:opacity-50"
                                       />

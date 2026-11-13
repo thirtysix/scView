@@ -179,6 +179,20 @@ async def test_data_tools(client, dataset_manager):
     assert "pca" in r["done"] and "species" in r
     r = await _call("qc_filter_preview", {"dataset_id": did, "mode": "fixed", "min_genes": 30})
     assert r["n_cells"] == 480 and r["n_removed"] > 0
+    # MAD mode: each sample's genes cut says whether its MAD bound or the genes floor set it.
+    mt = (await _call("qc_filter_preview", {"dataset_id": did, "sample_column": "donor_id",
+                                             "genes_floor": 0}))["mad_thresholds"]
+    col = mt["columns"].index
+    assert mt["n_total"] == 4 and "genes_floor" not in mt and "min_genes_by" not in mt["columns"]  # no floor
+    floor = int(max(row[col("min_genes")] for row in mt["rows"])) + 1
+    mt = (await _call("qc_filter_preview", {"dataset_id": did, "sample_column": "donor_id",
+                                             "genes_floor": floor}))["mad_thresholds"]
+    col = mt["columns"].index
+    assert mt["genes_floor"] == floor
+    for row in mt["rows"]:  # the floor set each cut, or was skipped as it would take most of the sample
+        assert row[col("min_genes_by")] == "floor" or row[col("floor_skipped")] is not None
+        if row[col("min_genes_by")] == "floor":
+            assert row[col("min_genes")] == floor and row[col("min_genes_mad")] < floor
     r = await _call("preflight", {"dataset_id": did, "steps": ["pca", "neighbors"]})
     assert r["verdict"]["level"] in ("fits", "tight", "wont_fit") and r["steps"]["rows"][0][0] == "pca"
     text = await _call("describe_column", {"dataset_id": did, "column": "nope"}, error=True)
@@ -675,6 +689,20 @@ async def test_public_search_and_import_job(client, dataset_manager, fake):  # n
     assert done["dataset_id"] == new
     r = await _call("list_datasets", {})
     assert new in {d["id"] for d in r["datasets"]}
+
+
+async def test_public_search_pages_with_offset_and_says_what_it_shows(client, fake, monkeypatch):  # noqa: F811
+    first = await _call("search_public_datasets", {"limit": 2})
+    assert first["n_total"] == 4 and first["n_shown"] == 2 and first["next_offset"] == 2
+    rest = await _call("search_public_datasets", {"limit": 2, "offset": 2})
+    assert rest["offset"] == 2 and rest["n_shown"] == 2 and "next_offset" not in rest
+    ids = [d["dataset_version_id"] for d in first["datasets"] + rest["datasets"]]
+    assert len(set(ids)) == 4
+    # A page that does not fit the reply holds whole records, and the next page starts after them.
+    monkeypatch.setattr(compact, "MAX_CHARS", 1200)
+    small = await _call("search_public_datasets", {"limit": 4})
+    assert 1 <= small["n_shown"] < 4 == small["n_total"] and len(small["datasets"]) == small["n_shown"]
+    assert small["next_offset"] == small["n_shown"] and "truncated" not in small
 
 
 # --- compact results -----------------------------------------------------------------------------

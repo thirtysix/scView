@@ -304,6 +304,14 @@ def test_assembly_for():
     assert tm.assembly_for(a, "mouse") == "mm10"
     a.var["genome"] = ["GRCm39", "GRCm39"]
     assert tm.assembly_for(a, "mouse") == "mm39"
+    # the genome the ATAC import recorded (peaks told as mm39 by their positions); not a note's words
+    b = ad.AnnData(np.zeros((2, 2)))
+    b.uns["scview_atac"] = json.dumps({"genome": "mm39"})
+    assert tm.assembly_for(b, "mouse") == "mm39"
+    b.uns["scview_atac"] = json.dumps({"genome": "mm9", "genome_note": "... GRCh38 (human) and mm10 or mm39 ..."})
+    assert tm.assembly_for(b, "mouse") == "mm10"
+    b.uns["scview_atac"] = "not json"
+    assert tm.assembly_for(b, "mouse") == "mm10"
 
 
 # ---------------------------------------------------------------------------

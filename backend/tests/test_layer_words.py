@@ -68,7 +68,7 @@ async def test_by_group_heatmap_and_mcp_say_what_raw_holds(client, dataset_manag
     seen: dict[str, str] = {}
     monkeypatch.setattr(plots, "violin", lambda v, g, title, ylabel, caption: seen.update(y=ylabel) or b"\x89PNG")
     monkeypatch.setattr(plots, "embedding",
-                        lambda xy, v, title, label_, note, focus: seen.update(c=label_) or b"\x89PNG")
+                        lambda xy, v, title, label_, note, focus, tissue=False: seen.update(c=label_) or b"\x89PNG")
     await _tool("plot", {"dataset_id": did, "kind": "violin", "gene": "CD3E", "groupby": "cluster", "layer": "raw"})
     await _tool("plot", {"dataset_id": did, "kind": "embedding", "gene": "CD3E", "layer": "raw"})
     assert seen == {"y": f"CD3E, {label}", "c": f"CD3E, {label}"}

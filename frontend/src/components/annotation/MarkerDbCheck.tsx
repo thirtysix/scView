@@ -37,6 +37,9 @@ const VERDICT_TITLE: Record<MarkerDbVerdict, string> = {
   no_markers: "The group has no marker genes that pass the filters",
 };
 
+const ONE_GENE_TITLE =
+  "Only one of the label's database markers is among this group's top markers: one shared gene is weak support, whatever its p";
+
 /** The server's reason from an apiFetch error ("API error 503: {detail}"). */
 function errorText(e: unknown): string {
   const body = (errorMessage(e)).replace(/^API error \d+: /, "");
@@ -362,7 +365,7 @@ function LabelRow({ row }: { row: MarkerDbLabel }) {
       <td className="pl-2">
         <span
           className={`inline-block whitespace-nowrap rounded-full border px-1.5 py-px text-[10px] ${VERDICT_STYLE[row.verdict]}`}
-          title={VERDICT_TITLE[row.verdict]}
+          title={row.one_gene ? ONE_GENE_TITLE : VERDICT_TITLE[row.verdict]}
           data-verdict={row.verdict}
         >
           {row.verdict_text}

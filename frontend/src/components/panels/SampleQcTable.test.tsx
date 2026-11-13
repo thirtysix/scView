@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { render, screen, fireEvent, within } from "@testing-library/react";
 import type { FilterGroupLoss, FilterPreview, MadThresholds } from "@/api/qc";
-import { heat, SampleQcTable } from "./SampleQcTable";
+import { floorSummary, heat, SampleQcTable, SampleThresholds } from "./SampleQcTable";
+import { filterThresholds } from "./DataAssessmentPanel";
 
 function group(name: string, n: number, genes: number, counts: number, mito: number, removed: number,
   flags: FilterGroupLoss["flags"] = [], reasons: string[] = []): FilterGroupLoss {
@@ -108,5 +109,39 @@ describe("SampleQcTable", () => {
     p.samples = { ...p.samples!, compared: false, groups: p.samples!.groups.slice(0, 2).map((g) => ({ ...g, flags: [] })) };
     render(<SampleQcTable preview={p} mad={null} />);
     expect(screen.getByText("2 samples: too few to say which stands out")).toBeInTheDocument();
+  });
+});
+
+describe("the genes floor", () => {
+  const floored: MadThresholds = {
+    ...MAD,
+    genes_floor: 200,
+    samples: [
+      { ...MAD.samples[0]!, min_genes: 210, min_genes_mad: 210, min_genes_by: "mad", n_floor: 0 },
+      { ...MAD.samples[1]!, min_genes: 200, min_genes_mad: 4, min_genes_by: "floor", n_floor: 708 },
+    ],
+  };
+
+  it("marks the samples whose cut is the floor and says what it removed", () => {
+    render(<SampleThresholds mad={floored} />);
+    const table = screen.getByRole("table", { name: "Thresholds per sample" });
+    expect(within(table).getByText("(floor)")).toBeInTheDocument();
+    expect(within(table).getByTitle(/The floor of 200 genes applies: its own MAD cut is 4\. The floor removes 708 cells/)).toBeInTheDocument();
+    expect(screen.getByTestId("genes-floor")).toHaveTextContent(
+      "Genes floor 200: it set the genes cut in 1 of 2 samples and removed 708 cells their own MAD cut keeps.");
+  });
+
+  it("says when the floor changed nothing or was not used, and is silent without one", () => {
+    const none = { ...floored, samples: [floored.samples[0]!, { ...floored.samples[1]!, min_genes: 190,
+      min_genes_by: "mad" as const, n_floor: 0, floor_skipped: 900 }] };
+    expect(floorSummary(none)).toBe("Genes floor 200: no sample's own MAD cut was below it, so it changed nothing. " +
+      "Not used in d2: it would have removed over half.");
+    expect(floorSummary(MAD)).toBeNull();
+  });
+
+  it("is sent only when set, and 0 (off) is sent as 0", () => {
+    expect(filterThresholds(undefined).qc_genes_floor).toBeUndefined();
+    expect(filterThresholds({ qc_genes_floor: 0 }).qc_genes_floor).toBe(0);
+    expect(filterThresholds({ qc_genes_floor: 150 }).qc_genes_floor).toBe(150);
   });
 });

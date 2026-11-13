@@ -8,7 +8,8 @@ Run: ``sq.gr.spatial_neighbors(adata, library_key="library_id")`` (coord_type fr
 squidpy's rule: grid when uns["spatial"] exists, else generic; n_neighs 6) then
 ``sq.gr.spatial_autocorr(adata, mode="moran")`` (genes: highly_variable when marked,
 else all; analytic p, one-tailed, fdr_bh). Also ``connectivities`` counts per spot, to
-check the graph itself.
+check the graph itself. Also each section alone (``squidpy_moran_sections.csv``): what
+scView's per-section values and a one-section run must equal.
 """
 
 import importlib.util
@@ -22,7 +23,7 @@ spec = importlib.util.spec_from_file_location("synthetic", here / "synthetic.py"
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 
-frames, degrees = [], []
+frames, degrees, sections = [], [], []
 for name, adata in (("visium", mod.visium()), ("cells", mod.cells())):
     sq.gr.spatial_neighbors(adata, library_key="library_id")
     df = sq.gr.spatial_autocorr(adata, mode="moran", copy=True)
@@ -35,6 +36,15 @@ for name, adata in (("visium", mod.visium()), ("cells", mod.cells())):
                                      int((adata.obs["library_id"].to_numpy()[g[i].indices]
                                           != adata.obs["library_id"].to_numpy()[i]).sum())
                                      for i in range(adata.n_obs)]}))
+    for lib in adata.obs["library_id"].cat.categories:
+        one = adata[adata.obs["library_id"] == lib].copy()
+        sq.gr.spatial_neighbors(one, library_key="library_id")
+        df = sq.gr.spatial_autocorr(one, mode="moran", copy=True)
+        sections.append(pd.DataFrame({"dataset": name, "library_id": lib, "n_obs": one.n_obs, "gene": df.index,
+                                      "I": df["I"].to_numpy(), "pval": df["pval_norm"].to_numpy(),
+                                      "var_I": df["var_norm"].to_numpy(),
+                                      "pval_adj": df["pval_norm_fdr_bh"].to_numpy()}))
 pd.concat(frames).to_csv(here / "squidpy_moran.csv", index=False, float_format="%.17g")
 pd.concat(degrees).to_csv(here / "squidpy_degrees.csv", index=False)
+pd.concat(sections).to_csv(here / "squidpy_moran_sections.csv", index=False, float_format="%.17g")
 print("written", here / "squidpy_moran.csv")

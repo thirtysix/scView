@@ -1132,9 +1132,10 @@ def spatial_genes(adata, names, genes):
     return idx[idx >= 0]
 
 
-def spatial_moran(adata, M, names, genes, library_id, grid, n_neighs=N_NEIGHS):
+def spatial_moran(adata, M, names, genes, library_id, grid, n_neighs=N_NEIGHS, centre="global"):
     """Moran's I per gene on the spots (one section's, or all), as squidpy's
-    uns["moranI"]: genes as the index, I, pval_norm, var_norm, pval_norm_fdr_bh."""
+    uns["moranI"]: genes as the index, I, pval_norm, var_norm, pval_norm_fdr_bh.
+    ``centre="section"``: several sections pooled, each centred on its own mean."""
     libs = (adata.obs["library_id"].astype(str).to_numpy() if "library_id" in adata.obs.columns
             else np.full(adata.n_obs, ""))
     rows = np.flatnonzero(libs == str(library_id)) if library_id else np.arange(adata.n_obs)
@@ -1142,7 +1143,13 @@ def spatial_moran(adata, M, names, genes, library_id, grid, n_neighs=N_NEIGHS):
     M = M[rows][:, idx]
     W = spatial_weights(np.asarray(adata.obsm["spatial"])[rows, :2], libs[rows], grid, n_neighs)
     order = spatial_order(np.asarray(adata.obsm["spatial"])[rows, :2], libs[rows])
-    table, _ = morans_i(W, M, np.asarray([str(n) for n in names])[idx], order)
+    gene_names = np.asarray([str(n) for n in names])[idx]
+    sections = [str(x) for x in pd.unique(libs[rows])]
+    if centre == "section" and len(sections) > 1:
+        codes = pd.Index(sections).get_indexer(libs[rows])
+        table, _, _ = morans_i_sections(W, M, gene_names, codes, sections, order)
+    else:
+        table, _ = morans_i(W, M, gene_names, order)
     return pd.DataFrame({"I": table["I"].to_numpy(), "pval_norm": table["pval"].to_numpy(),
                          "var_norm": table["var_I"].to_numpy(),
                          "pval_norm_fdr_bh": table["pval_adj"].to_numpy()},
@@ -1868,7 +1875,8 @@ def _cooccurrence_helper() -> str:
     lines += ["", "", '''
 def co_occurrence_of(adata, column, labels, interval, combine, max_obs, seed, scales=None):
     """(score, thresholds, ordered pairs), as scView's run: squidpy's score, each section's
-    pairs counted in that section. ``interval``: a number of default thresholds, or a list."""
+    pairs counted in that section (several sections: each scored against its own label
+    shares, then combined). ``interval``: a number of default thresholds, or a list."""
     codes = pd.Categorical(adata.obs[column].astype(str), categories=[str(x) for x in labels]).codes
     keep = codes >= 0
     if "library_id" in adata.obs.columns:
@@ -2897,11 +2905,32 @@ def _ingest_steps(p: dict, ctx: _Ctx) -> Snippet:
     return Snippet(EXACT, lines)
 
 
+def _unit_filtering_lines(rec: dict) -> list[str]:
+    """What the joint run's filtering did to each dataset, as comments."""
+    if not rec.get("on"):
+        return ["# The joint run's filtering of datasets never filtered was off."]
+    out = ["# Datasets scView never filtered were filtered before merging (each with a single run's",
+           "# QC), so the merged counts file holds the cells kept:"]
+    for u in rec.get("units") or []:
+        lab = comment_text(str(u.get("label")), 60)
+        if "filtered_before" in u:
+            out.append(f"#   {lab}: filtered before, left as it was")
+        elif "n_removed" in u:
+            mode = (u.get("params") or {}).get("qc_threshold_mode", "mad")
+            out.append(f"#   {lab}: {u['n_removed']:,} of {u.get('n_cells', 0):,} cells removed ({mode} thresholds)")
+        else:
+            out.append(f"#   {lab}: not filtered")
+    return out
+
+
 def _integrate(p: dict, ctx: _Ctx) -> Snippet:
+    p = dict(p)
+    filtering = p.pop("unit_filtering", None)
     return Snippet(NOT_REPLAYABLE, [
         "# This dataset was made by merging other scView datasets; the merge is not",
         "# replayed. Start from the merged counts file (the input above). Recorded:",
         *_param_comment(p),
+        *(_unit_filtering_lines(filtering) if isinstance(filtering, dict) else []),
     ], "merge of datasets: start from the merged file")
 
 
@@ -3079,6 +3108,7 @@ def _spot_deconvolution(p: dict, ctx: _Ctx) -> Snippet:
         if src and src not in ("layers['counts']", ".raw", "X"):
             status = APPROXIMATE
             notes.append(f"scView read the {who}' counts from {comment_text(src, 60)}; here from the file's own.")
+    ctx.runs["spot_deconvolution"] = status  # niches from its shares follow it
     return Snippet(status, [
         f"# Spot composition from {comment_text(p.get('reference'), 80)} (its column {comment_text(label, 60)}), "
         f"{comment_text(sd.METHOD_NAMES.get(method, method), 60)}.",
@@ -3884,14 +3914,17 @@ def _spatial_autocorr(p: dict, ctx: _Ctx) -> Snippet:
     _need(ctx, "spatial_autocorr")
     gene_lines = ([f"SPATIAL_GENES = {_lit(genes)}"] if isinstance(genes, str)
                   else ["SPATIAL_GENES = [", *_packed([repr(str(g)) for g in genes]), "]"])
+    centre = "section" if p.get("centring") == "section" else "global"  # older records: one mean
     return Snippet(EXACT, [
         f"# Spatially variable genes: Moran's I per gene ({'capture grid' if kind == 'grid' else 'kNN'} "
         f"neighbours, {p.get('n_neighs', 6)} each, within each section), = squidpy 1.6's",
-        "# spatial_neighbors + spatial_autocorr defaults; saved where squidpy saves it.",
+        "# spatial_neighbors + spatial_autocorr defaults; saved where squidpy saves it."
+        + (" Sections pooled, each centred on its own mean." if centre == "section" else ""),
         *values,
         *gene_lines,
         f"adata.uns[\"moranI\"] = spatial_moran(adata, M, names, SPATIAL_GENES, "
-        f"{_lit(p.get('library_id'))}, grid={_lit(kind == 'grid')}, n_neighs={_lit(p.get('n_neighs', 6))})",
+        f"{_lit(p.get('library_id'))}, grid={_lit(kind == 'grid')}, n_neighs={_lit(p.get('n_neighs', 6))}"
+        + (", centre=\"section\")" if centre == "section" else ")"),
     ])
 
 
@@ -3954,15 +3987,48 @@ def _co_occurrence(p: dict, ctx: _Ctx) -> Snippet:
     _need(ctx, "cooccurrence")
     return Snippet(EXACT, [
         f"# Co-occurrence of {comment_text(column, 60)} (= squidpy's co_occurrence; each section's pairs counted in that "
-        "section).",
+        "section, several sections each scored against its own label shares).",
         f"occ, interval, pairs = co_occurrence_of(adata, {_lit(column)}, {_lit([str(x) for x in labels])}, {_lit(asked)}, "
         f"{_lit(combine)}, {max_obs}, {seed}, {_lit(p.get('scales'))})",
         f"adata.uns[{_lit(squidpy_key(column))}] = {{\"occ\": occ, \"interval\": interval, \"count\": pairs}}",
     ])
 
 
+def _share_niches(p: dict, ctx: _Ctx) -> Snippet:
+    """Niches from the spot composition's shares (core/spatial_domains.py; Kuppe et al. 2022)."""
+    column, obsm, types, window, n, seed = (p.get(x) for x in ("column", "obsm", "types", "k_window", "n_niches",
+                                                               "seed"))
+    if (not isinstance(column, str) or obsm not in ("spot_deconv_cells", "spot_deconv") or not isinstance(types, list)
+            or not isinstance(window, int) or not isinstance(n, int) or not isinstance(seed, int)):
+        return Snippet(NOT_REPLAYABLE, ["# Composition niches from spot shares: settings not recorded. Recorded:",
+                                        *_param_comment({x: v for x, v in p.items() if x != "types"})],
+                       "settings not recorded")
+    made = ctx.runs.get("spot_deconvolution")
+    if made is None:
+        return Snippet(NOT_REPLAYABLE, [
+            "# Composition niches from spot shares: the spot composition they came from is not replayed above, so "
+            "its shares are not here. Recorded:", *_param_comment({x: v for x, v in p.items() if x != "types"})],
+            "the spot composition is not replayed")
+    _need(ctx, "spatial_domains")
+    kind = "cell" if obsm == "spot_deconv_cells" else "RNA"
+    smooth = f", averaged over the {window} nearest" if window > 1 else ""
+    return Snippet(made, [
+        f"# Composition niches (Kuppe et al. 2022): k-means on each spot's {kind} shares from the spot composition "
+        f"above{smooth}, {n} niches.",
+        f"shares = np.asarray(adata.obsm[{_lit(obsm)}], dtype=np.float32)",
+        "keep = np.isfinite(shares).all(axis=1)",
+        f"fractions = window_means(np.asarray(adata.obsm[\"spatial\"])[:, :2][keep], shares[keep], "
+        f"spatial_sections(adata)[keep], {window})",
+        "niches = np.full(adata.n_obs, -1, dtype=np.int32)",
+        f"niches[keep] = fit_niches(fractions, {n}, {seed})",
+        f"adata.obs[{_lit(column)}] = pd.Categorical.from_codes(niches, categories=[str(i) for i in range({n})])",
+    ], "" if made == EXACT else "follows the spot composition above")
+
+
 def _spatial_niches(p: dict, ctx: _Ctx) -> Snippet:
     """Composition niches (core/spatial_domains.py; Schurch et al. 2020)."""
+    if p.get("source") == "spot_composition":
+        return _share_niches(p, ctx)
     column, label, labels, window, n, seed = (p.get(x) for x in ("column", "label_column", "labels", "k_window",
                                                                  "n_niches", "seed"))
     if (not isinstance(column, str) or not isinstance(label, str) or not isinstance(labels, list) or len(labels) < 2

@@ -30,6 +30,11 @@ export function PublicSourceCard({ source }: { source: PublicSource }) {
               {source.about_collection ? `: ${source.about_collection}` : ""}
             </HoverTip>
           </p>
+          {source.about_spatial_note && (
+            <p className="rounded bg-amber-50 px-2 py-1 text-xs text-amber-800" data-testid="public-source-spatial-note">
+              {source.about_spatial_note}
+            </p>
+          )}
           <p className="text-xs text-slate-600" data-testid="public-source-citation">
             <span className="font-medium">Cite: </span>
             {source.citation_text}

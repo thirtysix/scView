@@ -380,6 +380,8 @@ export interface MarkerDbLabel {
   n_db_genes: number;
   verdict: MarkerDbVerdict;
   verdict_text: string;
+  /** Weak support on one shared gene, whatever its p (backend marker_db.MIN_SUPPORT_GENES) */
+  one_gene?: boolean;
   /** The 3 database types its markers fit best */
   suggestions: MarkerDbType[];
 }

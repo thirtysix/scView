@@ -237,7 +237,7 @@ export function AtacFragmentQc({ datasetId }: { datasetId: string }) {
           {status.barcode_share != null && (
             <>, {(status.barcode_share * 100).toFixed(1)}% of its first {(status.lines_checked ?? 0).toLocaleString()} fragments in this dataset&rsquo;s cells</>
           )}
-          {status.genome && <>, {status.genome}</>}.{" "}
+          {status.genome && <>, {status.genome === "other" ? "another species or build" : status.genome}</>}.{" "}
           <button type="button" className="text-slate-400 underline hover:text-slate-600" onClick={() => void onRemove()}>
             Remove
           </button>

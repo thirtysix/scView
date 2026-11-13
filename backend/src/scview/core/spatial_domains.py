@@ -44,8 +44,15 @@ Niches, neither of which reads X:
 - Composition niches (Schurch et al. 2020, Cell 182:1341): each cell's window is its
   k nearest cells in its section (itself included, as in the paper; k = 20 here), its
   features the label fractions in the window, and k-means on those (8 niches by default)
-  gives ``obs["spatial_niche"]``. Refused on Visium spots and on Visium HD bins other
-  than 8 um: a window of spots that each mix cells says little about composition.
+  gives ``obs["spatial_niche"]``. On Visium spots and on Visium HD bins other than 8 um,
+  where one observation mixes cells, a window of labels says little about composition: there
+  the niches come from each spot's cell-type shares from Spot composition (obsm
+  ``spot_deconv_cells``, or ``spot_deconv`` for RNA shares; Kuppe et al. 2022, Nature 608:766,
+  clustered spots by their cell2location shares the same way), k-means on the share vectors.
+  By default each spot's own shares (a 55 um spot already pools several cells); a window
+  above 1 averages them over the spot and its nearest ones first, which smooths noisy shares
+  but blurs a niche's edge by a ring of spots. Without a saved spot composition they are
+  refused, with a pointer to it.
 
 Observations without a label are left out of both niche analyses; they stay NaN in
 ``spatial_niche``. No X read anywhere here: a large dataset needs only its tables.
@@ -107,6 +114,10 @@ N_PERMS = 1000
 MAX_PERMS = 10_000
 PERM_BLOCK = 25  # permutations between a progress event and a stop check
 NICHE_NEIGHBOURS = 20
+SHARE_WINDOW = 1  # niches from spot shares: each spot's own (Kuppe et al. 2022)
+SOURCE_LABELS = "labels"
+SOURCE_SHARES = "spot_composition"
+SHARE_KINDS = ("cells", "rna")
 MAX_NICHE_NEIGHBOURS = 200
 DEFAULT_NICHES = 8
 MAX_NICHES = 40
@@ -338,6 +349,27 @@ def window_fractions(coords, codes, n_labels, libraries, k=20, block=50_000):
     return out
 
 
+def window_means(coords, values, libraries, k=1, block=50_000):
+    """Each row's mean of ``values`` (rows x features) over its ``k`` nearest rows in its section
+    (itself included; fewer when the section is smaller). ``k`` 1: the values. Float32."""
+    values = np.asarray(values, dtype=np.float64)
+    if int(k) <= 1:
+        return values.astype(np.float32)
+    coords = np.asarray(coords, dtype=np.float64)
+    libraries = np.asarray(libraries)
+    out = np.zeros(values.shape, dtype=np.float32)
+    for lib in pd.unique(libraries):
+        where = np.flatnonzero(libraries == lib)
+        m = min(int(k), len(where))
+        tree = cKDTree(coords[where])
+        for a in range(0, len(where), block):
+            rows = where[a:a + block]
+            _, idx = tree.query(coords[rows], k=m)
+            idx = np.asarray(idx).reshape(len(rows), m)
+            out[rows] = values[where[idx]].mean(axis=1)
+    return out
+
+
 def fit_niches(fractions, n_niches, seed=0, n_init=4):
     """Niches: seeded k-means on the window fractions, numbered by size."""
     model = KMeans(n_clusters=int(n_niches), n_init=int(n_init), random_state=int(seed))
@@ -345,7 +377,8 @@ def fit_niches(fractions, n_niches, seed=0, n_init=4):
 
 
 REPLAY_CODE = (delaunay_edges, spatial_graph, aggregate_neighbors, seeded_sample, fit_mixture, predict_blocks, by_size,
-               fit_domains, nhood_counts, shuffle_within, nhood_steps, nhood_enrichment, window_fractions, fit_niches)
+               fit_domains, nhood_counts, shuffle_within, nhood_steps, nhood_enrichment, window_fractions, window_means,
+               fit_niches)
 
 
 # ---------------------------------------------------------------------------
@@ -1074,26 +1107,56 @@ def enrichment_summary(adata, column: str | None = None, cells_fingerprint: str 
 # ---------------------------------------------------------------------------
 
 
+def _spot_shares(adata) -> dict[str, Any] | None:
+    """The saved spot composition's summary while its shares are in the dataset, else None."""
+    from scview.core import spot_deconvolution
+
+    try:
+        return spot_deconvolution.saved(adata)
+    except Exception:  # an unreadable record: no shares
+        return None
+
+
+def _reference_text(saved: dict[str, Any]) -> str:
+    ref = saved.get("reference") or {}
+    name = ref.get("name") or ref.get("id") or "a reference"
+    column = saved.get("celltype_column")
+    return f"'{name}'" + (f" (its column '{column}')" if column else "")
+
+
 def niches_allowed(adata) -> dict[str, Any]:
-    """``{"ok", "reason", "note"}``: refused on spots that mix cells, with a sentence."""
+    """``{"ok", "reason", "note", "source"}``: from labels where one observation is about one
+    cell; on spots and bins that mix cells from the spot composition's shares when one is
+    saved (``reference``, ``types``), else refused with a sentence."""
     tech, unit = spatial.technology(adata)["technology"], spatial.technology(adata)["unit"]
+    mixed = None
     if tech == "visium":
-        return {"ok": False, "note": None, "reason": (
-            "Composition niches need one label per cell, and a Visium spot mixes several cells: use neighbourhood "
-            "enrichment here, or Spot composition for each spot's cell-type shares.")}
-    if tech == "visium_hd" and unit == "bin":
+        mixed = "a Visium spot mixes several cells"
+    elif tech == "visium_hd" and unit == "bin":
         uns = adata.uns.get(spatial.KEY)
         sizes = {spatial._bin_size(uns.get(lib)) for lib in spatial._libraries(adata)} if uns is not None else set()
         sizes.discard(None)
         if sizes != {HD_NICHE_BIN_UM}:
             shown = ", ".join(f"{s:g}" for s in sorted(sizes))
-            return {"ok": False, "note": None, "reason": (
-                f"Composition niches need about one cell per observation, and these Visium HD bins are {shown} um: "
-                f"import the {HD_NICHE_BIN_UM:g} um bins for this.")}
-        return {"ok": True, "reason": None, "note": (
-            f"Visium HD {HD_NICHE_BIN_UM:g} um bins are close to one cell each but some hold parts of two: read the "
-            "niches as approximate.")}
-    return {"ok": True, "reason": None, "note": None}
+            mixed = f"these Visium HD bins are {shown} um and hold several cells"
+        else:
+            return {"ok": True, "reason": None, "source": SOURCE_LABELS, "note": (
+                f"Visium HD {HD_NICHE_BIN_UM:g} um bins are close to one cell each but some hold parts of two: read "
+                "the niches as approximate.")}
+    if mixed is None:
+        return {"ok": True, "reason": None, "note": None, "source": SOURCE_LABELS}
+    saved = _spot_shares(adata)
+    if saved is None:
+        return {"ok": False, "note": None, "source": None, "reason": (
+            f"Composition niches need one label per cell, and {mixed}: here niches come from each {unit}'s "
+            f"cell-type shares, so run Spot composition first (Spot composition tab), then come back. Neighbourhood "
+            "enrichment works on labels as they are.")}
+    return {"ok": True, "reason": None, "source": SOURCE_SHARES, "types": list(saved.get("types") or []),
+            "reference": {"name": (saved.get("reference") or {}).get("name"),
+                          "id": (saved.get("reference") or {}).get("id"),
+                          "celltype_column": saved.get("celltype_column"), "method": saved.get("method_name")},
+            "note": (f"Niches from each {unit}'s cell-type shares from Spot composition against {_reference_text(saved)}"
+                     f": {mixed}, so labels would say little.")}
 
 
 @dataclass
@@ -1101,8 +1164,8 @@ class NichePlan:
     n_obs: int
     n_labelled: int
     unit: str
-    label_column: str
-    labels: list[str]
+    label_column: str | None  # None: from the spot composition's shares
+    labels: list[str]  # the labels, or the spot composition's types
     k_window: int
     n_niches: int
     seed: int
@@ -1111,6 +1174,9 @@ class NichePlan:
     notes: list[str] = field(default_factory=list)
     estimate_seconds: float = 0.0
     estimate_bytes: int = 0
+    source: str = SOURCE_LABELS  # labels | spot_composition
+    shares: str | None = None  # cells | rna (spot_composition)
+    reference: dict[str, Any] | None = None  # the spot composition's reference (spot_composition)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -1121,7 +1187,8 @@ class NicheInputs:
     plan: NichePlan
     coords: np.ndarray
     libraries: np.ndarray
-    codes: np.ndarray
+    codes: np.ndarray  # -1: left out (no label, or a spot without shares)
+    values: np.ndarray | None = None  # the shares (spot_composition), rows x types
 
 
 @dataclass
@@ -1134,12 +1201,68 @@ class NicheResult:
 NICHE_STAGES = (("windows", "Each observation's neighbours"), ("kmeans", "Grouping into niches"))
 
 
-def plan_niches(adata, label_column: str, *, k_window: int = NICHE_NEIGHBOURS, n_niches: int = DEFAULT_NICHES,
-                seed: int = SEED, column: str = NICHE_COLUMN, overwrite: bool = False) -> NichePlan:
+SHARE_OBSM = {"cells": "spot_deconv_cells", "rna": "spot_deconv"}  # = spot_deconvolution.OBSM_CELLS / OBSM_RNA
+
+
+def _share_values(adata, shares: str) -> np.ndarray:
+    return np.asarray(adata.obsm[SHARE_OBSM[shares]], dtype=np.float32)
+
+
+def _plan_share_niches(adata, allowed: dict[str, Any], *, shares: str, k_window: int | None, n_niches: int,
+                       seed: int, column: str, overwrite: bool) -> NichePlan:
+    if shares not in SHARE_KINDS:
+        raise SpatialDomainsError(f"Unknown shares '{shares}': choose cells or rna.")
+    saved = _spot_shares(adata)
+    if saved is None:
+        raise SpatialDomainsError(allowed.get("reason") or "No spot composition is saved on this dataset: run Spot "
+                                  "composition first (Spot composition tab).")
+    window = SHARE_WINDOW if k_window is None else int(k_window)
+    if not 1 <= window <= MAX_NICHE_NEIGHBOURS:
+        raise SpatialDomainsError(f"The window must hold between 1 and {MAX_NICHE_NEIGHBOURS} spots.")
+    if not 2 <= int(n_niches) <= MAX_NICHES:
+        raise SpatialDomainsError(f"The number of niches must be between 2 and {MAX_NICHES}.")
+    _taken(adata, column, _load(adata, NICHES_KEY)["runs"], overwrite, "niche")
+    types = [str(t) for t in saved.get("types") or []]
+    fitted = int(np.isfinite(_share_values(adata, shares)).all(axis=1).sum())
+    unit = spatial.technology(adata)["unit"]
+    if fitted <= int(n_niches):
+        raise SpatialDomainsError(f"Only {fitted:,} {unit}s have shares for {n_niches} niches: pick fewer niches.")
+    kind = "cell shares" if shares == "cells" else "RNA shares"
+    notes = [f"From each {unit}'s {kind} from Spot composition against {_reference_text(saved)}, "
+             f"{saved.get('method_name') or saved.get('method')}"
+             + (f", averaged over the {window} nearest {unit}s." if window > 1 else ".")]
+    if fitted < adata.n_obs:
+        notes.append(f"{adata.n_obs - fitted:,} {unit}(s) without shares (too few counts to fit) are left out.")
+    ref = saved.get("reference") or {}
+    return NichePlan(n_obs=int(adata.n_obs), n_labelled=fitted, unit=unit, label_column=None, labels=types,
+                     k_window=window, n_niches=int(n_niches), seed=int(seed), column=column,
+                     overwrite=bool(overwrite), notes=notes,
+                     estimate_seconds=niche_seconds(fitted, len(types), window, int(n_niches)),
+                     estimate_bytes=niche_bytes(fitted, len(types), window), source=SOURCE_SHARES, shares=shares,
+                     reference={"name": ref.get("name"), "id": ref.get("id"),
+                                "celltype_column": saved.get("celltype_column"), "method": saved.get("method")})
+
+
+def plan_niches(adata, label_column: str | None = None, *, k_window: int | None = None,
+                n_niches: int = DEFAULT_NICHES, seed: int = SEED, column: str = NICHE_COLUMN, overwrite: bool = False,
+                source: str | None = None, shares: str = "cells") -> NichePlan:
+    """``source``: labels (``label_column``) or spot_composition (the saved shares); None picks
+    what the data allows (``niches_allowed``). ``k_window`` None: 20 cells, or each spot alone."""
     _need_positions(adata)
     allowed = niches_allowed(adata)
-    if not allowed["ok"]:
-        raise SpatialDomainsError(allowed["reason"])
+    source = source or allowed.get("source") or SOURCE_LABELS
+    if source not in (SOURCE_LABELS, SOURCE_SHARES):
+        raise SpatialDomainsError(f"Unknown source '{source}': choose labels or spot_composition.")
+    if source == SOURCE_SHARES:
+        return _plan_share_niches(adata, allowed, shares=shares, k_window=k_window, n_niches=n_niches, seed=seed,
+                                  column=column, overwrite=overwrite)
+    if not allowed["ok"] or allowed.get("source") == SOURCE_SHARES:
+        raise SpatialDomainsError(allowed["reason"] or (
+            "One observation here mixes several cells, so niches come from the spot composition's shares, not "
+            "from a label column."))
+    if not label_column:
+        raise SpatialDomainsError("Pick a label column for the niches.")
+    k_window = NICHE_NEIGHBOURS if k_window is None else int(k_window)
     if not 2 <= int(k_window) <= MAX_NICHE_NEIGHBOURS:
         raise SpatialDomainsError(f"The window must hold between 2 and {MAX_NICHE_NEIGHBOURS} neighbours.")
     if not 2 <= int(n_niches) <= MAX_NICHES:
@@ -1161,6 +1284,11 @@ def plan_niches(adata, label_column: str, *, k_window: int = NICHE_NEIGHBOURS, n
 
 
 def prepare_niches(adata, p: NichePlan) -> NicheInputs:
+    if p.source == SOURCE_SHARES:
+        values = _share_values(adata, p.shares or "cells")
+        codes = np.where(np.isfinite(values).all(axis=1), 0, -1).astype(np.int32)
+        return NicheInputs(plan=p, coords=_coords(adata), libraries=_libraries(adata), codes=codes,
+                           values=values.copy())
     codes, _ = _labels_of(adata, p.label_column)
     return NicheInputs(plan=p, coords=_coords(adata), libraries=_libraries(adata), codes=codes)
 
@@ -1170,7 +1298,11 @@ def iter_niches(inp: NicheInputs, stop: Callable[[], bool] = lambda: False) -> I
     stages = _Stages(NICHE_STAGES, stop)
     yield stages.begin("windows")
     keep = inp.codes >= 0
-    fractions = window_fractions(inp.coords[keep], inp.codes[keep], len(p.labels), inp.libraries[keep], p.k_window)
+    if inp.values is not None:  # the spot composition's shares
+        fractions = window_means(inp.coords[keep], inp.values[keep], inp.libraries[keep], p.k_window)
+    else:
+        fractions = window_fractions(inp.coords[keep], inp.codes[keep], len(p.labels), inp.libraries[keep],
+                                     p.k_window)
     yield stages.begin("kmeans")
     niche = fit_niches(fractions, p.n_niches, p.seed, NICHE_N_INIT)
     if stop():
@@ -1207,13 +1339,33 @@ def save_niches(adata, inp: NicheInputs, res: NicheResult, *, resources: dict | 
             "sizes": np.bincount(res.labels[res.labels >= 0], minlength=p.n_niches).astype(int).tolist(),
             "per_library": _per_library(res.labels, inp.libraries, p.n_niches), "notes": p.notes,
             "seconds": round(res.seconds, 1), "cells_fingerprint": cells_fingerprint,
-            "labels_fingerprint": _labels_key(inp.codes, p.labels)}
+            "labels_fingerprint": _labels_key(inp.codes, p.labels), "source": p.source}
+    if p.source == SOURCE_SHARES:
+        info.update(shares=p.shares, reference=p.reference, obsm=SHARE_OBSM[p.shares or "cells"],
+                    shares_fingerprint=_fingerprint(inp.values))
+        tool = "scview.spatial_domains (sklearn KMeans on the spot composition's shares, Kuppe et al. 2022)"
+        params = {"column": p.column, "source": p.source, "shares": p.shares, "obsm": SHARE_OBSM[p.shares or "cells"],
+                  "types": p.labels, "reference": (p.reference or {}).get("name"), "k_window": p.k_window,
+                  "n_niches": p.n_niches, "seed": p.seed}
+    else:
+        tool = "scview.spatial_domains (Schurch et al. 2020 windows, sklearn KMeans)"
+        params = {"column": p.column, "label_column": p.label_column, "labels": p.labels, "k_window": p.k_window,
+                  "n_niches": p.n_niches, "seed": p.seed}
     adata.uns[NICHES_KEY] = json.dumps({"latest": p.column, "runs": {**block["runs"], p.column: info}})
-    provenance.record_step(adata, step=STEP_NICHES, tool="scview.spatial_domains (Schurch et al. 2020 windows, sklearn "
-                           "KMeans)", params={"column": p.column, "label_column": p.label_column, "labels": p.labels,
-                                              "k_window": p.k_window, "n_niches": p.n_niches, "seed": p.seed},
-                           resources=resources)
+    provenance.record_step(adata, step=STEP_NICHES, tool=tool, params=params, resources=resources)
     return niches_summary(adata, cells_fingerprint)
+
+
+def _shares_changed(adata, info: dict, cells_fingerprint: str | None) -> str | None:
+    """Why niches from the spot composition's shares no longer fit them, or None."""
+    if cells_fingerprint is not None and info.get("cells_fingerprint") not in (None, cells_fingerprint):
+        return f"The {info.get('unit', 'spot')}s changed since this ran (a filter or a merge): run it again."
+    key = info.get("obsm") or SHARE_OBSM["cells"]
+    if key not in adata.obsm:
+        return "The spot composition these niches came from is gone: run Spot composition and the niches again."
+    if _fingerprint(np.asarray(adata.obsm[key], dtype=np.float32)) != info.get("shares_fingerprint"):
+        return "Spot composition was run again since these niches: run the niches again."
+    return None
 
 
 def niches_summary(adata, cells_fingerprint: str | None = None) -> dict[str, Any]:
@@ -1222,7 +1374,8 @@ def niches_summary(adata, cells_fingerprint: str | None = None) -> dict[str, Any
     latest = block.get("latest") if block.get("latest") in runs else next(iter(runs), None)
     if latest is None:
         return {"available": False, "columns": []}
-    reason = _labels_changed(adata, runs[latest], cells_fingerprint)
+    reason = (_shares_changed(adata, runs[latest], cells_fingerprint) if runs[latest].get("source") == SOURCE_SHARES
+              else _labels_changed(adata, runs[latest], cells_fingerprint))
     return {"available": True, **runs[latest], "stale": reason is not None, "stale_reason": reason,
             "columns": list(runs)}
 
@@ -1272,8 +1425,14 @@ def grounding_lines(adata, cells_fingerprint: str | None = None) -> tuple[list[s
         for i, row in enumerate(n["fractions"]):
             best = int(np.argmax(np.asarray(row, dtype=float)))
             tops.append(f"niche {i} ({n['sizes'][i]:,}): mostly {n['labels'][best]} {row[best]:.0%}")
-        text = (f"{n['n_niches']} composition niches in '{n['column']}' from '{n['label_column']}', windows of the "
-                f"{n['k_window']} nearest")
+        if n.get("source") == SOURCE_SHARES:
+            ref = (n.get("reference") or {}).get("name") or "a reference"
+            text = (f"{n['n_niches']} composition niches in '{n['column']}' from each {n.get('unit', 'spot')}'s "
+                    f"{'cell' if n.get('shares') == 'cells' else 'RNA'} shares (Spot composition against '{ref}')"
+                    + (f", averaged over the {n['k_window']} nearest" if n["k_window"] > 1 else ""))
+        else:
+            text = (f"{n['n_niches']} composition niches in '{n['column']}' from '{n['label_column']}', windows of "
+                    f"the {n['k_window']} nearest")
         detail = detail or text
         out.append(f"- {text}: " + "; ".join(tops) + f" [{TAG}].")
     e = enrichment_summary(adata, None, cells_fingerprint)

@@ -197,6 +197,17 @@ describe("PublicSourceCard", () => {
     expect(card).toHaveTextContent(VID);
     expect(card).toHaveTextContent("ab".repeat(32));
     expect(card).toHaveTextContent("2026-10-24");
+    expect(screen.queryByTestId("public-source-spatial-note")).toBeNull();
+  });
+
+  it("says when a spatial assay came without positions", () => {
+    const source = {
+      about_source: "CELLxGENE Discover", about_dataset_version_id: VID, about_url: DETAIL.download_url,
+      about_downloaded_at: "2026-10-24T12:00:00+00:00", about_size_bytes: "1", citation_text: "x",
+      about_spatial_note: "Discover lists a spatial assay (Visium Spatial Gene Expression V1), but this file holds no spot positions",
+    } as PublicSource;
+    render(<PublicSourceCard source={source} />);
+    expect(screen.getByTestId("public-source-spatial-note")).toHaveTextContent("no spot positions");
   });
 });
 

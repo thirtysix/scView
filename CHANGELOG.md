@@ -6,6 +6,61 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.77.0] - 2026-11-14
+
+Spatial statistics over several sections compare each section with itself; joint embeddings filter unfiltered
+datasets and take up to 32; per-sample QC gets a genes floor; mouse ATAC on mm39 works; large datasets survive a
+crash mid-edit. Found by re-analysing a published heart Visium study (Kuppe 2022) through scView's MCP.
+
+### Added
+- MCP: 11 spatial tools (Moran's I, domains, neighbourhood enrichment, co-occurrence, niches, spot composition) and
+  the joint embedding (plan, run, cancel), 49 tools in all. Long runs return a job id.
+- MCP `plot` draws a multi-section spatial dataset as sections side by side (12 at most, it says of how many), or
+  one section alone (`section`); before, all sections were drawn on top of each other. `get_dataset` lists the
+  spatial embedding, the sections and the off-tissue record.
+- MCP `search_public_datasets` takes an `offset` and says exactly how many records it shows.
+- A public spatial dataset whose file holds no spot positions says so at import and on its source card.
+- ATAC on mouse mm39 (GRCm39, the build of 10x's current GRCm39-2024-A references): gene activity, TSS
+  enrichment, motifs, chromVAR and peak-gene links run on it (GENCODE vM33 and UCSC mm39, fetched on first use).
+  Datasets that 0.76.0 imported as mm39 work without importing them again.
+- Composition niches on Visium spots, from Spot composition's cell-type shares (k-means on each spot's shares;
+  the note names the reference). Without a spot composition, the Niches control says to run one first.
+- Co-occurrence can show one section's own curves.
+- Data Assessment flags curated cell types that look to have lost the authors' meaning (a CELLxGENE curation
+  mapped Kuppe's "Myeloid" to "immature innate lymphoid cell"), with the cross-tab of curated vs author labels.
+  Nothing is renamed.
+- The joint embedding picker has a filter box, "Select shown", Clear and a selected count.
+
+### Changed
+- Moran's I over several sections centres each gene on its own section's mean and lists each section's own I.
+  Before, differences between slides counted as spatial pattern: on 8 Kuppe slides the pooled I was higher than
+  every single slide for 7 of 8 genes (MALAT1 0.61 vs at most 0.48). One-section results are unchanged.
+- Co-occurrence over several sections scores each section against its own label shares and then combines them.
+  Before, a pooled baseline turned slide composition into co-location (Fibroblast|Myeloid 1.6 at 4 mm on Kuppe,
+  now 0.99, in line with neighbourhood enrichment). One-section results are unchanged.
+- Moran's I runs on different sections are kept side by side in History; a run on one section no longer replaces
+  another section's.
+- Per-sample MAD QC never cuts below a genes floor: 200 genes for cells, 100 for spots and Visium HD cells, none for
+  bins and targeted panels (settable). A sample where half the spots are near empty had a MAD cut of 4 genes and
+  kept them all. The floor is skipped, and said so, where it would remove more than half of a sample. The preview
+  says per sample which cut applied. Recipes from earlier versions replay without it. Kang and paul15: no change.
+- The joint embedding filters the datasets scView never filtered (same QC as a single run), shows per dataset how
+  many cells that removes, and can be switched off. Datasets filtered before are left as they are.
+- The joint embedding takes up to 32 datasets (was 8); the memory estimate refuses a set that cannot fit.
+- ATAC input on another species or build (T2T-CHM13, rat, zebrafish and the like) gets one note naming the builds
+  scView supports; RNA work is unaffected. Before, rat or zebrafish fragments were read as GRCh38.
+- Data Assessment: identical requests for one dataset share one computation.
+- Marker database check: a match on one shared gene is "weak support (one shared gene)", whatever its p; it was
+  "supported".
+- The public dataset check reads a Visium file's header in 10 requests (0.2 to 4 s), not 68 (up to 70 s), and
+  now reaches a verdict on CELLxGENE slides instead of "unknown".
+- The tissue view's chosen section is kept in session files.
+
+### Fixed
+- Large datasets: an edit written into the file (labels, colours, a kept clustering) goes through a rollback
+  journal, so a backend killed mid-write leaves the file as it was.
+- The joint plan printed the one-condition note once per condition column; it is now one note naming the columns.
+
 ## [0.76.0] - 2026-11-13
 
 Joint embeddings get a pipeline run's memory protection; spatial imports leave off-tissue spots out; marker

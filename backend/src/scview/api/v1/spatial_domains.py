@@ -21,7 +21,7 @@ import json
 import logging
 import threading
 from collections.abc import Callable, Iterator
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -63,12 +63,16 @@ class EnrichmentRequest(BaseModel):
 
 
 class NichesRequest(BaseModel):
-    label_column: str = Field(max_length=256)
-    k_window: int = Field(default=sd.NICHE_NEIGHBOURS, ge=2, le=sd.MAX_NICHE_NEIGHBOURS)
+    label_column: str | None = Field(default=None, max_length=256)  # needed for niches from labels
+    # null: 20 cells, or each spot alone (spot_composition)
+    k_window: int | None = Field(default=None, ge=1, le=sd.MAX_NICHE_NEIGHBOURS)
     n_niches: int = Field(default=sd.DEFAULT_NICHES, ge=2, le=sd.MAX_NICHES)
     seed: int = Field(default=sd.SEED, ge=0, le=2**31 - 1)
     column: str = Field(default=sd.NICHE_COLUMN, max_length=64)
     overwrite: bool = False
+    # labels | spot_composition (each spot's cell-type shares); null: what the data allows
+    source: Literal["labels", "spot_composition"] | None = None
+    shares: Literal["cells", "rna"] = "cells"  # spot_composition: cell shares or RNA shares
 
 
 class CoOccurrenceRequest(BaseModel):
@@ -309,8 +313,9 @@ async def run_enrichment(dataset_id: str, body: EnrichmentRequest, dm: DatasetMa
 
 @router.post("/datasets/{dataset_id}/spatial/niches/run-stream")
 async def run_niches(dataset_id: str, body: NichesRequest, dm: DatasetManager = Depends(get_dataset_manager)):
-    """Composition niches from a label column. Refused on Visium spots and on Visium HD
-    bins other than 8 um. An earlier run's column is replaced only with ``overwrite``."""
+    """Composition niches from a label column, or on Visium spots and Visium HD bins other than
+    8 um from each spot's cell-type shares (a saved Spot composition; refused without one). An
+    earlier run's column is replaced only with ``overwrite``."""
     adaptor = await _adaptor(dm, dataset_id)
     _busy(dataset_id)
     adata = adaptor.adata
@@ -350,10 +355,14 @@ async def get_cooccurrence(
     interval: int = Query(default=cc.DEFAULT_INTERVAL, ge=cc.MIN_INTERVAL, le=cc.MAX_INTERVAL),
     combine: str = Query(default=cc.SUM, max_length=32),
     max_distance: float | None = Query(default=None, gt=0),
+    section: str = Query(default="", max_length=256),
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """The saved run of ``column`` (else the latest): ``result`` with ``occ`` (labels x labels x
-    distances), ``count``, ``distances``. With ``column``, what a run would need: ``plan`` and
+    distances), ``count``, ``distances``; over several sections ``sections_combined``
+    ("within_sections": each section scored against its own label shares, then combined) and
+    ``sections`` (each one's pairs). ``section``: that section's own ``occ`` and ``count``
+    instead (``result.section`` names it). With ``column``, what a run would need: ``plan`` and
     its preflight ``verdict``, or ``reason`` when it cannot run. ``max_distance`` in the
     positions' units: the thresholds a run with that reach would use."""
     adaptor = await _adaptor(dm, dataset_id)
@@ -361,8 +370,11 @@ async def get_cooccurrence(
 
     def work() -> dict[str, Any]:
         fp = adaptor.cells_fingerprint()
-        out: dict[str, Any] = {"plan": None, "verdict": None, "reason": None,
-                               "result": cc.cooccurrence_summary(adata, column or None, fp)}
+        try:
+            result = cc.cooccurrence_summary(adata, column or None, fp, section or None)
+        except sd.SpatialDomainsError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from None
+        out: dict[str, Any] = {"plan": None, "verdict": None, "reason": None, "result": result}
         if column:
             try:
                 distances = cc.even_distances(max_distance, interval) if max_distance is not None else None

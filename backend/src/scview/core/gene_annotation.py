@@ -2,8 +2,9 @@
 
 ATAC gene activity and TSS enrichment both need gene bodies. A 10x multiome h5 has an
 ``interval`` per gene, but it is not the gene body (FAM138A: chr1:36080-36081, 1 bp), so
-positions come from the GENCODE release 10x built its 2020-A references from: v32 for
-GRCh38, vM23 for mm10. The GTF is fetched on first use, its sha256 pinned, and reduced to
+positions come from the GENCODE release 10x built its references from: v32 for GRCh38 and
+vM23 for mm10 (2020-A), vM33 for mm39 (GRCm39-2024-A; vM33 = Ensembl 110), each as its basic
+GTF (the gene records match the comprehensive file's). The GTF is fetched on first use, its sha256 pinned, and reduced to
 ``DATA_DIR/annotation/<genome>.genes.tsv.gz``. ``ANNOTATION_AUTO_DOWNLOAD=false`` turns
 fetching off; ``seed_from`` reads a GTF already on disk.
 
@@ -50,8 +51,13 @@ RELEASES = {
         "https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_mouse/release_M23/gencode.vM23.basic.annotation.gtf.gz",
         "1751488e29871316ed7bbea4e38cbe229d67edc714b811012fcb9fe6131970b7",
     ),
+    # sha256 of the file as fetched 2026-11-13; its md5 matches GENCODE's MD5SUMS.
+    "mm39": Release(
+        "mm39", "GENCODE vM33 basic",
+        "https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_mouse/release_M33/gencode.vM33.basic.annotation.gtf.gz",
+        "3a7d3f134ce57a55cb84b72cd70f7af199405f980c257664316c689434c0807e",
+    ),
 }
-_ALIASES = {"grch38": "GRCh38", "hg38": "GRCh38", "mm10": "mm10", "grcm38": "mm10"}
 _lock = threading.Lock()
 _cache: dict[tuple[str, str], pd.DataFrame] = {}
 
@@ -61,16 +67,12 @@ class AnnotationError(RuntimeError):
 
 
 def canonical_genome(name: str | None) -> str:
-    """'GRCh38' or 'mm10' for a reference name such as 'GRCh38-2020-A' or 'mm10-2020-A'."""
-    key = re.split(r"[-_.\s]", str(name or "").strip().lower(), maxsplit=1)[0]
-    genome = _ALIASES.get(key)
-    if genome is None and (sentence := genome_build.refusal(name)):  # hg19 / mm9 / mm39 name chromosomes as GRCh38 / mm10
-        raise AnnotationError(sentence)
+    """'GRCh38', 'mm10' or 'mm39' for a reference name such as 'GRCh38-2020-A' or 'GRCm39-2024-A'.
+    Anything else raises the one sentence ``genome_build.unsupported`` gives (hg19, mm9, another
+    species, nothing named)."""
+    genome = genome_build.supported(name)
     if genome is None:
-        raise AnnotationError(
-            f"scView has gene positions for GRCh38 and mm10, not {name!r}. "
-            "Peaks from another reference cannot be matched to genes."
-        )
+        raise AnnotationError(genome_build.unsupported(name))
     return genome
 
 

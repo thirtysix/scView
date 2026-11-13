@@ -437,6 +437,35 @@ def test_run_import_refuses_what_will_not_fit_and_cleans_up(tmp_path):
     assert not (data / "uploads" / "ds1").exists() and not (data / "ingested" / "ds1").exists()
 
 
+def test_a_spatial_assay_without_positions_is_said_at_import_and_kept(tmp_path):
+    # Guilliams 2022 NAFLD: a pooled Visium file with no obsm 'spatial' imported as plain
+    # single-cell data, and nothing said it was spatial.
+    src = tmp_path / "src.h5ad"
+    discover_h5ad(src)
+    body = src.read_bytes()
+    visium = {**pi.slim(LISTING_REC()), "size_bytes": len(body), "assay": ["Visium Spatial Gene Expression V1"]}
+    note = pi.positions_note(visium, src)
+    assert note and "Visium Spatial Gene Expression V1" in note and "no spot positions" in note
+    assert pi.positions_note({**visium, "assay": ["10x 3' v3"]}, src) is None
+    with_xy = tmp_path / "xy.h5ad"
+    a = ad.read_h5ad(src)
+    a.obsm["spatial"] = np.zeros((a.n_obs, 2))
+    a.write_h5ad(with_xy)
+    assert pi.positions_note(visium, with_xy) is None
+
+    data = tmp_path / "data"
+    events = list(pi.run_import(visium, data, "ds1", threading.Event(), client=FakeDiscover(body).client(),
+                                verdict=lambda p: {"verdict": "fits", "message": "ok"}))
+    assert ("stage", {"stage": "note", "message": note}) in events
+    meta = dict(events)["registered"]
+    assert meta["public_source"]["about_spatial_note"] == note
+    with h5py.File(data / "ingested" / "ds1" / f"{LIVER_B}.h5ad", "r") as f:
+        assert "no spot positions" in f["uns"]["about_spatial_note"][()].decode()
+    plain = list(pi.run_import({**visium, "assay": ["10x 3' v3"]}, data, "ds2", threading.Event(),
+                               client=FakeDiscover(body).client(), verdict=lambda p: {"verdict": "fits"}))
+    assert "about_spatial_note" not in dict(plain)["registered"]["public_source"]
+
+
 # ---------------------------------------------------------------------------
 # API
 # ---------------------------------------------------------------------------
@@ -467,6 +496,7 @@ def fake(monkeypatch, tmp_path):
     f.handler = handler
     monkeypatch.setattr(pi, "new_client", f.client)
     monkeypatch.setattr(pi, "memory_verdict", lambda p: {"verdict": "fits", "message": "ok"})
+    monkeypatch.setattr(pi, "_UNREADABLE", {})
     api._catalogs.clear()
     yield f
     api._catalogs.clear()

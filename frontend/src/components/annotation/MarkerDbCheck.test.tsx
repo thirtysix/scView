@@ -102,6 +102,21 @@ describe("MarkerDbCheck", () => {
     expect((rows[1] as HTMLTableRowElement).cells[4]!.textContent).toMatch(/^NK cells.*T cells/);
   });
 
+  it("says a one-gene overlap is weak support, with why on hover", async () => {
+    const one = {
+      ...RESULT.labels[0]!, label: "Adipocyte", db_type: "Adipocytes", p: 0.035, overlap: ["MT2A"],
+      verdict: "weak" as const, verdict_text: "weak support (one shared gene)", one_gene: true,
+    };
+    runMarkerDbCheck.mockResolvedValue({ ...RESULT, labels: [one, ...RESULT.labels.slice(1)] });
+    render(<MarkerDbCheck datasetId="d1" column="cell_type" />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Check against marker databases" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Check against marker databases" }));
+    await waitFor(() => expect(screen.getByTestId("marker-db-result")).toBeTruthy());
+    const badge = screen.getByText("weak support (one shared gene)");
+    expect(badge.getAttribute("data-verdict")).toBe("weak");
+    expect(badge.getAttribute("title")).toMatch(/one shared gene is weak support, whatever its p/);
+  });
+
   it("downloads on first use and offers a retry when a download fails", async () => {
     getMarkerDbStatus.mockResolvedValue(MISSING);
     runMarkerDbCheck.mockRejectedValueOnce(

@@ -650,22 +650,29 @@ def plan_verdict(plan) -> dict:
 
 HEADER_BLOCK = 1 << 20  # bytes per ranged request (h5py reads the header in small pieces)
 HEADER_MAX_REQUESTS = 48  # a header spread wider than this is not read (no estimate)
+HEADER_MAX_SECONDS = 8.0  # a slow file host: stop here, and the import checks the downloaded file
 _HEADERS: dict[str, Any] = {}  # version id -> header (a version never changes)
 _HEADERS_MAX = 32
+# Version id -> (when, why) of a header that could not be read: the check and the import
+# right after it give the same answer at once instead of waiting for the host again.
+_UNREADABLE: dict[str, tuple[float, str]] = {}
+UNREADABLE_TTL = 600.0
 
 
 class RangeFile(io.RawIOBase):
     """A remote file read with HTTP range requests, a block at a time, each block kept:
     h5py opens it to read an h5ad's header (shapes, encodings, column lists) without its
     matrices. Raises ``PublicImportError`` when the host does not serve ranges or the
-    header needs more than ``max_requests`` blocks."""
+    header needs more than ``max_requests`` blocks or ``max_seconds``."""
 
     def __init__(self, url: str, size: int, client: httpx.Client, block: int = HEADER_BLOCK,
-                 max_requests: int | None = None) -> None:
+                 max_requests: int | None = None, max_seconds: float | None = None) -> None:
         super().__init__()
         self.url, self.size, self.client = url, int(size), client
         self.block = block
         self.max_requests = HEADER_MAX_REQUESTS if max_requests is None else max_requests
+        self.max_seconds = HEADER_MAX_SECONDS if max_seconds is None else max_seconds
+        self.started = time.monotonic()
         self.pos = 0
         self.requests = 0
         self._blocks: dict[int, bytes] = {}
@@ -689,6 +696,10 @@ class RangeFile(io.RawIOBase):
             if self.requests >= self.max_requests:
                 raise PublicImportError("The file's header is spread too widely to read before "
                                         "downloading it.", 502)
+            if self.requests and time.monotonic() - self.started > self.max_seconds:
+                raise PublicImportError(f"CELLxGENE Discover served the file's header too slowly to "
+                                        f"read before downloading it ({self.requests} parts in "
+                                        f"{self.max_seconds:g} s).", 502)
             start = i * self.block
             end = min(self.size, start + self.block) - 1
             self.requests += 1
@@ -730,6 +741,9 @@ def remote_header(rec: dict, client: httpx.Client | None = None):
     size = int(rec.get("size_bytes") or 0)
     if size <= 0:
         raise PublicImportError("Discover gives no size for this file.", 502)
+    failed = _UNREADABLE.get(vid)
+    if failed is not None and time.monotonic() - failed[0] < UNREADABLE_TTL:
+        raise PublicImportError(failed[1], 502)
     own = client is None
     client = client or new_client()
     t0 = time.monotonic()
@@ -737,7 +751,8 @@ def remote_header(rec: dict, client: httpx.Client | None = None):
         with RangeFile(file_url(vid), size, client) as fh:
             h = preflight._read_h5ad(fh)
             n = fh.requests
-    except PublicImportError:
+    except PublicImportError as e:
+        _UNREADABLE[vid] = (time.monotonic(), str(e))
         raise
     except httpx.HTTPError as e:
         raise PublicImportError(f"Could not reach CELLxGENE Discover ({e}).", 502)
@@ -774,6 +789,37 @@ def memory_before_download(rec: dict, client: httpx.Client | None = None) -> dic
                matrices=[{"where": m.where, "sparse": m.sparse, "nnz": m.nnz, "bytes": m.nbytes}
                          for m in h.matrices])
     return out
+
+
+# Words that name a spatial assay in Discover's assay names (Visium Spatial Gene Expression V1,
+# Slide-seqV2, Visium CytAssist, MERFISH, ...).
+SPATIAL_ASSAY = re.compile(r"visium|slide-?seq|spatial|merfish|xenium|cosmx|stereo-?seq|starmap|seqfish|dbit",
+                           re.I)
+
+
+def spatial_assay(rec: dict) -> str | None:
+    """The record's first assay that is a spatial one, or None."""
+    return next((a for a in rec.get("assay") or [] if SPATIAL_ASSAY.search(str(a))), None)
+
+
+def positions_note(rec: dict, path: Path) -> str | None:
+    """A sentence when the record names a spatial assay but the file holds no positions
+    (obsm 'spatial'): a pooled CELLxGENE file (Guilliams 2022 NAFLD) opens as plain
+    single-cell data, with nothing else saying it was spatial."""
+    import h5py
+
+    assay = spatial_assay(rec)
+    if assay is None:
+        return None
+    try:
+        with h5py.File(path, "r") as f:
+            if "obsm" in f and "spatial" in f["obsm"]:
+                return None
+    except OSError:
+        return None
+    return (f"Discover lists a spatial assay ({assay}), but this file holds no spot positions (obsm "
+            "'spatial'): it opens as single-cell data, with no tissue plot or spatial tools. A study's "
+            "per-section files may hold the positions its pooled file left out.")
 
 
 def dataset_name(rec: dict) -> str:
@@ -819,6 +865,10 @@ def run_import(rec: dict, data_dir: Path, dataset_id: str, cancel: threading.Eve
         yield "stage", {"stage": "prepare", "message": "Writing scView's working copy (gene symbols, "
                                                        "source and citation)"}
         info = about(rec, sha, src.stat().st_size, _now())
+        no_positions = positions_note(rec, src)
+        if no_positions:
+            info["about_spatial_note"] = no_positions
+            yield "stage", {"stage": "note", "message": no_positions}
         ingest_dir.mkdir(parents=True, exist_ok=True)
         out = ingest_dir / f"{vid}.h5ad"
         summary = prepare(src, out, rec, info)

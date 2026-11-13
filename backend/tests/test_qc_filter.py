@@ -273,8 +273,10 @@ async def test_endpoint_defaults_to_the_pipelines_thresholds(client, dataset_man
     did = _register(dataset_manager, _dataset())
     body = (await client.get(f"{API}/datasets/{did}/qc/filter-preview")).json()
     p = PipelineParams()
-    assert body["thresholds"] == {"mode": "mad", "min_genes": p.min_genes, "max_genes": 0,
-                                  "min_counts": 0, "max_pct_mt": p.max_pct_mt,
+    # MAD mode: the fixed cut-offs are not applied, so not echoed; the genes floor is.
+    assert body["thresholds"] == {"mode": "mad", "min_genes": None, "max_genes": None,
+                                  "min_counts": None, "genes_floor": 200.0, "counts_floor": 0.0,
+                                  "max_pct_mt": p.max_pct_mt,
                                   "drop_doublets": False, "mad_k": 5.0, "mad_k_mt": 3.0,
                                   "mad_upper": False, "mito_mode": "global", "mito_type_column": "",
                                   "mito_type_floor": False}

@@ -138,6 +138,24 @@ def cooccurrence_scores(count):
     return out
 
 
+def within_section_scores(by_section):
+    """One score from several sections (sections x labels x labels x thresholds of cumulative
+    ordered pairs), each section against its own label shares: sum over sections of the pairs
+    of (a, b) over the sum of the pairs each section would have of (a, b) were its labels placed
+    at random among its pairs (row x column / total, per section). That is each section's own
+    score, P(b | a) / P(b), weighted by those expected pairs; a section without a or b adds
+    nothing. One section: its score as ``cooccurrence_scores``. 0 where no section has the pair."""
+    count = np.asarray(by_section, dtype=np.float64)
+    row = count.sum(axis=2, keepdims=True)
+    column = count.sum(axis=1, keepdims=True)
+    total = count.sum(axis=(1, 2), keepdims=True)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        expected = np.where(total > 0, row * column / total, 0.0).sum(axis=0)
+        out = count.sum(axis=0) / expected
+    out[~np.isfinite(out)] = 0.0
+    return out
+
+
 def visited_pairs(x, top):
     """The pairs ``count_triangle`` visits per observation, for x sorted."""
     reach = np.searchsorted(x, x.astype(np.float64) + float(top) * (1.0 + 1e-6), side="right")
@@ -161,13 +179,16 @@ def _edges(interval):
     return upper[order], inverse
 
 
-def pair_counts(spatial, codes, n_labels, sections, interval, threads, kernels, progress=None):
-    """Cumulative ordered pairs (labels x labels x thresholds), section by section."""
+def section_pair_counts(spatial, codes, n_labels, sections, interval, threads, kernels, progress=None):
+    """Cumulative ordered pairs per section (sections x labels x labels x thresholds, the
+    sections in ``np.unique`` order), and the pairs visited."""
     edges, inverse = _edges(interval)
     table, per_unit = bin_lookup(edges)
     triangle = kernels[0]
+    names = np.unique(sections)
+    size = n_labels * n_labels * edges.size
     jobs, total = [], 0
-    for s in np.unique(sections):
+    for k, s in enumerate(names):
         rows = np.flatnonzero(sections == s)
         rows = rows[np.argsort(spatial[rows, 0], kind="stable")]
         x, y, c = spatial[rows, 0], spatial[rows, 1], codes[rows]
@@ -178,18 +199,17 @@ def pair_counts(spatial, codes, n_labels, sections, interval, threads, kernels, 
         while lo < rows.size:
             hi = int(np.searchsorted(ends, (ends[lo - 1] if lo else 0) + BLOCK_PAIRS, side="left")) + 1
             hi = min(hi, rows.size)
-            jobs.append((x, y, c, lo, hi, int(ends[hi - 1] - (ends[lo - 1] if lo else 0))))
+            jobs.append((k, x, y, c, lo, hi, int(ends[hi - 1] - (ends[lo - 1] if lo else 0))))
             lo = hi
-    size = n_labels * n_labels * edges.size
     free: queue.SimpleQueue = queue.SimpleQueue()
-    hists = [np.zeros(size, dtype=np.int64) for _ in range(max(1, threads))]
+    hists = [np.zeros(names.size * size, dtype=np.int64) for _ in range(max(1, threads))]
     for h in hists:
         free.put(h)
 
     def work(job):
-        x, y, c, lo, hi, n_pairs = job
+        k, x, y, c, lo, hi, n_pairs = job
         hist = free.get()
-        triangle(x, y, c, lo, hi, edges, table, per_unit, n_labels, hist)
+        triangle(x, y, c, lo, hi, edges, table, per_unit, n_labels, hist[k * size:(k + 1) * size])
         free.put(hist)
         return n_pairs
 
@@ -199,7 +219,15 @@ def pair_counts(spatial, codes, n_labels, sections, interval, threads, kernels, 
             done += n_pairs
             if progress is not None:
                 progress(done, total)
-    return _cumulative(np.sum(hists, axis=0), n_labels, edges.size, inverse), total
+    summed = np.sum(hists, axis=0).reshape(names.size, size)
+    return np.stack([_cumulative(h, n_labels, edges.size, inverse) for h in summed]), total
+
+
+def pair_counts(spatial, codes, n_labels, sections, interval, threads, kernels, progress=None):
+    """Cumulative ordered pairs (labels x labels x thresholds), each section's counted in that
+    section and summed."""
+    by_section, total = section_pair_counts(spatial, codes, n_labels, sections, interval, threads, kernels, progress)
+    return by_section.sum(axis=0), total
 
 
 def n_splits_of(n_obs):
@@ -261,18 +289,29 @@ def compiled_kernels():
     return numba.njit(nogil=True)(count_triangle), numba.njit(nogil=True)(count_rectangle)
 
 
-def compute(spatial, codes, n_labels, sections, interval, combine=SUM, threads=2, progress=None, kernels=None):
-    """(score, cumulative ordered pairs, pairs visited) at ``interval[1:]``."""
+def compute_sections(spatial, codes, n_labels, sections, interval, combine=SUM, threads=2, progress=None,
+                     kernels=None):
+    """(score, cumulative ordered pairs, pairs visited, each section's cumulative pairs or None)
+    at ``interval[1:]``. Several sections: each scored against its own label shares and
+    combined (``within_section_scores``); one: squidpy's score."""
     kernels = kernels or compiled_kernels()
     if combine == SQUIDPY_SPLITS and n_splits_of(spatial.shape[0]) > 1:
-        return split_scores(spatial, codes, n_labels, interval, threads, kernels, progress)
-    count, visited = pair_counts(spatial, codes, n_labels, sections, interval, threads, kernels, progress)
-    return cooccurrence_scores(count), count, visited
+        return (*split_scores(spatial, codes, n_labels, interval, threads, kernels, progress), None)
+    by_section, visited = section_pair_counts(spatial, codes, n_labels, sections, interval, threads, kernels,
+                                              progress)
+    if by_section.shape[0] == 1:
+        return cooccurrence_scores(by_section[0]), by_section[0], visited, None
+    return within_section_scores(by_section), by_section.sum(axis=0), visited, by_section
+
+
+def compute(spatial, codes, n_labels, sections, interval, combine=SUM, threads=2, progress=None, kernels=None):
+    """(score, cumulative ordered pairs, pairs visited): ``compute_sections`` without each section's pairs."""
+    return compute_sections(spatial, codes, n_labels, sections, interval, combine, threads, progress, kernels)[:3]
 
 
 REPLAY_CODE = (distance32, find_min_max, default_interval, sample_rows, bin_lookup, count_triangle, count_rectangle,
-               cooccurrence_scores, visited_pairs, _cumulative, _edges, pair_counts, n_splits_of, split_scores,
-               compiled_kernels, compute)
+               cooccurrence_scores, within_section_scores, visited_pairs, _cumulative, _edges, section_pair_counts,
+               pair_counts, n_splits_of, split_scores, compiled_kernels, compute_sections, compute)
 
 
 def _peak_rss_kb() -> int:
@@ -293,11 +332,13 @@ def _child() -> None:
         out.flush()
 
     with np.load(io.BytesIO(sys.stdin.buffer.read())) as d:
-        score, count, visited = compute(d["spatial"], d["codes"], int(d["n_labels"]), d["sections"], d["interval"],
-                                        str(d["combine"]), int(d["threads"]), progress)
+        score, count, visited, by_section = compute_sections(d["spatial"], d["codes"], int(d["n_labels"]), d["sections"],
+                                                             d["interval"], str(d["combine"]), int(d["threads"]),
+                                                             progress)
     payload = io.BytesIO()
+    extra = {} if by_section is None else {"by_section": by_section.astype(np.int64)}
     np.savez(payload, score=score.astype(np.float32), count=count.astype(np.int64), visited=visited,
-             peak_rss_kb=_peak_rss_kb())
+             peak_rss_kb=_peak_rss_kb(), **extra)
     out.write(f"result {payload.getbuffer().nbytes}\n".encode())
     out.write(payload.getvalue())
     out.flush()

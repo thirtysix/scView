@@ -817,8 +817,9 @@ _MM39 = re.compile(r"grcm39|mm39", re.IGNORECASE)
 
 
 def assembly_for(adata, species: str) -> str | None:
-    """hg38 for human, mm39 when the dataset names GRCm39 / mm39 (uns or a var ``genome``
-    column), else mm10 for mouse; None for an unknown species."""
+    """hg38 for human, mm39 when the dataset names GRCm39 / mm39 (uns, a var ``genome``
+    column or the genome its ATAC import recorded), else mm10 for mouse; None for an unknown
+    species."""
     if species == "human":
         return "hg38"
     if species != "mouse":
@@ -832,6 +833,10 @@ def assembly_for(adata, species: str) -> str | None:
         if col in getattr(adata, "var", {}).columns:
             vals = adata.var[col].astype(str).unique()[:5]
             hints.extend(str(v) for v in vals)
+    try:  # the genome the ATAC import recorded (its peaks may be told as mm39 by their positions)
+        hints.append(str(json.loads(str(adata.uns.get("scview_atac", "{}"))).get("genome") or ""))
+    except (TypeError, ValueError, AttributeError):
+        pass
     return "mm39" if any(_MM39.search(h) for h in hints) else "mm10"
 
 
