@@ -21,7 +21,7 @@ import json
 import logging
 import threading
 from collections.abc import Callable, Iterator
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -63,12 +63,16 @@ class EnrichmentRequest(BaseModel):
 
 
 class NichesRequest(BaseModel):
-    label_column: str = Field(max_length=256)
-    k_window: int = Field(default=sd.NICHE_NEIGHBOURS, ge=2, le=sd.MAX_NICHE_NEIGHBOURS)
+    label_column: str | None = Field(default=None, max_length=256)  # needed for niches from labels
+    # null: 20 cells, or each spot alone (spot_composition)
+    k_window: int | None = Field(default=None, ge=1, le=sd.MAX_NICHE_NEIGHBOURS)
     n_niches: int = Field(default=sd.DEFAULT_NICHES, ge=2, le=sd.MAX_NICHES)
     seed: int = Field(default=sd.SEED, ge=0, le=2**31 - 1)
     column: str = Field(default=sd.NICHE_COLUMN, max_length=64)
     overwrite: bool = False
+    # labels | spot_composition (each spot's cell-type shares); null: what the data allows
+    source: Literal["labels", "spot_composition"] | None = None
+    shares: Literal["cells", "rna"] = "cells"  # spot_composition: cell shares or RNA shares
 
 
 class CoOccurrenceRequest(BaseModel):
@@ -309,8 +313,9 @@ async def run_enrichment(dataset_id: str, body: EnrichmentRequest, dm: DatasetMa
 
 @router.post("/datasets/{dataset_id}/spatial/niches/run-stream")
 async def run_niches(dataset_id: str, body: NichesRequest, dm: DatasetManager = Depends(get_dataset_manager)):
-    """Composition niches from a label column. Refused on Visium spots and on Visium HD
-    bins other than 8 um. An earlier run's column is replaced only with ``overwrite``."""
+    """Composition niches from a label column, or on Visium spots and Visium HD bins other than
+    8 um from each spot's cell-type shares (a saved Spot composition; refused without one). An
+    earlier run's column is replaced only with ``overwrite``."""
     adaptor = await _adaptor(dm, dataset_id)
     _busy(dataset_id)
     adata = adaptor.adata

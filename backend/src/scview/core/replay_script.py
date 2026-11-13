@@ -3087,6 +3087,7 @@ def _spot_deconvolution(p: dict, ctx: _Ctx) -> Snippet:
         if src and src not in ("layers['counts']", ".raw", "X"):
             status = APPROXIMATE
             notes.append(f"scView read the {who}' counts from {comment_text(src, 60)}; here from the file's own.")
+    ctx.runs["spot_deconvolution"] = status  # niches from its shares follow it
     return Snippet(status, [
         f"# Spot composition from {comment_text(p.get('reference'), 80)} (its column {comment_text(label, 60)}), "
         f"{comment_text(sd.METHOD_NAMES.get(method, method), 60)}.",
@@ -3972,8 +3973,41 @@ def _co_occurrence(p: dict, ctx: _Ctx) -> Snippet:
     ])
 
 
+def _share_niches(p: dict, ctx: _Ctx) -> Snippet:
+    """Niches from the spot composition's shares (core/spatial_domains.py; Kuppe et al. 2022)."""
+    column, obsm, types, window, n, seed = (p.get(x) for x in ("column", "obsm", "types", "k_window", "n_niches",
+                                                               "seed"))
+    if (not isinstance(column, str) or obsm not in ("spot_deconv_cells", "spot_deconv") or not isinstance(types, list)
+            or not isinstance(window, int) or not isinstance(n, int) or not isinstance(seed, int)):
+        return Snippet(NOT_REPLAYABLE, ["# Composition niches from spot shares: settings not recorded. Recorded:",
+                                        *_param_comment({x: v for x, v in p.items() if x != "types"})],
+                       "settings not recorded")
+    made = ctx.runs.get("spot_deconvolution")
+    if made is None:
+        return Snippet(NOT_REPLAYABLE, [
+            "# Composition niches from spot shares: the spot composition they came from is not replayed above, so "
+            "its shares are not here. Recorded:", *_param_comment({x: v for x, v in p.items() if x != "types"})],
+            "the spot composition is not replayed")
+    _need(ctx, "spatial_domains")
+    kind = "cell" if obsm == "spot_deconv_cells" else "RNA"
+    smooth = f", averaged over the {window} nearest" if window > 1 else ""
+    return Snippet(made, [
+        f"# Composition niches (Kuppe et al. 2022): k-means on each spot's {kind} shares from the spot composition "
+        f"above{smooth}, {n} niches.",
+        f"shares = np.asarray(adata.obsm[{_lit(obsm)}], dtype=np.float32)",
+        "keep = np.isfinite(shares).all(axis=1)",
+        f"fractions = window_means(np.asarray(adata.obsm[\"spatial\"])[:, :2][keep], shares[keep], "
+        f"spatial_sections(adata)[keep], {window})",
+        "niches = np.full(adata.n_obs, -1, dtype=np.int32)",
+        f"niches[keep] = fit_niches(fractions, {n}, {seed})",
+        f"adata.obs[{_lit(column)}] = pd.Categorical.from_codes(niches, categories=[str(i) for i in range({n})])",
+    ], "" if made == EXACT else "follows the spot composition above")
+
+
 def _spatial_niches(p: dict, ctx: _Ctx) -> Snippet:
     """Composition niches (core/spatial_domains.py; Schurch et al. 2020)."""
+    if p.get("source") == "spot_composition":
+        return _share_niches(p, ctx)
     column, label, labels, window, n, seed = (p.get(x) for x in ("column", "label_column", "labels", "k_window",
                                                                  "n_niches", "seed"))
     if (not isinstance(column, str) or not isinstance(label, str) or not isinstance(labels, list) or len(labels) < 2

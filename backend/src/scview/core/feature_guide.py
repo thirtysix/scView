@@ -140,14 +140,16 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Unified View > Clonotypes", "TCR/BCR", "TCR/BCR repertoire"),
     ("Unified View > Perturbation", "CRISPR, Mixscape", "CRISPR guide calls, Mixscape"),
     ("Unified View > Spatial genes", "Moran's I",
-     "spatially variable genes (Moran's I) on Visium spots, Visium HD bins or imaging cells; click a gene to colour the "
-     "tissue"),
+     "spatially variable genes (Moran's I) on Visium spots, Visium HD bins or imaging cells, one section or all (then "
+     "within each section, with each section's own I); click a gene to colour the tissue"),
     ("Unified View > Domains", "niches",
      "spatial domains (clustering that sees each spot's, bin's or cell's neighbours; k chosen or suggested by stability), "
-     "neighbourhood enrichment between labels, composition niches; colours the tissue"),
+     "neighbourhood enrichment between labels, composition niches (from labels, or on Visium spots from Spot "
+     "composition's cell-type shares); colours the tissue"),
     ("Unified View > Domains > Co-occurrence", "squidpy",
      "how much more often one label is found within each distance of another than among all pairs at that range (score "
-     "above 1), with a score-by-distance plot per label and a labels-by-labels heatmap; nearby is not interacting"),
+     "above 1), with a score-by-distance plot per label and a labels-by-labels heatmap, several sections each scored "
+     "against its own label shares (one section's curves on request); nearby is not interacting"),
     ("Unified View > Traits", "GWAS",
      "GWAS Catalog traits linked to each group's markers (leads, not causal genes); one gene's traits"),
     ("Unified View > Velocity", "",
