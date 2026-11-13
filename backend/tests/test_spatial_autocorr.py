@@ -39,6 +39,11 @@ def squidpy_degrees() -> pd.DataFrame:
     return pd.read_csv(FIX / "squidpy_degrees.csv")
 
 
+@pytest.fixture(scope="module")
+def squidpy_sections() -> pd.DataFrame:
+    return pd.read_csv(FIX / "squidpy_moran_sections.csv")
+
+
 def _compare(r: sa.Result, ref: pd.DataFrame) -> None:
     t = r.table
     assert list(t["gene"]) == list(ref["gene"])  # the same genes, in squidpy's order (I high first)
@@ -51,12 +56,32 @@ def _compare(r: sa.Result, ref: pd.DataFrame) -> None:
 
 @pytest.mark.parametrize("name,make,kind", [("visium", synthetic.visium, "grid"),
                                             ("cells", synthetic.cells, "knn")])
-def test_equals_squidpy_defaults(name, make, kind, squidpy_ref, squidpy_degrees):
+def test_equals_squidpy_defaults(name, make, kind, squidpy_ref, squidpy_degrees, squidpy_sections):
     adata = make()
     r = sa.run(adata)
     assert r.neighbors == {"kind": kind, "k": 6}
     assert r.libraries == list(adata.obs["library_id"].cat.categories)
-    _compare(r, squidpy_ref[squidpy_ref["dataset"] == name])
+    assert r.centring == "section"
+    # Each section's own I, z and p: squidpy run on that section alone.
+    for lib in r.libraries:
+        ref = squidpy_sections[(squidpy_sections["dataset"] == name) & (squidpy_sections["library_id"] == lib)]
+        mine = r.by_library[r.by_library["library_id"] == lib].set_index("gene").loc[ref["gene"]]
+        assert (mine["n_obs"] == ref["n_obs"].to_numpy()).all()
+        np.testing.assert_allclose(mine["I"], ref["I"], rtol=0, atol=1e-6)
+        np.testing.assert_allclose(mine["pval"], ref["pval"], rtol=1e-6, atol=1e-12)
+        np.testing.assert_allclose(mine["pval_adj"], ref["pval_adj"], rtol=1e-6, atol=1e-12)
+    # The per-section sums added up and centred on one mean: squidpy's pooled I (sections
+    # pooled with one global mean), so the sums themselves are squidpy's.
+    libs = sa.library_labels(adata)
+    names = [str(x) for x in pd.unique(libs)]
+    codes = pd.Index(names).get_indexer(libs)
+    W = sa.spatial_weights(adata.obsm["spatial"], libs, kind == "grid")
+    idx, _, _ = sa.select_genes(adata, adata.var_names, "hvg")
+    sums = sa.section_sums(W, np.asarray(adata.X)[:, idx], codes, len(names))
+    total = (*(x.sum(axis=0) for x in sums[:5]), sums[5].all(axis=0))  # no gene differs only between sections
+    glob, _ = sa.moran_table(W, total, adata.var_names[idx])
+    _compare(sa.Result(id="", dataset_id="", n_obs=0, n_genes=0, neighbors={}, libraries=[], genes_choice="",
+                       matrix_source="", table=glob), squidpy_ref[squidpy_ref["dataset"] == name])
     # The graph itself: each spot's neighbour count as squidpy's, none across sections.
     deg = squidpy_degrees[squidpy_degrees["dataset"] == name]
     W = sa.spatial_weights(adata.obsm["spatial"], sa.library_labels(adata), kind == "grid")
@@ -124,6 +149,86 @@ def test_sparse_equals_dense_and_blocks_do_not_matter(monkeypatch):
         np.testing.assert_allclose(sparse[c], dense[c], rtol=1e-6, atol=1e-9)
 
 
+@pytest.mark.parametrize("name,make,lib", [("visium", synthetic.visium, "A"), ("cells", synthetic.cells, "D")])
+def test_a_one_section_dataset_is_unchanged_and_equals_squidpy(name, make, lib, squidpy_sections):
+    one = make()
+    one = one[one.obs["library_id"] == lib].copy()
+    r = sa.run(one)
+    assert r.centring == "global" and r.by_library is None and r.sections == []
+    # Bitwise what the code before per-section centring gave: one global mean.
+    W = sa.spatial_weights(one.obsm["spatial"], sa.library_labels(one), sa.is_grid(one))
+    idx, _, _ = sa.select_genes(one, one.var_names, "hvg")
+    before, _ = sa.morans_i(W, np.asarray(one.X)[:, idx], one.var_names[idx],
+                            sa.spatial_order(one.obsm["spatial"], sa.library_labels(one)))
+    pd.testing.assert_frame_equal(r.table, before, check_exact=True)
+    ref = squidpy_sections[(squidpy_sections["dataset"] == name) & (squidpy_sections["library_id"] == lib)]
+    _compare(r, ref)
+
+
+def test_pooled_i_is_within_section_and_ignores_a_shift_between_sections():
+    """Kuppe 2022, 8 slides: pooled MALAT1 0.61 against at most 0.48 on any one slide. A gene
+    that is only higher on one slide (no pattern inside either) is not spatial."""
+    adata = synthetic.visium()
+    libs = sa.library_labels(adata)
+    X = np.asarray(adata.X).copy()
+    noise = [i for i, g in enumerate(adata.var_names) if g.startswith("G") and int(g[1:]) % 6 >= 4]
+    X[:, noise] += np.where(libs == "B", 3.0, 0.0)[:, None]  # a pure between-section shift
+    adata.X = X
+    r = sa.run(adata, genes="all")
+    pooled = r.table.set_index("gene")["I"]
+    per = r.by_library.pivot(index="gene", columns="library_id", values="I")
+    names = adata.var_names[noise]
+    assert (pooled[names] <= per.loc[names].max(axis=1) + 1e-9).all()
+    assert pooled[names].abs().max() < 0.2
+    # One global mean (squidpy's pooled I) calls the shift spatial.
+    W = sa.spatial_weights(adata.obsm["spatial"], libs, True)
+    glob, _ = sa.morans_i(W, X, adata.var_names)
+    assert glob.set_index("gene")["I"][names].min() > 0.8
+    # A shift does not change a section's own I, nor the pooled I.
+    base = sa.run(synthetic.visium(), genes="all")
+    np.testing.assert_allclose(pooled[names], base.table.set_index("gene")["I"][names], atol=1e-9)
+    assert any("each centred on its own mean" in n for n in r.notes)
+
+
+def test_centred_moments_match_a_simulation():
+    """E[I] and Var[I] under the null for values centred within each section (Cliff and Ord):
+    against 4,000 draws of independent normal values with section means far apart."""
+    adata = synthetic.visium()
+    libs = sa.library_labels(adata)
+    codes = pd.Index(["A", "B"]).get_indexer(libs)
+    W = sa.spatial_weights(adata.obsm["spatial"], libs, True)
+    rng = np.random.default_rng(3)
+    M = rng.normal(size=(adata.n_obs, 4000)) + np.where(codes == 1, 50.0, 0.0)[:, None]
+    table, _, _ = sa.morans_i_sections(W, M, np.arange(4000).astype(str), codes, ["A", "B"])
+    e, v = table["expected_I"].iloc[0], table["var_I"].iloc[0]
+    assert abs(table["I"].mean() - e) < 4 * np.sqrt(v / 4000)
+    assert abs(table["I"].var() / v - 1) < 0.1
+    # One section: squidpy's moments.
+    n = adata.n_obs
+    s0, s1, s2 = sa.weight_moments(W)
+    e1, v1 = sa.centred_moments(W, np.zeros(n, dtype=int), 1)
+    assert e1 == pytest.approx(-1 / (n - 1), rel=1e-12)
+    assert v1 == pytest.approx((n * n * s1 - n * s2 + 3 * s0 * s0) / ((n - 1) * (n + 1) * s0 * s0) - e1 ** 2,
+                               rel=1e-10)
+
+
+def test_section_sums_blocks_and_sparse_do_not_matter(monkeypatch):
+    adata = synthetic.visium()
+    libs = sa.library_labels(adata)
+    codes = pd.Index(["A", "B"]).get_indexer(libs)
+    W = sa.spatial_weights(adata.obsm["spatial"], libs, True)
+    X = np.asarray(adata.X)
+    whole = sa.section_sums(W, X, codes, 2)
+    monkeypatch.setattr(sa, "BLOCK_BYTES", 8 * 30 * 7 * 13)
+    blocks = sa.section_sums(W, sp.csr_matrix(X), codes, 2, sa.spatial_order(adata.obsm["spatial"], libs))
+    genes = sa.section_sums_by_genes(W, lambda a, b: sp.csr_matrix(X[:, a:b]), X.shape[1], codes, 2, block=7)
+    for x, y, z in zip(whole[:5], blocks[:5], genes[:5], strict=True):
+        np.testing.assert_allclose(x, y, rtol=1e-10, atol=1e-9)
+        np.testing.assert_allclose(x, z, rtol=1e-10, atol=1e-9)
+    np.testing.assert_array_equal(whole[5], blocks[5])
+    np.testing.assert_array_equal(whole[5], genes[5])
+
+
 def test_one_section_alone():
     adata = synthetic.visium()
     r = sa.run(adata, library_id="B")
@@ -181,9 +286,15 @@ async def test_api_run_then_get_csv_and_saved(client, dataset_manager, squidpy_r
     assert body["n_genes"] == 20 and body["libraries"] == ["A", "B"] and body["unit"] == "spot"
     rows = body["rows"]
     ref = squidpy_ref[squidpy_ref["dataset"] == "visium"]
-    assert [x["gene"] for x in rows] == list(ref["gene"])
-    assert set(rows[0]) == {"gene", "I", "expected_I", "var_I", "z", "pval", "pval_adj"}
-    np.testing.assert_allclose([x["I"] for x in rows], ref["I"], atol=1e-5)
+    assert set(x["gene"] for x in rows) == set(ref["gene"])
+    assert set(rows[0]) == {"gene", "I", "expected_I", "var_I", "z", "pval", "pval_adj", "by_library"}
+    assert body["centring"] == "section" and body["library_id"] == "all"
+    assert body["sections"] == [{"library_id": "A", "n_obs": 288}, {"library_id": "B", "n_obs": 296}]
+    assert set(rows[0]["by_library"]) == {"A", "B"}
+    assert set(rows[0]["by_library"]["A"]) == {"I", "z", "pval", "pval_adj"}
+    want = sa.run(synthetic.visium()).table
+    assert [x["gene"] for x in rows] == list(want["gene"])
+    np.testing.assert_allclose([x["I"] for x in rows], want["I"], atol=1e-5)
     assert body["n_significant"] >= 2
 
     got = (await client.get(f"{API}/datasets/{did}/spatial/autocorr")).json()
@@ -191,6 +302,7 @@ async def test_api_run_then_get_csv_and_saved(client, dataset_manager, squidpy_r
     csv = await client.get(f"{API}/datasets/{did}/spatial/autocorr/{body['result_id']}.csv")
     assert csv.status_code == 200 and csv.text.startswith("gene,I,")
     assert len(csv.text.strip().splitlines()) == 21
+    assert csv.text.splitlines()[0].endswith("I_A,I_B,pval_adj_A,pval_adj_B")
 
     # Saved with the dataset: squidpy's uns["moranI"] and a History step; GET after a reload.
     results_store.flush()
@@ -198,7 +310,8 @@ async def test_api_run_then_get_csv_and_saved(client, dataset_manager, squidpy_r
     adata = (await dataset_manager.get_or_load_dataset(did)).adata
     step = provenance.read_provenance(adata)["history"][-1]
     assert step["step"] == "spatial_autocorr" and step["params"]["neighbors"] == "grid"
-    assert list(adata.uns["moranI"].index) == list(ref["gene"])
+    assert list(adata.uns["moranI"].index) == list(want["gene"])
+    assert step["params"]["centring"] == "section"
     again = (await client.get(f"{API}/datasets/{did}/spatial/autocorr")).json()
     assert again["result_id"] == body["result_id"]
     ds = (await client.get(f"{API}/datasets/{did}")).json()
@@ -216,6 +329,63 @@ async def test_api_run_then_get_csv_and_saved(client, dataset_manager, squidpy_r
 
     sa._last.clear()
     assert sa.last(_Filtered()) is None
+
+
+async def test_api_runs_per_section_coexist_in_the_history(client, dataset_manager):
+    """Kuppe 2022: Moran's I one section at a time over 8 sections kept the last 4, and a run on
+    section B marked the run on section A superseded. A run is its section and its genes."""
+    a = synthetic.visium()
+    # 8 sections and the pooled run must all stay: 4 copies of A and B, side by side.
+    parts = []
+    for i in range(4):
+        part = a.copy()
+        part.obs_names = [f"{n}_{i}" for n in part.obs_names]
+        part.obs["library_id"] = pd.Categorical([f"{x}{i}" for x in part.obs["library_id"]])
+        parts.append(part)
+    big = ad.concat(parts)
+    big.obsm["spatial"] = np.vstack([p.obsm["spatial"] for p in parts])
+    big.uns["spatial"] = {lib: {"scalefactors": {"spot_diameter_fullres": 89.0}, "metadata": {}}
+                          for lib in big.obs["library_id"].cat.categories}
+    big.uns["scview_spatial"] = {"technology": "visium", "unit": "spot"}
+    big.var["highly_variable"] = a.var["highly_variable"].to_numpy()
+    did = _register(dataset_manager, big, "sphist")
+    libs = list(big.obs["library_id"].cat.categories)
+    assert len(libs) == 8
+    ids = {}
+    for lib in [*libs, None]:
+        r = await client.post(f"{API}/datasets/{did}/spatial/autocorr", json={"genes": "hvg", "library_id": lib})
+        assert r.status_code == 200, r.text
+        ids[lib or "all"] = r.json()["result_id"]
+        assert r.json()["library_id"] == (lib or "all")
+    again = (await client.post(f"{API}/datasets/{did}/spatial/autocorr", json={"genes": "hvg", "library_id": libs[0]})).json()
+    results_store.flush()
+    listed = (await client.get(f"{API}/datasets/{did}/results")).json()
+    entries = listed if isinstance(listed, list) else listed.get("results", listed.get("entries"))
+    moran = {e["id"]: e for e in entries if e["kind"] == sa.KIND}
+    assert set(ids.values()) <= set(moran)  # nothing dropped
+    primaries = {e["id"] for e in moran.values() if e["status"] == "primary"}
+    assert primaries == (set(ids.values()) - {ids[libs[0]]}) | {again["result_id"]}
+    assert moran[ids[libs[0]]]["status"] == "superseded"  # only by the same section again
+    # Each section's last run, and the pooled one, by section.
+    for lib in libs[1:]:
+        got = (await client.get(f"{API}/datasets/{did}/spatial/autocorr", params={"library_id": lib})).json()
+        assert got["result_id"] == ids[lib] and got["libraries"] == [lib] and got["centring"] == "global"
+    got = (await client.get(f"{API}/datasets/{did}/spatial/autocorr", params={"library_id": "all"})).json()
+    assert got["result_id"] == ids["all"] and len(got["sections"]) == 8
+    got = (await client.get(f"{API}/datasets/{did}/spatial/autocorr", params={"library_id": "nope",
+                                                                            "allow_empty": True})).json()
+    assert got is None
+
+
+def test_result_key_names_section_and_genes():
+    a = synthetic.visium()
+    hv, full, one = sa.run(a), sa.run(a, genes="all"), sa.run(a, library_id="B")
+    lst, lst2 = sa.run(a, genes=["G01", "G02"]), sa.run(a, genes=["G02", "G01"])
+    keys = [sa.result_key(x) for x in (hv, full, one, lst)]
+    assert keys[:3] == ["all|hvg", "all|all", "B|hvg"] and keys[3].startswith("all|list:")
+    assert sa.result_key(lst2) == keys[3]
+    sub = a[a.obs["library_id"] == "A"].copy()
+    assert sa.section_of(sa.run(sub)) == "all"  # a one-section dataset: its whole
 
 
 async def test_api_refuses_without_spatial_and_bad_section(client, dataset_manager):
@@ -262,6 +432,17 @@ def test_replay_code_is_exact_and_runs(tmp_path):
     assert list(rep.index) == list(r.table["gene"])
     np.testing.assert_allclose(rep["I"], r.table["I"], atol=1e-12)
     np.testing.assert_allclose(rep["pval_norm_fdr_bh"], r.table["pval_adj"], rtol=1e-9, atol=1e-15)
+
+
+def test_replay_of_a_record_before_section_centring_keeps_one_mean():
+    snip = replay_script._spatial_autocorr(
+        {"genes": "hvg", "matrix_source": "log-normalised X", "neighbors": "grid", "n_neighs": 6, "library_id": None},
+        replay_script._Ctx(adata=None))
+    assert not any("centre=" in line for line in snip.code)
+    snip = replay_script._spatial_autocorr(
+        {"genes": "hvg", "matrix_source": "log-normalised X", "neighbors": "grid", "n_neighs": 6, "library_id": None,
+         "centring": "section"}, replay_script._Ctx(adata=None))
+    assert any('centre="section"' in line for line in snip.code)
 
 
 def test_replay_of_an_unreadable_record_is_a_comment():

@@ -18,8 +18,16 @@ scanpy/metrics/_morans_i.py):
   position, the first hit is dropped when the spot itself is not among them).
 - Weights row-normalised (``transformation=True``); a spot with no neighbour keeps
   a zero row and still counts in n and the mean, as in squidpy.
-- I = n / S0 * sum_ij w_ij z_i z_j / sum_i z_i^2, z = x - mean over all analysed
-  spots (sections pooled). Computed from per-gene sums in row blocks, so neither
+- I = n / S0 * sum_ij w_ij z_i z_j / sum_i z_i^2. One section: z = x - its mean, as
+  squidpy. Several sections (all of them in one run): z = x - the mean of ITS section,
+  so a gene that is simply higher on one slide than on another (a batch or a condition)
+  does not count as spatial pattern; squidpy's global mean would (8 Kuppe 2022 slides:
+  pooled MALAT1 0.61 against at most 0.48 on any one slide). Each section's own I, z
+  and p come with it (``by_library``), each equal to a run on that section alone. The
+  pooled p is the normal approximation for residuals of the section means (Cliff and
+  Ord 1981): E[I] = n / S0 tr(MW) / (n - L), Var[I] = (n / S0)^2 (tr(MWMW') + tr(MWMW)
+  + tr(MW)^2) / ((n - L)(n - L + 2)) - E[I]^2, M the centring within L sections; with
+  L = 1 these are squidpy's. Computed from per-gene sums in row blocks, so neither
   the matrix nor a gene block is ever made dense whole. A large dataset (``core/
   large_mode.py``) gives the same sums from the gene store, a block of genes at a time
   (``moran_sums_by_genes``), equal to a relative 1e-9 (the additions come in another order).
@@ -40,6 +48,7 @@ script with ``REPLAY_CONSTANTS``).
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import threading
 import time
@@ -234,8 +243,127 @@ def morans_i(W, M, genes, order=None):
     return moran_table(W, moran_sums(W, M, order), genes)
 
 
+def section_sums(W, M, sections, n_sections, order=None):
+    """``moran_sums`` split by section (``sections``: codes 0..n_sections - 1; ``W`` links no
+    two sections): each sum as sections x genes, and constant per section."""
+    W = sp.csr_matrix(W)
+    n, g = M.shape
+    if sp.issparse(M):
+        M = sp.csr_matrix(M)
+    sections = np.asarray(sections, dtype=np.int64)
+    r = np.asarray(W.sum(axis=1)).ravel()
+    c = np.asarray(W.sum(axis=0)).ravel()
+    xwx, s, ss, xr, xc = (np.zeros((n_sections, g)) for _ in range(5))
+    lo, hi = np.full((n_sections, g), np.inf), np.full((n_sections, g), -np.inf)
+    step = max(1, int(BLOCK_BYTES // (8 * max(g, 1) * (N_NEIGHS + 1))))
+    order = np.arange(n) if order is None else np.asarray(order)
+    for a in range(0, n, step):
+        rows = order[a:a + step]
+        Wb = W[rows]
+        near = np.unique(np.concatenate([rows, Wb.indices]))
+        XR = M[near]
+        XR = XR.toarray() if sp.issparse(XR) else np.asarray(XR)
+        XR = XR.astype(np.float64, copy=False)
+        Wb = sp.csr_matrix((Wb.data, np.searchsorted(near, Wb.indices), Wb.indptr), shape=(len(rows), len(near)))
+        Xb = XR[np.searchsorted(near, rows)]
+        sec = sections[rows]
+        P = sp.csr_matrix((np.ones(len(rows)), (sec, np.arange(len(rows)))), shape=(n_sections, len(rows)))
+        xwx += P @ (Xb * (Wb @ XR))
+        s += P @ Xb
+        ss += P @ (Xb * Xb)
+        xr += P @ (r[rows][:, None] * Xb)
+        xc += P @ (c[rows][:, None] * Xb)
+        for k in np.unique(sec):
+            part = Xb[sec == k]
+            lo[k] = np.minimum(lo[k], part.min(axis=0))
+            hi[k] = np.maximum(hi[k], part.max(axis=0))
+    return xwx, s, ss, xr, xc, lo == hi
+
+
+def centred_moments(W, sections, n_sections):
+    """(E[I], Var[I]) of Moran's I on values centred within each section, under the normality
+    assumption (Cliff and Ord 1981, regression residuals on section indicators). One
+    section gives squidpy's -1 / (n - 1) and its variance."""
+    W = sp.csr_matrix(W)
+    sections = np.asarray(sections, dtype=np.int64)
+    n = W.shape[0]
+    n_l = np.bincount(sections, minlength=n_sections).astype(np.float64)
+    r = np.asarray(W.sum(axis=1)).ravel()
+    c = np.asarray(W.sum(axis=0)).ravel()
+    s0_l = np.bincount(sections, weights=r, minlength=n_sections)
+    s0 = float(s0_l.sum())
+    used = n_l > 0
+    inv = np.divide(1.0, n_l, out=np.zeros_like(n_l), where=used)
+    tr_mw = -float((s0_l * inv).sum())
+    jwj = float((s0_l * s0_l * inv * inv).sum())
+    tr_mwmwt = (float(W.multiply(W).sum()) - float((np.bincount(sections, weights=c * c, minlength=n_sections) * inv).sum())
+                - float((np.bincount(sections, weights=r * r, minlength=n_sections) * inv).sum()) + jwj)
+    tr_mwmw = (float(W.multiply(W.T).sum()) - 2 * float((np.bincount(sections, weights=c * r, minlength=n_sections)
+                                                          * inv).sum()) + jwj)
+    k = int(used.sum())
+    scale = n / s0
+    expected = scale * tr_mw / (n - k)
+    var = scale * scale * (tr_mwmwt + tr_mwmw + tr_mw * tr_mw) / ((n - k) * (n - k + 2)) - expected * expected
+    return expected, var
+
+
+def section_tables(W, sums, sections, names, genes):
+    """From ``section_sums``: (the pooled table, values centred within each section, as
+    ``moran_table`` lays it out; each section's own table, its I as ``moran_table`` gives
+    for that section alone, with library_id and n_obs; the number of genes constant in
+    every section). A gene constant in one section only is left out of that section's table."""
+    W = sp.csr_matrix(W)
+    sections = np.asarray(sections, dtype=np.int64)
+    xwx, s, ss, xr, xc, constant = sums
+    L = len(names)
+    n = W.shape[0]
+    n_l = np.bincount(sections, minlength=L).astype(np.float64)
+    genes = np.asarray(genes, dtype=object)
+    nums, dens, parts = [], [], []
+    for k in range(L):
+        where = np.flatnonzero(sections == k)
+        Wk = W[where][:, where]
+        s0, s1, s2 = weight_moments(Wk)
+        m = s[k] / n_l[k]
+        num = xwx[k] - m * xr[k] - m * xc[k] + m * m * s0
+        den = ss[k] - n_l[k] * m * m
+        nums.append(num)
+        dens.append(np.where(constant[k], 0.0, den))
+        keep = ~constant[k]
+        if s0 <= 0 or n_l[k] < 3 or not keep.any():
+            continue
+        nk = n_l[k]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            score = nk / s0 * num[keep] / den[keep]
+        expected = -1.0 / (nk - 1)
+        var = (nk * nk * s1 - nk * s2 + 3 * s0 * s0) / ((nk - 1) * (nk + 1) * s0 * s0) - expected ** 2
+        z = (score - expected) / np.sqrt(var)
+        p = np.where(z > 0, stats.norm.sf(z), stats.norm.cdf(z))
+        parts.append(pd.DataFrame({"library_id": names[k], "n_obs": int(nk), "gene": genes[keep], "I": score,
+                                   "z": z, "pval": p, "pval_adj": bh_adjust(p)}))
+    keep = ~constant.all(axis=0)
+    s0 = float(W.sum())
+    with np.errstate(divide="ignore", invalid="ignore"):
+        score = n / s0 * np.sum(nums, axis=0)[keep] / np.sum(dens, axis=0)[keep]
+    expected, var = centred_moments(W, sections, L)
+    z = (score - expected) / np.sqrt(var)
+    p = np.where(z > 0, stats.norm.sf(z), stats.norm.cdf(z))
+    table = pd.DataFrame({"gene": genes[keep], "I": score, "expected_I": expected, "var_I": var, "z": z,
+                          "pval": p, "pval_adj": bh_adjust(p)})
+    table = table.sort_values("I", ascending=False, kind="mergesort").reset_index(drop=True)
+    by = (pd.concat(parts, ignore_index=True) if parts else
+          pd.DataFrame(columns=["library_id", "n_obs", "gene", "I", "z", "pval", "pval_adj"]))
+    return table, by, int((~keep).sum())
+
+
+def morans_i_sections(W, M, genes, sections, names, order=None):
+    """Moran's I per gene pooled over several sections, each centred on its own mean, and
+    each section's own (``section_tables``)."""
+    return section_tables(W, section_sums(W, M, sections, len(names), order), sections, names, genes)
+
+
 REPLAY_CODE = (knn_edges, spatial_weights, weight_moments, moran_sums, bh_adjust, spatial_order, moran_table,
-               morans_i)
+               morans_i, section_sums, centred_moments, section_tables, morans_i_sections)
 
 
 def moran_sums_by_genes(W, read, n_genes, block=GENE_BLOCK, progress=None):
@@ -256,6 +384,34 @@ def moran_sums_by_genes(W, read, n_genes, block=GENE_BLOCK, progress=None):
         xr[a:b] = r @ B
         xc[a:b] = c @ B
         constant[a:b] = B.max(axis=0).toarray().ravel() == B.min(axis=0).toarray().ravel()
+        if progress is not None:
+            progress(b, n_genes)
+    return xwx, s, ss, xr, xc, constant
+
+
+def section_sums_by_genes(W, read, n_genes, sections, n_sections, block=GENE_BLOCK, progress=None):
+    """``section_sums`` of a matrix read a block of genes at a time (``moran_sums_by_genes``)."""
+    W = sp.csr_matrix(W)
+    sections = np.asarray(sections, dtype=np.int64)
+    n = W.shape[0]
+    P = sp.csr_matrix((np.ones(n), (sections, np.arange(n))), shape=(n_sections, n))
+    r = np.asarray(W.sum(axis=1)).ravel()
+    c = np.asarray(W.sum(axis=0)).ravel()
+    Pr, Pc = sp.csr_matrix(P.multiply(r[None, :])), sp.csr_matrix(P.multiply(c[None, :]))
+    xwx, s, ss, xr, xc = (np.zeros((n_sections, n_genes)) for _ in range(5))
+    constant = np.zeros((n_sections, n_genes), dtype=bool)
+    where = [np.flatnonzero(sections == k) for k in range(n_sections)]
+    for a in range(0, n_genes, block):
+        b = min(a + block, n_genes)
+        B = sp.csc_matrix(read(a, b), dtype=np.float64)
+        xwx[:, a:b] = (P @ sp.csc_matrix(B.multiply(W @ B))).toarray()
+        s[:, a:b] = (P @ B).toarray()
+        ss[:, a:b] = (P @ sp.csc_matrix(B.multiply(B))).toarray()
+        xr[:, a:b] = (Pr @ B).toarray()
+        xc[:, a:b] = (Pc @ B).toarray()
+        for k, rows in enumerate(where):
+            part = sp.csc_matrix(B[rows])
+            constant[k, a:b] = part.max(axis=0).toarray().ravel() == part.min(axis=0).toarray().ravel()
         if progress is not None:
             progress(b, n_genes)
     return xwx, s, ss, xr, xc, constant
@@ -285,6 +441,12 @@ class Result:
     elapsed_seconds: float = 0.0
     created_at: float = 0.0
     cells: str = ""  # results_store.cells_hash of the dataset it ran on
+    # "global": one mean (one section, squidpy's I); "section": several sections pooled, each
+    # centred on its own mean, with each section's own values in ``by_library``.
+    centring: str = "global"
+    sections: list[dict[str, Any]] = field(default_factory=list)  # library_id, n_obs (several sections)
+    by_library: pd.DataFrame | None = None  # library_id, n_obs, gene, I, z, pval, pval_adj
+    section_run: bool = False  # run on one section of the dataset (``library_id``)
 
 
 def has_spatial(adata) -> bool:
@@ -438,6 +600,11 @@ def run(adata, *, genes: Any = "hvg", library_id: str | None = None, layer: str 
     W = spatial_weights(coords, libs[rows], grid, k)
     if W.nnz == 0:
         raise SpatialAutocorrError(f"No {unit_of(adata)} has a neighbour: the positions are too far apart.")
+    section_names = [str(x) for x in pd.unique(libs[rows])]
+    pooled = len(section_names) > 1
+    codes = pd.Index(section_names).get_indexer(libs[rows]) if pooled else None
+    gene_names = np.asarray(names)[idx]
+    by_library = None
     if large:
         whole = len(rows) == adata.n_obs
 
@@ -445,14 +612,29 @@ def run(adata, *, genes: Any = "hvg", library_id: str | None = None, layer: str 
             block = M.columns(idx[a:b])
             return block if whole else block[rows]
 
-        table, n_constant = moran_table(W, moran_sums_by_genes(W, read, len(idx), progress=progress),
-                                       np.asarray(names)[idx])
+        if pooled:
+            table, by_library, n_constant = section_tables(
+                W, section_sums_by_genes(W, read, len(idx), codes, len(section_names), progress=progress),
+                codes, section_names, gene_names)
+        else:
+            table, n_constant = moran_table(W, moran_sums_by_genes(W, read, len(idx), progress=progress), gene_names)
+    elif pooled:
+        table, by_library, n_constant = morans_i_sections(W, M, gene_names, codes, section_names,
+                                                          spatial_order(coords, libs[rows]))
     else:
-        table, n_constant = morans_i(W, M, np.asarray(names)[idx], spatial_order(coords, libs[rows]))
-    if n_constant:
-        notes.append(f"{n_constant:,} gene(s) with the same value in every spot were left out.")
-    isolated = int((np.diff(W.indptr) == 0).sum())
+        table, n_constant = morans_i(W, M, gene_names, spatial_order(coords, libs[rows]))
     unit = unit_of(adata)
+    if n_constant:
+        where = " of every section" if pooled else ""
+        notes.append(f"{n_constant:,} gene(s) with the same value in every {unit}{where} were left out.")
+    sections: list[dict[str, Any]] = []
+    if pooled:
+        sizes = np.bincount(codes, minlength=len(section_names))
+        sections = [{"library_id": name, "n_obs": int(sizes[i])} for i, name in enumerate(section_names)]
+        notes.append(f"{len(section_names)} sections pooled, each centred on its own mean: a gene that is only higher "
+                     "in one section than in another does not count as spatial pattern. Each section's own I is "
+                     "listed beside it.")
+    isolated = int((np.diff(W.indptr) == 0).sum())
     if isolated:
         notes.append(f"{isolated:,} {unit}(s) have no neighbour within reach; they count in the mean only.")
     off = off_tissue.note(adata, unit)
@@ -464,7 +646,8 @@ def run(adata, *, genes: Any = "hvg", library_id: str | None = None, layer: str 
         libraries=[str(x) for x in pd.unique(libs[rows])], genes_choice=choice, matrix_source=source,
         table=table, n_constant=n_constant, notes=notes, unit=unit,
         elapsed_seconds=round(time.time() - t0, 2), created_at=time.time(),
-        cells=results_store.cells_hash(adata),
+        cells=results_store.cells_hash(adata), centring="section" if pooled else "global",
+        sections=sections, by_library=by_library, section_run=bool(library_id),
     )
 
 
@@ -487,7 +670,7 @@ def record(adata, r: Result, genes: Any, library_id: str | None, layer: str | No
         params={"genes": genes if isinstance(genes, str) else [str(g) for g in genes],
                 "genes_used": r.genes_choice, "library_id": library_id, "layer": layer,
                 "matrix_source": r.matrix_source, "neighbors": r.neighbors["kind"], "n_neighs": r.neighbors["k"],
-                "n_obs": r.n_obs, "n_genes": r.n_genes, "n_constant": r.n_constant},
+                "n_obs": r.n_obs, "n_genes": r.n_genes, "n_constant": r.n_constant, "centring": r.centring},
         resources={"seconds": r.elapsed_seconds},
     )
 
@@ -500,6 +683,24 @@ _last: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 _lock = threading.Lock()
 
 
+ALL_SECTIONS = "all"
+
+
+def section_of(r: Result) -> str:
+    """The section a run is about: its library_id, or "all" (every section of the dataset)."""
+    return r.libraries[0] if len(r.libraries) == 1 and r.libraries[0] and r.section_run else ALL_SECTIONS
+
+
+def result_key(r: Result) -> str:
+    """A run's identity in the results store: its section and its genes (and layer), so a run on
+    section B does not supersede one on section A, nor all genes the variable ones."""
+    genes = r.genes_choice
+    if genes == "list":
+        genes = "list:" + hashlib.sha256("\n".join(sorted(map(str, r.table["gene"]))).encode()).hexdigest()[:12]
+    layer = r.matrix_source if r.matrix_source.startswith("layer:") else ""
+    return "|".join(x for x in (section_of(r), genes, layer) if x)
+
+
 def remember(adaptor, r: Result) -> None:
     """Keep the run for GET and the co-pilot, in memory and in the results store."""
     try:
@@ -507,9 +708,33 @@ def remember(adaptor, r: Result) -> None:
             _last[adaptor] = r
     except TypeError:  # a test double
         pass
-    where = f" in section {r.libraries[0]}" if len(r.libraries) == 1 and r.libraries[0] else ""
-    results_store.keep(adaptor, KIND, r, result_id=r.id, key="",
+    section = section_of(r)
+    where = f" in section {section}" if section != ALL_SECTIONS else (
+        f", {len(r.libraries)} sections" if len(r.libraries) > 1 else "")
+    results_store.keep(adaptor, KIND, r, result_id=r.id, key=result_key(r),
+                       params={"library_id": section, "genes": r.genes_choice},
                        label=f"Spatially variable genes (Moran's I, {r.n_genes:,} genes){where}")
+
+
+def last_for_section(adaptor, library_id: str) -> Result | None:
+    """The newest kept run on one section (or ``ALL_SECTIONS``) on the spots the dataset holds now."""
+    r = last(adaptor)
+    if r is not None and section_of(r) == library_id:
+        return r
+    dataset_id = results_store.dataset_id_of(adaptor)
+    if dataset_id is None:
+        return None
+    try:
+        cells = results_store.cells_hash(adaptor.adata)
+        for e in results_store.entries(dataset_id, KIND):
+            if (e.get("params") or {}).get("library_id") != library_id:
+                continue
+            got = results_store.recall(dataset_id, e["id"], KIND)
+            if got is not None and got.cells == cells:
+                return got
+    except Exception:  # a test double, an unreadable result
+        return None
+    return None
 
 
 def last(adaptor) -> Result | None:
@@ -542,8 +767,9 @@ def grounding_lines(adaptor) -> tuple[list[str], str | None]:
     t = r.table
     c = summary_counts(r)
     top = t[(t["I"] > 0) & (t["pval_adj"] < FACT_PADJ)].head(TOP_FACT_GENES)
-    sections = (f"{len(r.libraries)} sections, neighbours within each" if len(r.libraries) > 1
-                else "one section")
+    sections = (f"{len(r.libraries)} sections, neighbours within each"
+                + (", each centred on its own mean" if r.centring == "section" else "")
+                if len(r.libraries) > 1 else "one section")
     detail = (f"Moran's I on {r.n_obs:,} {r.unit}s ({sections}; {r.neighbors['kind']} neighbours, k "
               f"{r.neighbors['k']}), {r.n_genes:,} genes: {c['n_significant']:,} spatially variable "
               f"(I > 0, adjusted p < {FACT_PADJ:g})")
@@ -553,6 +779,13 @@ def grounding_lines(adaptor) -> tuple[list[str], str | None]:
             f"{row.gene} (I {row.I:.3f}, adjusted p {row.pval_adj:.2g})" for row in top.itertuples()) + ".")
     else:
         lines.append(f"- No gene has I > 0 with adjusted p < {FACT_PADJ:g}.")
+    by = r.by_library
+    if r.centring == "section" and by is not None and len(top):
+        lines.append(f"- The pooled I is within-section (each section centred on its own mean, so a section that is "
+                     f"only higher overall does not count as pattern). Each section's own I [{TAG}]:")
+        for g in top["gene"].head(3):
+            one = by[by["gene"] == g]
+            lines.append(f"  - {g}: " + ", ".join(f"{row.library_id} {row.I:.3f}" for row in one.itertuples()) + ".")
     lines.append(f"- Moran's I is 1 when neighbouring {r.unit}s have alike values, about 0 when the pattern "
                  "is random and below 0 when neighbours differ; it does not say which cell types drive it.")
     return lines, detail

@@ -401,6 +401,36 @@ def test_large_dataset_moran_equals_in_memory(tmp_path):
     np.testing.assert_allclose(g["pval"], w["pval"], rtol=1e-6)
 
 
+def test_large_dataset_moran_over_sections_equals_in_memory(tmp_path):
+    """Two sections: the pooled within-section I and each section's own, from the gene store."""
+    from tests.large_fixture import small_twin
+
+    parts = []
+    for i, lib in enumerate(("L", "M")):
+        part = _grid()
+        part.obs_names = [f"{lib}{n}" for n in part.obs_names]
+        part.obs["library_id"] = pd.Categorical([lib] * part.n_obs)
+        part.X = sp.csr_matrix(np.random.default_rng(i).poisson(1 + 2 * i + part.X.toarray()), dtype=np.float32)
+        parts.append(part)
+    a = ad.concat(parts)
+    a.obsm["spatial"] = np.vstack([p.obsm["spatial"] for p in parts])
+    a.uns["spatial"] = {lib: parts[0].uns["spatial"]["L"] for lib in ("L", "M")}
+    spatial.adopt(a)
+    path = make_large(tmp_path / "large", a)
+    adaptor = AnnDataAdaptor(str(path))
+    assert adaptor.is_large
+    got = sa.run(adaptor.adata, genes="all")
+    want = sa.run(small_twin(a), genes="all")
+    assert got.centring == want.centring == "section"
+    g, w = got.table.set_index("gene"), want.table.set_index("gene")
+    assert list(g.index) == list(w.index)
+    np.testing.assert_allclose(g["I"], w["I"], rtol=1e-9)
+    np.testing.assert_allclose(g["pval"], w["pval"], rtol=1e-6)
+    gb = got.by_library.set_index(["library_id", "gene"]).sort_index()
+    wb = want.by_library.set_index(["library_id", "gene"]).sort_index()
+    np.testing.assert_allclose(gb["I"], wb["I"], rtol=1e-9)
+
+
 def test_replay_passes_the_neighbour_count():
     from scview.core import replay_script
 

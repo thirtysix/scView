@@ -34,6 +34,7 @@ const row = (gene: string, I: number, padj: number) => ({
 const RESULT: MoranResult = {
   result_id: "r1", method: "moran", n_obs: 1000, n_genes: 3, neighbors: { kind: "grid", k: 6 },
   libraries: ["A", "B"], genes: "hvg", matrix_source: "log-normalised X", unit: "spot", n_constant: 0,
+  library_id: "all", centring: "global", sections: [],
   notes: ["3 spot(s) have no neighbour within reach; they count in the mean only."], rows_shown: 3,
   n_significant: 2, n_dispersed: 0, elapsed_seconds: 0.4, created_at: 0,
   rows: [row("CCL21", 0.69, 1e-80), row("CD3E", 0.31, 2e-9), row("ACTB", 0.01, 0.4)],
@@ -128,6 +129,54 @@ describe("SpatialGenesSubtab", () => {
     render(<SpatialGenesSubtab onGeneClick={vi.fn()} />);
     expect(screen.getByText(/no spot, bin or cell positions/)).toBeInTheDocument();
     expect(api.getSpatialAutocorr).not.toHaveBeenCalled();
+  });
+
+  it("shows each section's own I beside the pooled one and sorts by it", async () => {
+    // QA (Kuppe 2022): the pooled I over 8 slides rose above every slide's own; now it is
+    // within-section, and each section's own I shows a pattern carried by one slide.
+    setDataset(SPATIAL);
+    const by = (a: number, b: number) => ({
+      A: { I: a, z: 5, pval: 1e-6, pval_adj: 1e-5 },
+      B: { I: b, z: 5, pval: 1e-6, pval_adj: 1e-5 },
+    });
+    api.getSpatialAutocorr.mockResolvedValue({
+      ...RESULT,
+      centring: "section",
+      sections: [{ library_id: "A", n_obs: 600 }, { library_id: "B", n_obs: 400 }],
+      rows: [
+        { ...row("CCL21", 0.69, 1e-80), by_library: by(0.9, 0.4) },
+        { ...row("CD3E", 0.31, 2e-9), by_library: by(0.1, 0.6) },
+        { ...row("ACTB", 0.01, 0.4), by_library: { A: { I: 0.02, z: 1, pval: 0.3, pval_adj: 0.5 } } },
+      ],
+    });
+    render(<SpatialGenesSubtab onGeneClick={vi.fn()} />);
+    await screen.findByText("CCL21");
+    expect(screen.getByText(/pooled over 2 sections, each centred on its own mean/)).toBeInTheDocument();
+    const header = screen.getByRole("columnheader", { name: "B" });
+    expect(header).toHaveAttribute("title", "Moran's I in section B alone (400 spots)");
+    const cells = (gene: string) =>
+      within(screen.getByRole("button", { name: gene }).closest("tr") as HTMLElement).getAllByRole("cell").map((c) => c.textContent);
+    expect(cells("CCL21").slice(3)).toEqual(["0.900", "0.400"]);
+    expect(cells("ACTB").slice(3)).toEqual(["0.020", "–"]);
+    fireEvent.click(screen.getByRole("button", { name: "B" }));
+    const genes = screen.getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("cell")[0]?.textContent);
+    expect(genes).toEqual(["CD3E", "CCL21", "ACTB"]);
+  });
+
+  it("opens on the last run's section and loads another section's own run", async () => {
+    setDataset(SPATIAL);
+    api.getSpatialAutocorr.mockImplementation((_d: string, lib?: string) =>
+      Promise.resolve(lib === "all" ? null : { ...RESULT, library_id: lib ?? "A", libraries: [lib ?? "A"] }));
+    render(<SpatialGenesSubtab onGeneClick={vi.fn()} />);
+    await screen.findByText("CCL21");
+    expect(screen.getByLabelText("Section")).toHaveValue("A");
+    fireEvent.change(screen.getByLabelText("Section"), { target: { value: "B" } });
+    await waitFor(() => expect(api.getSpatialAutocorr).toHaveBeenCalledWith("d1", "B"));
+    expect(await screen.findByText(/in section B/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Section"), { target: { value: "" } });
+    await waitFor(() => expect(api.getSpatialAutocorr).toHaveBeenCalledWith("d1", "all"));
+    await waitFor(() => expect(screen.queryByText("CCL21")).toBeNull()); // no run over all sections yet
+    expect(screen.getByRole("button", { name: "Find spatial genes" })).toBeInTheDocument();
   });
 
   it("sorts missing values last", () => {

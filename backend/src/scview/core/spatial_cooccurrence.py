@@ -32,9 +32,15 @@ Where this differs from squidpy, each measured against it (``tests/fixtures/spat
 - squidpy adds up its counts in float32, where 16,777,216 + 1 is 16,777,216: from about 4,097
   observations a large label's count can stop growing at long range. Counts here are int64.
 - Several sections (``obs["library_id"]``): squidpy pools the coordinates, which counts pairs
-  across sections. Here each section's pairs are counted in that section and the counts
-  summed; the default thresholds run from the sections' smallest low to their largest high.
-  Sections with different pixel sizes are brought to the first one's scale.
+  across sections. Here each section's pairs are counted in that section, and each section is
+  scored against its OWN label shares; the sections are combined weighted by the pairs of
+  (a, b) each would have with its labels placed at random (``within_section_scores``). Summed
+  counts against pooled shares mixed slide composition into the score: on 8 Kuppe 2022 slides
+  Fibroblast|Myeloid rose from 1.40 at 180 um to 1.71 at 4 mm because both sit on the same
+  slides, while neighbourhood enrichment (shuffled within section) gave z -16.8. Each
+  section's own curves are kept (uns ``occ_by_section``). The default thresholds run from the
+  sections' smallest low to their largest high. Sections with different pixel sizes are
+  brought to the first one's scale.
 - Observations without a label are left out (squidpy cannot take them).
 
 Scale: cells are sorted by x, so a pair beyond the largest distance in x is never visited.
@@ -86,6 +92,7 @@ SEED = 0
 MAX_THREADS = 4
 VISIUM_SPOT_SPACING_UM = 100.0  # 10x: spot centres on the capture grid
 MIN_PAIRS = 30  # pairs at a distance for the co-pilot to quote the score
+SECTIONS_COMBINED = "within_sections"  # each section against its own shares, weighted by its expected pairs
 
 # Measured on the 0.53.0 image at 2 CPUs (Xenium breast, Visium HD 8 um; see the tests).
 _SECONDS_STARTUP = 4.0  # the child's imports and numba's compile
@@ -142,6 +149,7 @@ class CoOccurrenceResult:
     count: np.ndarray  # the ordered pairs behind it, int64
     seconds: float
     peak_rss_bytes: int
+    by_section: np.ndarray | None = None  # sections x labels x labels x thresholds pairs (several sections)
 
 
 def threads() -> int:
@@ -273,7 +281,10 @@ def plan_cooccurrence(adata, cluster_key: str, *, interval: int = DEFAULT_INTERV
         notes.append(f"Above {int(max_obs):,} {unit}s: a sample of about {n_used:,} of {n_labelled:,}, the same share of "
                      f"each label in each section (seed {int(seed)}).")
     if len(libs) > 1:
-        notes.append(f"{len(libs)} sections: pairs counted within each section and summed, never between sections.")
+        notes.append(f"{len(libs)} sections: pairs counted within each section, never between sections, and each "
+                     "section scored against its own label shares; the sections combined weighted by the pairs of "
+                     "each two labels a section would have at random. A label common on one section only does not "
+                     "raise its score elsewhere.")
     if n_splits > 1:
         notes.append(f"squidpy's split mean: {n_splits} splits by row order, so the result depends on the row order and "
                      "distant splits add zeros; below 1 here does not mean less than expected.")
@@ -289,7 +300,7 @@ def plan_cooccurrence(adata, cluster_key: str, *, interval: int = DEFAULT_INTERV
         distance_unit=distance_unit, um_per_unit=um_per_unit, distance_source=distance_source, scales=scales,
         threads=n_threads, visited_pairs=visited,
         notes=notes, estimate_seconds=estimate_seconds(visited, n_threads, n_splits),
-        estimate_bytes=estimate_bytes(n_used, len(labels), thresholds.size - 1, n_threads))
+        estimate_bytes=estimate_bytes(n_used, len(labels), thresholds.size - 1, n_threads, len(libs)))
 
 
 def _pairs_in_reach(points: np.ndarray, sections: np.ndarray, top: float, share: float, n_splits: int) -> int:
@@ -309,8 +320,10 @@ def estimate_seconds(visited: int, n_threads: int = 2, n_splits: int = 1) -> flo
     return _SECONDS_STARTUP + visited * per_pair * 2 / max(1, n_threads)
 
 
-def estimate_bytes(n_used: int, n_labels: int, n_thresholds: int, n_threads: int = 2) -> int:
-    return int(_CHILD_BYTES + n_used * _BYTES_PER_OBS + 3 * n_threads * n_labels**2 * n_thresholds * 8)
+def estimate_bytes(n_used: int, n_labels: int, n_thresholds: int, n_threads: int = 2, n_sections: int = 1) -> int:
+    """The child's peak: each thread's table, one per section, and the cumulative copies."""
+    return int(_CHILD_BYTES + n_used * _BYTES_PER_OBS
+               + (3 * n_threads + 2) * max(1, n_sections) * n_labels**2 * n_thresholds * 8)
 
 
 def prepare_cooccurrence(adata, p: CoOccurrencePlan) -> CoOccurrenceInputs:
@@ -380,7 +393,8 @@ def iter_cooccurrence(inp: CoOccurrenceInputs, stop: Callable[[], bool] = lambda
     seconds = stages.close()
     yield {"type": "result", "result": CoOccurrenceResult(
         occ=result["score"], count=result["count"], seconds=seconds,
-        peak_rss_bytes=int(result["peak_rss_kb"]) * 1024)}
+        peak_rss_bytes=int(result["peak_rss_kb"]) * 1024,
+        by_section=result["by_section"] if "by_section" in result.files else None)}
 
 
 def run_cooccurrence(inp: CoOccurrenceInputs) -> CoOccurrenceResult:
@@ -402,16 +416,19 @@ def save_cooccurrence(adata, inp: CoOccurrenceInputs, res: CoOccurrenceResult, *
     from scview.core import provenance
 
     p = inp.plan
-    adata.uns[squidpy_key(p.column)] = {"occ": res.occ.astype(np.float32),
-                                        "interval": np.asarray(p.thresholds, dtype=np.float32),
-                                        "count": res.count.astype(np.int64)}
+    stored = {"occ": res.occ.astype(np.float32), "interval": np.asarray(p.thresholds, dtype=np.float32),
+              "count": res.count.astype(np.int64)}
+    if res.by_section is not None:  # each section's own pairs and score (the sections in plan.libraries order)
+        stored["count_by_section"] = res.by_section.astype(np.int64)
+        stored["occ_by_section"] = np.stack([kernel.cooccurrence_scores(c) for c in res.by_section]).astype(np.float32)
+    adata.uns[squidpy_key(p.column)] = stored
     block = sd._load(adata, INFO_KEY)
     info = {"version": VERSION, "created_at": datetime.now(timezone.utc).isoformat(), "column": p.column,
             "labels": p.labels, "sizes": np.bincount(inp.codes, minlength=len(p.labels)).astype(int).tolist(),
             "n_obs": p.n_obs, "n_labelled": p.n_labelled, "n_used": p.n_used, "unit": p.unit, "interval": p.interval,
             "combine": p.combine, "n_splits": p.n_splits, "seed": p.seed, "max_obs": p.max_obs, "libraries": p.libraries,
             "distance_unit": p.distance_unit, "um_per_unit": p.um_per_unit, "distance_source": p.distance_source,
-            "notes": p.notes,
+            "notes": p.notes, "sections_combined": SECTIONS_COMBINED if res.by_section is not None else None,
             "visited_pairs": p.visited_pairs, "threads": p.threads, "seconds": round(res.seconds, 1),
             "peak_rss_gb": round(res.peak_rss_bytes / 1024**3, 2), "cells_fingerprint": cells_fingerprint,
             "labels_fingerprint": inp.fingerprint}
@@ -430,8 +447,19 @@ def distances_shown(thresholds: np.ndarray, um_per_unit: float | None) -> list[f
     return [round(float(v), 2) for v in upper]
 
 
-def cooccurrence_summary(adata, column: str | None = None, cells_fingerprint: str | None = None) -> dict[str, Any]:
-    """A saved run with its arrays (``column``'s, else the latest); ``available`` False without one."""
+def section_pairs(stored: Any, libraries: list[str]) -> list[dict[str, Any]]:
+    """Each section's pairs at the longest distance (what weighs it), when the run kept them."""
+    if "count_by_section" not in stored:
+        return []
+    counts = np.asarray(stored["count_by_section"])
+    return [{"library_id": lib, "pairs": int(counts[k, :, :, -1].sum())} for k, lib in enumerate(libraries)]
+
+
+def cooccurrence_summary(adata, column: str | None = None, cells_fingerprint: str | None = None,
+                         section: str | None = None) -> dict[str, Any]:
+    """A saved run with its arrays (``column``'s, else the latest); ``available`` False without one.
+    ``section``: that section's own score and pairs in ``occ`` and ``count`` (``section`` says
+    which; None: the sections combined)."""
     block = sd._load(adata, INFO_KEY)
     runs = {c: i for c, i in block["runs"].items() if isinstance(i, dict) and squidpy_key(c) in adata.uns}
     want = column if column in runs else (block.get("latest") if block.get("latest") in runs else next(iter(runs), None))
@@ -439,10 +467,19 @@ def cooccurrence_summary(adata, column: str | None = None, cells_fingerprint: st
         return {"available": False, "columns": []}
     stored = adata.uns[squidpy_key(want)]
     info = runs[want]
+    libraries = [str(x) for x in info.get("libraries") or []]
     reason = sd._labels_changed(adata, info, cells_fingerprint)
-    occ = np.asarray(stored["occ"], dtype=np.float64)
+    occ, count = stored["occ"], stored["count"]
+    shown = None
+    if section is not None and "occ_by_section" in stored:
+        if section not in libraries:
+            raise sd.SpatialDomainsError(f"No section '{section}' in this run: choose one of {', '.join(libraries)}.")
+        k = libraries.index(section)
+        occ, count, shown = stored["occ_by_section"][k], stored["count_by_section"][k], section
+    occ = np.asarray(occ, dtype=np.float64)
     return {"available": True, **info, "occ": np.round(occ, 4).tolist(),
-            "count": np.asarray(stored["count"]).astype(np.int64).tolist(),
+            "count": np.asarray(count).astype(np.int64).tolist(), "section": shown,
+            "sections": section_pairs(stored, libraries),
             "distances": distances_shown(stored["interval"], info.get("um_per_unit")),
             "stale": reason is not None, "stale_reason": reason, "columns": list(runs)}
 
@@ -479,8 +516,11 @@ def grounding_lines(adata, cells_fingerprint: str | None = None) -> tuple[list[s
     splits = s.get("combine") == SQUIDPY_SPLITS  # low scores there come from far-apart splits, not from the tissue
     parts = ([f"most together: {', '.join(high)}"] if high else []) + (
         [f"most apart: {', '.join(low)}"] if low and not splits else [])
+    within = (f" ({len(s['libraries'])} sections, each scored against its own label shares, then combined)"
+              if s.get("sections_combined") == SECTIONS_COMBINED else "")
     lines = ["\n## Spatial co-occurrence (last run)",
-             f"- {detail}{sampled}: {'; '.join(parts) if parts else 'no pair with enough observations'} [{TAG}].",
+             f"- {detail}{sampled}{within}: {'; '.join(parts) if parts else 'no pair with enough observations'} "
+             f"[{TAG}].",
              "- The score is P(b | a) / P(b) among pairs within that distance (squidpy's): above 1, b is near a more often "
              "than among all pairs at that range. It is symmetric: a near b equals b near a. Nearby does not mean "
              "interacting."]
