@@ -59,6 +59,10 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Data Assessment > Cell hashing", "", "HTODemux / hashedDrops: singlets, doublets, negatives"),
     ("Data Assessment > QC Distributions", "doublets, sample QC, sex check",
      "per-cell QC plots, per-sample QC, doublet calls, pseudobulk sample QC, sex check"),
+    ("Data Assessment > QC Distributions > QC per sample", "",
+     "each sample's cells and median genes, UMIs and % mito with flags; a sample sequenced as two or more "
+     "libraries is flagged 'Libraries differ' when its libraries' cell-type mix (or depth) differs more than "
+     "different samples alike in condition, tissue and sex do (one library may hold another sample's cells)"),
     ("Data Assessment > QC states: RP share vs mito", "", "damaged or stressed cells per type"),
     ("Data Assessment > Cluster QC > Evidence per cluster", "",
      "why each cluster was labelled or flagged, in words, never a probability: its markers against random genes "
@@ -206,7 +210,8 @@ CLOSING = "These are all of scView's tabs and tools; name a feature only by its 
 FULL_ONLY = ("Unified View > Accessibility >", "Unified View > Embedding > Tissue > Draw", "Unified View > Transcripts",
              "Unified View > Domains > Co-occurrence", "Unified View > Spot composition > Reference labels",
              "Data Assessment > Cell-type annotation", "Data Assessment > Cluster QC", "Unified View > Compare",
-             "Data Assessment > Annotation cross-check > Marker database check")
+             "Data Assessment > Annotation cross-check > Marker database check",
+             "Data Assessment > QC Distributions > QC per sample")
 
 
 def compact_guide() -> str:

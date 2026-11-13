@@ -579,6 +579,48 @@ async def sex_check(
 
 
 @tool(READ)
+async def library_concordance(
+    dataset_id: DatasetId,
+    sample_column: Annotated[str, Field(description=(
+        "The samples / donors whose libraries are compared (default: the donor column the QC "
+        "table uses)."))] = "",
+    library_column: Annotated[str, Field(description=(
+        "The libraries: one value per sequencing library, each within one sample (default: "
+        "detected: a library / lane / channel column, a non-person sample column such as "
+        "biosample_id, or the barcodes' prefix or -N suffix)."))] = "",
+    celltype_column: Annotated[str, Field(description=(
+        "The cell types the libraries' mixes are compared over (default: an author cell-type "
+        "column, else the clustering)."))] = "",
+    limit: Limit = DEFAULT_LIMIT,
+) -> str:
+    """Samples sequenced as two or more libraries: each library's cells, median UMIs and
+    genes, and a flag when two libraries of one sample differ in cell-type mix (or depth)
+    more than different samples alike in condition, tissue and sex do (90% quantile of those
+    distances, floor 0.15, chi-square p < 1e-3). A flagged library may hold another sample's
+    cells or a failed capture. A sample's libraries from different tissues or conditions are
+    compared only within one (``split_by``). ``reason`` says why nothing was checked."""
+    d = await _get(f"{_ds(dataset_id)}/qc/libraries", sample_column=sample_column,
+                   library_column=library_column, celltype_column=celltype_column)
+    samples = []
+    for s in d.get("samples") or []:
+        pair = s.get("pair") or {}
+        samples.append({"name": s.get("name"), "status": s.get("status"), "flags": s.get("flags"),
+                        "libraries": [pick(lib, "name", "n_cells", "median_counts", "median_genes", "too_small")
+                                      for lib in s.get("libraries") or []],
+                        **({"pair": pick(pair, "a", "b", "distance", "p", "above_share", "depth_log2_ratio",
+                                         "differing")} if pair else {}),
+                        **({"message": s["message"]} if s.get("message") else {})})
+    n = clamp(limit)
+    out = {"dataset_id": dataset_id,
+           **pick(d, "status", "reason", "sample_column", "library_column", "library_source",
+                  "celltype_column", "split_by", "n_checked", "n_flagged", "flagged", "reference", "note"),
+           "samples": samples[:n]}
+    if len(samples) > n:
+        out["samples_total"] = len(samples)
+    return dumps(out, _max_chars(limit))
+
+
+@tool(READ)
 async def preflight(dataset_id: DatasetId, steps: Steps, params: Annotated[dict[str, Any] | None, Field(
         description="The run's parameters, as run_pipeline takes them (its schema lists them).")] = None) -> str:
     """Before a run: its peak memory and rough time per step and in all, against the memory
