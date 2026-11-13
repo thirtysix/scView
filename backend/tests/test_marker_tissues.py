@@ -10,6 +10,7 @@ from __future__ import annotations
 import gzip
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -53,6 +54,8 @@ def test_everywhere_lineage_by_cell_ontology(installed):
 def test_dataset_tissue_from_hint_obs_column_or_title():
     a = _cells()
     assert mt.dataset_tissue(a) == (set(), "no tissue known (give one to restrict the database types)")
+    a.uns["about_title"] = np.array(["IFN-beta treated and control PBMCs from 8 donors"])  # as Kang's h5ad holds it
+    assert mt.dataset_tissue(a)[0] == {"blood"}
     a.uns["about_title"] = "Single-nucleus kidney atlas"
     assert mt.dataset_tissue(a)[0] == {"kidney"}
     a.obs["tissue"] = pd.Categorical(["cortex of kidney"] * a.n_obs)

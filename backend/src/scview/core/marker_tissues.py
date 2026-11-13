@@ -267,6 +267,8 @@ def dataset_tissue(adata, hint: str = "") -> tuple[set[str], str]:
                     shown = ", ".join(sorted(values)[:4]) + (", ..." if len(values) > 4 else "")
                     return o, f"obs '{col}' ({shown})"
     title = adata.uns.get("about_title") if hasattr(adata, "uns") else None
+    if not isinstance(title, str) and hasattr(title, "__len__") and len(title) == 1:
+        title = title[0]  # an h5ad can hold it as an array of one (Kang's file does)
     o = organs(title) if isinstance(title, str) else set()
     if len(o) == 1:
         return o, f"the dataset title ('{title}')"
