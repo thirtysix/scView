@@ -21,7 +21,8 @@ vi.mock("@/api/pipelineRun", async (importOriginal) => ({
   cancelPipelineRun,
 }));
 
-import { DroppedColumns, JointEmbedding, defaultJointName } from "./JointEmbedding";
+import { DroppedColumns, JointEmbedding, UnitFilteringNote, defaultJointName, unitFilteringText } from "./JointEmbedding";
+import type { UnitFiltering } from "@/api/integration";
 
 const ds = (id: string): DatasetInfo => ({
   id,
@@ -159,5 +160,52 @@ describe("DroppedColumns: what the joint dataset leaves out", () => {
     const box = screen.getByTestId("dropped-columns");
     expect(box.tagName).toBe("DETAILS");
     expect(within(box).getByText(/9 annotation columns are not carried .* \(show which and why\)/)).toBeInTheDocument();
+  });
+});
+
+describe("the joint run's filtering of datasets scView never filtered", () => {
+  const rows: UnitFiltering[] = [
+    { label: "P16", n_cells: 4400, filtered_before: false, n_removed: 708, by_criterion: { min_genes: 708, min_counts: 300 },
+      mode: "mad", genes_floor: 100, note: null },
+    { label: "P1", n_cells: 4000, filtered_before: true, n_removed: 0, by_criterion: {}, mode: null, genes_floor: null,
+      note: "filtered by scView before: left as it is" },
+    { label: "P7", n_cells: 3000, filtered_before: false, n_removed: 0, by_criterion: {}, mode: "mad", genes_floor: 100, note: null },
+  ];
+
+  it("says per dataset what it removes, and that filtered ones are left alone", () => {
+    expect(unitFilteringText(rows[0]!)).toBe("P16: removes 708 of 4,400 cells (16.1%), mostly Min genes");
+    expect(unitFilteringText(rows[1]!)).toBe("P1: filtered by scView before, left as it is");
+    expect(unitFilteringText(rows[2]!)).toBe("P7: removes no cells");
+  });
+
+  it("is on by default and can be switched off", () => {
+    const onChange = vi.fn();
+    const { rerender } = render(<UnitFilteringNote rows={rows} on onChange={onChange} />);
+    const box = screen.getByRole("checkbox", { name: "Filter the datasets scView has not filtered" });
+    expect(box).toBeChecked();
+    expect(screen.getByTestId("unit-filtering")).toHaveTextContent("at least 100 genes per cell");
+    expect(screen.getByTestId("unit-filtering")).toHaveTextContent("708 cells go in all.");
+    fireEvent.click(box);
+    expect(onChange).toHaveBeenCalledWith(false);
+    rerender(<UnitFilteringNote rows={rows} on={false} onChange={onChange} />);
+    expect(screen.getByTestId("unit-filtering")).toHaveTextContent("Off: every cell of every dataset joins.");
+  });
+
+  it("cannot be switched when every dataset was filtered before", () => {
+    render(<UnitFilteringNote rows={[rows[1]!]} on onChange={vi.fn()} />);
+    expect(screen.getByRole("checkbox")).toBeDisabled();
+    expect(screen.getByTestId("unit-filtering")).toHaveTextContent("none is filtered again");
+  });
+
+  it("sends the switch with the run", async () => {
+    listDatasets.mockResolvedValue([ds("s1"), ds("s2")]);
+    planIntegration.mockResolvedValue({ ...PLAN, filtering: rows });
+    runIntegration.mockImplementation(() => new Promise(() => {}));
+    render(<JointEmbedding />);
+    const picker = await screen.findByTestId("joint-picker");
+    for (const box of within(picker).getAllByRole("checkbox")) fireEvent.click(box);
+    fireEvent.click(await screen.findByRole("checkbox", { name: "Filter the datasets scView has not filtered" }));
+    fireEvent.click(screen.getByText("Build joint embedding"));
+    expect(runIntegration.mock.calls.at(-1)![0].filter_units).toBe(false);
   });
 });

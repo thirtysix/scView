@@ -10,6 +10,11 @@ for comparison, Harmony, then neighbors / clustering / UMAP / markers on the
 corrected space — so every existing panel works on it unchanged. A batch-mixing
 score before and after correction is stored with it (``batch_mixing``).
 
+Datasets scView never filtered (their recipe has no filtering step: a raw CELLxGENE slide)
+are filtered first, each with the QC a single run of it would use (``judge_unit``), so
+their near-empty cells do not make clusters of their own; ``filter_units`` False skips it.
+Datasets filtered before are left as they are.
+
 Sources are never modified: the merged counts land in ``ingested/{id}/``
 (read-only) and the processed result in ``derived/{id}/``, like any dataset.
 """
@@ -264,6 +269,20 @@ def carried_obs(adata: ad.AnnData, label: str) -> pd.DataFrame:
 
 
 @dataclass
+class UnitFilter:
+    """What the joint run's filtering keeps of one unit (``judge_unit``): the cells kept and
+    what a filtering step records beside its params (``pipeline.filter_judgement``)."""
+
+    keep: np.ndarray
+    found: dict[str, Any]
+    by_criterion: dict[str, int]
+
+    @property
+    def n_removed(self) -> int:
+        return int((~self.keep).sum())
+
+
+@dataclass
 class Unit:
     dataset_id: str
     name: str
@@ -273,6 +292,10 @@ class Unit:
     n_cells: int = 0  # kept once ``adata`` is dropped (``release_units``)
     # obs columns of the dataset not carried, with the reason (``obs_choice``)
     dropped: dict[str, str] = field(default_factory=dict)
+    # When scView filtered the dataset before (its last filtering's timestamp, or "yes"); None: never
+    filtered_before: str | None = None
+    qc: UnitFilter | None = None  # the joint run's filtering of a dataset never filtered
+    qc_error: str | None = None  # why it could not be judged (it is then not filtered)
 
     def __post_init__(self) -> None:
         if self.adata is not None:
@@ -289,6 +312,27 @@ def release_units(units: dict[str, Unit]) -> None:
     from scview.core import memory_budget
 
     memory_budget.release_memory()
+
+
+def judge_unit(unit: ad.AnnData, source: ad.AnnData) -> UnitFilter:
+    """The cells a filtering step with the run's default QC keeps of ``unit`` (its counts
+    and carried annotations), as a single run of the dataset would judge them: per-sample
+    MAD with the genes floor, the spatial rules for spots and bins, a targeted panel's own
+    defaults (``pipeline.filter_judgement``). The source's recorded technology goes with the
+    unit for the judgement only. Raises ValueError as the filtering step does."""
+    from scview.core import qc_filter, targeted_panel
+    from scview.core.pipeline import filter_judgement
+
+    uns = dict(unit.uns)
+    if spatial.INFO_KEY in source.uns:
+        uns[spatial.INFO_KEY] = source.uns[spatial.INFO_KEY]
+    light = ad.AnnData(X=unit.X, obs=unit.obs, var=unit.var, obsm=dict(unit.obsm), uns=uns)
+    params = targeted_panel.for_run(light, PipelineParams())
+    t, keep, record, found = filter_judgement(light, params)
+    bits = qc_filter.criterion_bits(record)
+    by = {str(c): int(((bits >> i) & 1).sum()) for i, c in enumerate(record["criteria"])}
+    return UnitFilter(np.asarray(keep, dtype=bool), {"qc_threshold_mode": t.mode, **found},
+                      {c: n for c, n in by.items() if n})
 
 
 def build_unit(
@@ -313,7 +357,18 @@ def build_unit(
             if col in adata.obs.columns:
                 unit.obs[col] = adata.obs[col].to_numpy()
         unit.uns[spatial.KEY] = _shown_images_only(adata.uns[spatial.KEY])
-    return Unit(dataset_id, name, label, unit, counts.source, dropped=dropped)
+    out = Unit(dataset_id, name, label, unit, counts.source, dropped=dropped)
+    from scview.core import qc_filter
+
+    before = qc_filter.recorded_filtering(adata)
+    if before is not None:
+        out.filtered_before = str(before.get("timestamp") or "yes")
+    else:
+        try:
+            out.qc = judge_unit(unit, adata)
+        except ValueError as e:  # e.g. too many samples for per-sample bounds: not filtered
+            out.qc_error = str(e)
+    return out
 
 
 def _shown_images_only(libraries: Any) -> dict:
@@ -400,6 +455,48 @@ def dropped_columns(units: dict[str, Unit]) -> list[DroppedColumn]:
                                                d.column.lower()))
 
 
+class UnitFiltering(BaseModel):
+    """What the joint run's filtering does to one dataset (``unit_filtering``)."""
+
+    label: str
+    n_cells: int
+    filtered_before: bool = False  # scView filtered it before: left as it is
+    n_removed: int = 0  # cells the run's filtering removes (when it is on)
+    by_criterion: dict[str, int] = Field(default_factory=dict)  # each rule on its own
+    mode: str | None = None  # "mad" | "fixed"
+    genes_floor: float | None = None
+    note: str | None = None
+
+
+def unit_filtering(units: dict[str, Unit]) -> list[UnitFiltering]:
+    """Per unit: filtered before (left alone), or what the joint run's filtering removes."""
+    out = []
+    for lab, u in units.items():
+        row = UnitFiltering(label=lab, n_cells=u.n_cells, filtered_before=u.filtered_before is not None)
+        if u.filtered_before is not None:
+            row.note = "filtered by scView before: left as it is"
+        elif u.qc is not None:
+            row.n_removed, row.by_criterion = u.qc.n_removed, u.qc.by_criterion
+            row.mode = u.qc.found.get("qc_threshold_mode")
+            row.genes_floor = u.qc.found.get("qc_genes_floor")
+        else:
+            row.note = f"not filtered: {u.qc_error}" if u.qc_error else "not filtered"
+        out.append(row)
+    return out
+
+
+def filter_units(units: dict[str, Unit]) -> list[str]:
+    """Cut each unit the joint run filters to the cells its filtering keeps (in place);
+    the labels of those that lost cells."""
+    cut = []
+    for lab, u in units.items():
+        if u.qc is None or u.adata is None or not u.qc.n_removed:
+            continue
+        u.adata = u.adata[u.qc.keep].copy()
+        cut.append(lab)
+    return cut
+
+
 class IntegrationPlan(BaseModel):
     datasets: list[DatasetCheck] = Field(default_factory=list)
     merge: MergePlan | None = None
@@ -412,6 +509,8 @@ class IntegrationPlan(BaseModel):
     notes: list[str] = Field(default_factory=list)
     # The joint run's memory and time (``joint_preflight``'s verdict, as the other preflight notes).
     preflight: dict[str, Any] | None = None
+    # Per dataset, what the run's filtering does (on unless the run sets filter_units false)
+    filtering: list[UnitFiltering] = Field(default_factory=list)
     ok: bool = False
 
 
@@ -535,6 +634,7 @@ def build_plan(
 
     if len(units) >= 2:
         plan.notes = confounding_notes(units)
+    plan.filtering = unit_filtering(units)
     plan.ok = not blocking
     return plan
 
@@ -622,11 +722,29 @@ def merge_joint(
     return joint
 
 
+def filtering_record(units: dict[str, Unit], on: bool, cut: list[str]) -> dict[str, Any]:
+    """The joint run's filtering, for the ``integrate`` entry: on or off, and per dataset
+    whether it was filtered before, or what this run removed and by which thresholds."""
+    rows = []
+    for lab, u in units.items():
+        row: dict[str, Any] = {"label": lab, "n_cells": u.n_cells}
+        if u.filtered_before is not None:
+            row["filtered_before"] = u.filtered_before
+        elif u.qc is not None:
+            row.update(n_removed=u.qc.n_removed if lab in cut else 0, by_criterion=u.qc.by_criterion,
+                       params=u.qc.found)
+        elif u.qc_error:
+            row["not_filtered"] = u.qc_error
+        rows.append(row)
+    return {"on": bool(on), "units": rows}
+
+
 def record_integration_provenance(
     joint: ad.AnnData, units: dict[str, Unit], *, join: MergeJoin, method: str,
-    apply_reconciliation: bool,
+    apply_reconciliation: bool, filtering: dict[str, Any] | None = None,
 ) -> None:
-    """Source block + an ``integrate`` history entry. Never raises."""
+    """Source block + an ``integrate`` history entry (with the run's filtering of the
+    datasets never filtered, ``filtering_record``). Never raises."""
     merged_from = [
         {"dataset_id": u.dataset_id, "name": u.name, "label": u.label,
          "n_cells": u.n_cells, "counts_source": u.counts_source}
@@ -645,7 +763,8 @@ def record_integration_provenance(
         provenance.record_step(
             joint, step="integrate", tool="scview.integration",
             params={"datasets": [u.dataset_id for u in units.values()], "join": join.value,
-                    "method": method, "label_column": LABEL_COLUMN},
+                    "method": method, "label_column": LABEL_COLUMN,
+                    **({"unit_filtering": filtering} if filtering is not None else {})},
         )
     except Exception as e:  # provenance must never block integration
         logger.warning("Could not record integration provenance: %s", e)
@@ -1131,6 +1250,7 @@ def run_integration_streamed(
     overrides: dict[str, Any] | None = None,
     control: RunControl | None = None,
     on_merged: Callable[[], None] | None = None,
+    filter_units_first: bool = True,
 ) -> Generator[tuple[str, dict[str, Any]], None, None]:
     """Merge, persist and process; yields (event, data) for SSE progress.
 
@@ -1140,7 +1260,9 @@ def run_integration_streamed(
     "merge" (``joint_before_step``): a stop there ends with ``pipeline_complete`` of that
     status before anything is written. The units' counts are dropped once merged
     (``release_units``), then ``on_merged()`` is called: the pipeline holds the joint
-    counts only.
+    counts only. With ``filter_units_first`` the datasets scView never filtered are cut to
+    the cells their filtering keeps before merging (``filter_units``; recorded in the
+    ``integrate`` entry).
     """
     yield ("stage", {"stage": "merge", "message": f"Merging {len(units)} datasets",
                      "dataset_id": dataset_id})
@@ -1148,12 +1270,19 @@ def run_integration_streamed(
     if halt is not None:
         yield ("pipeline_complete", {"status": halt[0], "stop_reason": halt[1], "steps_run": []})
         return
+    cut: list[str] = []
+    if filter_units_first and any(u.qc is not None and u.qc.n_removed for u in units.values()):
+        n = sum(1 for u in units.values() if u.qc is not None and u.qc.n_removed)
+        yield ("stage", {"stage": "filter",
+                         "message": f"Filtering {n} dataset{'s' if n != 1 else ''} scView never filtered"})
+        cut = filter_units(units)
     joint = merge_joint(units, join=join, apply_reconciliation=apply_reconciliation, copy=False)
     release_units(units)
     if on_merged is not None:
         on_merged()
     record_integration_provenance(joint, units, join=join, method=method,
-                                  apply_reconciliation=apply_reconciliation)
+                                  apply_reconciliation=apply_reconciliation,
+                                  filtering=filtering_record(units, filter_units_first, cut))
 
     yield ("stage", {"stage": "persist", "message": "Saving the joint dataset"})
     src = persist_joint(data_dir, dataset_id, name, joint, units)

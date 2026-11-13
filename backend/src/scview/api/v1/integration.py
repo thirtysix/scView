@@ -66,6 +66,9 @@ class IntegrateRequest(IntegratePlanRequest):
     method: str = "harmony"  # harmony | scanorama | bbknn | none (core/integration.py METHODS)
     join: MergeJoin = MergeJoin.inner
     apply_reconciliation: bool = True
+    # Filter the datasets scView never filtered first, with a single run's QC (the plan's
+    # ``filtering`` says what that removes); datasets filtered before are left as they are.
+    filter_units: bool = True
     params: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -189,6 +192,7 @@ async def run_integration(
             overrides=body.params,
             control=control,
             on_merged=merged.set,
+            filter_units_first=body.filter_units,
         ):
             if event == "pipeline_complete":
                 ended.update(data)

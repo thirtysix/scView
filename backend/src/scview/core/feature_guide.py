@@ -193,7 +193,8 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Marker Genes", "", "marker table, dot plot and heatmap of the top markers per group"),
     ("Trajectory", "", "PAGA, pseudotime and the genes that change along it"),
     ("Compare > Joint embedding", "Harmony, Scanorama, BBKNN",
-     "merge 2+ library datasets, corrected with Harmony, Scanorama or BBKNN"),
+     "merge 2 to 32 library datasets, corrected with Harmony, Scanorama or BBKNN; datasets scView never "
+     "filtered are filtered first with a single run's QC (the plan lists what each loses; it can be switched off)"),
     ("Compare > Composition > Between conditions", "",
      "cell-type proportions between conditions, donors as replicates"),
     ("Compare > Composition > Neighbourhoods (Milo)", "", "neighbourhood differential abundance"),
