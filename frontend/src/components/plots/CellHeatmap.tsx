@@ -183,7 +183,7 @@ export function CellHeatmap({
   }
 
   const meta = data.meta;
-  const layerLabel = layers?.find((l) => l.key === meta.layer)?.label ?? meta.layer;
+  const layerLabel = meta.layer_label ?? layers?.find((l) => l.key === meta.layer)?.label ?? meta.layer;
   const left = allGenes.length - genes.length;
   return (
     <div>

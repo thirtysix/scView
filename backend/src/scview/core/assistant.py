@@ -242,6 +242,24 @@ def _add_qc_states(adaptor, lines: list[str], sources: list[ChatSource]) -> None
                                   evidence="\n".join(st_lines[1:])))
 
 
+def _add_library_concordance(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
+    """Samples sequenced as two or more libraries, and any whose libraries disagree
+    (core/library_concordance.py). Obs plus the cached per-cell counts (the chat route
+    warms them in a thread)."""
+    from scview.core import library_concordance
+
+    try:
+        result = library_concordance.library_concordance(adaptor.adata, adaptor.qc_per_cell())
+        lc_lines, lc_detail = library_concordance.grounding_lines(result)
+    except Exception as exc:  # no samples, a bad column: no fact
+        logger.debug("assistant: library concordance failed: %s", exc)
+        return
+    if lc_lines:
+        lines.extend(lc_lines)
+        sources.append(ChatSource(kind="result", ref=library_concordance.TAG, detail=lc_detail,
+                                  evidence="\n".join(lc_lines[1:])))
+
+
 def _add_cluster_evidence(adaptor, lines: list[str], sources: list[ChatSource]) -> None:
     """Why each cluster was labelled or flagged (core/cluster_evidence.py), so "why is cluster 5
     low quality?" is answered from the rule's own numbers. Cached only: the chat route warms it
@@ -1108,6 +1126,7 @@ def build_grounding_context(
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("assistant: mito-by-type grounding failed: %s", exc)
         _add_qc_states(adaptor, lines, sources)
+        _add_library_concordance(adaptor, lines, sources)
         _add_hashing(adaptor, lines, sources)
         _add_fragment_qc(adaptor, lines, sources)
         _qc_removal_fact(adaptor, lines, sources)

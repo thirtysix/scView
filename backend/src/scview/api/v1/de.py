@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from scview.dependencies import get_dataset_manager
 from scview.core import de_composition, de_methods, de_prefilter, de_results, transcriptome_size
@@ -76,8 +76,29 @@ class _CompareScope(BaseModel):
     group_a: str
     group_b: str
     within_column: str | None = None
-    within_value: str | None = None
+    # One value, or several (a list, as the composition test takes it): their cells pooled.
+    within_value: str | list[str] | None = None
     replicate_key: str | None = None  # donor/sample obs column; overrides detection
+
+    _within = field_validator("within_value", mode="before")(lambda v: _within_input(v))
+
+    def within_values(self) -> list[str] | None:
+        v = self.within_value
+        return None if v is None else [v] if isinstance(v, str) else list(v)
+
+    def within_text(self) -> str | None:
+        """The subgroup for labels: the value, or the values joined by ", "."""
+        vals = self.within_values()
+        return None if vals is None else ", ".join(vals)
+
+
+def _within_input(v):
+    """``within_value`` as one value or a list: a one-item list reads as its value, an
+    empty one as none (every route takes both, as the composition test always did)."""
+    if isinstance(v, (list, tuple)):
+        vals = [str(x) for x in v]
+        return None if not vals else vals[0] if len(vals) == 1 else vals
+    return v
 
 
 class DECompareRequest(_CompareScope):
@@ -181,6 +202,9 @@ class DEResponse(BaseModel):
     replicate_key: str | None = None
     n_donors_a: int | None = None
     n_donors_b: int | None = None
+    # The column whose values n_donors_* count: the replicate column (which may be a
+    # sample column), or the person column its samples nest in (pseudobulk).
+    n_donors_column: str | None = None
     top_donor_share_a: float | None = None
     top_donor_share_b: float | None = None
     underreplicated: bool = False
@@ -390,6 +414,7 @@ def _replicate_guard(obs, mask_a, mask_b, key: str | None) -> dict:
         "replicate_key": key,
         "n_donors_a": na,
         "n_donors_b": nb,
+        "n_donors_column": key,
         "top_donor_share_a": round(sa, 4),
         "top_donor_share_b": round(sb, 4),
         "underreplicated": bool(under),
@@ -753,7 +778,7 @@ def _scope_masks(adata, body: _CompareScope, *extra: str | None):
     split = obs[body.split_by].astype(str).to_numpy()
     within = np.ones(adata.n_obs, dtype=bool)
     if body.within_column and body.within_value is not None:
-        within = obs[body.within_column].astype(str).to_numpy() == body.within_value
+        within = obs[body.within_column].astype(str).isin(body.within_values()).to_numpy()
     return within & (split == body.group_a), within & (split == body.group_b)
 
 
@@ -762,7 +787,7 @@ def _compare_masks(adata, body: _CompareScope, *extra: str | None):
     mask_a, mask_b = _scope_masks(adata, body, *extra)
     n_a, n_b = int(mask_a.sum()), int(mask_b.sum())
     if min(n_a, n_b) < _MIN_GROUP:
-        scope = f" within {body.within_value}" if body.within_column else ""
+        scope = f" within {body.within_text()}" if body.within_column else ""
         raise HTTPException(
             status_code=400,
             detail=(f"Each group needs at least {_MIN_GROUP} cells{scope} "
@@ -772,7 +797,7 @@ def _compare_masks(adata, body: _CompareScope, *extra: str | None):
 
 
 def _compare_label(body: _CompareScope) -> str:
-    return body.group_a + (f" ({body.within_value})" if body.within_column else "")
+    return body.group_a + (f" ({body.within_text()})" if body.within_column else "")
 
 
 def _composition(adata, body: _CompareScope, mask_a, mask_b, column: str | None) -> DEComposition:
@@ -781,7 +806,7 @@ def _composition(adata, body: _CompareScope, mask_a, mask_b, column: str | None)
         adata.obs, mask_a, mask_b, body.group_a, body.group_b, split_by=body.split_by,
         column=column, default=de_composition.default_column(adata),
         within_column=body.within_column if body.within_value is not None else None,
-        within_value=body.within_value,
+        within_value=body.within_text(),
     )
     return DEComposition(**res)
 
@@ -793,7 +818,7 @@ async def differential_expression_composition(
     group_a: str,
     group_b: str,
     within_column: str | None = None,
-    within_value: str | None = None,
+    within_value: list[str] | None = Query(default=None, description="One subgroup value, or several (repeat it)"),
     column: str | None = Query(default=None, description="Label column; default the active clustering"),
     dm: DatasetManager = Depends(get_dataset_manager),
 ) -> DEComposition:
@@ -974,7 +999,7 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
         logger.error("Pseudobulk DE failed for %s: %s", dataset_id, exc, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Pseudobulk DE failed: {exc!s}")
 
-    label = body.group_a + (f" ({body.within_value})" if body.within_column else "")
+    label = _compare_label(body)
     genes = [DEGene(gene=g, logfoldchange=lf, pval=p, pval_adj=pa, stat=res.stats.get(g))
              for g, lf, p, pa in res.genes]
     # Replicates nested in people (a sample column, several samples per donor), and few people.
@@ -1020,6 +1045,7 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
         replicate_key=key,
         n_donors_a=people[body.group_a],
         n_donors_b=people[body.group_b],
+        n_donors_column=rep["donor_key"] if rep else key,
         method="pseudobulk",
         n_samples_a=res.n_samples_a,
         n_samples_b=res.n_samples_b,
@@ -1231,7 +1257,7 @@ class DEAuditRequest(BaseModel):
     group_a: str | None = None
     group_b: str | None = None
     within_column: str | None = None
-    within_value: str | None = None
+    within_value: str | list[str] | None = None  # one value or several, as /de/compare takes it
     replicate_key: str | None = None
     method: Literal["wilcoxon", "t-test"] = "wilcoxon"
     min_pct: float = _MinPct

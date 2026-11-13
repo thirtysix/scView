@@ -159,7 +159,10 @@ _RESULT_FACET_HINTS = {
            "mix of two", "why is cluster", "why was cluster", "why did scview", "evidence",
            # cluster QC cautions (core/cluster_qc.py): nuclei_mito, low_content, noncoding/sex markers
            "mito in nuclei", "mitochondrial in nuclei", "cytoplasm", "low rna", "less rna", "rna content",
-           "non-coding", "noncoding", "pseudogene", "snorna", "mirna", "sex genes", "xist", "split by sex"),
+           "non-coding", "noncoding", "pseudogene", "snorna", "mirna", "sex genes", "xist", "split by sex",
+           # two or more libraries of one sample (core/library_concordance.py)
+           "libraries", "this library", "that library", "library concordance", "concordance",
+           "sequenced twice", "technical replicate", "sample swap", "swapped sample"),
 }
 
 

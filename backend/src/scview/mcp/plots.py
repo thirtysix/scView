@@ -206,7 +206,7 @@ def dotplot(result: dict[str, Any], title: str, caption: str) -> bytes:
     ax.set_yticklabels(groups, fontsize=8)
     ax.set_xlim(-0.6, len(genes) - 0.4)
     ax.set_ylim(len(groups) - 0.4, -0.6)
-    fig.colorbar(sc, ax=ax, shrink=0.5, label=f"mean ({result.get('layer_label') or result.get('layer')})")
+    fig.colorbar(sc, ax=ax, shrink=0.5, label=f"mean, {result.get('layer_label') or result.get('layer')}")
     for f in (0.25, 0.5, 1.0):
         ax.scatter([], [], s=f * 220 + 1, c="#bbbbbb", label=f"{int(f * 100)}%")
     ax.legend(title="expressing", loc="upper left", bbox_to_anchor=(1.25, 1.0), fontsize=7,

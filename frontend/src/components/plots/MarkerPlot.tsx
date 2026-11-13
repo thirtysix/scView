@@ -35,6 +35,8 @@ export { pickMarkerGenes, scalePerGene } from "@/lib/markerPlot";
 interface ByGroup {
   groupby: string;
   layer: string;
+  /** What the layer's values are ("Log-normalized (raw)", "Counts (raw)"; absent from older servers) */
+  layer_label?: string;
   groups: string[];
   genes: string[];
   mean: number[][]; // [group][gene]
@@ -239,7 +241,8 @@ export function MarkerPlot({
   const lines = sameGroups && treeData?.tree ? dendrogramSegments(treeData.tree, treeData.order) : null;
   const treeLoading = byTree && tree?.key !== treeKey;
   const treeError = byTree && tree?.key === treeKey ? tree.error : null;
-  const layerLabel = layers?.find((l) => l.key === data.layer)?.label ?? data.layer;
+  // The server's word for what the values are, else the layer menu's: never the bare key.
+  const layerLabel = data.layer_label ?? layers?.find((l) => l.key === data.layer)?.label ?? data.layer;
   const markerOf = new Map(picked.map((p) => [p.gene, p.group]));
   // Genes in the order picked (top markers: in blocks by marker group), or as
   // the gene tree orders them.

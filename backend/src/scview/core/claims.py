@@ -651,6 +651,7 @@ _FAMILY_PREFIX = {
     "count_split": "result:count_split", "count": "result:count_split",
     "marker": "result:marker_panel", "panel": "result:marker_panel",
     "pca": "result:pca", "qcstates": "result:qcstates",
+    "libraries": "result:libraries", "library": "result:libraries",  # core/library_concordance.py
     "evidence": "result:evidence:",  # each cluster's evidence (core/cluster_evidence.py)
     "mito": "result:mito_by_type",
     "programs": "result:programs",
