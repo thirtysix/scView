@@ -531,9 +531,16 @@ def build_plan(
     return plan
 
 
+def _quoted(names: list[str]) -> str:
+    q = [f"'{n}'" for n in names]
+    return q[0] if len(q) == 1 else ", ".join(q[:-1]) + f" and {q[-1]}"
+
+
 def confounding_notes(units: dict[str, "Unit"]) -> list[str]:
     """When each dataset holds one condition, joining them corrects the condition
-    away with the datasets: say so before the user reads the mixing as success."""
+    away with the datasets: say so before the user reads the mixing as success.
+    Columns that split the datasets the same way (CELLxGENE's ``disease`` and
+    ``disease_ontology_term_id``) are one finding, so one note naming them all."""
     import pandas as pd
 
     from scview.core.confounding import check, condition_columns
@@ -541,18 +548,29 @@ def confounding_notes(units: dict[str, "Unit"]) -> list[str]:
     frames = [u.adata.obs.assign(**{"__dataset": lab}) for lab, u in units.items()]
     shared = set.intersection(*(set(f.columns) for f in frames))
     obs = pd.concat([f[sorted(shared)] for f in frames], ignore_index=True)
-    notes = []
+    findings: dict[tuple, list[str]] = {}
+    kinds: dict[tuple, str] = {}
     for cond in condition_columns(obs):
         hit = check(obs, "__dataset", cond)
         if hit is None:
             continue
-        shape = "one" if hit.kind == "confounded" else "a single"
+        # Which datasets share a group: the same partition is the same finding.
+        main = obs.groupby("__dataset", observed=True)[cond].agg(
+            lambda s: s.astype(str).value_counts().index[0] if s.notna().any() else None)
+        key = (hit.kind, tuple(pd.factorize(main.sort_index().to_numpy())[0]))
+        findings.setdefault(key, []).append(cond)
+        kinds[key] = hit.kind
+    notes = []
+    for key, cols in findings.items():
+        shape = "one" if kinds[key] == "confounded" else "a single"
+        what = _quoted(cols)
+        group = f"{what} group" if len(cols) == 1 else f"group of {what} (they split the datasets alike)"
         notes.append(
-            f"Each dataset holds {shape} '{cond}' group, so batch correction removes the '{cond}' difference "
+            f"Each dataset holds {shape} {group}, so batch correction removes that difference "
             "from the joint embedding along with the dataset difference: a high mixing score is "
-            f"expected, and cells of different '{cond}' groups can share clusters. Expression "
-            f"values are not corrected, so DE between '{cond}' groups within a cell type still "
-            "works (use pseudobulk across donors)."
+            "expected, and cells of different groups can share clusters. Expression values are "
+            "not corrected, so DE between those groups within a cell type still works (use "
+            "pseudobulk across donors)."
         )
     return notes[:2]
 

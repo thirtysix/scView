@@ -101,6 +101,21 @@ def test_integration_plan_notes_datasets_that_are_conditions():
     assert confounding_notes({"A": unit("A", "CTRL"), "B": unit("B", "CTRL")}) == []
 
 
+def test_two_columns_that_split_the_datasets_alike_are_one_note():
+    """CELLxGENE files carry disease and disease_ontology_term_id: one finding, one note."""
+    def unit(label: str, disease: str, term: str, stim: str) -> Unit:
+        obs = pd.DataFrame({"disease": [disease] * 40, "disease_ontology_term_id": [term] * 40,
+                            "stim": [stim] * 40}, index=[f"{label}{i}" for i in range(40)])
+        return Unit(dataset_id=label, name=label, label=label, adata=_adata(obs), counts_source="X")
+
+    notes = confounding_notes({"A": unit("A", "normal", "PATO:0000461", "CTRL"),
+                               "B": unit("B", "myocardial infarction", "MONDO:0005068", "CTRL"),
+                               "C": unit("C", "myocardial infarction", "MONDO:0005068", "STIM")})
+    assert len(notes) == 2  # disease (both columns) is one finding, stim another
+    disease = next(n for n in notes if "'disease'" in n)
+    assert "'disease' and 'disease_ontology_term_id'" in disease and "'stim'" not in disease
+
+
 async def test_a_batch_key_that_is_the_compared_column_is_not_a_batch_for_de():
     """Kang run with Harmony on 'stim': DE by 'stim' tests expression, which the
     correction never touched, so it is not 'different batches'."""
