@@ -5,6 +5,7 @@ import { CapNote, Caption } from "@/components/common/Caption";
 import { Help } from "@/components/common/Help";
 import { HoverTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
+import { SavedScoreNote } from "@/components/common/SavedScoreNote";
 import Plot from "@/components/plots/Plot";
 import { formatP } from "@/lib/atac";
 import { chromvarEstimateText } from "@/lib/atacMotifs";
@@ -36,6 +37,8 @@ export function AtacChromvar({
   const [group, setGroup] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The column the motif last drawn was saved as (lib/savedScores.ts), or why not.
+  const [saved, setSaved] = useState<{ column: string | null; note: string | null } | null>(null);
   const chromvar = state.chromvar ?? null;
   const runId = chromvar?.run_id;
 
@@ -63,7 +66,9 @@ export function AtacChromvar({
     setBusy("Reading its activity…");
     setError(null);
     try {
-      onMotif(await getChromVarMotif(datasetId, id, groupby || undefined));
+      const motif = await getChromVarMotif(datasetId, id, groupby || undefined);
+      setSaved({ column: motif.saved_column ?? null, note: motif.save_note ?? null });
+      onMotif(motif);
     } catch (e) {
       setError(errorMessage(e));
     } finally {
@@ -110,6 +115,7 @@ export function AtacChromvar({
               <Loader2 className="h-3 w-3 animate-spin" /> {busy}
             </p>
           )}
+          <SavedScoreNote column={saved?.column} note={saved?.note} />
           {!groupby && <Caption>Choose Group by at the top of this tab to compare groups.</Caption>}
           {heat && groups && (
             <div data-testid="atac-chromvar-heatmap">

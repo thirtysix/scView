@@ -403,3 +403,79 @@ describe("Saved scores in the Compare control", () => {
     expect(screen.queryByText(/detail/)).toBeNull();
   });
 });
+
+const PROGRAM = {
+  name: "program_k3_2",
+  dtype: "float32",
+  n_unique: 6,
+  saved_score: {
+    kind: "program" as const, name: "P2 (k 3)", method: "NMF usage share", k: 3, program: 2, run_id: "r1",
+    top_genes: ["GZMB", "PRF1", "NKG7"], earlier_run: true,
+  },
+};
+const MOTIF = {
+  name: "chromvar_SPI1_MA0080.6",
+  dtype: "float32",
+  n_unique: 6,
+  saved_score: { kind: "chromvar" as const, name: "SPI1", method: "chromVAR deviation z", motif_id: "MA0080.6", run_id: "c1", earlier_run: false },
+};
+
+describe("Program and chromVAR scores in Compare", () => {
+  beforeEach(() => {
+    removeSavedScore.mockReset().mockResolvedValue({ removed: PROGRAM.name, kind: "program", name: "P2 (k 3)" });
+    useDatasetStore.setState({
+      currentDataset: { ...dataset([STIM, CELL_TYPE, PROGRAM, MOTIF]), active_clustering: "cell_type" },
+      currentDatasetId: "ds1",
+    });
+  });
+
+  it("lists both under Scores, says a program is from an earlier run, and removes one", async () => {
+    render(<CompareColoringsControl />);
+    fireEvent.click(screen.getByRole("button", { name: /Compare/ }));
+    const labels = screen.getAllByRole("checkbox").map((c) => c.closest("label")!.textContent);
+    expect(labels).toEqual([
+      "cell_type3",
+      "stim2",
+      "P2 (k 3)Program usage: GZMB, PRF1, NKG7, earlier run",
+      "SPI1chromVAR z (MA0080.6)",
+    ]);
+    const programRow = screen.getByRole("checkbox", { name: /P2 \(k 3\)/ }).closest("label")!;
+    expect(programRow.title).toMatch(/From an earlier gene programs \(NMF\) run/);
+    expect(screen.getByRole("checkbox", { name: /SPI1/ }).closest("label")!.title).toBe(
+      "SPI1, chromVAR z (MA0080.6) (column chromvar_SPI1_MA0080.6)",
+    );
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Remove saved score P2 (k 3)" })));
+    expect(removeSavedScore).toHaveBeenCalledWith("ds1", PROGRAM.name);
+  });
+
+  it("draws chromVAR z on a scale centred on 0 and a program's usage on a sequential one", async () => {
+    const z = Float32Array.from([-2, Number.NaN, 0, 0.5, 1, 3]);
+    const usage = Float32Array.from([0, 0.1, 0.2, 0.4, 0.8, 1]);
+    useSettingsStore.setState({ signedColormapMode: "auto", divergingColormap: "RdBu" });
+    fetchEmbeddingBinary.mockImplementation(async (_ds: string, _emb: string, column: string) => {
+      const table = tableFromArrays({
+        x: Float32Array.from([0, 1, 2, 3, 4, 5]),
+        y: Float32Array.from([0, 1, 2, 3, 4, 5]),
+        [column]: column === MOTIF.name ? z : usage,
+      });
+      return tableToIPC(table).slice().buffer;
+    });
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <CompareColoringsGrid
+          datasetId="ds1"
+          embedding="X_umap"
+          columns={[MOTIF.name, PROGRAM.name]}
+          positions={Float32Array.from([0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5])}
+          dimensions={2}
+          onHover={vi.fn()}
+        />
+      </QueryClientProvider>,
+    );
+    await screen.findByTestId("deck");
+    expect(screen.getByText("chromVAR z (MA0080.6)")).toBeInTheDocument();
+    expect(screen.getByText("Program usage: GZMB, PRF1, NKG7, earlier run")).toBeInTheDocument();
+    // One diverging centre: the signed chromVAR panel's, not the usage panel's.
+    expect(screen.getAllByTitle("The centre of the diverging scale")).toHaveLength(1);
+  });
+});

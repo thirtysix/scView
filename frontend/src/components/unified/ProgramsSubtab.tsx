@@ -4,6 +4,7 @@ import { Loader2 } from "lucide-react";
 import type { PlotMouseEvent } from "plotly.js";
 import Plot from "@/components/plots/Plot";
 import { Caption } from "@/components/common/Caption";
+import { SavedScoreNote } from "@/components/common/SavedScoreNote";
 import { HoverTip } from "@/components/common/InfoTip";
 import { Help } from "@/components/common/Help";
 import {
@@ -67,6 +68,8 @@ export function ProgramsSubtab({ onUsage, activeIndex, groupByColumn, setGroupBy
   const [enriching, setEnriching] = useState<number | null>(null);
   const [enrichment, setEnrichment] = useState<ProgramEnrichment | null>(null);
   const [reload, setReload] = useState(0);
+  // The column the program last drawn was saved as (lib/savedScores.ts), or why not.
+  const [saved, setSaved] = useState<{ column: string | null; note: string | null } | null>(null);
 
   const groupColumns = useMemo(() => {
     if (!dataset) return [];
@@ -101,14 +104,19 @@ export function ProgramsSubtab({ onUsage, activeIndex, groupByColumn, setGroupBy
   }, [datasetId, groupby, version, reload]);
 
   // A new run's programs are other programs: their enrichment is not this one.
-  useEffect(() => setEnrichment(null), [datasetId, summary?.run_id]);
+  useEffect(() => {
+    setEnrichment(null);
+    setSaved(null);
+  }, [datasetId, summary?.run_id]);
 
   const show = useCallback(
     async (index: number) => {
       if (!datasetId || showing !== null) return;
       setShowing(index);
       try {
-        onUsage(await getProgramUsage(datasetId, index, groupby || undefined));
+        const usage = await getProgramUsage(datasetId, index, groupby || undefined);
+        setSaved({ column: usage.saved_column ?? null, note: usage.save_note ?? null });
+        onUsage(usage);
       } catch (e) {
         setError(errorText(e));
       } finally {
@@ -224,6 +232,7 @@ export function ProgramsSubtab({ onUsage, activeIndex, groupByColumn, setGroupBy
               {n}
             </p>
           ))}
+          <SavedScoreNote column={saved?.column} note={saved?.note} />
           <div className="max-h-80 overflow-auto rounded-lg border border-slate-200">
             <table className="w-full text-xs">
               <thead className="sticky top-0 bg-slate-50">

@@ -1,6 +1,7 @@
 /**
  * Per-cell scores kept as obs columns (backend core/saved_scores.py): a scored gene set
- * (score_<set>) or one TF / pathway's activity (activity_<source>), saved when the user
+ * (score_<set>), one TF / pathway's activity (activity_<source>), one gene program's usage
+ * (program_k<k>_<n>) or one motif's chromVAR z (chromvar_<motif>_<id>), saved when the user
  * draws it, plus the scores the pipeline keeps (cell cycle, dissociation stress).
  * Compare colourings offers them under "Scores"; they colour with a continuous bar.
  */
@@ -34,12 +35,30 @@ export function scoreTitle(col: ObsColumnInfo): string {
   return col.saved_score?.name ?? prettyObsLabel(col.name);
 }
 
-/** What the score is, in a few words: "Gene-set score (AUCell)", "TF activity". */
+/** What the score is, in a few words: "Gene-set score (AUCell)", "TF activity",
+ *  "Program usage: GZMB, PRF1, NKG7", "chromVAR z (MA0080.6)"; ", earlier run" when the
+ *  dataset's gene programs or chromVAR run is a later one than the score came from. */
 export function scoreDetail(col: ObsColumnInfo): string {
   const s = col.saved_score;
   if (!s) return BUILTIN_SCORE_COLUMNS[col.name] ?? "Score";
+  const earlier = s.earlier_run ? ", earlier run" : "";
   if (s.kind === "activity") return NETWORK_LABELS[s.network ?? ""] ?? "Activity";
+  if (s.kind === "program") {
+    const what = s.method === "NMF usage" ? "Program usage (unscaled)" : "Program usage";
+    const genes = (s.top_genes ?? []).slice(0, 3).join(", ");
+    return `${what}${genes ? `: ${genes}` : ""}${earlier}`;
+  }
+  if (s.kind === "chromvar") return `chromVAR z${s.motif_id ? ` (${s.motif_id})` : ""}${earlier}`;
   return `Gene-set score (${METHOD_LABELS[s.method ?? ""] ?? s.method ?? "score_genes"})`;
+}
+
+/** The hover text of a score in Compare: what it is, where it came from, its column. */
+export function scoreTooltip(col: ObsColumnInfo): string {
+  const s = col.saved_score;
+  const base = `${scoreTitle(col)}, ${scoreDetail(col)} (column ${col.name})`;
+  if (!s?.earlier_run) return base;
+  const run = s.kind === "program" ? "an earlier gene programs (NMF) run" : "an earlier chromVAR run";
+  return `${base}. From ${run}: the dataset's ${s.kind === "program" ? "programs" : "chromVAR scores"} now come from a later run.`;
 }
 
 /** A saved record entry as far as matching needs it (api/savedScores.ts SavedScoreRecord). */

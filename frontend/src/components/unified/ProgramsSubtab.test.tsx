@@ -103,6 +103,19 @@ describe("ProgramsSubtab", () => {
     expect(screen.getByText(/k = 4: 3 of 4 stable/)).toBeTruthy();
   });
 
+  it("says the column a drawn program was saved as, or why it was not", async () => {
+    render(<ProgramsSubtab onUsage={vi.fn()} activeIndex={null} groupByColumn="stim" setGroupByColumn={() => {}} />);
+    await waitFor(() => screen.getByTestId("program-row-2"));
+    api.getProgramUsage.mockResolvedValueOnce({ ...USAGE, saved_column: "program_k2_2", save_note: null });
+    fireEvent.click(screen.getByTestId("program-row-2"));
+    expect((await screen.findByTestId("score-saved")).textContent).toBe(
+      "Saved as column program_k2_2: Compare and Color offer it.",
+    );
+    api.getProgramUsage.mockResolvedValueOnce({ ...USAGE, saved_column: null, save_note: "Not saved: the dataset is being processed." });
+    fireEvent.click(screen.getByTestId("program-row-2"));
+    await waitFor(() => expect(screen.getByTestId("score-saved").textContent).toMatch(/being processed/));
+  });
+
   it("colours the cells by a program and enriches one", async () => {
     const onUsage = vi.fn();
     render(<ProgramsSubtab onUsage={onUsage} activeIndex={2} groupByColumn="stim" setGroupByColumn={() => {}} />);
@@ -111,6 +124,7 @@ describe("ProgramsSubtab", () => {
     fireEvent.click(screen.getByTestId("program-row-2"));
     await waitFor(() => expect(onUsage).toHaveBeenCalledWith(USAGE));
     expect(api.getProgramUsage).toHaveBeenCalledWith("d1", 2, "stim");
+    expect(screen.queryByTestId("score-saved")).toBeNull(); // nothing saved, nothing said
 
     api.enrichProgram.mockResolvedValue({
       index: 1, name: "P1", run_id: "r1", collections: ["h.all"], query: ["CD3D", "LTB"], n_query: 2,

@@ -1,5 +1,6 @@
 import { apiFetch } from "./client";
 import { API_BASE } from "@/lib/constants";
+import { announceSavedScore } from "@/lib/savedScores";
 import { streamEvents } from "./clustering";
 
 /** The scan's numbers (backend core/atac_motifs.py build). */
@@ -176,6 +177,9 @@ export interface ChromVarMotif {
   violin: Record<string, number[]> | null;
   column: string | null;
   violin_error?: string;
+  /** Asked to save: the obs column (chromvar_<motif>_<id>), or null with save_note saying why */
+  saved_column?: string | null;
+  save_note?: string | null;
 }
 
 export function getMotifState(datasetId: string): Promise<MotifState> {
@@ -241,10 +245,21 @@ export function getChromVarGroups(datasetId: string, column: string): Promise<Ch
   return apiFetch(`/datasets/${datasetId}/atac/motifs/chromvar/groups?${q.toString()}`);
 }
 
-export function getChromVarMotif(datasetId: string, motifId: string, groupby?: string): Promise<ChromVarMotif> {
+/** One motif's chromVAR z per cell. `save` (the default: the user drew it) also keeps it as
+ *  an obs column (backend core/saved_scores.py); a violin regroup or a session drawing it
+ *  again passes false. */
+export async function getChromVarMotif(
+  datasetId: string,
+  motifId: string,
+  groupby?: string,
+  save = true,
+): Promise<ChromVarMotif> {
   const q = new URLSearchParams({ motif_id: motifId });
   if (groupby) q.set("groupby", groupby);
-  return apiFetch(`/datasets/${datasetId}/atac/motifs/chromvar/motif?${q.toString()}`);
+  if (save) q.set("save", "true");
+  const res = await apiFetch<ChromVarMotif>(`/datasets/${datasetId}/atac/motifs/chromvar/motif?${q.toString()}`);
+  if (res.saved_column) announceSavedScore(datasetId, res.saved_column);
+  return res;
 }
 
 export function chromVarCsvUrl(datasetId: string): string {
