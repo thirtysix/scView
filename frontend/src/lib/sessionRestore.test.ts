@@ -612,6 +612,25 @@ describe("the tissue plot's outlines and transcripts", () => {
     expect(report.notes.join(" ")).toContain("Transcript dots: this dataset has no transcripts attached.");
   });
 
+  it("round-trips the section shown on a dataset of several, and says when it is gone", async () => {
+    const two = xenium({ libraries: [library, { ...library, id: "r2" }] });
+    useDatasetStore.setState({ currentDataset: two, currentDatasetId: two.id });
+    useTissueViewStore.setState({ library: "r2" });
+    const session = roundTrip(captureSession());
+    expect(session.view?.tissue_section).toBe("r2");
+    useTissueViewStore.setState({ library: null });
+    api.getDataset.mockResolvedValue(two);
+    await restoreSession(session);
+    expect(useTissueViewStore.getState().library).toBe("r2");
+    api.getDataset.mockResolvedValue(xenium());
+    const report = await restoreSession(session);
+    expect(useTissueViewStore.getState().library).toBeNull();
+    expect(report.notes.join(" ")).toContain("this dataset has no such tissue section");
+    // One section: nothing to save.
+    useDatasetStore.setState({ currentDataset: xenium(), currentDatasetId: two.id });
+    expect("tissue_section" in captureSession().view!).toBe(false);
+  });
+
   it("refuses a file with more genes than can be drawn", () => {
     const bad = { format: "scview-session", version: 1, view: { transcripts: { genes: Array(9).fill("A"), dot_size: 2 } } };
     expect(() => parseSession(bad)).toThrow();
