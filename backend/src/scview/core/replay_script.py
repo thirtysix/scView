@@ -2905,11 +2905,32 @@ def _ingest_steps(p: dict, ctx: _Ctx) -> Snippet:
     return Snippet(EXACT, lines)
 
 
+def _unit_filtering_lines(rec: dict) -> list[str]:
+    """What the joint run's filtering did to each dataset, as comments."""
+    if not rec.get("on"):
+        return ["# The joint run's filtering of datasets never filtered was off."]
+    out = ["# Datasets scView never filtered were filtered before merging (each with a single run's",
+           "# QC), so the merged counts file holds the cells kept:"]
+    for u in rec.get("units") or []:
+        lab = comment_text(str(u.get("label")), 60)
+        if "filtered_before" in u:
+            out.append(f"#   {lab}: filtered before, left as it was")
+        elif "n_removed" in u:
+            mode = (u.get("params") or {}).get("qc_threshold_mode", "mad")
+            out.append(f"#   {lab}: {u['n_removed']:,} of {u.get('n_cells', 0):,} cells removed ({mode} thresholds)")
+        else:
+            out.append(f"#   {lab}: not filtered")
+    return out
+
+
 def _integrate(p: dict, ctx: _Ctx) -> Snippet:
+    p = dict(p)
+    filtering = p.pop("unit_filtering", None)
     return Snippet(NOT_REPLAYABLE, [
         "# This dataset was made by merging other scView datasets; the merge is not",
         "# replayed. Start from the merged counts file (the input above). Recorded:",
         *_param_comment(p),
+        *(_unit_filtering_lines(filtering) if isinstance(filtering, dict) else []),
     ], "merge of datasets: start from the merged file")
 
 

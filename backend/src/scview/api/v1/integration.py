@@ -37,6 +37,7 @@ from scview.core.integration import (
     estimate_joint,
     joint_before_step,
     joint_genes,
+    default_name,
     joint_preflight,
     load_units,
     read_need,
@@ -65,6 +66,9 @@ class IntegrateRequest(IntegratePlanRequest):
     method: str = "harmony"  # harmony | scanorama | bbknn | none (core/integration.py METHODS)
     join: MergeJoin = MergeJoin.inner
     apply_reconciliation: bool = True
+    # Filter the datasets scView never filtered first, with a single run's QC (the plan's
+    # ``filtering`` says what that removes); datasets filtered before are left as they are.
+    filter_units: bool = True
     params: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -162,7 +166,7 @@ async def run_integration(
         raise HTTPException(status_code=400, detail=plan.blocking[0])
 
     dataset_id = uuid.uuid4().hex
-    name = (body.name or "").strip() or "joint: " + " + ".join(units)
+    name = (body.name or "").strip() or default_name(list(units))
     merged = threading.Event()
     control = RunControl(before_step=joint_before_step(est.merge_bytes if est is not None else 0))
     needs = est.step_needs() if est is not None else {}
@@ -188,6 +192,7 @@ async def run_integration(
             overrides=body.params,
             control=control,
             on_merged=merged.set,
+            filter_units_first=body.filter_units,
         ):
             if event == "pipeline_complete":
                 ended.update(data)

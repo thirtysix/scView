@@ -30,6 +30,21 @@ export interface DroppedColumn {
   datasets: string[];
 }
 
+/** What the joint run's filtering does to one dataset (backend integration.unit_filtering). */
+export interface UnitFiltering {
+  label: string;
+  n_cells: number;
+  /** scView filtered it before: left as it is. */
+  filtered_before: boolean;
+  /** Cells the run's filtering removes (when it is on). */
+  n_removed: number;
+  /** Cells each rule removes on its own (FilterCriterion keys). */
+  by_criterion: Record<string, number>;
+  mode: "mad" | "fixed" | null;
+  genes_floor: number | null;
+  note: string | null;
+}
+
 export interface IntegrationPlan {
   datasets: IntegrationDatasetCheck[];
   merge: IntegrationMergePlan | null;
@@ -42,6 +57,8 @@ export interface IntegrationPlan {
   notes?: string[];
   /** The joint run's memory and time estimate (backend integration.joint_preflight). */
   preflight?: PreflightVerdict | null;
+  /** Per dataset, what the run's filtering of datasets scView never filtered does. */
+  filtering?: UnitFiltering[];
   ok: boolean;
 }
 
@@ -52,6 +69,8 @@ export interface IntegrateRequest {
   labels?: string[];
   name?: string;
   method?: IntegrationMethod;
+  /** Filter the datasets scView never filtered first (default true). */
+  filter_units?: boolean;
   params?: Record<string, number>;
 }
 

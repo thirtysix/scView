@@ -49,15 +49,52 @@ function keptRange(lo: number | null, hi: number | null): string {
   return `${lo === null ? "any" : bound(lo)}–${bound(hi)}`;
 }
 
+type MadRow = MadThresholds["samples"][number] | MadThresholds["pooled"];
+
+/** Which genes cut applies to a row, in words: its own MAD cut, or the floor and what that removed. */
+export function genesCutNote(row: MadRow, floor: number | undefined): string | undefined {
+  if (!floor) return undefined;
+  const own = row.min_genes_mad == null ? "none (its MAD is 0)" : bound(row.min_genes_mad);
+  if (row.min_genes_by === "floor") {
+    return `The floor of ${bound(floor)} genes applies: its own MAD cut is ${own}. The floor removes ${(row.n_floor ?? 0).toLocaleString()} cells that cut keeps.`;
+  }
+  if (row.floor_skipped) {
+    return `Its own MAD cut (${own}) applies: the floor of ${bound(floor)} genes would remove ${row.floor_skipped.toLocaleString()} cells, over half of them, so it is not used here.`;
+  }
+  return `Its own MAD cut applies (${own}, above the floor of ${bound(floor)}).`;
+}
+
+/** One line under the table: the floor and how much it changed. */
+export function floorSummary(mad: MadThresholds): string | null {
+  const floor = mad.genes_floor;
+  if (!floor) return null;
+  const rows: MadRow[] = mad.column ? mad.samples : [mad.pooled];
+  const set = rows.filter((r) => r.min_genes_by === "floor");
+  const skipped = rows.filter((r) => r.floor_skipped);
+  const what = mad.column ? "samples" : "groups";
+  const removed = set.reduce((n, r) => n + (r.n_floor ?? 0), 0);
+  let text = `Genes floor ${bound(floor)}: `;
+  text += set.length
+    ? `it set the genes cut in ${set.length} of ${rows.length} ${what} and removed ${removed.toLocaleString()} cells their own MAD cut keeps.`
+    : `no ${mad.column ? "sample's" : "group's"} own MAD cut was below it, so it changed nothing.`;
+  if (skipped.length) {
+    text += ` Not used in ${skipped.map((r) => ("name" in r ? r.name : "all cells")).join(", ")}: it would have removed over half.`;
+  }
+  return text;
+}
+
 /** MAD mode: each sample's bounds and what they remove, in the samples' own order. */
 export function SampleThresholds({ mad }: { mad: MadThresholds }) {
+  const floorLine = floorSummary(mad);
   if (!mad.column) {
     const p = mad.pooled;
     return (
       <p className="text-[11px] text-slate-600" data-testid="mad-pooled">
         No sample column found, so all cells are one group: kept with {keptRange(p.min_counts, p.max_counts)} counts
         and {keptRange(p.min_genes, p.max_genes)} genes per cell
+        {p.min_genes_by === "floor" ? " (the floor)" : ""}
         {p.max_pct_mt !== null ? `, under ${bound(p.max_pct_mt, 1)}% mito` : ""}.
+        {floorLine && <span className="block text-slate-500" data-testid="genes-floor">{floorLine}</span>}
       </p>
     );
   }
@@ -103,8 +140,9 @@ export function SampleThresholds({ mad }: { mad: MadThresholds }) {
               <td className="text-right" title={skipped(s, "total_counts")}>
                 {keptRange(s.min_counts, s.max_counts)}
               </td>
-              <td className="text-right" title={skipped(s, "n_genes")}>
+              <td className="text-right" title={skipped(s, "n_genes") ?? genesCutNote(s, mad.genes_floor)}>
                 {keptRange(s.min_genes, s.max_genes)}
+                {s.min_genes_by === "floor" && <span className="text-slate-400"> (floor)</span>}
               </td>
               {hasMt && (
                 <td className="text-right" title={skipped(s, "pct_mt")}>
@@ -120,6 +158,11 @@ export function SampleThresholds({ mad }: { mad: MadThresholds }) {
           ))}
         </tbody>
       </table>
+      {floorLine && (
+        <p className="text-[11px] text-slate-500" data-testid="genes-floor">
+          {floorLine}
+        </p>
+      )}
       {mad.n_unlabelled > 0 && (
         <p className="text-[11px] text-slate-400">
           {mad.n_unlabelled.toLocaleString()} cells without a {mad.column} value are judged against all cells pooled.

@@ -11,7 +11,10 @@ import {
   type IntegrationMethod,
   type IntegrationPlan,
   type DroppedColumn,
+  type UnitFiltering,
 } from "@/api/integration";
+import { CRITERION_LABELS } from "@/components/qc/RemovalAudit";
+import type { FilterCriterion } from "@/api/qc";
 import { formatNumber, prettyObsLabel } from "@/lib/formatting";
 import type { DatasetInfo } from "@/api/types";
 import { JointSummary } from "./JointSummary";
@@ -37,6 +40,26 @@ const STEP_LABELS: Record<string, string> = {
 };
 const stepLabel = (s: string) => STEP_LABELS[s] ?? (s === "merge" ? "Merging" : s);
 
+/** Datasets one joint run takes (backend MAX_INTEGRATE_DATASETS). */
+export const MAX_JOINT_DATASETS = 32;
+/** More datasets than this in the library: the picker scrolls and gets a filter. */
+const PICKER_OPEN_MAX = 8;
+
+/** The joint dataset's default name: the labels, or the first three and how many more
+ *  (backend integration.default_name). */
+export function defaultJointName(labels: string[]): string {
+  if (labels.length < 2) return "";
+  if (labels.length <= 4) return `joint: ${labels.join(" + ")}`;
+  return `joint: ${labels.slice(0, 3).join(" + ")} + ${labels.length - 3} more`;
+}
+
+/** The datasets the picker shows for a filter text (name, case-insensitive), selected ones always. */
+export function pickerRows(all: DatasetInfo[], filter: string, selected: string[]): DatasetInfo[] {
+  const q = filter.trim().toLowerCase();
+  if (!q) return all;
+  return all.filter((d) => selected.includes(d.id) || d.name.toLowerCase().includes(q));
+}
+
 // skipped: not run, as a step it needs failed (backend core/step_failures.py)
 type StepStatus = "pending" | "running" | "done" | "error" | "skipped";
 
@@ -60,11 +83,13 @@ export function JointEmbedding() {
   const setPanel = useViewStore((s) => s.setPanel);
 
   const [all, setAll] = useState<DatasetInfo[]>([]);
+  const [filter, setFilter] = useState("");
   const [listing, setListing] = useState(true);
   const [selected, setSelected] = useState<string[]>(current ? [current.id] : []);
   const [labels, setLabels] = useState<Record<string, string>>({});
   const [name, setName] = useState("");
   const [method, setMethod] = useState<IntegrationMethod>("harmony");
+  const [filterUnits, setFilterUnits] = useState(true);
   const [resolution, setResolution] = useState(0.5);
 
   const [plan, setPlan] = useState<IntegrationPlan | null>(null);
@@ -120,8 +145,12 @@ export function JointEmbedding() {
 
   const toggle = (id: string) =>
     setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
+  const rows = useMemo(() => pickerRows(all, filter, selected), [all, filter, selected]);
+  const many = all.length > PICKER_OPEN_MAX;
+  const addShown = () =>
+    setSelected((s) => [...s, ...rows.map((d) => d.id).filter((id) => !s.includes(id))].slice(0, MAX_JOINT_DATASETS));
 
-  const defaultName = labelList.length >= 2 ? `joint: ${labelList.join(" + ")}` : "";
+  const defaultName = defaultJointName(labelList);
 
   const onEvent = useCallback((e: IntegrationEvent) => {
     if (e.event === "stage" && typeof e.data.dataset_id === "string") setJointId(e.data.dataset_id);
@@ -186,6 +215,7 @@ export function JointEmbedding() {
           labels: labelList,
           name: name.trim() || defaultName,
           method,
+          filter_units: filterUnits,
           params: { clustering_resolution: resolution },
         },
         onEvent,
@@ -236,7 +266,42 @@ export function JointEmbedding() {
 
       {/* Dataset picker */}
       <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <h3 className="mb-2 text-sm font-semibold text-slate-700">Datasets to integrate</h3>
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <h3 className="text-sm font-semibold text-slate-700">Datasets to integrate</h3>
+          {all.length > 0 && (
+            <span className={`text-xs ${selected.length > MAX_JOINT_DATASETS ? "text-red-600" : "text-slate-400"}`} data-testid="joint-picked">
+              {selected.length} of {all.length} selected
+              {selected.length > MAX_JOINT_DATASETS ? ` (at most ${MAX_JOINT_DATASETS} at once)` : ""}
+            </span>
+          )}
+          {many && (
+            <span className="ml-auto flex items-center gap-2">
+              <input
+                aria-label="Filter datasets"
+                value={filter}
+                placeholder="Filter by name"
+                onChange={(e) => setFilter(e.target.value)}
+                className="w-44 rounded border border-slate-300 px-2 py-1 text-xs text-slate-700"
+              />
+              <button
+                type="button"
+                onClick={addShown}
+                disabled={running || rows.length === 0}
+                className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Select shown
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelected([])}
+                disabled={running || selected.length === 0}
+                className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Clear
+              </button>
+            </span>
+          )}
+        </div>
         {listing ? (
           <p className="flex items-center gap-2 text-sm text-slate-400">
             <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading datasets…
@@ -244,8 +309,8 @@ export function JointEmbedding() {
         ) : (
           all.length === 0 && <p className="text-sm text-slate-400">No ready datasets in the library.</p>
         )}
-        <div className="space-y-1.5">
-          {all.map((d) => {
+        <div className={`space-y-1.5 ${many ? "max-h-80 overflow-y-auto pr-1" : ""}`} data-testid="joint-picker">
+          {rows.map((d) => {
             const on = selected.includes(d.id);
             return (
               <div
@@ -262,7 +327,7 @@ export function JointEmbedding() {
                     disabled={running}
                     className="h-4 w-4"
                   />
-                  <span className="truncate text-sm font-medium text-slate-800">{d.name}</span>
+                  <span className="truncate text-sm font-medium text-slate-800" title={d.name}>{d.name}</span>
                   <span className="text-xs text-slate-400">
                     {d.n_cells != null ? `${formatNumber(d.n_cells)} cells` : ""}
                   </span>
@@ -294,7 +359,7 @@ export function JointEmbedding() {
           {planError && <ErrorLine text={planError} />}
           {plan && (
             <div className="space-y-2 text-sm">
-              <ul className="space-y-1">
+              <ul className={`space-y-1 ${plan.datasets.length > PICKER_OPEN_MAX ? "max-h-64 overflow-y-auto pr-1" : ""}`}>
                 {plan.datasets.map((d) => (
                   <li key={d.id} className="flex items-start gap-2">
                     {d.error ? (
@@ -335,6 +400,9 @@ export function JointEmbedding() {
                     </span>
                   ))}
                 </p>
+              )}
+              {plan.filtering && plan.filtering.length > 0 && (
+                <UnitFilteringNote rows={plan.filtering} on={filterUnits} onChange={setFilterUnits} disabled={running} />
               )}
               {plan.dropped_columns && plan.dropped_columns.length > 0 && (
                 <DroppedColumns columns={plan.dropped_columns} nDatasets={plan.datasets.length} />
@@ -526,6 +594,64 @@ export function DroppedColumns({ columns, nDatasets }: { columns: DroppedColumn[
       <summary className="cursor-pointer">{what} (show which and why)</summary>
       <div className="mt-1">{lines}</div>
     </details>
+  );
+}
+
+/** One dataset's line: what the joint run's filtering does to it. */
+export function unitFilteringText(r: UnitFiltering): string {
+  if (r.filtered_before) return `${r.label}: filtered by scView before, left as it is`;
+  if (r.note) return `${r.label}: ${r.note}`;
+  if (!r.n_removed) return `${r.label}: removes no cells`;
+  const share = r.n_cells ? ` (${((100 * r.n_removed) / r.n_cells).toFixed(1)}%)` : "";
+  const main = Object.entries(r.by_criterion).sort((a, b) => b[1] - a[1])[0];
+  const by = main ? `, mostly ${CRITERION_LABELS[main[0] as FilterCriterion] ?? main[0]}` : "";
+  return `${r.label}: removes ${r.n_removed.toLocaleString()} of ${r.n_cells.toLocaleString()} cells${share}${by}`;
+}
+
+/** The joint run's filtering of datasets scView never filtered: on by default, per dataset what it removes. */
+export function UnitFilteringNote({
+  rows,
+  on,
+  onChange,
+  disabled,
+}: {
+  rows: UnitFiltering[];
+  on: boolean;
+  onChange: (on: boolean) => void;
+  disabled?: boolean;
+}) {
+  const todo = rows.filter((r) => !r.filtered_before && !r.note);
+  const removed = todo.reduce((n, r) => n + r.n_removed, 0);
+  const floor = todo.find((r) => r.genes_floor)?.genes_floor;
+  return (
+    <div className="rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-600" data-testid="unit-filtering">
+      <label className="flex items-center gap-2 font-medium text-slate-700">
+        <input
+          type="checkbox"
+          checked={on}
+          onChange={(e) => onChange(e.target.checked)}
+          disabled={disabled || todo.length === 0}
+          className="h-3.5 w-3.5"
+        />
+        Filter the datasets scView has not filtered
+      </label>
+      <p className="mt-0.5 text-slate-500">
+        {todo.length === 0
+          ? "Every dataset was filtered by scView before, so none is filtered again."
+          : `Each with the QC a single run would use (per-sample MAD outliers${floor ? `, at least ${floor} genes per cell` : ""}), ` +
+            `before merging: near-empty cells would otherwise make clusters of their own. ` +
+            (on
+              ? `${removed.toLocaleString()} cells are removed in all.`
+              : "Off: every cell of every dataset joins.")}
+      </p>
+      <ul className={`mt-1 space-y-0.5 ${rows.length > PICKER_OPEN_MAX ? "max-h-40 overflow-y-auto pr-1" : ""}`}>
+        {rows.map((r) => (
+          <li key={r.label} className={!on && !r.filtered_before ? "text-slate-400" : undefined}>
+            {unitFilteringText(r)}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
