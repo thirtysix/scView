@@ -1132,9 +1132,10 @@ def spatial_genes(adata, names, genes):
     return idx[idx >= 0]
 
 
-def spatial_moran(adata, M, names, genes, library_id, grid, n_neighs=N_NEIGHS):
+def spatial_moran(adata, M, names, genes, library_id, grid, n_neighs=N_NEIGHS, centre="global"):
     """Moran's I per gene on the spots (one section's, or all), as squidpy's
-    uns["moranI"]: genes as the index, I, pval_norm, var_norm, pval_norm_fdr_bh."""
+    uns["moranI"]: genes as the index, I, pval_norm, var_norm, pval_norm_fdr_bh.
+    ``centre="section"``: several sections pooled, each centred on its own mean."""
     libs = (adata.obs["library_id"].astype(str).to_numpy() if "library_id" in adata.obs.columns
             else np.full(adata.n_obs, ""))
     rows = np.flatnonzero(libs == str(library_id)) if library_id else np.arange(adata.n_obs)
@@ -1142,7 +1143,13 @@ def spatial_moran(adata, M, names, genes, library_id, grid, n_neighs=N_NEIGHS):
     M = M[rows][:, idx]
     W = spatial_weights(np.asarray(adata.obsm["spatial"])[rows, :2], libs[rows], grid, n_neighs)
     order = spatial_order(np.asarray(adata.obsm["spatial"])[rows, :2], libs[rows])
-    table, _ = morans_i(W, M, np.asarray([str(n) for n in names])[idx], order)
+    gene_names = np.asarray([str(n) for n in names])[idx]
+    sections = [str(x) for x in pd.unique(libs[rows])]
+    if centre == "section" and len(sections) > 1:
+        codes = pd.Index(sections).get_indexer(libs[rows])
+        table, _, _ = morans_i_sections(W, M, gene_names, codes, sections, order)
+    else:
+        table, _ = morans_i(W, M, gene_names, order)
     return pd.DataFrame({"I": table["I"].to_numpy(), "pval_norm": table["pval"].to_numpy(),
                          "var_norm": table["var_I"].to_numpy(),
                          "pval_norm_fdr_bh": table["pval_adj"].to_numpy()},
@@ -3884,14 +3891,17 @@ def _spatial_autocorr(p: dict, ctx: _Ctx) -> Snippet:
     _need(ctx, "spatial_autocorr")
     gene_lines = ([f"SPATIAL_GENES = {_lit(genes)}"] if isinstance(genes, str)
                   else ["SPATIAL_GENES = [", *_packed([repr(str(g)) for g in genes]), "]"])
+    centre = "section" if p.get("centring") == "section" else "global"  # older records: one mean
     return Snippet(EXACT, [
         f"# Spatially variable genes: Moran's I per gene ({'capture grid' if kind == 'grid' else 'kNN'} "
         f"neighbours, {p.get('n_neighs', 6)} each, within each section), = squidpy 1.6's",
-        "# spatial_neighbors + spatial_autocorr defaults; saved where squidpy saves it.",
+        "# spatial_neighbors + spatial_autocorr defaults; saved where squidpy saves it."
+        + (" Sections pooled, each centred on its own mean." if centre == "section" else ""),
         *values,
         *gene_lines,
         f"adata.uns[\"moranI\"] = spatial_moran(adata, M, names, SPATIAL_GENES, "
-        f"{_lit(p.get('library_id'))}, grid={_lit(kind == 'grid')}, n_neighs={_lit(p.get('n_neighs', 6))})",
+        f"{_lit(p.get('library_id'))}, grid={_lit(kind == 'grid')}, n_neighs={_lit(p.get('n_neighs', 6))}"
+        + (", centre=\"section\")" if centre == "section" else ")"),
     ])
 
 
