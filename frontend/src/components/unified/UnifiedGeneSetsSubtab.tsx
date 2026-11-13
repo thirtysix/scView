@@ -5,6 +5,8 @@ import { useCustomGeneSetsStore } from "@/stores/customGeneSetsStore";
 import { apiFetch } from "@/api/client";
 import type { CollectionChoice } from "@/api/genesets";
 import { scoreGeneSet, type ScoreMethod } from "@/api/genesetScore";
+import { listSavedScores } from "@/api/savedScores";
+import { savedGeneSetMatches } from "@/lib/savedScores";
 import type { OnScoreGeneSet } from "@/hooks/useGeneSetScoring";
 import { useScoringMethodStore } from "@/stores/scoringMethodStore";
 import { Caption } from "@/components/common/Caption";
@@ -47,6 +49,20 @@ interface ScoreSummary {
   shareBelow: number | null;
   note: string | null;
   panelCaution?: string | null;
+  /** The obs column the score was saved as (lib/savedScores.ts), or why it was not */
+  saved?: string | null;
+  saveNote?: string | null;
+}
+
+/** A score drawn before: its summary, values and the genes it found (for the saved check). */
+type CachedScore = ScoreSummary & { scores: Float32Array; genesFound: string[] };
+
+/** The summary line's part of a cached score. */
+function summaryOf(c: CachedScore): ScoreSummary {
+  const s: Partial<CachedScore> = { ...c };
+  delete s.scores;
+  delete s.genesFound;
+  return s as ScoreSummary;
 }
 
 interface UnifiedGeneSetsSubtabProps {
@@ -137,27 +153,58 @@ export function UnifiedGeneSetsSubtab({
   // Cache of already-computed scores, so re-selecting a previously-scored gene
   // set restores its overlay instantly instead of forcing a re-score. Keyed by
   // dataset id + gene-set name (scores are per-dataset).
-  const scoreCache = useRef<Map<string, ScoreSummary & { scores: Float32Array }>>(new Map());
+  const scoreCache = useRef<Map<string, CachedScore>>(new Map());
+  // The selection now (cache key): a save that ends after another pick must not touch its line.
+  const selectedKey = useRef<string | null>(null);
   // The collection is part of the key: a custom set may share an MSigDB set's name;
   // and the method: each set can be on the plot either way.
   const cacheKey = (gs: GeneSetSearchResult, m: ScoreMethod) => `${datasetId}::${m}::${gs.collection}::${gs.name}`;
+
+  // A cached score drawn again is saved again when the dataset's column holds another
+  // method's or genes' score of the set (one column per set): what is drawn is what is saved.
+  const resaveIfDiffers = useCallback(
+    async (gs: GeneSetSearchResult, key: string) => {
+      const cached = scoreCache.current.get(key);
+      if (!datasetId || !cached) return;
+      let saved;
+      try {
+        saved = await listSavedScores(datasetId);
+      } catch {
+        return; // the record is unknown: leave the column as it is
+      }
+      if (savedGeneSetMatches(saved, gs.name, cached.method, cached.genesFound)) return;
+      try {
+        const res = await scoreGeneSet(datasetId, gs.genes, gs.name, cached.method, true);
+        const next = { ...cached, saved: res.saved_column ?? null, saveNote: res.save_note ?? null };
+        scoreCache.current.set(key, next);
+        if (selectedKey.current === key) setScoreResult(summaryOf(next));
+      } catch (err) {
+        if (selectedKey.current === key) {
+          setScoreResult((r) => (r ? { ...r, saved: null, saveNote: `Not saved: ${errorMessage(err)}` } : r));
+        }
+      }
+    },
+    [datasetId],
+  );
 
   // Select a gene set from the list — re-apply a cached score if we have one.
   const handleSelectGeneSet = useCallback(
     (gs: GeneSetSearchResult) => {
       setSelectedGeneSet(gs);
       setScoreError(null);
-      const cached = scoreCache.current.get(cacheKey(gs, method));
+      const key = cacheKey(gs, method);
+      selectedKey.current = key;
+      const cached = scoreCache.current.get(key);
       if (cached) {
-        const { scores, ...summary } = cached;
-        setScoreResult(summary);
-        onScoreComplete(scores, gs.name, gs.genes, undefined, cached.method);
+        setScoreResult(summaryOf(cached));
+        onScoreComplete(cached.scores, gs.name, gs.genes, undefined, cached.method);
+        void resaveIfDiffers(gs, key);
       } else {
         setScoreResult(null);
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [datasetId, onScoreComplete, method],
+    [datasetId, onScoreComplete, method, resaveIfDiffers],
   );
 
   // Score gene set using correct API fields
@@ -178,8 +225,12 @@ export function UnifiedGeneSetsSubtab({
         shareBelow: response.share_below_max_rank,
         note: response.note ?? null,
         panelCaution: response.panel_caution ?? null,
+        saved: response.saved_column ?? null,
+        saveNote: response.save_note ?? null,
       };
-      scoreCache.current.set(cacheKey(selectedGeneSet, method), { ...summary, scores });
+      const key = cacheKey(selectedGeneSet, method);
+      selectedKey.current = key;
+      scoreCache.current.set(key, { ...summary, scores, genesFound: response.genes_found });
       setScoreResult(summary);
       onScoreComplete(scores, selectedGeneSet.name, selectedGeneSet.genes, undefined, response.method);
     } catch (err) {
@@ -329,6 +380,16 @@ export function UnifiedGeneSetsSubtab({
               </span>
             )}
           </div>
+          {scoreResult?.saved && (
+            <p className="mt-1 text-[10px] leading-snug text-slate-500" data-testid="score-saved">
+              Saved as column {scoreResult.saved}: Compare and Color offer it.
+            </p>
+          )}
+          {scoreResult?.saveNote && (
+            <p className="mt-1 text-[10px] leading-snug text-amber-600" data-testid="score-saved">
+              {scoreResult.saveNote}
+            </p>
+          )}
           {scoreResult?.panelCaution && (
             <Caption className="mt-1" testId="panel-caution">{scoreResult.panelCaution}</Caption>
           )}

@@ -62,6 +62,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import math
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -551,7 +552,9 @@ def counts_matrix(adata):
     if ORIGINAL_LAYER in adata.layers and looks_like_counts(adata.layers[ORIGINAL_LAYER]):
         return adata.layers[ORIGINAL_LAYER], f"layers['{ORIGINAL_LAYER}']"
     try:
-        return find_counts(adata)
+        # read only: every caller here only reads, and a copy of .raw cut to X's genes cost
+        # +1.8 GB on a 39k-nuclei kidney file, four times at once when Data Assessment opened
+        return find_counts(adata, read_only=True)
     except ValueError:
         raise AmbientError("Ambient RNA needs raw counts (layers['counts'], .raw or X), and this "
                            "dataset has none.") from None
@@ -796,22 +799,32 @@ def correction_record(adata) -> dict | None:
     return {}
 
 
+def _not_applicable(note: str, reason: str) -> dict:
+    """The card's answer when the estimate cannot apply (``reason``: targeted_panel |
+    no_counts): a note, not an error."""
+    return {"available": False, "approximate": False, "column": None, "counts_from": None, "samples": [],
+            "markers": {"column": None, "approximate": False, "groups": {}, "n_flagged": 0},
+            "hb_note": None, "notes": [note], "not_applicable": True, "reason": reason,
+            "correction": None, "help": HELP, "method": "", "url": SOUPX_URL}
+
+
 def diagnose(adata, column: str | None = None) -> dict:
     """The Ambient RNA card's answer: per sample its soup (top genes), rho and notes; the
     ambient-looking markers per group of ``column`` (default: the active clustering);
-    whether the counts were corrected."""
+    whether the counts were corrected. Without counts (or on a targeted panel) a
+    ``not_applicable`` answer with the reason as a note."""
     from scview.core import cluster_qc, spatial, targeted_panel
     from scview.core.species import detect_species
 
     if spatial.targeted_panel(adata):
-        return {"available": False, "approximate": False, "column": None, "counts_from": None, "samples": [],
-                "markers": {"column": None, "approximate": False, "groups": {}, "n_flagged": 0},
-                "hb_note": None, "notes": [f"{targeted_panel.AMBIENT_SKIP}."], "not_applicable": True,
-                "correction": None, "help": HELP, "method": "", "url": SOUPX_URL}
+        return _not_applicable(f"{targeted_panel.AMBIENT_SKIP}.", "targeted_panel")
     if column and column not in adata.obs.columns:
         raise AmbientError(f"Column '{column}' not found.")
     column = column or cluster_qc.default_grouping(adata)
-    counts, where = counts_matrix(adata)
+    try:
+        counts, where = counts_matrix(adata)
+    except AmbientError as e:
+        return _not_applicable(str(e), "no_counts")
     found, fits, notes = fit_samples(adata, column, counts)
     names = adata.var_names.astype(str)
     rows = []
@@ -879,13 +892,23 @@ def _cache_key(adata, column: str | None) -> tuple:
             id(adata.X), ORIGINAL_LAYER in adata.layers)
 
 
+# One diagnosis at a time: Data Assessment asks for it from the ambient card, cluster QC, the
+# QC report and the co-pilot's insight at once, and each first call made its own (the
+# 39k-nuclei kidney file went past 6 GB that way). Later callers wait and read the cache.
+_DIAGNOSE_LOCK = threading.Lock()
+
+
 def diagnose_cached(adata, column: str | None = None) -> dict:
     """``diagnose``, answered again from memory while nothing it reads has changed."""
-    key = _cache_key(adata, column)
-    hit = _CACHE.get(adata, key)
-    if hit is None:
-        hit = diagnose(adata, column)
-        _CACHE.put(adata, hit, key)
+    hit = _CACHE.get(adata, _cache_key(adata, column))
+    if hit is not None:
+        return hit
+    with _DIAGNOSE_LOCK:
+        key = _cache_key(adata, column)
+        hit = _CACHE.get(adata, key)
+        if hit is None:
+            hit = diagnose(adata, column)
+            _CACHE.put(adata, hit, key)
     return hit
 
 

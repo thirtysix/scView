@@ -66,8 +66,9 @@ SCRUBLET_CALL = "predicted_doublet"
 SCRUBLET_SCORE = "doublet_score"
 CLASSIFIER_CALL = "predicted_doublet_classifier"  # core/doublets.py run_classifier
 CLASSIFIER_SCORE = "doublet_score_classifier"
-# Doublet calls stored as text by other tools (scDblFinder, demuxlet, DoubletFinder).
-TEXT_COLUMNS = ("scDblFinder.class", "scDblFinder_class", "multiplets", "doublet_class")
+# Doublet calls stored as text by other tools (scDblFinder, demuxlet, DoubletFinder; doublet_id
+# Singlet/Doublet in CELLxGENE files from Seurat pipelines).
+TEXT_COLUMNS = ("scDblFinder.class", "scDblFinder_class", "multiplets", "doublet_class", "doublet_id")
 TEXT_PREFIX = "DF.classification"
 CLASSIFIER_LABEL = "the doublet classifier"
 LABELS = {HASHING: "cell hashing", SCRUBLET: "Scrublet", CLASSIFIER: CLASSIFIER_LABEL,

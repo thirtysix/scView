@@ -18,21 +18,11 @@ import {
 } from "@/api/results";
 import { formatBytes } from "@/lib/formatting";
 import { useObsRevisionStore } from "@/stores/obsRevisionStore";
+import { errorMessage } from "@/lib/errorMessage";
 
 function fmtTime(iso: string): string {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
-}
-
-function errorText(e: unknown): string {
-  const msg = e instanceof Error ? e.message : String(e);
-  const body = msg.match(/^API error \d+: (.*)$/s)?.[1];
-  if (body === undefined) return msg;
-  try {
-    return String(JSON.parse(body).detail ?? body);
-  } catch {
-    return body;
-  }
 }
 
 /** The obs column a stored markers / enrichment result is about. */
@@ -63,7 +53,7 @@ export function ResultsList({ datasetId }: { datasetId: string }) {
         setData(d);
         setError(null);
       })
-      .catch((e) => setError(errorText(e)));
+      .catch((e) => setError(errorMessage(e)));
   }, [datasetId]);
 
   useEffect(() => {
@@ -85,7 +75,7 @@ export function ResultsList({ datasetId }: { datasetId: string }) {
       after?.();
       load();
     } catch (e) {
-      setRowError({ id: r.id, text: errorText(e) });
+      setRowError({ id: r.id, text: errorMessage(e) });
     } finally {
       setBusy(null);
     }
@@ -103,7 +93,7 @@ export function ResultsList({ datasetId }: { datasetId: string }) {
       setCompare({ id: r.id, data });
     } catch (e) {
       setCompare(null);
-      setRowError({ id: r.id, text: errorText(e) });
+      setRowError({ id: r.id, text: errorMessage(e) });
     }
   };
 
@@ -202,6 +192,11 @@ export function ResultsList({ datasetId }: { datasetId: string }) {
                       <div className="mt-0.5 text-slate-500">
                         {fmtTime(r.created_at)} · scView {r.version} · {formatBytes(r.bytes)}
                       </div>
+                      {r.stale && r.stale_reason && (
+                        <div className="mt-0.5 text-amber-800" data-testid="stale-reason">
+                          Earlier data: {r.stale_reason}.
+                        </div>
+                      )}
                     </div>
                     <div className="flex shrink-0 items-center gap-0.5">
                       {RESTORABLE_KINDS.has(r.kind) && (

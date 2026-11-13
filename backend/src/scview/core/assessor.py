@@ -91,6 +91,19 @@ def _seurat_qc_columns(obs_cols: set[str]) -> list[str]:
     return sorted(c for c in obs_cols if _SEURAT_QC.match(str(c)))
 
 
+# % or fraction mitochondrial under the names tools give it: scanpy pct_counts_mt, Seurat
+# percent.mt, CELLxGENE mitochondrial_percent, scater subsets_Mito_percent, mito_frac ...
+_MITO_COLUMN = re.compile(
+    r"^(?:(?:pct|percent|perc|frac|fraction|ratio|prop)(?:[._]counts)?[._]?(?:mt|mito|mitochondrial)"
+    r"|(?:subsets[._])?(?:mt|mito|mitochondrial)[._]?(?:pct|percent|perc|frac|fraction|ratio|prop))$",
+    re.IGNORECASE)
+
+
+def mito_columns(obs_cols) -> list[str]:
+    """The obs columns that hold a per-cell % (or fraction) mitochondrial, sorted."""
+    return sorted(str(c) for c in obs_cols if _MITO_COLUMN.match(str(c)))
+
+
 def _check_qc_metrics(adata: Any) -> StepStatus:
     """Check if QC metrics (n_genes_by_counts, total_counts, etc.) are present."""
     try:
@@ -99,7 +112,10 @@ def _check_qc_metrics(adata: Any) -> StepStatus:
         found = qc_columns & obs_cols
 
         # Also check for mitochondrial percentage columns
-        mt_cols = [c for c in obs_cols if "pct_counts_mt" in c.lower() or "percent_mt" in c.lower()]
+        mt_cols = mito_columns(obs_cols)
+        seurat = _seurat_qc_columns(obs_cols)
+        if not found and seurat:
+            mt_cols = []  # Seurat's percent.mt: named below, and the step still runs
 
         if found and mt_cols:
             return StepStatus(
@@ -119,7 +135,6 @@ def _check_qc_metrics(adata: Any) -> StepStatus:
                 confidence="medium",
                 details=f"Found MT% columns only: {', '.join(mt_cols)}",
             )
-        seurat = _seurat_qc_columns(obs_cols)
         if seurat:
             # Not done: other steps read scanpy's own columns, so the QC metrics step still runs.
             return StepStatus(
@@ -160,6 +175,17 @@ def _check_doublet_detection(adata: Any) -> StepStatus:
                 detail += (f"; cell hashing calls {int(hashing.sum())} doublets, the doublet views' "
                            "primary call (Scrublet is the second opinion)")
             return StepStatus(done=True, confidence="high", details=detail)
+        from scview.core import doublet_source
+
+        text = doublet_source.text_call(adata.obs)
+        if text is not None:
+            col, calls = text
+            return StepStatus(
+                done=True, confidence="medium",
+                details=(f"Found doublet calls from another tool in '{col}' ({int(calls.sum()):,} of "
+                         f"{len(calls):,} cells called doublets"
+                         + (": doublets were likely removed before export)" if not calls.any() else ")")),
+            )
         from scview.core import spatial
 
         if reason := spatial.doublet_skip(adata):
@@ -657,6 +683,11 @@ def _check_pca(adata: Any) -> StepStatus:
         return StepStatus(done=False, confidence="low", details=f"Check failed: {exc}")
 
 
+# Batch-corrected spaces under the names other tools give them (Seurat's Harmony reduction
+# in a CELLxGENE file is X_harmony; scvi-tools writes X_scVI).
+_AUTHOR_CORRECTED_KEYS = ("X_harmony", "X_scVI", "X_scvi", "X_scANVI", "X_scanvi")
+
+
 def _check_batch_correction(adata: Any) -> StepStatus:
     """Check for batch-corrected PCs (Harmony X_pca_harmony, Scanorama X_scanorama) in
     obsm, or a BBKNN neighbour graph."""
@@ -670,6 +701,14 @@ def _check_batch_correction(adata: Any) -> StepStatus:
                     done=True,
                     confidence="high",
                     details=f"Found {key} with {n_dims} dimensions",
+                )
+        for key in _AUTHOR_CORRECTED_KEYS:
+            if key in adata.obsm:
+                return StepStatus(
+                    done=True, confidence="medium",
+                    details=(f"Found {key} with {adata.obsm[key].shape[1]} dimensions, batch-corrected "
+                             "PCs from the file's own analysis (scView's own correction writes "
+                             "X_pca_harmony)"),
                 )
         if batch_methods.is_bbknn_graph(adata):
             return StepStatus(done=True, confidence="high",
@@ -861,6 +900,17 @@ def _check_enrichment(adata: Any) -> StepStatus:
         return StepStatus(done=False, confidence="low", details=f"Check failed: {exc}")
 
 
+# Cell-cycle scores and phases under other tools' names: Seurat (S.Score, G2M.Score, Phase),
+# CELLxGENE (cell_cycle_s_score, cell_cycle_g2m_score, cell_cycle_phase), lower-case scanpy.
+_CELL_CYCLE_COLUMN = re.compile(
+    r"^(?:cell[._]?cycle[._])?(?:s[._]?score|g2m[._]?score|phase)$", re.IGNORECASE)
+
+
+def cell_cycle_columns(obs_cols) -> list[str]:
+    """The obs columns that hold cell-cycle scores or a phase call, sorted."""
+    return sorted(str(c) for c in obs_cols if _CELL_CYCLE_COLUMN.match(str(c)))
+
+
 def _check_cell_cycle(adata: Any) -> StepStatus:
     """Check for S_score and G2M_score in obs."""
     try:
@@ -868,6 +918,15 @@ def _check_cell_cycle(adata: Any) -> StepStatus:
         has_s = "S_score" in obs_cols
         has_g2m = "G2M_score" in obs_cols
         has_phase = "phase" in obs_cols
+        other = [c for c in cell_cycle_columns(obs_cols) if c not in ("S_score", "G2M_score", "phase")]
+        if other and not (has_s and has_g2m):
+            # Not done: the regress-out and replay read scanpy's S_score / G2M_score, which the step adds.
+            # Cluster QC's cycling check reads these scores already (core/cell_cycle.py).
+            return StepStatus(
+                done=False, confidence="high",
+                details=(f"Found cell-cycle columns from the file's own analysis: {', '.join(other)}. "
+                         "The cell cycle step adds S_score and G2M_score, which regress-out reads"),
+            )
 
         if has_s and has_g2m:
             extra = " with phase assignments" if has_phase else ""

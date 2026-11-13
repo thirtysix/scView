@@ -171,6 +171,8 @@ def test_on_demand_markers_endpoint(runner, name):
     b = a.copy()
     b.obs["sub"] = b.obs["sub"].astype("category")
     sc.tl.rank_genes_groups(b, "sub", method="wilcoxon", pts=True)
+    assert got["params"]["matrix"] == "log-normalised .raw"  # recorded (core/marker_matrix.py)
+    b.uns["rank_genes_groups"]["params"]["matrix"] = got["params"]["matrix"]
     _same_entry(b.uns["rank_genes_groups"], got)
 
 
@@ -180,6 +182,7 @@ def test_on_demand_markers_follow_the_log_base():
     got = markers_api._compute_markers(a, col)
     b = a.copy()
     sc.tl.rank_genes_groups(b, col, method="wilcoxon", pts=True)  # the pipeline's own
+    b.uns["rank_genes_groups"]["params"]["matrix"] = got["params"]["matrix"]  # recorded by ours
     _same_entry(b.uns["rank_genes_groups"], got)
 
 

@@ -48,6 +48,7 @@ RECORDED_STEPS: tuple[str, ...] = (
     "keep_layout",
     "label_cells",
     "undo_label_cells",
+    "combine_columns",
     "doublet_threshold",
     "mito_refilter",
     "qc_state_label",
@@ -84,6 +85,8 @@ RECORDED_STEPS: tuple[str, ...] = (
     "bulk_deconvolution",
     "learned_gate_train",
     "learned_gate_apply",
+    "save_score",
+    "remove_score",
     # Spatial
     "spatial_autocorr",
     "spot_deconvolution",

@@ -24,7 +24,7 @@ import { OffTargetPanel } from "@/components/unified/OffTargetPanel";
 import { ProteinNetwork } from "@/components/unified/ProteinNetwork";
 import { formatFoldChange, formatPValue } from "@/lib/formatting";
 import { downloadCsv } from "@/lib/csv";
-import { errorMessage } from "@/lib/errorMessage";
+import { errorMessage, errorStatus } from "@/lib/errorMessage";
 import {
   MARKER_CSV_HEADERS,
   SPECIFICITY_HELP,
@@ -162,8 +162,7 @@ export function UnifiedMarkersSubtab({
       })
       .catch((err) => {
         if (cancelled) return;
-        const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes("404")) setNoMarkers(NO_MARKERS_REASON);
+        if (errorStatus(err) === 404) setNoMarkers(NO_MARKERS_REASON);
         else setError(errorMessage(err));
         setIsLoading(false);
       });

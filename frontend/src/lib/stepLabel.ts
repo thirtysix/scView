@@ -43,6 +43,7 @@ export const STEP_LABELS: Record<string, string> = {
   keep_layout: "UMAP layout kept",
   label_cells: "Cells labelled",
   undo_label_cells: "Cell labels undone",
+  combine_columns: "Columns combined",
   doublet_threshold: "Doublet threshold set",
   mito_refilter: "Re-filtered by % mito per cell type",
   qc_state_label: "QC states labelled",
@@ -79,6 +80,8 @@ export const STEP_LABELS: Record<string, string> = {
   bulk_deconvolution: "Bulk deconvolution",
   learned_gate_train: "Learned gate trained",
   learned_gate_apply: "Learned gate applied",
+  save_score: "Score saved as a column",
+  remove_score: "Saved score removed",
   // Spatial
   spatial_autocorr: "Spatially variable genes (Moran's I)",
   spot_deconvolution: "Spot composition (cell types per spot)",

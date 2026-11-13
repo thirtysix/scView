@@ -63,15 +63,26 @@ describe("UnifiedGeneSetsSubtab scoring method", () => {
     score_name: "SET_0", n_cells: 3, scores: method === "aucell" ? [0.1, 0.2, 0.3] : [1, 2, 3],
     min_score: 0, max_score: 1, genes_found: ["A"], genes_missing: [], method,
     max_rank: method === "aucell" ? 703 : null, source: "log-normalised .raw", genes_undetected: [],
-    share_below_max_rank: method === "aucell" ? 0.64 : null,
+    share_below_max_rank: method === "aucell" ? 0.64 : null, saved_column: "score_SET_0", save_note: null,
   });
+  // The dataset's saved-score record, as the server keeps it: the last saving method wins.
+  let savedMethod: string | null = null;
   function respondScoring() {
+    savedMethod = null;
     client.apiFetch.mockImplementation((url: string, init?: { body?: string }) => {
       if (url.includes("/genesets/collections")) {
         return Promise.resolve({ dataset_id: "ds1", collections: [{ id: "c2", name: "C2", category: "MSigDB", n_sets: 1, available: true }] });
       }
       if (url.includes("/genesets/search")) return Promise.resolve({ results: sets(1) });
-      if (url.endsWith("/genesets/score")) return Promise.resolve(scored(JSON.parse(init!.body!).method));
+      if (url.endsWith("/genesets/score")) {
+        const body = JSON.parse(init!.body!);
+        if (body.save) savedMethod = body.method;
+        return Promise.resolve(scored(body.method));
+      }
+      if (url.endsWith("/ds1/scores")) {
+        return Promise.resolve({ scores: savedMethod ? {
+          score_SET_0: { kind: "geneset", name: "SET_0", method: savedMethod, genes: ["A"] } } : {} });
+      }
       return Promise.reject(new Error(`unexpected ${url}`));
     });
   }
@@ -85,7 +96,9 @@ describe("UnifiedGeneSetsSubtab scoring method", () => {
     fireEvent.change(screen.getByRole("combobox", { name: "Gene-set scoring method" }), { target: { value: "aucell" } });
     fireEvent.click(screen.getByRole("button", { name: "Score" }));
     await waitFor(() => expect(onScore).toHaveBeenCalledTimes(1));
-    expect(JSON.parse(scoreCalls()[0]![1].body)).toEqual({ gene_set: ["A"], score_name: "SET_0", method: "aucell" });
+    expect(JSON.parse(scoreCalls()[0]![1].body)).toEqual({ gene_set: ["A"], score_name: "SET_0", method: "aucell", save: true });
+    // Saved as a column, and it says so.
+    expect(screen.getByTestId("score-saved")).toHaveTextContent("Saved as column score_SET_0: Compare and Color offer it.");
     expect(onScore.mock.calls[0]!.slice(1)).toEqual(["SET_0", ["A"], undefined, "aucell"]);
     expect(screen.getByTestId("aucell-note")).toHaveTextContent(
       "AUCell over each cell's top 703 genes (5% of those detected); 64% of cells detect fewer",
@@ -99,11 +112,39 @@ describe("UnifiedGeneSetsSubtab scoring method", () => {
     expect(Array.from(onScore.mock.calls[1]![0] as Float32Array)).toEqual([1, 2, 3]);
     expect(screen.queryByTestId("aucell-note")).toBeNull();
 
-    // Re-selecting the set shows the cached score for the current method, without a request.
+    // Re-selecting the set shows the cached score for the current method; the saved column
+    // already holds it (score_genes was saved last), so nothing is scored or saved.
     fireEvent.click(screen.getAllByText("SET_0")[0]!); // the list row, not the heading
     expect(onScore).toHaveBeenCalledTimes(3);
     expect(onScore.mock.calls[2]![4]).toBe("score_genes");
+    await waitFor(() =>
+      expect(client.apiFetch.mock.calls.some(([u]) => String(u).endsWith("/ds1/scores"))).toBe(true));
     expect(scoreCalls()).toHaveLength(2);
+  });
+
+  it("saves a cached score again when the column holds another method's score of the set", async () => {
+    respondScoring();
+    const onScore = vi.fn();
+    render(<UnifiedGeneSetsSubtab onScoreComplete={onScore} groupByColumn="" setGroupByColumn={vi.fn()} />);
+    fireEvent.click(await screen.findByText("SET_0"));
+    const method = () => screen.getByRole("combobox", { name: "Gene-set scoring method" });
+    fireEvent.change(method(), { target: { value: "aucell" } });
+    fireEvent.click(screen.getByRole("button", { name: "Score" }));
+    await waitFor(() => expect(onScore).toHaveBeenCalledTimes(1));
+    fireEvent.change(method(), { target: { value: "score_genes" } });
+    fireEvent.click(screen.getByRole("button", { name: "Score" }));
+    await waitFor(() => expect(onScore).toHaveBeenCalledTimes(2));
+    expect(savedMethod).toBe("score_genes");
+    // Back to AUCell and re-pick the set: the plot shows the cached AUCell score, and the
+    // column (score_genes) is saved again with AUCell so the two agree.
+    fireEvent.change(method(), { target: { value: "aucell" } });
+    fireEvent.click(screen.getAllByText("SET_0")[0]!);
+    expect(onScore.mock.calls[2]![4]).toBe("aucell");
+    await waitFor(() => expect(scoreCalls()).toHaveLength(3));
+    expect(JSON.parse(scoreCalls()[2]![1].body)).toMatchObject({ method: "aucell", save: true });
+    expect(savedMethod).toBe("aucell");
+    expect(onScore).toHaveBeenCalledTimes(3); // saved, not drawn again
+    expect(screen.getByTestId("score-saved")).toHaveTextContent("Saved as column score_SET_0");
   });
 
   it("shows how GSVA scored, and why a score was refused", async () => {

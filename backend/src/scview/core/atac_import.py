@@ -232,7 +232,7 @@ class UnitPeaks:
     genome: str | None
     genome_assumed: bool = False
     note: str | None = None
-    genome_note: str | None = None  # why genome-dependent steps are off (hg19)
+    genome_note: str | None = None  # why genome-dependent steps are off (hg19, mm9)
 
 
 def infer_genome(gene_ids) -> str | None:
@@ -459,16 +459,19 @@ def plan_unit(unit: IngestUnit, workdir: str | Path | None = None) -> UnitPeaks 
 
 
 def check_build(plan: UnitPeaks | None) -> UnitPeaks | None:
-    """hg19 input recorded as ``hg19`` (``core/genome_build.py``): a file that names hg19 /
-    GRCh37, or, when the genome was only assumed (GRCh38 from Ensembl ids, or none), peaks past
-    GRCh38's chromosome ends. Genome-dependent steps then refuse it; the rest works."""
+    """hg19 / mm9 input recorded as ``hg19`` / ``mm9`` (``core/genome_build.py``): a file that
+    names the older build, or, when the genome was only assumed (GRCh38 or mm10 from Ensembl ids,
+    or none), peaks past the newer build's chromosome ends. Genome-dependent steps then refuse
+    it; the rest works."""
     if plan is None or plan.rows is None:
         return plan
-    hg19 = genome_build.names_hg19(plan.genome)
-    if not hg19 and (plan.genome is None or (plan.genome_assumed and plan.genome == "GRCh38")):
-        hg19 = genome_build.from_intervals(parse_interval(s) for s in plan.intervals) == genome_build.HG19
-    if hg19:
-        plan.genome, plan.genome_assumed, plan.genome_note = genome_build.HG19, False, genome_build.HG19_REFUSAL
+    old = genome_build.old_build(plan.genome)
+    if not old and (plan.genome is None or (plan.genome_assumed and plan.genome in ("GRCh38", "mm10"))):
+        found = genome_build.from_intervals(parse_interval(s) for s in plan.intervals)
+        if found and plan.genome in (None, genome_build.NEWER[found]):
+            old = found
+    if old:
+        plan.genome, plan.genome_assumed, plan.genome_note = old, False, genome_build.REFUSALS[old]
     return plan
 
 

@@ -59,6 +59,7 @@ def _adata(style: str = "human") -> ad.AnnData:
     a.var_names = genes
     a.obs_names = [f"C{i}" for i in range(90)]
     a.obs["cell_type"] = pd.Categorical(["T"] * 30 + ["B"] * 30 + ["NK"] * 30)
+    sc.pp.log1p(a)  # markers ranked on counts are stale (core/marker_matrix.py)
     sc.tl.rank_genes_groups(a, "cell_type", method="wilcoxon", key_added=markers_key("cell_type"))
     return a
 

@@ -1,4 +1,5 @@
 import type { GeneProgram, ProgramsByGroup, ProgramsKStats } from "@/api/programs";
+import { errorMessage } from "@/lib/errorMessage";
 
 /** "P3 (ISG15, IFI6, MX1)": the program and its first top genes. */
 export function programLabel(p: Pick<GeneProgram, "name" | "top_genes">, nGenes = 3): string {
@@ -114,15 +115,7 @@ export function sweepTraces(sweep: ProgramsKStats[]) {
 
 /** The server's sentence out of an `apiFetch` error ("API error 400: {detail}"). */
 export function errorText(e: unknown): string {
-  const msg = e instanceof Error ? e.message : String(e);
-  const body = msg.replace(/^API error \d+: /, "");
-  try {
-    const detail = JSON.parse(body).detail;
-    if (typeof detail === "string") return detail;
-  } catch {
-    /* not JSON */
-  }
-  return msg;
+  return errorMessage(e);
 }
 
 const pct = (v: number) => `${Math.round(v * 100)}%`;

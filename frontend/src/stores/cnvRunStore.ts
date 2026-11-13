@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { runCnv, type CnvProgress, type CnvRunBody, type CnvStart, type CnvSummary } from "@/api/cnv";
 import { watchdogMessage, type WatchdogEvent } from "@/api/pipelineRun";
+import { errorMessage } from "@/lib/errorMessage";
 
 /**
  * A copy-number run in flight (Copy number subtab). Kept here, not in the subtab,
@@ -49,7 +50,7 @@ export const useCnvRunStore = create<CnvRunState>((set, get) => ({
       const aborted = signal.aborted;
       set({
         running: false,
-        error: aborted ? "Cancelled: nothing was saved." : e instanceof Error ? e.message : String(e),
+        error: aborted ? "Cancelled: nothing was saved." : errorMessage(e),
       });
     } finally {
       if (controller?.signal === signal) controller = null;

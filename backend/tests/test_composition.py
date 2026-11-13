@@ -232,8 +232,10 @@ def test_pairing_follows_the_donors():
     partial = T2_SAMPLES[:7] + ["B__d9"]
     r = composition_test(_obs(partial, T2), "cond", "donor", "group")
     assert r.design == "unpaired" and "independent" in r.notes[0]
-    with pytest.raises(CompositionError, match="every 'donor'"):
-        composition_test(_obs(partial, T2), "cond", "donor", "group", paired=True)
+    # Asked to pair: the donors in every condition are paired, the rest left out (was an error).
+    r = composition_test(_obs(partial, T2), "cond", "donor", "group", paired=True)
+    assert r.design == "paired" and r.pairing["n_pairs"] == 3 and r.pairing["n_dropped"] == 2
+    assert any("2 left out because they lack a condition" in n for n in r.notes)
 
 
 def test_paired_donors_get_a_signed_rank_test_on_their_shares():
@@ -607,3 +609,28 @@ async def test_grounding_walks_back_to_the_newest_valid_tested_run(dataset_manag
     # the cluster report asks for a run on its own column
     assert comp._last_result(a, a.adata.obs, group_key="group") is not None
     assert comp._last_result(a, a.adata.obs, group_key="cond") is None
+
+
+def test_few_cell_donors_names_donors_under_a_third_of_the_median():
+    from scview.core.replicates import few_cell_donors
+
+    # Wilson 2022 kidney: diabetic_5 has 884 nuclei against a median donor of 2,996
+    sizes = {"control_1": 3605, "control_2": 2552, "control_3": 5278, "diabetic_1": 2996, "diabetic_2": 2468,
+             "diabetic_3": 2587, "diabetic_4": 2574, "diabetic_5": 884, "healthy_4": 3707, "healthy_5": 3819,
+             "healthy_6": 8706}
+    msg = few_cell_donors(sizes)
+    assert msg and "This donor has under a third of the median donor's 2,996 cells: diabetic_5 (884 cells)" in msg
+    assert few_cell_donors({k: v for k, v in sizes.items() if k != "diabetic_5"}) is None
+    assert few_cell_donors({"a": 10, "b": 1000}) is None  # two donors: no median to judge by
+    two = few_cell_donors({"a": 10, "b": 20, "c": 1000, "d": 1000, "e": 1000}, "sample")
+    assert two.startswith("These samples have") and "a (10 cells), b (20 cells)" in two
+
+
+def test_composition_warns_about_a_sample_with_few_cells():
+    counts = [list(r) for r in T2]
+    counts[3] = [max(1, n // 6) for n in counts[3]]  # A__d4: 77 cells against a median of ~370
+    r = composition_test(_obs(T2_SAMPLES, counts), "cond", "donor", "group", paired=True)
+    hit = [w for w in r.warnings if "under a third of the median sample" in w]
+    assert len(hit) == 1 and "d4 (A) (" in hit[0]
+    r = composition_test(_obs(T2_SAMPLES, T2), "cond", "donor", "group", paired=True)
+    assert not any("under a third" in w for w in r.warnings)

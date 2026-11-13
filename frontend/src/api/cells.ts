@@ -1,5 +1,6 @@
 import { apiFetch } from "./client";
 import { decodeMask, type CellFilter } from "@/lib/cellFilter";
+import { errorMessage } from "@/lib/errorMessage";
 
 export interface CellFilterResult {
   n_cells: number;
@@ -8,20 +9,9 @@ export interface CellFilterResult {
   mask: string | null;
 }
 
-/** The server's reason for a refused request (FastAPI `detail`, a 422's first message). */
+/** The server's reason for a refused request (FastAPI `detail`, a 422's messages). */
 function reason(e: unknown): Error {
-  const raw = e instanceof Error ? e.message : String(e);
-  const body = raw.replace(/^API error \d+: /, "");
-  try {
-    const detail = JSON.parse(body).detail;
-    if (typeof detail === "string") return new Error(detail);
-    if (Array.isArray(detail) && typeof detail[0]?.msg === "string") {
-      return new Error(String(detail[0].msg).replace(/^Value error, /, ""));
-    }
-  } catch {
-    /* not JSON */
-  }
-  return e instanceof Error ? e : new Error(raw);
+  return new Error(errorMessage(e));
 }
 
 /** How many cells match `filter` and, with `mask`, which (`POST /cells/filter`). */

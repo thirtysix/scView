@@ -141,13 +141,18 @@ def unpaired_test(first: Sequence[float], second: Sequence[float]) -> dict:
 def group_unpaired_tests(points: Iterable[dict], conditions: Sequence[str],
                          groups: Sequence[str]) -> dict[str, dict]:
     """``unpaired_test`` per group over its donors' values in the two ``conditions``
-    (points: dicts with group, condition, sample, value)."""
+    (points: dicts with group, condition, sample, value). ``n_donors`` names the sides'
+    counts by condition (``n_a`` is the first, the reference; ``n_b`` the second)."""
     first, second = conditions[0], conditions[1]
     vals: dict[str, dict[str, list[float]]] = {g: {first: [], second: []} for g in groups}
     for p in points:
         if p["condition"] in (first, second) and p["group"] in vals:
             vals[p["group"]][p["condition"]].append(float(p["value"]))
-    return {g: unpaired_test(vals[g][first], vals[g][second]) for g in groups}
+    out = {}
+    for g in groups:
+        t = unpaired_test(vals[g][first], vals[g][second])
+        out[g] = {**t, "n_donors": {str(first): t["n_a"], str(second): t["n_b"]}}
+    return out
 
 
 def _min_ranksum_p(na: int, nb: int) -> float:

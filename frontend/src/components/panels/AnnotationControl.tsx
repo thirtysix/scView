@@ -166,7 +166,8 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
     lastWritten ?? (hasColumn(target.trim()) ? target.trim() : hasColumn("cell_type") ? "cell_type" : null);
 
   const handleAnnotate = async () => {
-    const tgt = target.trim() || "cell_type";
+    // scView's own column (the server's default too), never a file's curated cell_type
+    const tgt = target.trim() || (groupby ? `${groupby}_celltypeAnno` : "celltypeAnno");
     const params: Record<string, unknown> = {
       annotation_method: method,
       annotation_groupby: groupby,
@@ -174,7 +175,10 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
     };
     if (method === "llm") params.annotation_tissue = tissue.trim();
     else if (method === "celltypist") params.celltypist_model = model;
-    else params.annotation_marker_sets = markerSets;
+    else {
+      params.annotation_marker_sets = markerSets;
+      if (markerSets === "databases" && tissue.trim()) params.annotation_tissue = tissue.trim();
+    }
     setAnnotating(true);
     setLastWritten(null);
     setReplyCut(null);
@@ -282,9 +286,28 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
           </select>
           <p className="mt-1 text-[11px] text-slate-400">
             {markerSets === "databases"
-              ? "Names each cluster after the database cell type its top markers match best, any tissue, human or mouse. Downloaded on first use; the built-in sets are used if they are unavailable."
+              ? "Names each cluster after the database cell type its top markers match best, human or mouse. Downloaded on first use; the built-in sets are used if they are unavailable."
               : "Scores 14 curated immune sets per cluster. Better than the databases on PBMC subtypes (CD4/CD8 T, monocytes), no use outside blood."}
           </p>
+          {markerSets === "databases" && (
+            <>
+              <label htmlFor="marker-tissue" className="mb-1 mt-2 block text-xs font-medium text-slate-600">
+                Tissue (optional)
+              </label>
+              <input
+                id="marker-tissue"
+                type="text"
+                value={tissue}
+                onChange={(e) => setTissue(e.target.value)}
+                placeholder="e.g. kidney, lung, brain"
+                className="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:border-primary focus:outline-none"
+              />
+              <p className="mt-1 text-[11px] text-slate-400">
+                Leaves out database types of other tissues; blood, immune, vessel and stromal types stay. Empty: the
+                data&apos;s own tissue column is used when it has one.
+              </p>
+            </>
+          )}
         </div>
       ) : method === "llm" ? (
         <div className="mb-3">
@@ -413,7 +436,10 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
 
 interface Decided {
   lowQuality: string[];
+  /** Labelled Unidentified by scView itself: annotations of v0.71.0 to v0.74.0 */
   unidentified: string[];
+  /** Sent to the AI with a note that their markers look random (`llm_random_markers_noted`) */
+  noted: string[];
   toAi: string[];
   /** The clustering the annotation was based on (its clusters' evidence). */
   column?: string;
@@ -434,8 +460,8 @@ async function lastLlmNotes(datasetId: string, target: string): Promise<{ cut: s
     const p = step.params ?? {};
     const cut = typeof p.llm_reply_cut === "string" && p.llm_reply_cut ? p.llm_reply_cut : null;
     const d = { lowQuality: ids(p.llm_decided_low_quality), unidentified: ids(p.llm_random_markers),
-      toAi: ids(p.llm_high_mito_type_to_ai) };
-    const any = d.lowQuality.length || d.unidentified.length || d.toAi.length;
+      noted: ids(p.llm_random_markers_noted), toAi: ids(p.llm_high_mito_type_to_ai) };
+    const any = d.lowQuality.length || d.unidentified.length || d.noted.length || d.toAi.length;
     return { cut, decided: any ? d : null };
   } catch {
     return { cut: null, decided: null };
@@ -445,7 +471,7 @@ async function lastLlmNotes(datasetId: string, target: string): Promise<{ cut: s
 /** Which clusters scView labelled without the AI, and why: the rule, then each cluster's evidence. */
 function DecidedNote({ decided, datasetId }: { decided: Decided; datasetId: string }) {
   const [showEvidence, setShowEvidence] = useState(false);
-  const groups = [...decided.lowQuality, ...decided.unidentified, ...decided.toAi];
+  const groups = [...decided.lowQuality, ...decided.unidentified, ...decided.noted, ...decided.toAi];
   return (
     <div className="mt-2 space-y-0.5 rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs text-slate-600" data-testid="annotation-decided">
       {decided.lowQuality.length > 0 && (
@@ -456,8 +482,14 @@ function DecidedNote({ decided, datasetId }: { decided: Decided; datasetId: stri
       )}
       {decided.unidentified.length > 0 && (
         <p>
-          scView labelled {clusterList(decided.unidentified)} <b>Unidentified</b> itself: their markers match no
-          cell type in the marker databases better than random genes do.
+          scView labelled {clusterList(decided.unidentified)} <b>Unidentified</b> itself: their markers do not beat
+          9 of 10 random gene lists of the same size against the marker databases.
+        </p>
+      )}
+      {decided.noted.length > 0 && (
+        <p>
+          The AI was told that the markers of {clusterList(decided.noted)} do not beat 9 of 10 random gene lists
+          of the same size against the marker databases: junk, or a state the databases lack.
         </p>
       )}
       {decided.toAi.length > 0 && (

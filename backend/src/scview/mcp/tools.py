@@ -723,6 +723,8 @@ async def get_markers(
     if d.get("skipped_groups"):
         extra["skipped_groups"] = d["skipped_groups"]
         extra["skipped_reason"] = d.get("skipped_reason")
+    if d.get("matrix"):  # what the test ranked: log-normalised values (core/marker_matrix.py)
+        extra["ranked_on"] = d["matrix"]
     return dumps({"dataset_id": dataset_id, "column": column, "columns": cols, "markers": out, **extra},
                  _max_chars(DEFAULT_LIMIT * max(1, n_genes // 10)))
 
@@ -734,12 +736,15 @@ async def annotate_celltypist(
                                             "Immune_All_High.pkl, Healthy_COVID19_PBMC.pkl.")] = "Immune_All_Low.pkl",
     groupby: Annotated[str, Field(description="Clusters for the majority vote (default: the active clustering).")] = "",
     target_column: Annotated[str, Field(description="Obs column to write.")] = "celltypist",
+    overwrite: Annotated[bool, Field(description=(
+        "Replace target_column when it is a column that came with the data (an author or curated "
+        "annotation); without it such a column is refused."))] = False,
 ) -> str:
     """Label cells with a CellTypist reference model (the pipeline's cell_type_annotation step;
     a job). The result names the labels' confidence and the model's gene overlap. The model is
     downloaded on first use."""
     p = {"annotation_method": "celltypist", "celltypist_model": model, "annotation_groupby": groupby,
-         "annotation_target": target_column}
+         "annotation_target": target_column, "annotation_overwrite": overwrite}
 
     async def finish(job: jobs.Job) -> dict[str, Any]:
         out = _pipeline_result(job)
@@ -772,6 +777,36 @@ async def cell_ontology_ids(
                   "labels": [[r.get(c) for c in cols] for r in d["labels"]]})
 
 
+@tool(WEB_READ)
+async def marker_db_check(
+    dataset_id: DatasetId,
+    column: Annotated[str, Field(description=(
+        "Label column to check, e.g. an author cell_type or an annotation scView wrote."))],
+    species: Annotated[Literal["human", "mouse"] | None, Field(description=(
+        "Database rows to use (default: the dataset's species, told from the gene names)."))] = None,
+    retry: Annotated[bool, Field(description=(
+        "Try a database whose download failed a moment ago again now."))] = False,
+    limit: Limit = DEFAULT_LIMIT,
+) -> str:
+    """The UI's marker database check (PanglaoDB, CellMarker, ACT): for each label of a column, its
+    database type matched by name, the verdict (supported / weak support / no database support /
+    too few database markers / not in database) with p and the overlapping genes, and the 3
+    database types the group's top 25 markers fit best. Changes nothing in the dataset. The
+    databases are downloaded on first use (about a minute); after that cluster_evidence also
+    compares markers with them."""
+    d = await _post(f"{_ds(dataset_id)}/annotation/marker-db/check",
+                    {"column": column, "species": species, "retry": retry})
+    n = clamp(limit)
+    labels = [{**r, "overlap": ", ".join(r.get("overlap") or []),
+               "suggestions": "; ".join(f"{s['cell_type']} (p {num(s['p'])})" for s in r.get("suggestions") or [])}
+              for r in d.get("labels") or []]
+    return dumps({"dataset_id": dataset_id,
+                  **pick(d, "column", "species", "species_note", "verdict_counts", "cellmarker",
+                         "verdict_sources", "suggestion_sources", "note"),
+                  "labels": table(labels, ["label", "verdict_text", "db_type", "p", "overlap", "n_db_genes",
+                                           "suggestions"], n)}, _max_chars(n))
+
+
 @tool(READ)
 async def cluster_evidence(
     dataset_id: DatasetId,
@@ -782,8 +817,9 @@ async def cluster_evidence(
     (never a probability): its markers against random genes (best marker-database p vs what 1 in
     10 random lists reach), median genes and % mito against the typical cluster with the cluster
     QC flags that fired, a doublet-like cluster's two parents, database types as shares of the
-    evidence (named groupings only), and the label scView gave ('Low-quality cells',
-    'Unidentified') or would give itself in an AI annotation. Markers must be computed first."""
+    evidence (named groupings only), and the label scView gave ('Low-quality cells') or would give
+    itself in an AI annotation, or the note the AI got. Markers must be computed first; the
+    marker lines need the marker databases (marker_db_check downloads them)."""
     d = await _get(f"{_ds(dataset_id)}/clusters/evidence", column=column or None)
     return dumps({"dataset_id": dataset_id, **pick(d, "column", "n_groups", "markers", "typing", "annotation", "notes"),
                   "clusters": [{"group": c["group"], "n_cells": c["n_cells"], "label": c["label"],
@@ -814,6 +850,25 @@ async def set_labels(
                n_changed=sum(len(g.get("indices") or []) for g in r.get("previous") or []
                              if g.get("value") != r.get("label")))
     return dumps(out)
+
+
+@tool(WRITE)
+async def combine_columns(
+    dataset_id: DatasetId,
+    columns: Annotated[list[str], Field(min_length=2, max_length=4, description=(
+        "Two to four obs columns, in the order their values are joined (e.g. ['donor_id', 'depot']).")
+    )],
+    name: Annotated[str, Field(min_length=1, description="Name of the new user annotation column.")],
+    separator: Annotated[str, Field(min_length=1, max_length=5, description=(
+        "Text between the values."))] = " | ",
+) -> str:
+    """Make a new annotation column whose value is each cell's values of 2-4 columns joined
+    ("HFD01 | ING"): a sample id from donor AND depot (or day, library) in one call, instead
+    of one set_labels call per pair. A cell missing a value in any column gets none. Saved with
+    the dataset; set_labels can edit it afterwards."""
+    r = await _post(f"{_ds(dataset_id)}/labels/combine",
+                    {"columns": columns, "name": name, "separator": separator})
+    return dumps({"dataset_id": dataset_id, **r})
 
 
 @tool(WRITE)
@@ -852,6 +907,7 @@ def _de_warnings(r: dict[str, Any]) -> list[str]:
                  f"(median counts {num(ts.get('median_a'))} vs {num(ts.get('median_b'))})")
     if r.get("dropped_samples"):
         w.append(f"samples left out: {', '.join(map(str, r['dropped_samples'][:10]))}")
+    w += [f"technology: {x}" for x in r.get("technology_warnings") or []]
     w += [f"replicates: {x}" for x in r.get("replicate_warnings") or []]
     w += [f"covariate: {x}" for x in r.get("covariate_notes") or []]
     return w
@@ -878,6 +934,9 @@ async def differential_expression(
     covariates: Annotated[list[str] | None, Field(max_length=4, description=(
         "Pseudobulk: per-sample obs columns in the design before the condition (sex, batch, age); "
         "refused when one varies within a sample or is confounded with the condition."))] = None,
+    numeric_covariates: Annotated[list[str] | None, Field(max_length=4, description=(
+        "Pseudobulk: covariates read as numbers, one slope each (an age; text such as "
+        "'54-year-old stage' is read as 54). Added to covariates."))] = None,
     donor_key: Annotated[str | None, Field(description=(
         "Pseudobulk: the person column the replicate column's samples nest in, for the "
         "repeated-donor warning (default: detected)."))] = None,
@@ -899,10 +958,11 @@ async def differential_expression(
                                 "replicate_key": replicate_key, "method": method, "pb_method": pb_method}
         if min_pct is not None:
             body["min_pct"] = min_pct
-        if covariates or donor_key:
+        if covariates or donor_key or numeric_covariates:
             if method != "pseudobulk":
-                raise ToolError("covariates and donor_key are for method='pseudobulk'.")
-            body.update({"covariates": covariates, "donor_key": donor_key})
+                raise ToolError("covariates, numeric_covariates and donor_key are for method='pseudobulk'.")
+            body.update({"covariates": covariates, "donor_key": donor_key,
+                         "numeric_covariates": numeric_covariates})
         r = await _post(f"{_ds(dataset_id)}/de/compare", body)
     else:
         if method == "pseudobulk":
@@ -949,6 +1009,11 @@ async def differential_expression(
     }
     if not out.get("covariates"):
         out.pop("covariates", None)
+    if r.get("fold_change_note"):
+        out["fold_change_note"] = r["fold_change_note"]
+    sig_note = (r.get("significance") or {}).get("note")
+    if sig_note and not up and not down:
+        out["none_significant"] = sig_note
     if (out["method"] != "pseudobulk" and not r.get("underreplicated")
             and (r.get("n_donors_a") or 0) >= 2 and (r.get("n_donors_b") or 0) >= 2):
         # The UI's caption says the same: a cell-level test treats cells as independent.
@@ -972,13 +1037,17 @@ async def compare_de_results(
     result_b: Annotated[str, Field(description="Another result_id (e.g. pseudobulk on the same comparison).")],
     padj_max: Annotated[float, Field(gt=0, le=1, description="Significant at adjusted p at most this.")] = 0.05,
     lfc_min: Annotated[float, Field(ge=0, le=20, description="And |log2FC| at least this.")] = 0.25,
+    common_tested_only: Annotated[bool, Field(description=(
+        "Count only the genes both results tested (the cell-level detection cut-off and the "
+        "pseudobulk count filter keep different genes)."))] = False,
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
     """Compare two DE results' significant genes (the DE overlap the UI draws): how many each
     calls, how many both call, their sign agreement, and the top genes only one of them calls
     (largest |log2FC| first). Use case: cell-level Wilcoxon vs donor-level pseudobulk."""
     d = await _post(f"{_ds(dataset_id)}/de/overlap", {
-        "result_ids": [result_a, result_b], "direction": "both", "padj_max": padj_max, "lfc_min": lfc_min})
+        "result_ids": [result_a, result_b], "direction": "both", "padj_max": padj_max, "lfc_min": lfc_min,
+        "restrict_to_common_tested": common_tested_only})
     n = clamp(limit)
     sets = d.get("sets") or []
     pair = (d.get("pairs") or [{}])[0]
@@ -1002,7 +1071,7 @@ async def compare_de_results(
         "only_a": genes((0,)), "only_b": genes((1,)),
         "note": "lfc_* is null where that result did not test the gene (under its detection "
                 "cut-off or the pseudobulk count filter).",
-        "notes": d.get("notes") or [],
+        "notes": [_api_words(x) for x in d.get("notes") or []],
     }
     if disc:
         out["discordant_genes"] = [g["gene"] for g in (d.get("discordant") or {}).get("genes", [])[:n]]
@@ -1058,7 +1127,9 @@ async def composition_test(
     reference: Annotated[str | None, Field(description="Baseline condition (default: the first).")] = None,
     transform: Annotated[Literal["logit", "asin"], Field(description=(
         "Scale the per-sample shares are tested on: logit (propeller's default) or arcsine square root."))] = "logit",
-    paired: Annotated[bool | None, Field(description="Default: paired when every donor is in every condition.")] = None,
+    paired: Annotated[bool | None, Field(description=(
+        "Default: paired when every donor is in every condition. True: pair the sample values found "
+        "in every condition and leave the others out (the result says how many)."))] = None,
     exclude_samples: Annotated[list[str] | None, Field(description=(
         "Values of the sample column to leave out (e.g. one donor's samples, for a leave-one-out)."))] = None,
     within_column: Annotated[str | None, Field(description=(
@@ -1067,6 +1138,9 @@ async def composition_test(
         "The subset's value(s) of within_column (e.g. ['Immune']: T cells among immune cells)."))] = None,
     donor_key: Annotated[str | None, Field(description=(
         "Person column the samples nest in, for the repeated-donor warning (default: detected)."))] = None,
+    covariates: Annotated[list[str] | None, Field(max_length=4, description=(
+        "Per-sample obs columns in the design before the condition (sex, batch; the animal column "
+        "blocks on the animal when the condition varies within it, e.g. depot)."))] = None,
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
     """Do cell types make up different shares of the cells between conditions, with donors as
@@ -1075,13 +1149,19 @@ async def composition_test(
     body = {"condition_key": condition_key, "group_key": group_key, "sample_key": sample_key,
             "conditions": conditions, "reference": reference, "transform": transform, "paired": paired,
             "exclude_samples": exclude_samples, "within_column": within_column,
-            "within_value": within_value, "donor_key": donor_key}
+            "within_value": within_value, "donor_key": donor_key, "covariates": covariates}
     d = await _post(f"{_ds(dataset_id)}/composition/test", body)
     groups = [_flat(g) for g in d.pop("groups", []) or []]
     d.pop("samples", None)  # per-sample shares: in get_result's table
     cols = list(dict.fromkeys(k for g in groups for k in g))
     out = {"dataset_id": dataset_id, **d, "groups": table(groups, cols, clamp(limit))}
     return dumps(out, _max_chars(limit))
+
+
+def _api_words(note: str) -> str:
+    """A DE overlap note in this tool's terms: the UI's checkbox is an argument here."""
+    return note.replace('tick "only genes tested in all" to count only those',
+                        "pass common_tested_only=true to count only those")
 
 
 def _flat(d: dict[str, Any], prefix: str = "") -> dict[str, Any]:
@@ -1295,10 +1375,14 @@ async def enrichment(
     return dumps(out, _max_chars(limit))
 
 
-@tool(READ)
+@tool(WRITE)
 async def score_gene_set(
     dataset_id: DatasetId,
     genes: Annotated[list[str], Field(min_length=1, max_length=2000, description="The set's gene symbols.")],
+    name: Annotated[str, Field(max_length=200, description=(
+        "The set's name, e.g. HALLMARK_TNFA_SIGNALING_VIA_NFKB. With a name the score is also saved "
+        "as an obs column score_<name> (saved_column), offered in Compare colourings and Colour by; "
+        "scoring the same name again replaces it. Empty: not saved."))] = "",
     groupby: Annotated[str, Field(description="Summarise the per-cell scores by this obs column "
                                               "(default: the active clustering).")] = "",
     method: Annotated[Literal["score_genes", "aucell", "ssgsea", "gsva"], Field(description=(
@@ -1321,16 +1405,22 @@ async def score_gene_set(
     """Score every cell for a gene set (scanpy score_genes by default, or AUCell / ssGSEA /
     GSVA, on log-normalised values) and summarise the scores per group (mean, median, share
     above 0). With sample (and condition): each sample's mean score within each group, and
-    per group the donor-level test between two conditions, in one call."""
+    per group the donor-level test between two conditions, in one call. With name the score
+    is also saved as an obs column (saved_column; remove_saved_score drops it)."""
     if (condition or conditions) and not sample:
         raise ToolError("A donor-level test needs the sample (donor) column: give sample.")
     if conditions and not condition:
         raise ToolError("conditions needs the condition column it is values of.")
-    d = await _post(f"{_ds(dataset_id)}/genesets/score", {"gene_set": genes, "method": method})
+    body: dict[str, Any] = {"gene_set": genes, "method": method}
+    if name.strip():
+        body.update(score_name=name.strip(), save=True)
+    d = await _post(f"{_ds(dataset_id)}/genesets/score", body)
     scores = np.asarray(d.pop("scores"), dtype=np.float64)
     if not groupby:
         groupby = (await _get(_ds(dataset_id))).get("active_clustering") or ""
-    out: dict[str, Any] = {"dataset_id": dataset_id, **{k: v for k, v in d.items() if k != "score_name"}}
+    out: dict[str, Any] = {"dataset_id": dataset_id,
+                           **{k: v for k, v in d.items() if k != "score_name"
+                              and not (k in ("saved_column", "save_note") and v is None)}}
     out["genes_found"] = out.get("genes_found", [])[:50]
     if sample:
         if not groupby:
@@ -1354,6 +1444,22 @@ async def score_gene_set(
     else:
         out["summary"] = {"mean": float(scores.mean()), "median": float(np.median(scores))}
     return dumps(out, _max_chars(limit))
+
+
+@tool(WRITE)
+async def remove_saved_score(
+    dataset_id: DatasetId,
+    column: Annotated[str, Field(min_length=1, max_length=200, description=(
+        "The saved score's obs column (score_<set> or activity_<source>, the saved_column a scoring "
+        "returned). Only a column scView saved as a score can be removed."))],
+) -> str:
+    """Remove a saved per-cell score: its obs column and its record. The dataset's own columns
+    and hand labels are never removed; scoring the set again brings the column back."""
+    try:
+        _, data = await api.request("DELETE", f"{_ds(dataset_id)}/scores/{column}")
+    except api.RouteError as e:
+        raise _fail(e) from None
+    return dumps({"dataset_id": dataset_id, **json.loads(data)}, compact.MAX_CHARS)
 
 
 SAMPLE_MIN_CELLS = 10  # per sample x group, as per_donor_expression (core/donor_expression.py)
@@ -1441,7 +1547,7 @@ async def list_results(
     id, kind, label, and whether computed on an earlier version of the data (stale)."""
     d = await _get(f"{_ds(dataset_id)}/results", kind=kind)
     res = d.get("results") or []
-    return dumps({"dataset_id": dataset_id, **rows(res, ["id", "kind", "label", "created_at", "stale", "status"],
+    return dumps({"dataset_id": dataset_id, **rows(res, ["id", "kind", "label", "created_at", "stale", "stale_reason", "status"],
                                                    clamp(limit))}, _max_chars(limit))
 
 
@@ -1456,7 +1562,7 @@ async def get_result(
     """A stored result's parameters and its table's rows (from offset, limit of them)."""
     meta = await _get(f"{_ds(dataset_id)}/results/{result_id}")
     out: dict[str, Any] = {"dataset_id": dataset_id, **pick(meta, "id", "kind", "label", "created_at",
-                                                            "stale", "params")}
+                                                            "stale", "stale_reason", "params")}
     try:
         df = await _de_table(dataset_id, result_id)
     except ToolError as e:
@@ -1513,7 +1619,7 @@ async def plot(
             d = await _dotplot_within(dataset_id, genes, groupby, layer, within_column, within_value or "")
         else:
             d = await _get(f"{_ds(dataset_id)}/expression/by-group", genes=genes, groupby=groupby, layer=layer)
-        caption = f"{len(d['groups'])} groups of {d['groupby']}{scope}, layer {d['layer']}"
+        caption = f"{len(d['groups'])} groups of {d['groupby']}{scope}, layer {d.get('layer_label') or d['layer']}"
         png = await asyncio.to_thread(plots.dotplot, d, f"Dot plot by {d['groupby']}{scope}", caption)
         return [Image(data=png, format="png"), TextContent(type="text", text=caption)]
 
@@ -1639,7 +1745,7 @@ async def _dotplot_within(dataset_id: str, genes: list[str], groupby: str, layer
                         {"genes": genes, "groupby": groupby, "layer": layer, "cells": cells.tolist(),
                          "include_groups": False})
         sel = r["selection"]
-        out.update(genes=r["genes"], layer=r["layer"])
+        out.update(genes=r["genes"], layer=r["layer"], layer_label=r.get("layer_label"))
         out["groups"].append(g)
         out["mean"].append(sel["mean"])
         out["fraction"].append(sel["fraction"])

@@ -187,9 +187,14 @@ class PipelineParams:
     annotation_method: str = "llm"               # llm (default, any-tissue) | celltypist | marker_score
     celltypist_model: str = "Immune_All_Low.pkl"  # CellTypist model (immune default)
     annotation_groupby: str = ""                 # cluster column for consensus (empty = active clustering / "cluster")
-    annotation_target: str = "cell_type"         # obs column to write
+    # obs column to write; empty = <grouping>_celltypeAnno, scView's own. An existing column scView
+    # did not write (a file's curated cell_type) is refused unless annotation_overwrite is set.
+    annotation_target: str = ""
+    annotation_overwrite: bool = False           # allow writing over a column scView did not write
     annotation_llm_model: str = ""               # chat model id for method="llm" (provider's name)
-    annotation_tissue: str = ""                  # optional tissue hint for method="llm"
+    # optional tissue hint for method llm, and for marker_score on the databases (types of other
+    # tissues left out; without it the data's own obs 'tissue' column is read)
+    annotation_tissue: str = ""
     annotation_marker_sets: str = "databases"    # marker_score: databases (core/marker_db.py) | builtin (14 immune sets)
 
     # Large-dataset mode (core/large_run.py): "auto" runs the steps with the matrices on
@@ -320,19 +325,20 @@ def large_backend(backend: Any):
 def _wilcoxon(adata: ad.AnnData, groupby: str, key_added: str | None = None) -> None:
     """Wilcoxon markers with pts, as ``sc.tl.rank_genes_groups`` writes them (into
     ``uns[key_added or "rank_genes_groups"]``), by blocks of genes (``core/rank_genes.py``,
-    bit for bit scanpy's); in a large-dataset run from its gene store. Either way with the
-    specificity frame already in (``sparse_markers``) unless scanpy ran."""
+    bit for bit scanpy's), on log-normalised values (``core/marker_matrix.py``: never the
+    raw counts an imported file keeps in .raw); in a large-dataset run from its gene store
+    (X, log-normalised). Either way with the specificity frame already in
+    (``sparse_markers``) unless scanpy ran."""
+    from scview.core import marker_matrix
     from scview.core.sparse_markers import testable_groups
 
     groups, skipped = testable_groups(adata.obs[groupby])
     backend = _LARGE.get()
     if backend is not None:
         backend.rank_genes_groups(adata, groupby, key_added=key_added, groups=groups)
+        adata.uns[key_added or "rank_genes_groups"]["params"]["matrix"] = marker_matrix.X_LOG
     else:
-        from scview.core import rank_genes
-
-        rank_genes.rank_genes_groups(adata, groupby, method="wilcoxon", pts=True, groups=groups,
-                                     key_added=key_added, specificity=True)
+        marker_matrix.rank(adata, groupby, key_added=key_added, groups=groups)
     note_skipped(adata.uns[key_added or "rank_genes_groups"], skipped)
 
 
@@ -1480,6 +1486,46 @@ def _run_dissociation_stress(adata: ad.AnnData, params: PipelineParams) -> dict[
     return {"species": species, "n_genes": len(genes), "genes": genes}
 
 
+class AnnotationTargetError(ValueError):
+    """An annotation would write over a column scView did not create (a 422 at the routes)."""
+
+
+def default_annotation_target(groupby: str) -> str:
+    """scView's own column for an annotation of ``groupby`` (the UI suggests the same)."""
+    return f"{groupby}_celltypeAnno" if groupby else "celltypeAnno"
+
+
+def annotation_columns(adata: ad.AnnData) -> set[str]:
+    """Columns an earlier annotation step wrote (provenance; before v0.75.0 the default
+    target was 'cell_type' and a record could leave it out)."""
+    out: set[str] = set()
+    for h in provenance.read_provenance(adata).get("history") or []:
+        if isinstance(h, dict) and h.get("step") == "cell_type_annotation":
+            out.add(str((h.get("params") or {}).get("annotation_target") or "cell_type"))
+    return out
+
+
+def check_annotation_target(adata: ad.AnnData, target: str, overwrite: bool = False) -> None:
+    """Raise ``AnnotationTargetError`` when ``target`` is a column of the dataset that scView
+    did not write (an author's or a curated annotation, e.g. CELLxGENE's cell_type) and
+    ``overwrite`` is off. A column an earlier annotation wrote, or a ``scview_`` one, is fine."""
+    if overwrite or target not in adata.obs.columns:
+        return
+    if target.startswith("scview_") or target in annotation_columns(adata):
+        return
+    raise AnnotationTargetError(
+        f"Not run: '{target}' is a column scView did not write (it came with the data, e.g. a "
+        "curated or author annotation), and annotation would overwrite it. Leave the output "
+        "column empty for scView's own (<grouping>_celltypeAnno), name a new column, or set "
+        "annotation_overwrite to replace it.")
+
+
+def resolve_annotation_target(adata: ad.AnnData, params: PipelineParams) -> str:
+    """The column the annotation step writes: the one named, else scView's own."""
+    return (params.annotation_target or "").strip() or default_annotation_target(
+        _resolve_annotation_groupby(adata, params))
+
+
 def _resolve_annotation_groupby(adata: ad.AnnData, params: PipelineParams) -> str:
     """Clustering column to take per-cluster consensus over, or "" if none exists.
 
@@ -1686,9 +1732,13 @@ def _annotate_llm(adata: ad.AnnData, params: PipelineParams, groupby: str, targe
 
     hint = params.annotation_tissue.strip()
     qc = _annotation_qc_notes(adata, groupby)
-    # Damaged cells and marker lists that name no type are decided here, not by the AI; the
-    # rest are sent (annotation benchmark arms ox + dq, 2026-11-11).
+    # Damaged cells are decided here, not by the AI; the rest are sent (annotation benchmark arms
+    # ox + dq, 2026-11-11), marker lists no better than random ones with a note saying so.
     decided, decided_record = _annotation_decided(adata, groupby, marker_map)
+    from scview.core.marker_randomness import NOTE as RANDOM_NOTE
+
+    for g in decided_record.get(RANDOM_NOTED, []):
+        qc[g] = f"{qc[g]}; {RANDOM_NOTE}" if g in qc else RANDOM_NOTE
     sent = {g: genes for g, genes in marker_map.items() if str(g) not in decided}
     listing = "\n".join(f"{g}: {', '.join(genes)}" + (f" [QC: {qc[str(g)]}]" if str(g) in qc else "")
                         for g, genes in sent.items())
@@ -1829,10 +1879,15 @@ def _record_llm_cl_ids(adata: ad.AnnData, target: str, model_ids: dict[str, str 
 
 LOW_QUALITY_LABEL = "Low-quality cells"
 _LOW_QUALITY = re.compile(r"^\s*(?:likely\s+|probable\s+)?low[-\s]?quality(?:\s+cells?)?\s*$", re.I)
-# The label scView gives a cluster whose markers match no database type better than random genes
-# (core/marker_randomness.py), without asking the AI. Not "Unknown": that is the label of clusters
-# a cut reply never reached.
+# The label scView gave a cluster whose markers do not beat 9 of 10 random gene lists of the same
+# size against the marker databases (core/marker_randomness.py), without asking the AI, from
+# v0.71.0 to v0.74.0 (record key ``llm_random_markers``). Not "Unknown": that is the label of
+# clusters a cut reply never reached. Since v0.75.0 such a cluster goes to the AI with a note
+# (``RANDOM_NOTED``): disease and injury states are not in the databases (kidney PT_VCAM1).
 UNIDENTIFIED_LABEL = "Unidentified"
+# The step record's key for the clusters sent with that note. A new key, not the old one with a new
+# meaning: records of v0.71.0-v0.74.0 still say their clusters were labelled Unidentified.
+RANDOM_NOTED = "llm_random_markers_noted"
 # Cluster QC flags that mean damaged cells: scView labels these clusters "Low-quality cells" itself.
 # low_genes is not one: erythrocytes and platelets have few genes by nature.
 _DAMAGE_FLAGS = ("low_quality", "high_mito")
@@ -1889,13 +1944,15 @@ def _annotation_decided(adata: ad.AnnData, groupby: str,
     - "Low-quality cells": cluster QC flags it ``low_quality`` (few genes and high mito) or
       ``high_mito``, unless its markers best match a type with much mito RNA by nature
       (``_HIGH_MITO_TYPE``): that cluster goes to the AI with its QC note.
-    - "Unidentified": its markers match no database cell type better than random genes do
-      (``core/marker_randomness.py``). Damaged wins when both hold.
+    - Markers that do not beat 9 of 10 random gene lists of the same size against the marker
+      databases (``core/marker_randomness.py``) are not decided: the cluster goes to the AI with a
+      QC note saying so (record ``RANDOM_NOTED``). Damaged wins when both hold.
 
     In the annotation benchmark the AI's low-quality call moved with the wording and with the other
-    clusters in the prompt (arms pp, ox), and a random-marker note in the prompt moved other clusters'
-    calls (arms rm, ua); deciding both here kept them (arm dq). Best effort: a check that cannot run
-    decides nothing."""
+    clusters in the prompt (arms pp, ox); deciding it here kept it (arm dq). Random-like lists were
+    labelled "Unidentified" here too until v0.75.0 (user decision 2026-11-12): disease and injury
+    states that the databases lack (kidney PT_VCAM1) were hidden that way, and cluster QC catches
+    most junk. Best effort: a check that cannot run decides nothing."""
     from scview.core import cluster_qc, marker_randomness
 
     try:
@@ -1919,9 +1976,9 @@ def decide_clusters(check, report, marker_map) -> tuple[dict[str, str], dict[str
     best = {str(g): t for g, t in check.best.items()}
     to_ai = sorted((g for g in damaged if g in in_map and _HIGH_MITO_TYPE.search(best.get(g, ""))), key=str)
     low = sorted((g for g in damaged if g in in_map and g not in to_ai), key=str)
-    unid = sorted((str(g) for g in check.flagged if str(g) in in_map and str(g) not in low), key=str)
-    decided = {g: LOW_QUALITY_LABEL for g in low} | {g: UNIDENTIFIED_LABEL for g in unid}
-    record = {k: v for k, v in (("llm_decided_low_quality", low), ("llm_random_markers", unid),
+    noted = sorted((str(g) for g in check.flagged if str(g) in in_map and str(g) not in low), key=str)
+    decided = {g: LOW_QUALITY_LABEL for g in low}
+    record = {k: v for k, v in (("llm_decided_low_quality", low), (RANDOM_NOTED, noted),
                                 ("llm_high_mito_type_to_ai", to_ai)) if v}
     return decided, record
 
@@ -2048,7 +2105,9 @@ def _annotate_marker_score(
     With the marker databases (PanglaoDB + CellMarker 3.0 curated rows, or 2.0 + ACT; see
     core/marker_db.py) each cluster gets the database type its top 25 markers
     over-represent most (hypergeometric against the full database set), "Unknown"
-    when no type shares a marker. Without them, the 14 curated sets above are
+    when no type shares a marker; when the tissue is known (``annotation_tissue``, else
+    the data's obs 'tissue') only types of that tissue or found in every tissue compete
+    (``core/marker_tissues.py``). Without them, the 14 curated sets above are
     scored per cell and each cluster gets the highest mean. Which one ran is
     recorded in ``uns[f"{target}_markerscore_source"]`` and returned for the
     provenance."""
@@ -2070,7 +2129,7 @@ def _annotate_marker_score(
         if temporary:
             _wilcoxon(adata, groupby, key_added=key)
         try:
-            mapping, info = marker_db.annotate(adata, groupby, db=db)
+            mapping, info = marker_db.annotate(adata, groupby, db=db, tissue=params.annotation_tissue)
         finally:
             if temporary:
                 adata.uns.pop(key, None)
@@ -2118,8 +2177,9 @@ def _run_cell_type_annotation(
     marker scoring). See docs/CELLTYPE_ANNOTATION.md.
     """
     method = (params.annotation_method or "llm").lower()
-    target = params.annotation_target or "cell_type"
     groupby = _resolve_annotation_groupby(adata, params)
+    target = resolve_annotation_target(adata, params)
+    check_annotation_target(adata, target, params.annotation_overwrite)
 
     # Default method is the any-tissue LLM; degrade to CellTypist when no LLM key is set.
     if method == "llm":
@@ -2164,8 +2224,11 @@ def _run_cell_type_annotation(
     qual = label_qualifiers.apply(adata, groupby, target) if groupby else {}
     if not groupby:
         label_qualifiers.drop(adata, target)
-    # Recorded with the step: the model's species and gene overlap (CellTypist only).
-    return {**{k: v for k, v in (fit or {}).items() if k != "model"}, **qual} or None
+    # Recorded with the step: the column written (so a later run may write it again), the
+    # model's species and gene overlap (CellTypist only).
+    return {**{k: v for k, v in (fit or {}).items() if k != "model"}, **qual,
+            "annotation_target": target,
+            **({"annotation_overwrite": True} if params.annotation_overwrite else {})}
 
 
 def drop_enrichment_cache(adata: ad.AnnData, col: str) -> None:

@@ -22,6 +22,8 @@ export interface CompositionRequest {
   within_value?: string | string[];
   /** Person column the samples nest in, for the repeated-donor warning (default: detected). */
   donor_key?: string;
+  /** Per-sample columns in the design before the condition (sex, batch, the animal). */
+  covariates?: string[];
 }
 
 export interface CompositionGroup {
@@ -87,6 +89,9 @@ export interface CompositionResult {
   repeated_donors?: { donor_key: string; n_samples: number; n_donors: number; donors: Record<string, number> } | null;
   /** e.g. "'cell_type' by 'disease' (MS vs normal); within class = OL". */
   comparison?: string;
+  /** The covariates in the design, and those left out (and why). Absent from older servers. */
+  covariates?: string[];
+  covariate_notes?: string[];
   /** The stored result's id (Results). */
   result_id?: string | null;
 }

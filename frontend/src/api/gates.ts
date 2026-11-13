@@ -1,16 +1,9 @@
 import { apiFetch } from "./client";
+import { errorMessage } from "@/lib/errorMessage";
 
 /** The server's reason from an "API error N: {detail}" message, else the message. */
 function reason(e: unknown): Error {
-  const raw = e instanceof Error ? e.message : String(e);
-  const body = raw.replace(/^API error \d+: /, "");
-  try {
-    const detail = JSON.parse(body).detail;
-    if (typeof detail === "string") return new Error(detail);
-  } catch {
-    /* not JSON */
-  }
-  return new Error(body || raw);
+  return new Error(errorMessage(e));
 }
 
 /**

@@ -8,7 +8,7 @@ import asyncio
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from scview.core import composition as comp
 from scview.core.confounding import recorded_batch_key
@@ -28,7 +28,9 @@ class CompositionRequest(BaseModel):
     conditions: list[str] | None = None  # values to compare (default: all)
     reference: str | None = None  # the baseline condition (default: the first)
     transform: Literal["logit", "asin"] = "logit"
-    paired: bool | None = None  # None: paired when every donor is in every condition
+    # None: paired when every donor is in every condition; True: pairs the donors in every
+    # condition and leaves the others out (said in the result).
+    paired: bool | None = None
     robust: bool = True  # limma's robust empirical Bayes, propeller's default
     # Leave these values of the sample column out (a donor's samples, a failed library).
     exclude_samples: list[str] | None = None
@@ -37,6 +39,8 @@ class CompositionRequest(BaseModel):
     within_value: str | list[str] | None = None
     # The person column the samples nest in, for the repeated-donor warning (default: detected).
     donor_key: str | None = None
+    # Per-sample columns in the design before the condition (sex, batch, the animal).
+    covariates: list[str] | None = Field(default=None, max_length=comp.MAX_COVARIATES)
 
     def within_values(self) -> list[str] | None:
         v = self.within_value
@@ -68,7 +72,8 @@ async def composition_test(
         raise HTTPException(status_code=404, detail="Dataset not found.")
     adata = adaptor.adata
     obs = adata.obs
-    for col in (body.condition_key, body.group_key, body.sample_key, body.within_column, body.donor_key):
+    for col in (body.condition_key, body.group_key, body.sample_key, body.within_column, body.donor_key,
+                *(body.covariates or [])):
         if col and col not in obs.columns:
             raise HTTPException(status_code=404, detail=f"Column '{col}' not found.")
 
@@ -82,6 +87,7 @@ async def composition_test(
             group_is_clustering=comp.is_clustering_column(adata, body.group_key),
             exclude_samples=body.exclude_samples, within_column=body.within_column,
             within_values=body.within_values(), donor_key=body.donor_key,
+            covariates=body.covariates,
         )
         return result, not body.sample_key and key is not None
 

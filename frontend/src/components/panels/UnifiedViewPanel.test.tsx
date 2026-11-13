@@ -307,7 +307,8 @@ describe("Unified View and a restored session", () => {
     const [path, init] = apiFetch.mock.calls.find(([p]) => String(p).endsWith("/genesets/score"))!;
     expect(path).toBe("/datasets/kang/genesets/score");
     // A session from before the method choice: scored with score_genes, as then.
-    expect(JSON.parse(init.body)).toEqual({ gene_set: ["ISG15", "MX1"], score_name: "IFN", method: "score_genes" });
+    // Drawn again, not saved again: the user did not score it now.
+    expect(JSON.parse(init.body)).toEqual({ gene_set: ["ISG15", "MX1"], score_name: "IFN", method: "score_genes", save: false });
     const u = useUnifiedViewStore.getState();
     expect(u.scatterOverlay).toEqual({ type: "score", name: "IFN", genes: ["ISG15", "MX1"] });
     expect(u.overlayLabel).toBe("IFN");

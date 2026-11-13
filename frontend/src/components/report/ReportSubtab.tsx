@@ -19,6 +19,7 @@ import type { ObsColumnInfo } from "@/api/types";
 import { ReportCard } from "./ReportCard";
 import { ClusterSectionBody } from "./ClusterSections";
 import { GeneSectionBody } from "./GeneSections";
+import { errorMessage } from "@/lib/errorMessage";
 
 /** Columns a report can be about: labels with 2 to 100 listed values. */
 function groupColumns(columns: ObsColumnInfo[] | undefined): ObsColumnInfo[] {
@@ -98,7 +99,7 @@ export function ReportSubtab({ groupByColumn }: { groupByColumn: string }) {
       })
       .catch((e: unknown) => {
         if (ctrl.signal.aborted) return;
-        setError(e instanceof ReportError ? e : new ReportError(e instanceof Error ? e.message : String(e), 0));
+        setError(e instanceof ReportError ? e : new ReportError(errorMessage(e), 0));
       })
       .finally(() => {
         if (!ctrl.signal.aborted) setLoading(false);

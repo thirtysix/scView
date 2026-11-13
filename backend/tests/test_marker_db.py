@@ -644,6 +644,34 @@ async def test_status_and_check_endpoints(client, dataset_manager, test_settings
     assert r.status_code == 404
 
 
+async def test_mcp_tool_runs_the_check_and_gives_the_evidence_its_marker_lines(
+        client, dataset_manager, test_settings, tmp_data_dir, raw, monkeypatch):
+    """marker_db_check through the MCP: the UI's check, the databases from the data volume; then
+    cluster_evidence (which never downloads) reads them too."""
+    from scview.core import cluster_evidence as CE
+    from tests.test_mcp import _call
+
+    test_settings.MARKER_DB_AUTO_DOWNLOAD = False
+    did = _register(dataset_manager, _cells(), "mdbmcp")
+    text = await _call("marker_db_check", {"dataset_id": did, "column": "lab"}, error=True)
+    assert "MARKER_DB_AUTO_DOWNLOAD" in text
+    rawdir = tmp_data_dir / "marker_db" / "raw"
+    rawdir.mkdir(parents=True)
+    for name, spec in mdb.SOURCES.items():
+        if name not in ("act", "cellmarker3"):
+            (rawdir / spec.filename).write_bytes(raw[name])
+    (rawdir / mdb.ONTOLOGY_FILE).write_bytes(raw["ontology"])
+    r = await _call("marker_db_check", {"dataset_id": did, "column": "lab"})
+    assert r["column"] == "lab" and r["species"] == "human" and r["verdict_counts"]["supported"] == 1
+    rows = {row[0]: dict(zip(r["labels"]["columns"], row)) for row in r["labels"]["rows"]}
+    assert rows["B"]["verdict_text"] == "supported" and "CD79A" in rows["B"]["overlap"]
+    assert rows["T-cells"]["suggestions"].startswith("NK cells")
+    assert r["labels"]["n_total"] == 4
+    monkeypatch.setattr(mdb, "marker_db_dir", lambda: tmp_data_dir / "marker_db")
+    db, _ = CE._on_disk()
+    assert db is not None  # the evidence's marker lines now have their databases
+
+
 def test_start_download_returns_at_once_and_reports_downloading(tmp_path, monkeypatch):
     import threading
 

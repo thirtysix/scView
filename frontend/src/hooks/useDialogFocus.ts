@@ -16,12 +16,13 @@ export function focusableIn(root: HTMLElement): HTMLElement[] {
  * focus moves into it (the first field or button, never an info icon, unless something in it
  * already has focus), Tab and Shift+Tab stay inside it (`trap`; off for a
  * floating panel used alongside the plot), Escape calls `onClose`, and on
- * unmount focus goes back to where it was before.
+ * unmount focus goes back to where it was before. `initial`: the element to
+ * focus first instead (a confirm's Cancel, so Enter does not delete).
  */
 export function useDialogFocus(
   ref: RefObject<HTMLElement | null>,
   onClose: () => void,
-  { trap = true }: { trap?: boolean } = {},
+  { trap = true, initial }: { trap?: boolean; initial?: RefObject<HTMLElement | null> } = {},
 ): void {
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
@@ -32,7 +33,7 @@ export function useDialogFocus(
     if (!root.contains(document.activeElement)) {
       // Not an info icon: focus arriving on one opens its tip over the dialog (Tab still reaches it).
       const items = focusableIn(root);
-      (items.find((el) => !el.hasAttribute("data-infotip")) ?? items[0] ?? root).focus();
+      (initial?.current ?? items.find((el) => !el.hasAttribute("data-infotip")) ?? items[0] ?? root).focus();
     }
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -65,5 +66,5 @@ export function useDialogFocus(
       const lost = !active || active === document.body || root.contains(active);
       if (lost && opener?.isConnected) opener.focus();
     };
-  }, [ref, trap]);
+  }, [ref, trap, initial]);
 }

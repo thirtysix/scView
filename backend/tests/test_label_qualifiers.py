@@ -114,7 +114,7 @@ def test_annotation_step_writes_the_qualified_column(monkeypatch):
         DEEPINFRA_API_KEY="k", RAG_CHAT_MODEL="m"))
     rec = P._run_cell_type_annotation(a, P.PipelineParams(annotation_groupby="cluster"))
     assert rec["qualifiers"] == 3 and rec["cl_ids"] == 0
-    assert "cell_type_qualified" in a.obs
+    assert "cluster_celltypeAnno_qualified" in a.obs  # scView's own column by default
 
 
 @pytest.mark.parametrize("gene,ok", [("ISG15", True), ("RPS3", False), ("MT-CO1", False),

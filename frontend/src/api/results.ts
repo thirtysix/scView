@@ -15,6 +15,8 @@ export interface StoredResult {
   bytes: number;
   /** Computed on an earlier version of the data; null when the dataset is not open. */
   stale: boolean | null;
+  /** Why it is stale ("neighbours rebuilt after this result"); absent when current or from older servers. */
+  stale_reason?: string | null;
   /** ISO 8601, UTC */
   created_at: string;
 }

@@ -44,19 +44,49 @@ FEW_DONORS = 3  # fewer on a side: the between-donor variance rests on one or tw
 MAX_NAMED = 8  # donors named in a warning
 
 
+def _differs_within(obs, frame: pd.DataFrame, cand: str, skip: set[str]) -> str | None:
+    """A column (2-8 values) that is one value per sample but differs between one
+    person's samples: what the person's samples are (a depot, a time point)."""
+    rows = frame.index
+    many = frame.drop_duplicates("s").groupby("d", observed=True)["s"].transform("size") > 1
+    if not many.any():
+        return None
+    for col in obs.columns:
+        name = str(col)
+        if name in skip or name == cand:
+            continue
+        v = obs.loc[rows, col]
+        if not 2 <= v.nunique(dropna=True) <= 8 or v.isna().any():
+            continue
+        f = pd.DataFrame({"s": frame["s"].to_numpy(), "d": frame["d"].to_numpy(),
+                          "v": v.astype(str).to_numpy()})
+        if (f.groupby("s", observed=True)["v"].nunique() > 1).any():
+            continue  # varies within a sample: a per-cell column
+        if (f.drop_duplicates("s").groupby("d", observed=True)["v"].nunique() > 1).any():
+            return name
+    return None
+
+
 def repeated_donors(obs, sample_key: str, sides: Sequence, donor_key: str | None = None,
-                    exclude: Iterable[str] = ()) -> dict | None:
+                    exclude: Iterable[str] = (), covariates: Iterable[str] = ()) -> dict | None:
     """When the replicates (``sample_key``, one per value per side) nest in a person
     column with more than one replicate for some person among the cells of ``sides``
     (boolean masks, one per side): ``{"donor_key", "n_samples", "n_donors", "donors":
-    {donor: n replicates}, "message"}``. ``donor_key`` None tries the person-named
-    columns; None when there is none, or every person gives one replicate."""
+    {donor: n replicates}, "within", "blocked", "message"}``. ``donor_key`` None tries the
+    person-named columns; None when there is none, or every person gives one replicate.
+
+    The advice fits the design: ``within`` is set when some person has samples on both
+    sides (the compared factor varies inside a person, as a depot does inside a mouse), so
+    the person is blocked on, not pooled; ``blocked`` (``message`` None) when the person
+    column is already in ``covariates``, which is that blocking."""
+    covs = set(covariates)
     if donor_key is not None:
         candidates = [donor_key] if donor_key != sample_key and donor_key in obs.columns else []
     else:
         skip = set(exclude) | {sample_key}
         candidates = [c for c in donor_candidates(obs, skip)
                       if any(p.search(c) for p in PERSON_PATTERNS)]
+        candidates.sort(key=lambda c: c not in covs)  # a blocked person column first
     if not candidates:
         return None
     in_any = np.zeros(len(obs), bool)
@@ -68,7 +98,8 @@ def repeated_donors(obs, sample_key: str, sides: Sequence, donor_key: str | None
     sample = obs[sample_key].astype(str).where(obs[sample_key].notna())
     for cand in candidates:
         person = obs[cand].astype(str).where(obs[cand].notna())
-        frame = pd.DataFrame({"s": sample.to_numpy(), "d": person.to_numpy(), "side": side_of})
+        frame = pd.DataFrame({"s": sample.to_numpy(), "d": person.to_numpy(), "side": side_of},
+                             index=obs.index)
         frame = frame[in_any].dropna()
         if frame.empty or (frame.groupby("s", observed=True)["d"].nunique() > 1).any():
             continue  # not nested: a sample with cells of several people (pooled) or no person
@@ -82,15 +113,34 @@ def repeated_donors(obs, sample_key: str, sides: Sequence, donor_key: str | None
         donors = {str(k): int(v) for k, v in many.items()}
         shown = ", ".join(f"{k}: {v}" for k, v in list(donors.items())[:MAX_NAMED])
         more = f" and {len(donors) - MAX_NAMED} more" if len(donors) > MAX_NAMED else ""
-        return {
-            "donor_key": cand, "n_samples": int(len(reps)), "n_donors": int(per.size),
-            "donors": donors,
-            "message": (
-                f"Samples are not independent: {len(donors)} of {per.size} '{cand}' values give "
+        both = reps.drop_duplicates(["d", "side"]).groupby("d", observed=True).size()
+        n_within = int((both > 1).sum())
+        out = {"donor_key": cand, "n_samples": int(len(reps)), "n_donors": int(per.size),
+               "donors": donors, "within": n_within > 0, "blocked": cand in covs}
+        if cand in covs:
+            out["message"] = None
+            return out
+        head = (f"Samples are not independent: {len(donors)} of {per.size} '{cand}' values give "
                 f"more than one '{sample_key}' value here ({shown}{more}). Each sample is counted "
-                f"as an independent replicate, so p values are optimistic; use '{cand}' as the "
-                "replicate column to count each person once."),
-        }
+                "as an independent replicate, so p values are optimistic")
+        if n_within:
+            out["message"] = (
+                f"{head}. The compared factor varies within '{cand}' ({n_within} of them have "
+                f"samples on both sides), so block on it: add '{cand}' as a covariate (each "
+                f"one's samples are then compared within it), or use '{cand}' as the replicate "
+                "column (its cells are summed per side and paired).")
+            return out
+        other = _differs_within(obs, frame, cand, set(exclude) | {sample_key} | covs)
+        if other:
+            out["differs_by"] = other
+            out["message"] = (
+                f"{head}. A '{cand}' value's samples differ in '{other}': use '{cand}' as the "
+                f"replicate column to count each one once (that pools its '{other}' levels), "
+                f"or test within one '{other}' value.")
+        else:
+            out["message"] = (f"{head}; use '{cand}' as the replicate column to count each "
+                              f"'{cand}' value once.")
+        return out
     return None
 
 
@@ -119,6 +169,32 @@ def few_donors(counts: dict[str, int], unit: str) -> str | None:
     where = ", ".join(f"{k}: {n}" for k, n in few.items())
     return (f"Fewer than {FEW_DONORS} {unit} on a side ({where}): the variance between them rests "
             "on one or two people, so one unusual person can make or hide a difference.")
+
+
+# A donor (or sample) with fewer cells than this share of the median one's: its shares and its
+# pseudobulk rest on few cells, so they carry over sqrt(3) = 1.7 times a typical donor's sampling
+# error, yet the test weighs it as one replicate like the rest. A third catches the Wilson 2022
+# kidney's diabetic_5 (884 nuclei, 0.30 of the median donor's 2,996: 150 PT nuclei); the QC per
+# sample table's few-cells flag (a tenth, ``qc_groups.FEW_CELLS_SHARE``) is about thresholds, not tests.
+FEW_CELLS_SHARE = 1 / 3
+MIN_DONORS_FOR_SIZE = 3  # a median of two says nothing about which is small
+
+
+def few_cell_donors(sizes: dict[str, int], unit: str = "donor") -> str | None:
+    """A caution naming the donors (``sizes``: donor -> cells in the comparison) with fewer
+    than ``FEW_CELLS_SHARE`` of the median donor's cells, or None."""
+    if len(sizes) < MIN_DONORS_FOR_SIZE:
+        return None
+    med = float(np.median(list(sizes.values())))
+    few = sorted(((k, n) for k, n in sizes.items() if n < FEW_CELLS_SHARE * med), key=lambda kv: kv[1])
+    if not few:
+        return None
+    shown = ", ".join(f"{k} ({n:,} cells)" for k, n in few[:MAX_NAMED]) + (" ..." if len(few) > MAX_NAMED else "")
+    many = len(few) > 1
+    return (f"{'These' if many else 'This'} {unit}{'s have' if many else ' has'} under a third of the median "
+            f"{unit}'s {med:,.0f} cells: {shown}. {'Their' if many else 'Its'} numbers rest on few cells and "
+            f"are noisier, yet {'each counts' if many else 'it counts'} as a full replicate; check that one "
+            f"small {unit} does not drive a difference (leave it out and compare).")
 
 
 def pick_donor(obs, candidates: Sequence[str], groups: Sequence) -> str | None:

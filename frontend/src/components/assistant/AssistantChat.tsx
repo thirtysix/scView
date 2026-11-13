@@ -42,6 +42,7 @@ import {
 } from "@/lib/copilotPlan";
 import { PlanCard } from "@/components/assistant/PlanCard";
 import { ClaimsLedger, mergeVerdicts, toCheck } from "@/components/assistant/ClaimsLedger";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface Turn {
   role: "user" | "assistant";
@@ -215,7 +216,7 @@ export function AssistantChat({ surface = "drawer" }: { surface?: "drawer" | "pa
     } catch (e) {
       patchLast((t) => ({
         ...t,
-        content: `Sorry — methods generation failed: ${e instanceof Error ? e.message : String(e)}`,
+        content: `Sorry — methods generation failed: ${errorMessage(e)}`,
       }));
     } finally {
       setBusy(false);
@@ -266,7 +267,7 @@ export function AssistantChat({ surface = "drawer" }: { surface?: "drawer" | "pa
         );
       } catch (e) {
         if (started !== epoch.current) return;
-        const msg = e instanceof Error ? e.message : String(e);
+        const msg = errorMessage(e);
         setClaimsError((prev) => ({ ...prev, [index]: `Check failed: ${msg}` }));
       } finally {
         setCheckingTurn(null);
@@ -344,7 +345,7 @@ export function AssistantChat({ surface = "drawer" }: { surface?: "drawer" | "pa
         patchLast((t) => ({
           ...t,
           content: `Sorry — the assistant failed: ${
-            e2 instanceof Error ? e2.message : String(e2)
+            errorMessage(e2)
           }`,
         }));
       }
@@ -408,7 +409,7 @@ export function AssistantChat({ surface = "drawer" }: { surface?: "drawer" | "pa
           useViewStore.getState().setPanel("unified");
         }
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
+        const msg = errorMessage(e);
         setTurns((prev) =>
           prev.map((t, i) =>
             i === prev.length - 1 ? { ...t, content: t.content.replace("_Running…_", `❌ ${msg}`) } : t,

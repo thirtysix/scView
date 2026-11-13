@@ -12,6 +12,7 @@ import {
 } from "@/api/atac";
 import { runAtacLinks, type LinksBody, type LinksPage } from "@/api/atacLinks";
 import { watchdogMessage, type WatchdogEvent } from "@/api/pipelineRun";
+import { errorMessage } from "@/lib/errorMessage";
 
 export type AtacRunKind = "run" | "wnn" | "differential" | "links" | "chromvar";
 
@@ -71,7 +72,7 @@ export const useAtacRunStore = create<AtacRunState>((set, get) => {
       set((s) => ({ running: false, version: s.version + 1 }));
     } catch (e) {
       const aborted = signal.aborted;
-      set({ running: false, error: aborted ? "Cancelled: nothing was saved." : e instanceof Error ? e.message : String(e) });
+      set({ running: false, error: aborted ? "Cancelled: nothing was saved." : errorMessage(e) });
     } finally {
       if (controller?.signal === signal) controller = null;
     }

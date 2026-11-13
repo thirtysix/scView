@@ -10,7 +10,7 @@ import { collectionLabel } from "@/api/genesets";
 import { runGsea, type EnrichmentResult, type GseaResponse, type GseaTerm } from "@/api/enrichment";
 import { MSigDBCollectionTree, DEFAULT_MSIGDB_COLLECTIONS } from "@/components/panels/MSigDBCollectionTree";
 import { downloadCsv } from "@/lib/csv";
-import { errorMessage } from "@/lib/errorMessage";
+import { errorMessage, errorStatus } from "@/lib/errorMessage";
 import { Caption } from "@/components/common/Caption";
 import { HoverTip } from "@/components/common/InfoTip";
 import { Help } from "@/components/common/Help";
@@ -153,8 +153,7 @@ export function UnifiedEnrichmentSubtab({
         setGroupsFromData(data);
       } catch (err) {
         if (cancelled) return;
-        const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes("404")) setNoMarkers(true);
+        if (errorStatus(err) === 404) setNoMarkers(true);
         else setMarkersError(errorMessage(err));
       } finally {
         if (!cancelled) setIsLoadingGroups(false);

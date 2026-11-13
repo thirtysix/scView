@@ -52,6 +52,10 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
      "detection (Scrublet or scDblFinder-style), regress-out"),
     ("Data Assessment > Sequencing QC (Cell Ranger)", "", "Cell Ranger metrics, barcode ranks"),
     ("Data Assessment > Ambient RNA", "", "soup from empty droplets, contamination estimate"),
+    ("Data Assessment > Cluster QC", "",
+     "each cluster's genes, counts and % mito against the typical cluster, with flags for damaged, doublet-like, "
+     "stressed or cycling clusters and cautions: mito RNA in nuclei (share of cells with mito reads), a cluster "
+     "with another's markers but far less RNA, markers led by non-coding RNAs or by sex genes (XIST, Y genes)"),
     ("Data Assessment > Cell hashing", "", "HTODemux / hashedDrops: singlets, doublets, negatives"),
     ("Data Assessment > QC Distributions", "doublets, sample QC, sex check",
      "per-cell QC plots, per-sample QC, doublet calls, pseudobulk sample QC, sex check"),
@@ -60,18 +64,21 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
      "why each cluster was labelled or flagged, in words, never a probability: its markers against random genes "
      "(best database p vs what 1 in 10 random lists reach), genes and % mito vs the typical cluster with the flags "
      "that fired, a doublet-like cluster's two parents and RNA, database types as shares of the evidence (named "
-     "groupings only), and the label scView gave itself ('Low-quality cells', 'Unidentified'); any grouping"),
+     "groupings only), and the label scView gave itself ('Low-quality cells') or the note the AI got; any grouping"),
     ("Data Assessment > PCA", "", "elbow, variance explained, loadings"),
     ("Data Assessment > Cell-type annotation", "",
-     "name clusters by an LLM from their markers, a CellTypist model or marker-database scores, into an obs "
-     "column; with Cell Ontology ids; <column>_qualified adds the genes that set a cluster apart where clusters "
+     "name clusters by an LLM from their markers, a CellTypist model or marker-database scores (types of other "
+     "tissues left out when the tissue is given or in the data), into an obs column; with Cell Ontology ids; <column>_qualified adds the genes that set a cluster apart where clusters "
      "share a label or a label is a mixture or no cell type, e.g. 'Monocytes (CCL8+ RSAD2+)'; with the LLM, "
-     "scView itself labels clusters cluster QC flags as damaged 'Low-quality cells' and marker lists that match "
-     "no database type better than random genes 'Unidentified', and the LLM names the rest"),
+     "scView itself labels clusters cluster QC flags as damaged 'Low-quality cells', and the LLM names the "
+     "rest, told when a cluster's markers do not beat 9 of 10 random gene lists of the same size"),
     ("Data Assessment > Label from a reference dataset", "reference mapping",
      "label cells from another annotated library dataset; flags cells not in the reference"),
     ("Data Assessment > Annotation confidence", "", "label-fit flags per cell"),
     ("Data Assessment > Annotation cross-check", "", "agreement between two annotations"),
+    ("Data Assessment > Annotation cross-check > Marker database check", "",
+     "each label against PanglaoDB, CellMarker and ACT: supported, weak, no database support or not in "
+     "database, and the 3 database types its markers fit best; downloads the databases on first use"),
     ("Unified View", "", "linked scatter (UMAP/tSNE/PCA) with analysis tabs beside it"),
     ("Unified View > Embedding > Tissue", "spatial",
      "spots, bins or cells on the tissue image (Visium, Visium HD); Section, Image on/off; colours, lasso as on UMAP"),
@@ -99,6 +106,11 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
      "nearest gene, distance to TSS, class; CSV"),
     ("Unified View > Gene Sets", "AUCell, ssGSEA, GSVA",
      "browse MSigDB sets; score them with AUCell, ssGSEA or GSVA"),
+    ("Unified View > Compare", "saved scores",
+     "the plot coloured by 2-12 columns side by side: groupings, and under Scores every gene-set score and "
+     "TF / pathway activity the user has drawn (each is saved as a column, score_<set> or activity_<source>; "
+     "scoring the same set again replaces it) plus cell-cycle and stress scores; saved scores also show in "
+     "Colour by and the histogram, and Remove beside one drops it"),
     ("Unified View > Enrichment", "ORA, GSEA", "pathway enrichment (ORA, preranked GSEA)"),
     ("Unified View > Enrichment > Diagram", "Reactome",
      "a Reactome row's pathway diagram coloured by a DE result's fold changes (also on the DE tab's "
@@ -193,7 +205,8 @@ CLOSING = "These are all of scView's tabs and tools; name a feature only by its 
 # In the full guide only: the compact block is at its cap (tests/test_feature_guide.py). The tab stays in it.
 FULL_ONLY = ("Unified View > Accessibility >", "Unified View > Embedding > Tissue > Draw", "Unified View > Transcripts",
              "Unified View > Domains > Co-occurrence", "Unified View > Spot composition > Reference labels",
-             "Data Assessment > Cell-type annotation", "Data Assessment > Cluster QC")
+             "Data Assessment > Cell-type annotation", "Data Assessment > Cluster QC", "Unified View > Compare",
+             "Data Assessment > Annotation cross-check > Marker database check")
 
 
 def compact_guide() -> str:

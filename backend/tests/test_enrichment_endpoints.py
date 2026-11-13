@@ -59,6 +59,7 @@ def _register(dm, did: str = "enr", labels: tuple[str, str, str] = ("T", "B", "N
     a.obs[column] = pd.Categorical(
         [labels[0]] * 30 + [labels[1]] * 30 + [labels[2]] * 30, categories=list(labels)
     )
+    sc.pp.log1p(a)  # markers ranked on counts are stale (core/marker_matrix.py)
     if markers:
         sc.tl.rank_genes_groups(a, column, method="wilcoxon", pts=True,
                                 key_added=markers_key(column))

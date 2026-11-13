@@ -19,6 +19,10 @@ export const FLAG_LABELS: Record<ClusterFlag, string> = {
   cycling: "Cycling",
   low_malat1: "Low MALAT1",
   small: "Very small",
+  nuclei_mito: "Mito in nuclei",
+  low_content: "Low RNA",
+  noncoding_markers: "Non-coding markers",
+  sex_markers: "Sex genes lead",
 };
 
 const FLAG_STYLES: Record<ClusterFlag, string> = {
@@ -32,6 +36,10 @@ const FLAG_STYLES: Record<ClusterFlag, string> = {
   cycling: "border-sky-200 bg-sky-50 text-sky-700",
   low_malat1: "border-teal-200 bg-teal-50 text-teal-800",
   small: "border-slate-200 bg-slate-50 text-slate-600",
+  nuclei_mito: "border-amber-200 bg-amber-50 text-amber-800",
+  low_content: "border-amber-200 bg-amber-50 text-amber-800",
+  noncoding_markers: "border-slate-200 bg-slate-50 text-slate-600",
+  sex_markers: "border-slate-200 bg-slate-50 text-slate-600",
 };
 
 const MALAT1_TITLE =
@@ -41,9 +49,17 @@ const MALAT1_TITLE =
 
 const ERYTHROID_TITLE = "Red-cell lineage by its own markers: its haemoglobin is real expression, not ambient RNA.";
 
-function fmt(v: number | null | undefined, kind: "n" | "pct" | "frac" | "hb" = "n"): string {
+function fmt(v: number | null | undefined, kind: "n" | "pct" | "frac" | "hb" | "mito" = "n"): string {
   if (v === null || v === undefined || !isFinite(v)) return "—";
   if (kind === "pct") return `${v.toFixed(1)}%`;
+  if (kind === "mito") {
+    // From damaged cells (25%) down to nuclei (0.008%): as many digits as it takes to differ.
+    // Decided on the rounded value: 0.0999 reads 0.10%, like 0.1.
+    if (Number(v.toFixed(1)) >= 1) return `${v.toFixed(1)}%`;
+    if (Number(v.toFixed(2)) >= 0.1) return `${v.toFixed(2)}%`;
+    if (Number(v.toFixed(3)) >= 0.001) return `${v.toFixed(3)}%`;
+    return v > 0 ? "<0.001%" : "0%";
+  }
   if (kind === "frac") return `${Math.round(v * 100)}%`;
   if (kind === "hb") {
     // From red cells (~50%) down to ambient traces (0.01%).
@@ -217,6 +233,11 @@ export function ClusterQcTable({ datasetId, refreshKey = 0 }: { datasetId: strin
                   <th className="px-2 py-1 text-right font-medium" title="Median genes per cell">Genes</th>
                   <th className="px-2 py-1 text-right font-medium" title="Median counts per cell">Counts</th>
                   {has("pct_mt") && <th className="px-2 py-1 text-right font-medium" title="Median % mitochondrial">Mito</th>}
+                  {has("mt_detected") && (
+                    <th className="px-2 py-1 text-right font-medium">
+                      <Help id="clusterqc.mito_cells">Mito cells</Help>
+                    </th>
+                  )}
                   {has("pct_ribo") && <th className="px-2 py-1 text-right font-medium" title="Median % ribosomal">Ribo</th>}
                   {has("doublet_fraction") && <th className="px-2 py-1 text-right font-medium" title={`Share of the cluster's cells called doublets${data.doublet_source ? ` by ${data.doublet_source}` : ""} (cell hashing when it was run, else Scrublet)`}>Doublets</th>}
                   {!has("doublet_fraction") && has("doublet_score") && <th className="px-2 py-1 text-right font-medium" title="Median doublet score">Dbl score</th>}
@@ -241,7 +262,8 @@ export function ClusterQcTable({ datasetId, refreshKey = 0 }: { datasetId: strin
                   <td className="px-2 py-1" />
                   <td className="px-2 py-1 text-right">{fmt(data.typical.median_genes)}</td>
                   <td className="px-2 py-1 text-right">{fmt(data.typical.median_counts)}</td>
-                  {has("pct_mt") && <td className="px-2 py-1 text-right">{fmt(data.typical.median_pct_mt, "pct")}</td>}
+                  {has("pct_mt") && <td className="px-2 py-1 text-right">{fmt(data.typical.median_pct_mt, "mito")}</td>}
+                  {has("mt_detected") && <td className="px-2 py-1 text-right">{fmt(data.typical.mt_detected, "frac")}</td>}
                   {has("pct_ribo") && <td className="px-2 py-1 text-right">{fmt(data.typical.median_pct_ribo, "pct")}</td>}
                   {has("doublet_fraction") && <td className="px-2 py-1 text-right">{fmt(data.typical.doublet_fraction, "frac")}</td>}
                   {!has("doublet_fraction") && has("doublet_score") && <td className="px-2 py-1 text-right">{data.typical.median_doublet_score?.toFixed(2) ?? "—"}</td>}
@@ -274,7 +296,12 @@ export function ClusterQcTable({ datasetId, refreshKey = 0 }: { datasetId: strin
                     <td className="px-2 py-1 text-right tabular-nums">{fmt(c.n_cells)}</td>
                     <td className="px-2 py-1 text-right tabular-nums">{fmt(c.median_genes)}</td>
                     <td className="px-2 py-1 text-right tabular-nums">{fmt(c.median_counts)}</td>
-                    {has("pct_mt") && <td className="px-2 py-1 text-right tabular-nums">{fmt(c.median_pct_mt, "pct")}</td>}
+                    {has("pct_mt") && <td className="px-2 py-1 text-right tabular-nums">{fmt(c.median_pct_mt, "mito")}</td>}
+                    {has("mt_detected") && (
+                      <td className="px-2 py-1 text-right tabular-nums" title={`Mean ${fmt(c.mean_pct_mt, "mito")} of its reads`}>
+                        {fmt(c.mt_detected, "frac")}
+                      </td>
+                    )}
                     {has("pct_ribo") && <td className="px-2 py-1 text-right tabular-nums">{fmt(c.median_pct_ribo, "pct")}</td>}
                     {has("doublet_fraction") && <td className="px-2 py-1 text-right tabular-nums">{fmt(c.doublet_fraction, "frac")}</td>}
                     {!has("doublet_fraction") && has("doublet_score") && <td className="px-2 py-1 text-right tabular-nums">{c.median_doublet_score?.toFixed(2) ?? "—"}</td>}

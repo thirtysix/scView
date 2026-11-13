@@ -48,6 +48,7 @@ import { scoreGeneSet, scoreLabel, type GeneSetScoreResponse } from "@/api/genes
 import { useScoringMethodStore } from "@/stores/scoringMethodStore";
 import { ScoringMethodChoice } from "@/components/common/ScoringMethodChoice";
 import { RequestError } from "@/components/common/RequestError";
+import { errorMessage } from "@/lib/errorMessage";
 
 /* ------------------------------------------------------------------ */
 /* Types                                                               */
@@ -417,7 +418,7 @@ export function GeneSetPanel() {
         buildViolinFromScores(data.scores);
       }
     } catch (err) {
-      setScoreError(err instanceof Error ? err.message : String(err));
+      setScoreError(errorMessage(err));
     } finally {
       setIsScoring(false);
     }
@@ -480,7 +481,7 @@ export function GeneSetPanel() {
           }),
         );
       } catch (err) {
-        setNetworkError(err instanceof Error ? err.message : String(err));
+        setNetworkError(errorMessage(err));
         setNetwork(null);
       } finally {
         setIsBuildingNetwork(false);
@@ -549,7 +550,7 @@ export function GeneSetPanel() {
       setEnrichment(data);
       void buildNetwork(resolution);
     } catch (err) {
-      setEnrichError(err instanceof Error ? err.message : String(err));
+      setEnrichError(errorMessage(err));
     } finally {
       setIsEnrichLoading(false);
     }

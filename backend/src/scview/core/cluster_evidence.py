@@ -59,12 +59,16 @@ FLAG_WORDS = {
     "cycling": "cycling",
     "low_malat1": "low MALAT1",
     "small": "very small",
+    "nuclei_mito": "mito RNA in nuclei",
+    "low_content": "low RNA for its identity",
+    "noncoding_markers": "non-coding markers",
+    "sex_markers": "sex genes lead its markers",
 }
 _DAMAGE = ("low_quality", "high_mito")
 
 
 class Line(BaseModel):
-    kind: Literal["markers", "qc", "doublet", "typing", "decision"]
+    kind: Literal["markers", "qc", "doublet", "content", "makeup", "typing", "decision"]
     text: str
     fired: bool = False  # this is why a rule fired
 
@@ -130,13 +134,14 @@ def markers_line(group: str, check: marker_randomness.RandomCheck | None, has_li
         return Line(kind="markers", text=(
             f"Only {n} of its markers are in the marker databases (best match {kind}, p {p_text(best)}): too few "
             f"to compare with random genes (that needs {marker_randomness.MIN_NAMED})."))
+    # The bar is the 90th percentile of random lists: "beats 9 of 10", never "better than random".
     if group in check.flagged:
         return Line(kind="markers", fired=True, text=(
-            f"Markers match no database type better than random genes: best p {p_text(best)} ({kind}), while 1 in "
-            f"10 random lists of {n} database genes reach {p_text(cut)}."))
+            f"Markers do not beat 9 of 10 random lists of {n} database genes: best p {p_text(best)} ({kind}), "
+            f"while 1 in 10 random lists reach {p_text(cut)}."))
     return Line(kind="markers", text=(
-        f"Markers match {kind} better than random genes: best p {p_text(best)}, while 1 in 10 random lists of "
-        f"{n} database genes reach {p_text(cut)}."))
+        f"Markers match {kind} at best p {p_text(best)}, which beats 9 of 10 random lists of {n} database "
+        f"genes (1 in 10 reach {p_text(cut)})."))
 
 
 def qc_line(row: cluster_qc.ClusterQC, typical: dict[str, float]) -> Line:
@@ -144,7 +149,14 @@ def qc_line(row: cluster_qc.ClusterQC, typical: dict[str, float]) -> Line:
     if row.median_genes is not None and typical.get("median_genes"):
         parts.append(f"{_n(row.median_genes)} genes vs {_n(typical['median_genes'])} typical")
     if row.median_pct_mt is not None and typical.get("median_pct_mt") is not None:
-        parts.append(f"{row.median_pct_mt:.1f}% vs {typical['median_pct_mt']:.1f}% mito")
+        mito = f"{cluster_qc.mito_text(row.median_pct_mt)} vs {cluster_qc.mito_text(typical['median_pct_mt'])} mito"
+        if typical["median_pct_mt"] < cluster_qc.NUCLEI_MITO_MEDIAN and row.mt_detected is not None \
+                and typical.get("mt_detected") is not None:
+            # Nuclei: the median cell has no mito read, so say how many cells have one
+            mito += (f" (mito reads in {row.mt_detected:.0%} of its cells vs {typical['mt_detected']:.0%}, mean "
+                     f"{cluster_qc.mito_text(row.mean_pct_mt or 0.0)} vs "
+                     f"{cluster_qc.mito_text(typical.get('mean_pct_mt') or 0.0)})")
+        parts.append(mito)
     if "doublet_rich" in row.flags and row.doublet_fraction is not None and typical.get("doublet_fraction") is not None:
         parts.append(f"{row.doublet_fraction:.0%} vs {typical['doublet_fraction']:.0%} predicted doublets")
     text = "; ".join(parts) or f"{row.n_cells:,} cells"
@@ -152,7 +164,8 @@ def qc_line(row: cluster_qc.ClusterQC, typical: dict[str, float]) -> Line:
         text += ". Cluster QC flags it " + ", ".join(FLAG_WORDS.get(f, f.replace("_", " ")) for f in row.flags) + "."
     else:
         text += ". No cluster QC flag."
-    return Line(kind="qc", text=text, fired=any(f in _DAMAGE for f in row.flags))
+    # nuclei_mito is a caution read from these numbers: the line is why it fired
+    return Line(kind="qc", text=text, fired=any(f in (*_DAMAGE, "nuclei_mito") for f in row.flags))
 
 
 def doublet_line(row: cluster_qc.ClusterQC, rows: dict[str, cluster_qc.ClusterQC]) -> Line | None:
@@ -170,6 +183,34 @@ def doublet_line(row: cluster_qc.ClusterQC, rows: dict[str, cluster_qc.ClusterQC
         rna = (f", and its cells carry {row.median_counts / big.median_counts:.1f}x the RNA of {big.group} "
                f"({_n(row.median_counts)} vs {_n(big.median_counts)} median counts)")
     return Line(kind="doublet", fired=True, text=f"Looks like a mix of {a} and {b}{shared}{rna}.")
+
+
+def content_line(row: cluster_qc.ClusterQC, rows: dict[str, cluster_qc.ClusterQC]) -> Line | None:
+    """``low_content``: the cluster whose identity it shares, and how much less RNA it carries."""
+    o = rows.get(row.low_content_of or "")
+    if "low_content" not in row.flags or o is None or len(row.low_content_shared) != 2:
+        return None
+    shared, k = row.low_content_shared
+    if not (row.median_counts and o.median_counts and row.median_genes and o.median_genes):
+        return None
+    return Line(kind="content", fired=True, text=(
+        f"Looks like {o.group} with less RNA: {shared} of its {k} top markers are {o.group}'s, but its cells carry "
+        f"{row.median_counts / o.median_counts:.2f}x the counts ({_n(row.median_counts)} vs {_n(o.median_counts)} "
+        f"median) and {row.median_genes / o.median_genes:.2f}x the genes. Damaged cells, nuclei losing RNA or "
+        "ambient droplets split off by depth; its markers against "
+        f"{o.group} are likely ambient genes of other types."))
+
+
+def makeup_line(row: cluster_qc.ClusterQC) -> Line | None:
+    """``sex_markers`` / ``noncoding_markers``: what leads the marker list, in words."""
+    parts = []
+    if "sex_markers" in row.flags and row.sex_markers:
+        parts.append(f"Sex genes lead its markers ({', '.join(row.sex_markers)}): it may be one sex's cells "
+                     "(or one donor's) of a type split by sex, not a type of its own.")
+    if "noncoding_markers" in row.flags and row.noncoding_markers:
+        parts.append(f"Its top markers are mostly non-coding or unnamed ({', '.join(row.noncoding_markers[:6])}): "
+                     "little to name a cell type by, typical of a technical cluster.")
+    return Line(kind="makeup", fired=True, text=" ".join(parts)) if parts else None
 
 
 # ---------------------------------------------------------------------------
@@ -311,19 +352,25 @@ def decision_line(group: str, rec: dict | None, rules: dict[str, list[str]],
                   check: marker_randomness.RandomCheck | None) -> tuple[Line | None, str | None, bool]:
     """(line, scView's own label, recorded): from the annotation's record when there is one,
     else what ``pipeline.decide_clusters`` would decide now."""
-    from scview.core.pipeline import LOW_QUALITY_LABEL, UNIDENTIFIED_LABEL
+    from scview.core.pipeline import LOW_QUALITY_LABEL, RANDOM_NOTED, UNIDENTIFIED_LABEL
 
     best = (check.best.get(group) if check else None) or "a type"
     src = rec["record"] if rec else rules
-    low, unid, to_ai = (_ids(src.get(k)) for k in ("llm_decided_low_quality", "llm_random_markers",
-                                                    "llm_high_mito_type_to_ai"))
+    # llm_random_markers: an annotation of v0.71.0-v0.74.0 labelled those clusters Unidentified itself
+    low, unid, noted, to_ai = (_ids(src.get(k)) for k in (
+        "llm_decided_low_quality", "llm_random_markers", RANDOM_NOTED, "llm_high_mito_type_to_ai"))
     label = LOW_QUALITY_LABEL if group in low else UNIDENTIFIED_LABEL if group in unid else None
+    told = "its markers do not beat 9 of 10 random gene lists of the same size against the marker databases"
     if rec:
         where = f"'{rec['target']}'"
         if label:
             return Line(kind="decision", fired=True, text=(
                 f"scView labelled this {label} itself in {where}, without asking the AI.")), label, True
         named = rec["mapping"].get(group)
+        if group in noted:
+            return Line(kind="decision", text=(
+                f"The AI was told that {told}"
+                f"{f', and named it {named}' if named else ''} in {where}.")), None, True
         if group in to_ai:
             return Line(kind="decision", text=(
                 f"High mito, but its markers best match {best}, a cell type with much mitochondrial RNA by nature, "
@@ -334,6 +381,10 @@ def decision_line(group: str, rec: dict | None, rules: dict[str, list[str]],
     if label:
         return Line(kind="decision", fired=True, text=(
             f"AI annotation would label this {label} itself, without asking the AI.")), label, False
+    if group in noted:
+        return Line(kind="decision", text=(
+            f"AI annotation would ask the AI with a note that {told}: a state the databases lack "
+            "can look like this.")), None, False
     if group in to_ai:
         return Line(kind="decision", text=(
             f"High mito, but its markers best match {best}, a cell type with much mitochondrial RNA by nature: "
@@ -397,6 +448,9 @@ def build(adata, column: str, report: cluster_qc.ClusterQCReport, db=None, index
         ev.lines.append(qc_line(r, report.typical))
         if (d := doublet_line(r, rows)) is not None:
             ev.lines.append(d)
+        for extra in (content_line(r, rows), makeup_line(r)):
+            if extra is not None:
+                ev.lines.append(extra)
         if scorer is not None and markers.get(g):
             shares, nested = type_shares(type_candidates(scorer, markers[g], index), hier)
             if (t := typing_line(shares, nested)) is not None:

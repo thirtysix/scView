@@ -64,8 +64,8 @@ def canonical_genome(name: str | None) -> str:
     """'GRCh38' or 'mm10' for a reference name such as 'GRCh38-2020-A' or 'mm10-2020-A'."""
     key = re.split(r"[-_.\s]", str(name or "").strip().lower(), maxsplit=1)[0]
     genome = _ALIASES.get(key)
-    if genome is None and genome_build.names_hg19(name):  # hg19 names its chromosomes as GRCh38 does
-        raise AnnotationError(genome_build.HG19_REFUSAL)
+    if genome is None and (sentence := genome_build.refusal(name)):  # hg19 / mm9 name chromosomes as GRCh38 / mm10
+        raise AnnotationError(sentence)
     if genome is None:
         raise AnnotationError(
             f"scView has gene positions for GRCh38 and mm10, not {name!r}. "

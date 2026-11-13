@@ -120,6 +120,7 @@ export function describeComparison(c: DEComparison, r: DEResponse): string {
   let text = describeTest(c, r);
   // The co-pilot must not read a batch difference as biology...
   if (r.confounding) text += `. Caution: ${r.confounding.message}`;
+  for (const w of r.technology_warnings ?? []) text += `. Caution: ${w.replace(/\.$/, "")}`;
   // ... nor sex-linked genes as the condition's.
   if (r.sex) text += `. Caution: ${r.sex.message.replace(/\.$/, "")}`;
   const sexGenes = significantSexLinked(r);

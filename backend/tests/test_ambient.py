@@ -315,6 +315,24 @@ def test_no_clustering_says_so():
     assert s["rho"] is None and s["rho_status"] == "no_clusters"
 
 
+def _no_counts(a: ad.AnnData) -> ad.AnnData:
+    """``a`` log-normalised in X, with no counts layer or .raw: nothing to read a soup from."""
+    a = a.copy()
+    a.layers.clear()
+    a.raw = None
+    a.X = sp.csr_matrix(np.log1p(a.X.toarray() / a.X.toarray().sum(1, keepdims=True) * 1e4))
+    return a
+
+
+def test_without_counts_the_answer_is_a_note_not_an_error():
+    body = ambient.diagnose(_no_counts(_adata(0.05)))
+    assert body["not_applicable"] and body["reason"] == "no_counts" and not body["available"]
+    assert body["samples"] == [] and body["markers"]["groups"] == {}
+    assert "needs raw counts" in body["notes"][0]
+    # cluster QC reads no flags from it, and never fails
+    assert ambient.flagged_markers(_no_counts(_adata(0.05)), "leiden") == {}
+
+
 def _register(dm, a: ad.AnnData, did: str = "amb") -> str:
     d = Path(dm.data_dir) / "uploads" / did
     d.mkdir(parents=True)
@@ -336,6 +354,14 @@ async def test_ambient_endpoint(client, dataset_manager):
     assert (await client.get(f"{API}/datasets/ghost/qc/ambient")).status_code == 404
     r = await client.get(f"{API}/datasets/{did}/cluster-qc")
     assert r.status_code == 200 and any(c["ambient_markers"] for c in r.json()["clusters"])
+
+
+async def test_ambient_endpoint_without_counts_is_a_200_note(client, dataset_manager):
+    did = _register(dataset_manager, _no_counts(_adata(0.05)), "amb-nocounts")
+    r = await client.get(f"{API}/datasets/{did}/qc/ambient")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["not_applicable"] and body["reason"] == "no_counts" and body["notes"]
 
 
 async def test_ambient_endpoint_refuses_a_large_dataset(client, tmp_data_dir):
@@ -520,3 +546,37 @@ def test_preflight_estimates_the_step():
     set_rho = preflight.estimate_run(preflight.header_from_adata(a), steps=["ambient_correction"],
                                      params=PipelineParams(ambient_rho=0.1))
     assert set_rho.seconds[1] < est.seconds[1]  # no estimate, no quick clustering
+
+
+def test_counts_are_read_in_place_not_copied():
+    # a CELLxGENE-shaped file: counts in .raw beside log values in X, same genes
+    counts = sp.random(300, 50, density=0.2, format="csr", random_state=1, dtype=np.float32)
+    counts.data = np.ceil(counts.data * 10)
+    a = ad.AnnData(X=counts.copy(), var=pd.DataFrame(index=[f"g{i}" for i in range(50)]))
+    a.raw = a.copy()
+    a.X = a.X.log1p() if hasattr(a.X, "log1p") else np.log1p(a.X)
+    M, where = ambient.counts_matrix(a)
+    assert where == ".raw"
+    assert np.shares_memory(M.data, a.raw.X.data)
+
+
+def test_concurrent_first_calls_diagnose_once(monkeypatch):
+    import threading
+    import time
+
+    a = _adata(0.1)
+    calls = []
+
+    def slow(adata, column=None):
+        calls.append(1)
+        time.sleep(0.3)
+        return {"markers": {"groups": {}}}
+
+    monkeypatch.setattr(ambient, "diagnose", slow)
+    out = []
+    threads = [threading.Thread(target=lambda: out.append(ambient.diagnose_cached(a))) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(calls) == 1 and len(out) == 4

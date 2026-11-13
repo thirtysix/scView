@@ -494,12 +494,15 @@ def markers_key(column):
 
 
 def markers_for(adata, column):
-    """Wilcoxon markers of one obs column (2-100 groups), as scView stores them."""
+    """Wilcoxon markers of one obs column (2-100 groups), as scView stores them: on
+    log-normalised values, so not .raw when it holds counts beside a log-normalised X."""
     if column not in adata.obs.columns or not 2 <= adata.obs[column].nunique() <= 100:
         return
     if adata.obs[column].dtype.name != "category":
         adata.obs[column] = adata.obs[column].astype(str).astype("category")
-    sc.tl.rank_genes_groups(adata, groupby=column, method="wilcoxon", pts=True,
+    use_raw = adata.raw is not None and not (looks_like_counts(adata.raw.X)
+                                             and not looks_like_counts(adata.X))
+    sc.tl.rank_genes_groups(adata, groupby=column, method="wilcoxon", pts=True, use_raw=use_raw,
                             key_added=markers_key(column))
 ''',
     "louvain": '''
@@ -853,13 +856,36 @@ def vdj_file(name):
     sys.exit(f"Contig table {name} not found: put it beside this script or the input file.")
 '''
 
+def _aucell_helper() -> str:
+    """core/aucell.py's ranking and scoring (decoupler 2.2's AUCell), nested in one function
+    so its generic names (``score``, ``build``) stay out of the script's namespace."""
+    import inspect
+    import textwrap
+
+    from scview.core import aucell
+
+    body = [f"{name} = {_lit(getattr(aucell, name))}" for name in aucell.REPLAY_CONSTANTS]
+    for obj in aucell.REPLAY_CODE:
+        body += ["", inspect.getsource(obj).rstrip("\n")]
+    body += ["", "rk = build(M, names, max_rank=max_rank)",
+             "idx = pd.Index([str(g) for g in rk.genes]).get_indexer([str(g) for g in genes])",
+             "return score(rk, idx[idx >= 0])"]
+    return ("\nfrom dataclasses import dataclass\n\n\n"
+            "def aucell_scores(M, names, genes, max_rank):\n"
+            '    """AUCell (scView core/aucell.py, = decoupler 2.2): every cell\'s score for the genes."""\n'
+            + textwrap.indent("\n".join(body), "    ") + "\n")
+
+
+_HELPERS["aucell"] = _aucell_helper()
+
+
 # The order helpers are written in (later ones call earlier ones).
 _HELPER_ORDER = ("looks_like_counts", "keep_raw_counts", "find_counts", "var_from_hvg_frame",
                  "counts_hvg", "pearson_residuals", "per_cell_qc", "doublet_calls",
                  "mad_thresholds", "apply_thresholds", "fixed_drop", "type_mito_drop", "refilter_types",
                  "markers_key", "louvain",
                  "harmony", "scanorama", "lognorm_scoring", "subcluster", "gene_programs", "infer_cnv",
-                 "read_hashtags", "hashing", "vdj")
+                 "read_hashtags", "hashing", "vdj", "aucell")
 
 # Helpers another helper calls.
 _HELPER_NEEDS = {
@@ -872,6 +898,7 @@ _HELPER_NEEDS = {
     "refilter_types": ("looks_like_counts",),
     "gene_programs": ("find_counts",),
     "infer_cnv": ("looks_like_counts", "find_counts"),
+    "markers_key": ("looks_like_counts",),
 }
 
 
@@ -2969,6 +2996,20 @@ def _label_cells(p: dict, ctx: _Ctx) -> Snippet:
     ], "manual labels: cells not recorded")
 
 
+def _combine_columns(p: dict, ctx: _Ctx) -> Snippet:
+    column = str(p.get("column") or "")
+    cols = [str(c) for c in p.get("columns") or []]
+    sep = str(p.get("separator") or " | ")
+    if not column or len(cols) < 2:
+        return Snippet(RECORDED, ["# Columns combined; recorded:", *_param_comment(p)])
+    parts = f" + {_lit(sep)} + ".join(f"adata.obs[{_lit(c)}].astype(str)" for c in cols)
+    gone = " | ".join(f"adata.obs[{_lit(c)}].isna()" for c in cols)
+    return Snippet(EXACT, [
+        "# A column of each cell's values of these columns joined (a cell missing one: none).",
+        f"adata.obs[{_lit(column)}] = ({parts}).where(~({gone})).astype('category')",
+    ])
+
+
 def _annotation_crosscheck(p: dict, ctx: _Ctx) -> Snippet:
     outs = [str(c) for c in (p.get("outputs") or []) if c]
     join = [f"#   adata.obs[{comment_text(repr(c), 80)}] = meta.loc[adata.obs_names, {comment_text(repr(c), 80)}]"
@@ -3922,6 +3963,73 @@ def _spatial_niches(p: dict, ctx: _Ctx) -> Snippet:
     ])
 
 
+def _score_matrix(source: str, ctx: _Ctx) -> tuple[str, str]:
+    """(matrix, gene names) code for the matrix a saved score's record names
+    (aucell.rank_matrix: '<kind> .raw', '<kind> X', 'counts in ...')."""
+    if source.endswith(".raw"):
+        return "adata.raw.X", "adata.raw.var_names"
+    if source.endswith(" X") or source == "X":
+        return "adata.X", "adata.var_names"
+    _need(ctx, "find_counts")
+    return "find_counts(adata)", "adata.var_names"
+
+
+def _save_score(p: dict, ctx: _Ctx) -> Snippet:
+    """A per-cell score kept as an obs column (core/saved_scores.py): a gene set scored with
+    score_genes or AUCell is computed again; ssGSEA, GSVA and TF / pathway activity are not."""
+    column, kind, name, method = (p.get(x) for x in ("column", "kind", "name", "method"))
+    genes, source = p.get("genes"), str(p.get("source") or "")
+    recorded = ["# Recorded:", *_param_comment({k: v for k, v in p.items() if k not in ("genes", "genes_missing")})]
+    if not isinstance(column, str) or not column:
+        return Snippet(NOT_REPLAYABLE, ["# A saved score: its column was not recorded.", *recorded],
+                       "column not recorded")
+    head = f"# Saved score {comment_text(name, 120)} ({comment_text(kind, 20)}, {comment_text(method, 20)})."
+    if kind == "geneset" and isinstance(genes, list) and genes and method in ("score_genes", "aucell"):
+        genes_line = f"genes = {_lit([str(g) for g in genes])}  # the genes scored"
+        if method == "aucell" and isinstance(p.get("max_rank"), int):
+            _need(ctx, "aucell")
+            M, names = _score_matrix(source, ctx)
+            return Snippet(EXACT, [head, genes_line,
+                                   f"adata.obs[{_lit(column)}] = aucell_scores({M}, {names}, genes, "
+                                   f"{int(p['max_rank'])}).astype(np.float32)"])
+        if method == "score_genes":
+            if source.startswith("log-normalised") or source == "X":
+                use_raw = source.endswith(".raw")
+                return Snippet(EXACT, [
+                    head, genes_line,
+                    f"sc.tl.score_genes(adata, genes, score_name={_lit(column)}, use_raw={use_raw})",
+                    f"adata.obs[{_lit(column)}] = adata.obs[{_lit(column)}].fillna(0).astype(np.float32)",
+                ])
+            _need(ctx, "find_counts")
+            return Snippet(APPROXIMATE, [
+                head, genes_line,
+                "# NOTE: scView scored its shifted log of the counts; here normalize_total + log1p.",
+                "tmp = ad.AnnData(X=find_counts(adata).astype(np.float32), obs=pd.DataFrame(index=adata.obs_names),",
+                "                 var=pd.DataFrame(index=adata.var_names))",
+                "sc.pp.normalize_total(tmp)",
+                "sc.pp.log1p(tmp)",
+                f"sc.tl.score_genes(tmp, genes, score_name={_lit(column)}, use_raw=False)",
+                f"adata.obs[{_lit(column)}] = tmp.obs[{_lit(column)}].fillna(0).to_numpy(np.float32)",
+            ], "scored on normalize_total + log1p of the counts")
+    why = ("scView's own TF / pathway activity (ULM on a network fetched on first use; decoupler-py's "
+           "ulm gives it)" if kind == "activity" else f"scView's own {comment_text(method, 20)} code")
+    return Snippet(NOT_REPLAYABLE, [
+        head,
+        f"# It is {why}: not replayed. Its values are in scView's cell metadata export",
+        f"# (column {comment_text(repr(column), 80)}).",
+        *recorded,
+    ], "not computed again: see the export")
+
+
+def _remove_score(p: dict, ctx: _Ctx) -> Snippet:
+    column = p.get("column")
+    if not isinstance(column, str) or not column:
+        return Snippet(NOT_REPLAYABLE, ["# A saved score removed: column not recorded.", *_param_comment(p)],
+                       "column not recorded")
+    return Snippet(EXACT, [f"adata.obs.drop(columns=[{_lit(column)}], inplace=True, errors=\"ignore\")  "
+                           "# a saved score removed"])
+
+
 _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "ingest": _ingest,
     "integrate": _integrate,
@@ -3954,6 +4062,7 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "annotation_confidence_unknown": _annotation_confidence,
     "label_cells": _label_cells,
     "undo_label_cells": _label_cells,
+    "combine_columns": _combine_columns,
     "doublet_threshold": _doublet_threshold,
     "annotation_crosscheck": _annotation_crosscheck,
     "merge_clusters": _merge_clusters,
@@ -3988,6 +4097,8 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "nhood_enrichment": _nhood_enrichment,
     "co_occurrence": _co_occurrence,
     "spatial_niches": _spatial_niches,
+    "save_score": _save_score,
+    "remove_score": _remove_score,
     "atac_fragment_qc": _atac_fragment_qc,
     "run_errors": _run_errors,
 }

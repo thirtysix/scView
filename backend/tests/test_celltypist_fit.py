@@ -151,7 +151,7 @@ def test_step_records_species_and_overlap_in_uns_and_provenance(monkeypatch):
     ret = P._run_cell_type_annotation(a, params)
     assert calls["model"] is loaded  # loaded once, for the check and the prediction
     assert ret == {"dataset_species": "human", "model_species": "human",
-                   "n_model_genes": 100, "n_shared_genes": 20, "gene_overlap": 0.2}
+                   "n_model_genes": 100, "n_shared_genes": 20, "gene_overlap": 0.2, "annotation_target": "ct"}
     s = fit.summarize(a, "ct")
     assert s["model"] == "Immune_All_Low.pkl" and s["gene_overlap"] == 0.2
     assert any("only 20 of the model's 100 genes (20%)" in c for c in s["cautions"])
@@ -187,8 +187,9 @@ def test_another_method_forgets_the_celltypist_run(monkeypatch):
 
     monkeypatch.setattr(P, "_annotate_marker_score", marker_score)
     ret = P._run_cell_type_annotation(a, P.PipelineParams(
-        annotation_method="marker_score", annotation_groupby="cluster", annotation_target="ct"))
-    assert ret is None and fit.run_columns(a) == []
+        annotation_method="marker_score", annotation_groupby="cluster", annotation_target="ct",
+        annotation_overwrite=True))  # written above without a step record
+    assert ret == {"annotation_target": "ct", "annotation_overwrite": True} and fit.run_columns(a) == []
 
 
 # ---------------------------------------------------------------------------

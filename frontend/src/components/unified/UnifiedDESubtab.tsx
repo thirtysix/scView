@@ -758,6 +758,9 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
             {result.method !== "pseudobulk" && describePrefilter(result) && (
               <span className="mt-0.5 block">{describePrefilter(result)}</span>
             )}
+            {result.fold_change_note && (
+              <span className="mt-0.5 block" data-testid="de-fold-change-note">{result.fold_change_note}</span>
+            )}
             {result.transcriptome_size && !result.transcriptome_size.caution && (
               <span className="mt-0.5 block">
                 {describeSize(result.transcriptome_size, labelA, labelB)}
@@ -773,6 +776,11 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
                 {(result.dropped_samples?.length ?? 0) > 0 &&
                   ` Left out (under 10 cells): ${result.dropped_samples!.join(", ")}.`}
                 {(result.covariate_notes ?? []).map((n) => ` ${n}`).join("")}
+                {result.significance?.note && (
+                  <span className="mt-0.5 block" data-testid="de-none-significant">
+                    {result.significance.note}
+                  </span>
+                )}
               </span>
             ) : refLabel !== "rest" && (
               <span
@@ -814,6 +822,16 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
                   ? "biological" : `'${result.confounding.condition}'`} effect.
               </span>
             )}
+            {(result.technology_warnings ?? []).map((w) => (
+              <span
+                key={w}
+                role="alert"
+                data-testid="de-technology-caution"
+                className="mt-1 block rounded border border-amber-200 bg-amber-50 px-1.5 py-1 text-amber-800"
+              >
+                {w}
+              </span>
+            ))}
             {(result.replicate_warnings ?? []).map((w) => (
               <span
                 key={w}

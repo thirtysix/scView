@@ -126,6 +126,7 @@ ADDITIVE_STEPS = frozenset({
     "velocity",
     "spatial_domains", "spatial_niches", "nhood_enrichment", "co_occurrence",
     "atac_fragment_qc", "atac_differential", "atac_links", "atac_motif_enrichment", "atac_chromvar",
+    "save_score", "remove_score",  # one per-cell score column (core/saved_scores.py)
 })
 
 
@@ -133,21 +134,46 @@ ADDITIVE_STEPS = frozenset({
 # a result is stale after one only when it named that column (its labels' hash is in the
 # fingerprint's ``columns``), so naming cells no longer marks every DE, Milo and
 # composition result stale.
-LABEL_STEPS = frozenset({"label_cells", "undo_label_cells"})
+LABEL_STEPS = frozenset({"label_cells", "undo_label_cells", "combine_columns"})
+
+# Wilson 2022: a neighbours rebuild and a new annotation column marked all 20 DE,
+# composition and GSEA results stale. Two more classes, used only for result kinds that
+# name every obs column they read (``NAMED_COLUMN_KINDS``):
+# - steps that write label columns (a clustering, an annotation, a merge): stale only a
+#   result that named a column whose labels changed (as LABEL_STEPS);
+# - steps that rebuild the graph, PCs or a layout: stale only a result that read them,
+#   i.e. one not in GRAPH_FREE_KINDS (Milo).
+# Other kinds keep counting them as before (``n_core_steps``).
+COLUMN_STEPS = frozenset({"clustering", "cell_type_annotation", "subcluster", "merge_clusters",
+                          "keep_resolution"})
+GRAPH_STEPS = frozenset({"pca", "batch_correction", "neighbors", "embeddings", "uncorrected_embedding",
+                         "keep_layout"})
+# Computed from expression, counts and labels only, never the graph, PCs or a layout.
+GRAPH_FREE_KINDS = frozenset({"de", "composition", "gsea", "de_audit", "ccc", "ccc_compare", "cytokine",
+                              "planner"})
+NAMED_COLUMN_KINDS = GRAPH_FREE_KINDS | {"milo", "milode"}
+
+
+def _history_steps(adaptor: Any) -> list[str]:
+    from scview.core import provenance
+
+    return [str(h.get("step")) for h in provenance.read_provenance(adaptor.adata).get("history") or []]
 
 
 def fingerprint(adaptor: Any) -> dict[str, Any] | None:
     """The cells (in order) and the recipe's step count the adaptor holds now:
     ``n_steps`` every step, ``n_data_steps`` without ``ADDITIVE_STEPS``, ``n_core_steps``
-    without those and ``LABEL_STEPS`` either."""
+    without those and ``LABEL_STEPS`` either, ``n_base_steps`` without those and
+    ``COLUMN_STEPS`` / ``GRAPH_STEPS`` either, ``n_graph_steps`` the graph steps."""
     try:
-        from scview.core import provenance
         adata = adaptor.adata
-        history = provenance.read_provenance(adata).get("history") or []
-        steps = [h.get("step") for h in history]
-        return {"n_cells": int(adata.n_obs), "cells": adaptor.cells_fingerprint(), "n_steps": len(history),
+        steps = _history_steps(adaptor)
+        core = [s for s in steps if s not in ADDITIVE_STEPS and s not in LABEL_STEPS]
+        return {"n_cells": int(adata.n_obs), "cells": adaptor.cells_fingerprint(), "n_steps": len(steps),
                 "n_data_steps": sum(1 for s in steps if s not in ADDITIVE_STEPS),
-                "n_core_steps": sum(1 for s in steps if s not in ADDITIVE_STEPS and s not in LABEL_STEPS)}
+                "n_core_steps": len(core),
+                "n_base_steps": sum(1 for s in core if s not in COLUMN_STEPS and s not in GRAPH_STEPS),
+                "n_graph_steps": sum(1 for s in core if s in GRAPH_STEPS)}
     except Exception:  # a test double, or no data
         return None
 
@@ -172,27 +198,36 @@ def _strings(obj: Any) -> list[str]:
     return out
 
 
-def used_user_columns(adaptor: Any, *objs: Any) -> dict[str, str | None]:
-    """The user annotation columns ``objs`` (a result, its parameters) name, each with
-    its labels' hash now."""
+def used_user_columns(adaptor: Any, *objs: Any, kind: str | None = None) -> dict[str, str | None]:
+    """The obs columns ``objs`` (a result, its parameters) name, each with its labels'
+    hash now: the user annotation columns, and for a ``NAMED_COLUMN_KINDS`` result every
+    obs column (a clustering or annotation step then stales it only through them)."""
     try:
         from scview.core.user_labels import user_columns
 
         adata = adaptor.adata
-        mine = set(user_columns(adata))
+        mine = set(adata.obs.columns.astype(str)) if kind in NAMED_COLUMN_KINDS else set(user_columns(adata))
         names = sorted({s for o in objs for s in _strings(o) if s in mine})
         return {c: (column_fingerprint(adata, c, cells="-") or {}).get("labels") for c in names}
     except Exception:  # a test double, or no data
         return {}
 
 
-def _is_stale(stored: dict[str, Any], now: dict[str, Any], columns_now: Any = None) -> bool:
+_BASE_KEYS = ("n_cells", "cells", "n_base_steps")
+
+
+def _is_stale(stored: dict[str, Any], now: dict[str, Any], columns_now: Any = None,
+              kind: str | None = None) -> bool:
     """A stored fingerprint against the current one. Entries written before
     ``n_data_steps`` existed still compare every step; before ``n_core_steps``, every
-    step but the additive ones (labels included). ``columns_now(names)``: the labels'
-    hashes of the user columns the result named, now."""
-    if "n_core_steps" in stored:
-        keys = set(stored) - {"n_steps", "n_data_steps", "columns"}
+    step but the additive ones (labels included). With ``n_base_steps`` a
+    ``NAMED_COLUMN_KINDS`` result leaves out the column steps, and a ``GRAPH_FREE_KINDS``
+    one the graph steps too. ``columns_now(names)``: the labels' hashes of the columns
+    the result named, now."""
+    if "n_base_steps" in stored and kind in NAMED_COLUMN_KINDS:
+        keys = set(_BASE_KEYS) | (set() if kind in GRAPH_FREE_KINDS else {"n_graph_steps"})
+    elif "n_core_steps" in stored:
+        keys = set(stored) - {"n_steps", "n_data_steps", "n_base_steps", "n_graph_steps", "columns"}
     elif "n_data_steps" in stored:
         keys = set(stored) - {"n_steps"}
     else:
@@ -201,6 +236,42 @@ def _is_stale(stored: dict[str, Any], now: dict[str, Any], columns_now: Any = No
         return True
     cols = stored.get("columns") or {}
     return bool(cols) and columns_now is not None and columns_now(list(cols)) != cols
+
+
+# What a step's name says in a stale reason.
+_STEP_WORDS = {
+    "neighbors": "neighbours rebuilt", "pca": "PCA rerun", "batch_correction": "batch correction rerun",
+    "embeddings": "embedding recomputed", "uncorrected_embedding": "embedding recomputed",
+    "keep_layout": "another layout kept", "clustering": "clustering rerun",
+    "cell_type_annotation": "cell types annotated", "filtering": "cells filtered",
+    "normalization": "normalisation rerun", "log_transform": "log transform rerun",
+    "highly_variable_genes": "variable genes rerun", "scaling": "scaling rerun",
+    "reset_to_counts": "data reset to counts", "subcluster": "a group sub-clustered",
+    "merge_clusters": "clusters merged",
+}
+
+
+def stale_reason(stored: dict[str, Any], now: dict[str, Any], steps: list[str], columns_now: Any = None,
+                 kind: str | None = None) -> str:
+    """Why a stale result is stale, in a few words: the cells changed, a named column's
+    labels changed, or the steps run since (``steps``: the recipe's steps now)."""
+    if stored.get("n_cells") != now.get("n_cells") or stored.get("cells") != now.get("cells"):
+        return "the cells changed after this result (filtered or reloaded)"
+    cols = stored.get("columns") or {}
+    if cols and columns_now is not None:
+        changed = [c for c, h in columns_now(list(cols)).items() if cols.get(c) != h]
+        if changed:
+            return f"labels of '{changed[0]}' changed after this result"
+    start = stored.get("n_steps")
+    if isinstance(start, int) and 0 <= start <= len(steps):
+        later = [s for s in steps[start:] if s not in ADDITIVE_STEPS and s not in LABEL_STEPS]
+        if "n_base_steps" in stored and kind in NAMED_COLUMN_KINDS:
+            later = [s for s in later if s not in COLUMN_STEPS
+                     and (kind not in GRAPH_FREE_KINDS or s not in GRAPH_STEPS)]
+        words = list(dict.fromkeys(_STEP_WORDS.get(s, s.replace("_", " ")) for s in later))
+        if words:
+            return f"{', '.join(words[:3])}{' and more' if len(words) > 3 else ''} after this result"
+    return "the data changed after this result"
 
 
 def safe_id(value: str | None) -> bool:
@@ -571,7 +642,7 @@ def keep(
         return None
     fp = computed_on if computed_on is not None else (fingerprint(adaptor) if adaptor is not None else None)
     if computed_on is None and fp is not None:
-        used = used_user_columns(adaptor, params, value)
+        used = used_user_columns(adaptor, params, value, kind=kind)
         if used:
             fp = {**fp, "columns": used}
     entry = {
@@ -606,10 +677,19 @@ def entries(dataset_id: str, kind: str | None = None, adaptor: Any = None) -> li
                 hashes[c] = (column_fingerprint(adaptor, c, cells="-") or {}).get("labels")
         return {c: hashes[c] for c in names}
 
+    steps: list[str] | None = None
     for e in out:
         fp = e.get("fingerprint")
         now = _current_fingerprint(adaptor, fp, cache) if adaptor is not None and fp else None
-        e["stale"] = None if now is None else _is_stale(fp, now, columns_now)
+        e["stale"] = None if now is None else _is_stale(fp, now, columns_now, e.get("kind"))
+        if e["stale"] and "column" not in fp:
+            try:
+                steps = _history_steps(adaptor) if steps is None else steps
+            except Exception:  # a test double
+                steps = []
+            e["stale_reason"] = stale_reason(fp, now, steps, columns_now, e.get("kind"))
+        elif e["stale"]:
+            e["stale_reason"] = f"labels of '{fp['column']}' or the cells changed after this result"
     return sorted(out, key=lambda e: e["created_at"], reverse=True)
 
 

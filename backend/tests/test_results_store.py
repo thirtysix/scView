@@ -200,8 +200,62 @@ def test_a_label_marks_stale_only_the_results_that_named_its_column(tmp_path):
     assert stale() == {"de": False, "composition": True, "milo": False}
     label_cells(a.adata, "other", "x", range(3, 6), new_column=False)  # a Milo covariate
     assert stale()["milo"] is True
-    provenance.record_step(a.adata, step="clustering", tool="scanpy")  # data steps still count
+    provenance.record_step(a.adata, step="normalization", tool="scanpy")  # data steps still count
     assert stale()["de"] is True
+
+
+def test_a_graph_rebuild_or_new_column_stales_only_what_read_it(tmp_path):
+    """Wilson 2022: a neighbours rebuild and a new annotation column marked every DE,
+    composition and GSEA result stale, with no reason. Now: the graph stales Milo only, a
+    clustering or annotation step only results that named a column it changed."""
+    a = FakeAdaptor(tmp_path, "ds2g", _adata())
+    a.adata.obs["stim"] = pd.Categorical(["A", "B"] * 10)
+    a.adata.obs["cell_type"] = pd.Categorical(["T", "B", "NK", "M"] * 5)
+    results_store.keep(a, "de", {"v": 1}, params={"split_by": "stim", "within_column": "cell_type",
+                                                  "within_value": "T"}).result()
+    results_store.keep(a, "gsea", {"v": 2}, params={"de_result_id": "x"}).result()
+    results_store.keep(a, "milo", {"condition_key": "stim"}).result()
+    results_store.keep(a, "test", {"v": 3}).result()  # a kind not sorted: every step counts
+
+    def state():
+        return {e["kind"]: (e["stale"], e.get("stale_reason")) for e in results_store.entries("ds2g", adaptor=a)}
+
+    provenance.record_step(a.adata, step="neighbors", tool="scanpy")
+    s = state()
+    assert s["de"] == (False, None) and s["gsea"] == (False, None)
+    assert s["milo"] == (True, "neighbours rebuilt after this result")
+    assert s["test"] == (True, "neighbours rebuilt after this result")
+
+    # A clustering into a new column: nothing named it.
+    a.adata.obs["scview_leiden_r0.5"] = pd.Categorical(["0", "1"] * 10)
+    provenance.record_step(a.adata, step="clustering", tool="scanpy")
+    s = state()
+    assert not s["de"][0] and not s["gsea"][0]
+    # An annotation rewrites the column the DE subset was taken from.
+    a.adata.obs["cell_type"] = pd.Categorical(["T", "T", "NK", "M"] * 5)
+    provenance.record_step(a.adata, step="cell_type_annotation", tool="scview")
+    s = state()
+    assert s["de"] == (True, "labels of 'cell_type' changed after this result") and not s["gsea"][0]
+    # A data step stales them all, and says which.
+    provenance.record_step(a.adata, step="normalization", tool="scanpy")
+    assert state()["gsea"] == (True, "normalisation rerun after this result")
+
+
+def test_a_result_stored_before_base_steps_keeps_its_old_rule(tmp_path):
+    a = FakeAdaptor(tmp_path, "ds2h", _adata())
+    fp = results_store.fingerprint(a)
+    old = {k: v for k, v in fp.items() if k not in ("n_base_steps", "n_graph_steps")}
+    provenance.record_step(a.adata, step="neighbors", tool="scanpy")
+    now = results_store.fingerprint(a)
+    assert results_store._is_stale(old, now, kind="de") is True  # as when it was written
+    assert results_store._is_stale(fp, now, kind="de") is False
+    assert results_store._is_stale(fp, now, kind="milo") is True
+    # The classes name real step kinds, none additive or a label step.
+    from scview.core.step_kinds import RECORDED_STEPS
+
+    for cls in (results_store.COLUMN_STEPS, results_store.GRAPH_STEPS):
+        assert cls <= set(RECORDED_STEPS)
+        assert not cls & (results_store.ADDITIVE_STEPS | results_store.LABEL_STEPS)
 
 
 def test_an_entry_from_before_core_steps_still_counts_label_steps(tmp_path):

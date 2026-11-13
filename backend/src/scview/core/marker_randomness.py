@@ -1,9 +1,12 @@
-"""Marker lists that name no known cell type better than random genes do (no LLM).
+"""Marker lists that do not beat 9 of 10 random gene lists of their size (no LLM).
 
 The annotation benchmark's T4 controls (2026-11-08) gave the annotator 25 random genes as a
-"cluster": the default model named a cell type every time (0 of 54). This check finds such lists, and
-the annotator labels them "Unidentified" itself instead of asking the AI (``pipeline._annotation_decided``).
-A note in the prompt instead moved other clusters' calls (arms rm, ua).
+"cluster": the default model named a cell type every time (0 of 54). This check finds such lists. From
+v0.71.0 the annotator labelled them "Unidentified" itself; since v0.75.0 (user decision 2026-11-12) it
+sends them to the AI with ``NOTE`` beside their markers (``pipeline._annotation_decided``), because
+disease and injury states missing from the databases (kidney PT_VCAM1) look random to this check. A
+note in the prompt moved other clusters' calls in the benchmark (arms rm, ua): the price of not hiding
+those states.
 
 Each list (the annotator's own markers, ``core/marker_selection.py``) is scored by its best
 hypergeometric match in the marker databases (``core/marker_db.py``, the annotate view), counting
@@ -34,7 +37,7 @@ NULL_QUANTILE = 0.90
 MIN_NAMED = 10
 POOL_MIN_DETECTED = 0.10
 SEED = 0
-NOTE = "markers match no cell type in the marker databases better than random genes do"
+NOTE = "markers do not beat 9 of 10 random gene lists of the same size against the marker databases"
 
 
 @dataclass

@@ -21,6 +21,7 @@ import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from scview.api.v1 import saved_scores as saved_scores_api
 from scview.config import Settings
 from scview.core import (
     activity,
@@ -271,33 +272,53 @@ async def activity_summary(
     return await _in_thread(_run, reading=(dm, dataset_id, adaptor, adata, network, _net_dir(settings)))
 
 
+def source_named(sources: list[str], name: str) -> str | None:
+    """``name`` as the network spells it: exact, else the one source equal ignoring case
+    (a JASPAR TF "GATA1" is "Gata1" in mouse CollecTRI); None for no or several matches."""
+    if name in sources:
+        return name
+    hits = [s for s in sources if s.upper() == name.upper()]
+    return hits[0] if len(hits) == 1 else None
+
+
 @router.get("/datasets/{dataset_id}/activity/{network}/cells")
 async def activity_cells(
     dataset_id: str,
     network: str,
     source: str,
+    save: bool = False,
     dm: DatasetManager = Depends(get_dataset_manager),
     settings: Settings = Depends(get_settings_dep),
 ):
-    """Every cell's activity for one source, in cell order (to colour the embedding)."""
+    """Every cell's activity for one source, in cell order (to colour the embedding).
+    With ``save`` it is also kept as an obs column (``saved_column``, core/saved_scores.py;
+    ``save_note`` says why not)."""
     s = _spec(network)
     adaptor = await _adaptor(dm, dataset_id)
     adata = adaptor.adata
     species = _species(adata)
+    cells = adaptor.cells_fingerprint() if save else None
 
     def _run(room: int) -> dict:
-        model, _ = _model(adata, network, _net_dir(settings), species, room=room)
-        if source not in model.net.sources:
+        model, matrix = _model(adata, network, _net_dir(settings), species, room=room)
+        name = source_named(model.net.sources, source)
+        if name is None:
             raise HTTPException(
                 status_code=404,
                 detail=f"'{source}' is not scored on this dataset ({s.label} sources need "
                 f"at least {activity.TMIN} targets among its genes).",
             )
-        j = model.net.sources.index(source)
-        return {"network": s.name, "source": source, "n_targets": int(model.net.n_targets[j]),
-                "scores": _round(model.source(source))}
+        j = model.net.sources.index(name)
+        return {"network": s.name, "source": name, "n_targets": int(model.net.n_targets[j]),
+                "scores": _round(model.source(name)), "matrix_source": matrix}
 
-    return await _in_thread(_run, reading=(dm, dataset_id, adaptor, adata, network, _net_dir(settings)))
+    out = await _in_thread(_run, reading=(dm, dataset_id, adaptor, adata, network, _net_dir(settings)))
+    if save:
+        out["saved_column"], out["save_note"] = await saved_scores_api.persist(
+            dm, dataset_id, cells, kind="activity", name=source, values=out["scores"], method="ulm",
+            source=out["matrix_source"], network=s.name, resource=f"{s.label}: {s.url}",
+            extra={"n_targets": out["n_targets"], "species": species})
+    return out
 
 
 @router.post("/datasets/{dataset_id}/activity/{network}/de")

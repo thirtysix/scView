@@ -471,7 +471,11 @@ class AnnDataAdaptor:
     # ------------------------------------------------------------------
 
     def obs_columns_info(self) -> list[dict]:
-        """Return info about each obs column: name, dtype, n_unique, values (if categorical)."""
+        """Return info about each obs column: name, dtype, n_unique, values (if categorical),
+        and for a saved per-cell score what it holds (``saved_score``, core/saved_scores.py)."""
+        from scview.core import saved_scores
+
+        saved = saved_scores.record(self.adata)
         results = []
         for col in self.adata.obs.columns:
             series = self.adata.obs[col]
@@ -501,6 +505,8 @@ class AnnDataAdaptor:
                     info["values"] = [str(v) for v in unique]
             else:
                 info["n_unique"] = int(series.nunique())
+            if col in saved:
+                info["saved_score"] = saved_scores.obs_flag(saved[col])
             results.append(info)
         return results
 
@@ -676,11 +682,16 @@ class AnnDataAdaptor:
         """
         layers: list[dict] = []
 
-        # raw (log-normalized, all genes)
+        # raw: log-normalised after scView's pipeline; an imported file's .raw often holds
+        # the raw COUNTS instead (CELLxGENE), and the label says so.
         if self.adata.raw is not None:
+            try:
+                counts = _looks_like_counts(self.adata.raw.X)
+            except Exception:  # noqa: BLE001 - an unreadable .raw: no claim about it
+                counts = False
             layers.append({
                 "key": "raw",
-                "label": "Log-normalized (raw)",
+                "label": "Counts (raw)" if counts else "Log-normalized (raw)",
                 "n_genes": len(self.adata.raw.var_names),
             })
 
@@ -734,11 +745,44 @@ class AnnDataAdaptor:
                 "denoise": rec["denoise"], "method": rec["method"]},
         }
 
+    def _raw_holds_counts(self) -> bool:
+        from scview.core.pipeline import looks_like_counts
+
+        try:
+            return looks_like_counts(self.adata.raw.X)
+        except Exception:  # noqa: BLE001 - an unreadable .raw: no claim about it
+            return False
+
+    def layer_label(self, layer: str) -> str:
+        """The layer's label as the layer menu shows it ("Counts (raw)", "Log-normalized (X)")."""
+        return next((lyr["label"] for lyr in self.available_expression_layers() if lyr["key"] == layer),
+                    layer)
+
     def default_expression_layer(self) -> str:
-        """Return the default layer key — prefers 'raw' if available, else 'X'."""
-        if self.adata.raw is not None:
-            return "raw"
-        return "X"
+        """The default layer key: 'raw' when there is one, else 'X'; but 'X' when .raw
+        holds raw counts beside a log-normalised X of (nearly) the same genes, as a
+        CELLxGENE file does. Plots on counts track library depth (Wilson 2022: per-donor
+        dot plots and violins on counts ranked donors by depth); log-normalised values
+        are what the per-donor box, DE and markers read."""
+        raw = self.adata.raw
+        if raw is None:
+            return "X"
+        key = (id(raw.X), id(self.adata.X))
+        cached = getattr(self, "_default_layer", None)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        layer = "raw"
+        try:
+            X = self.adata.X
+            if (_looks_like_counts(raw.X) and X is not None and self.adata.n_vars >= 0.9 * raw.n_vars
+                    and not _looks_like_counts(X) and not scaling.holds_scaled(X, rows=200)):
+                head = _dense_rows(X[: min(200, X.shape[0])])
+                if head.size and head.min() >= 0:
+                    layer = "X"
+        except Exception:  # noqa: BLE001 - an unreadable matrix: keep the old default
+            layer = "raw"
+        self._default_layer = (key, layer)
+        return layer
 
     # ------------------------------------------------------------------
     # Gene names and expression
@@ -863,7 +907,8 @@ class AnnDataAdaptor:
         if layer == "X" and self.is_large and genes:
             stats = _group_stats_sparse(self.gene_block(genes), labels, groups)
             return {
-                "groupby": groupby, "layer": layer, "groups": groups, "genes": genes, **stats,
+                "groupby": groupby, "layer": layer, "layer_label": self.layer_label(layer),
+                "groups": groups, "genes": genes, **stats,
                 "scale_range": list(self.layer_scale_range(layer)),
             }
         expr = self.get_expression(genes, layer=layer) if genes else np.zeros((len(labels), 0))
@@ -877,7 +922,8 @@ class AnnDataAdaptor:
             mean_expressing.append([round(float(v), 4) for v in level])
             fraction.append([round(float(v), 4) for v in expressing.mean(axis=0)])
         return {
-            "groupby": groupby, "layer": layer, "groups": groups, "genes": genes,
+            "groupby": groupby, "layer": layer, "layer_label": self.layer_label(layer),
+            "groups": groups, "genes": genes,
             "mean": mean, "mean_expressing": mean_expressing, "fraction": fraction,
             "scale_range": list(self.layer_scale_range(layer)),
         }
@@ -966,8 +1012,8 @@ class AnnDataAdaptor:
     # ------------------------------------------------------------------
 
     def has_markers(self, column: str | None = None) -> bool:
-        if column:
-            return resolve_markers_key(self.adata.uns, column) is not None
+        if column:  # a table ranked on raw counts is stale: none (core/marker_matrix.py)
+            return resolve_markers_key(self.adata.uns, column, self.adata) is not None
         return "rank_genes_groups" in self.adata.uns or any(
             markers_column(k) is not None for k in self.adata.uns
         )
@@ -1004,7 +1050,7 @@ class AnnDataAdaptor:
         (tau, pct_max_other, max_other_group, pct_ratio) when they can be computed.
         """
         # A file's own markers are often under the bare key with params.groupby set.
-        uns_key = resolve_markers_key(self.adata.uns, column or "")
+        uns_key = resolve_markers_key(self.adata.uns, column or "", self.adata)
         if uns_key is None:
             return None
 

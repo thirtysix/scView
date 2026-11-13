@@ -192,7 +192,8 @@ async def post_expression_by_group(
     def _run() -> dict:
         selection = adaptor.expression_for_cells(body.genes, cells, layer=layer)
         if not body.include_groups:
-            return {"groupby": groupby, "layer": selection["layer"], "groups": [],
+            return {"groupby": groupby, "layer": selection["layer"],
+                    "layer_label": adaptor.layer_label(selection["layer"]), "groups": [],
                     "genes": selection["genes"], "selection": selection}
         return {**adaptor.expression_by_group(body.genes, groupby, layer=layer), "selection": selection}
 

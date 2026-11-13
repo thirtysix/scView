@@ -209,6 +209,18 @@ describe("Plot reliability toggle", () => {
     expect(useUnifiedViewStore.getState().scatterOverlay).toBeNull();
   });
 
+  it("takes focus when it opens; Escape turns it off and gives focus back to the button", async () => {
+    render(<EmbeddingReliabilityControl />);
+    button().focus();
+    fireEvent.click(button());
+    const dialog = await screen.findByRole("dialog", { name: "Plot reliability" });
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Plot reliability" })).toBeNull();
+    expect(useUnifiedViewStore.getState().scatterOverlay).toBeNull();
+    expect(button()).toHaveFocus();
+  });
+
   it("leaves another score overlay alone when turned off, and does not count it as on", () => {
     useUnifiedViewStore.setState({ scatterOverlay: { type: "score", name: "IFN", genes: ["ISG15"] }, overlayDatasetId: "kang" });
     render(<EmbeddingReliabilityControl />);

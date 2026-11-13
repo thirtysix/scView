@@ -44,7 +44,7 @@ describe("MarkerGenesPanel", () => {
       if (url.includes("groupby_column=")) return Promise.resolve(MARKERS);
       bareCalls += 1;
       const delay = bareCalls === 1 ? 50 : 0;
-      return new Promise((_, reject) => setTimeout(() => reject(new Error("404: no markers")), delay));
+      return new Promise((_, reject) => setTimeout(() => reject(new Error("API error 404: no markers")), delay));
     });
     render(<MarkerGenesPanel />);
     await waitFor(() => screen.getByText("CD3E"));

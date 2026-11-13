@@ -226,7 +226,7 @@ async def qc_stream(dataset_id: str, settings: Settings = Depends(get_settings_d
     try:
         tss = await asyncio.to_thread(af.tss_table, genome, settings.DATA_DIR, settings.ANNOTATION_AUTO_DOWNLOAD)
     except gene_annotation.AnnotationError as e:
-        raise HTTPException(status_code=422 if genome_build.names_hg19(genome) else 503, detail=str(e))
+        raise HTTPException(status_code=422 if genome_build.old_build(genome) else 503, detail=str(e))
     est = state["estimate"]
     await dm.reserve(dataset_id, est["peak_bytes"], what=_WHAT)
     fingerprint = await asyncio.to_thread(adaptor.cells_fingerprint)

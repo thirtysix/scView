@@ -6,6 +6,83 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.75.0] - 2026-11-13
+
+Scores are kept and offered in Compare; marker genes no longer rank raw counts on CELLxGENE files; cluster QC
+sees nuclei contamination and ambient mixes; study-design warnings fit the design; Data Assessment fits in 6 GB
+on a 39k-nuclei file. Found by re-analysing two published studies through scView's MCP.
+
+### Added
+- Scores are kept: a scored gene set (score_genes, AUCell, ssGSEA, GSVA) or a drawn TF/pathway activity is saved
+  as a cell column (`score_<set>`, `activity_<source>`) with how it was made (method, genes used and missing,
+  matrix, network). Scoring the same set again replaces it; a column the file brought is never overwritten.
+- Compare (toolbar) offers saved scores under Scores, beside the groupings, each drawn with its own colour bar;
+  cell-cycle and dissociation-stress scores are offered too. Remove a saved score from the same list. Saved
+  scores also appear in Color by (with a violin by group), the histogram's Values, sessions and the h5ad export,
+  and the replay script recomputes score_genes and AUCell scores exactly.
+- MCP: `score_gene_set` saves the score when given a `name`; new `remove_saved_score`.
+- ATAC input on mouse mm9 (NCBIM37) is recognised like hg19: from the reference the file names, the fragments
+  header, or peaks past mm10's chromosome ends (mm9's chr7 runs 7 Mb longer). It is recorded as mm9, and gene
+  activity, nearest genes, motifs, peak-gene links and TSS enrichment say they need mm10 instead of reading the
+  wrong sequence.
+
+- Cluster QC sees contamination in nuclei data: where the median cell has no mito reads, it shows the share of
+  cells with any, and a "Mito in nuclei" caution for a cluster far above the rest. % mito is shown with enough
+  digits to tell nuclei clusters apart.
+- New cluster QC cautions: a cluster with another cluster's markers but far less RNA (an ambient-like mix), and
+  marker lists led by non-coding RNAs, pseudogenes or sex genes. They are cautions in the evidence and the report;
+  none changes the labels scView decides itself.
+- The composition test and pseudobulk DE warn when a donor has under a third of the median donor's cells.
+- Combine two to four columns into a new column in one call (API `POST /labels/combine`, MCP `combine_columns`),
+  e.g. mouse x depot as a sample column; recorded and replayed.
+- The composition test takes covariates (sex, batch, the animal) and pairs on the complete pairs only, saying how
+  many pairs were used and left out. The unpaired test without covariates still matches R limma.
+- Marker-score annotation keeps to the dataset's tissue (from a Tissue field, the file's tissue column or its
+  title): on a kidney dataset, 8 of 21 clusters got types from other organs before, 0 now.
+- MCP: `marker_db_check` runs the marker database check (verdicts and top suggestions per label), so
+  `cluster_evidence` gets its marker lines without an annotation run first.
+
+### Changed
+- Clusters whose markers match no database type better than random now go to the AI with that note instead of
+  being labelled "Unidentified" by scView (disease states are missing from the marker databases). Damaged clusters
+  are still labelled "Low-quality cells". The random bar is said plainly: "beats 9 of 10 random lists".
+- The repeated-donor warning fits the design: silent when the donor is a covariate, "block on it" when the
+  compared factor varies within a donor.
+- Cell-level DE and the composition test warn when a technology or batch value is on one side only; a covariate
+  value held by one sample is named.
+- Pseudobulk DE with no significant gene says the smallest adjusted p and how many genes reach nominal p < 0.05.
+- Stored results go stale only when something they read changed (a neighbours rebuild no longer stales DE or
+  composition; a new label column stales only results that used it), and say why.
+- Milo results are labelled with k; age-like covariates can be numeric; per-donor tests name their sides; a note
+  explains very large one-sided log2FC; `compare_de_results` speaks API terms.
+- The assessment recognises CELLxGENE and Seurat columns: `mitochondrial_percent` and other % mito names,
+  cell-cycle scores, `X_harmony` and scVI embeddings, `doublet_id` (also used as a doublet call in filtering).
+- Error messages in the older panels (Gene Expression, Gene Sets, Trajectory, Observations, the co-pilot and
+  others) show the server's reason instead of the raw `{"detail": ...}` text; validation errors give their
+  messages. A test keeps new code from showing raw error bodies.
+- The Ambient RNA card on a dataset without raw counts shows a plain note, not a red error.
+- Keyboard focus moves into and stays inside the Share link dialog and the gate delete confirm, and the Plot
+  reliability panel takes focus too. Escape closes each one and focus returns to its button. The delete confirm
+  starts on Cancel.
+- Evidence per cluster says what it is doing when the first call is slow (comparing markers with random genes,
+  about 10 to 15 seconds the first time).
+
+### Fixed
+- Opening Data Assessment on a 39k-nuclei kidney file ran a 6 GB backend out of memory (also in 0.74.0): the
+  ambient RNA check copied the counts, and four panels started it at once. It now reads the counts in place and
+  runs once per dataset while the others wait: the same page peaks at 3.5 GB.
+- Marker genes were ranked on raw counts when a file keeps them in `.raw` beside log-normalised X, as CELLxGENE
+  files do: Wilcoxon on counts and fold changes of counts read as logs (a kidney podocyte gene at log2FC 437).
+  Markers now use the same log-normalised matrix as gene-set scoring, the table records it, and stored tables
+  ranked on counts are recomputed. This also corrects what the AI annotator, cluster evidence, co-pilot facts and
+  enrichment (ORA version 7) were given on such files.
+- Annotation no longer overwrites the file's own `cell_type` (or any column scView did not write): it writes
+  `<grouping>_celltypeAnno` by default and refuses a curated column unless `annotation_overwrite` is set.
+- On a file whose `.raw` holds counts, plots default to the log-normalised layer and the raw layer is labelled
+  "Counts (raw)".
+- The Compare grid header wraps instead of drawing "Cluster distances" over the pager; mouse TF candidates find
+  mouse-cased TFs (Gata1); re-picking an already-scored gene set keeps the plot and the saved column in agreement.
+
 ## [0.74.0] - 2026-11-12
 
 Each cluster's evidence in words; the co-pilot's claims check reaches Write methods and marks sentences in place;

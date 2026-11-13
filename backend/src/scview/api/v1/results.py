@@ -17,7 +17,7 @@ from scview.dependencies import get_dataset_manager
 
 router = APIRouter()
 
-_FIELDS = ("id", "kind", "key", "label", "status", "version", "bytes", "stale")
+_FIELDS = ("id", "kind", "key", "label", "status", "version", "bytes", "stale", "stale_reason")
 
 
 def _summary(e: dict) -> dict:
