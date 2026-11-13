@@ -4,7 +4,9 @@ import { OrthographicView, OrbitView, type Layer } from "@deck.gl/core";
 import { BitmapLayer, LineLayer, ScatterplotLayer, SolidPolygonLayer, PointCloudLayer } from "@deck.gl/layers";
 import { mapCategoryToColor, mapValueToColor, type AnyColormapName } from "@/lib/colors";
 import { useSettingsStore } from "@/stores/settingsStore";
-import { RotateCcw, AlertTriangle } from "lucide-react";
+import { RotateCcw } from "lucide-react";
+import { GpuLostOverlay } from "@/components/common/GpuLostOverlay";
+import { isContextCreationFailure } from "@/lib/webgl";
 import { downloadDeckPng, type ScatterLegend } from "@/lib/scatterExport";
 import {
   buildScatterSvg,
@@ -257,6 +259,7 @@ export function EmbeddingScatter({
 
   // WebGL context loss recovery
   const [contextLost, setContextLost] = useState(false);
+  const [contextBlocked, setContextBlocked] = useState(false);
   const [renderKey, setRenderKey] = useState(0);
 
   // Track container size with ResizeObserver
@@ -347,11 +350,13 @@ export function EmbeddingScatter({
     console.error("[EmbeddingScatter] GPU error:", error);
     if (error.message?.toLowerCase().includes("context")) {
       setContextLost(true);
+      if (isContextCreationFailure(error)) setContextBlocked(true);
     }
   }, []);
 
   const retryRender = useCallback(() => {
     setContextLost(false);
+    setContextBlocked(false);
     setRenderKey((k) => k + 1);
   }, []);
 
@@ -964,21 +969,7 @@ export function EmbeddingScatter({
       )}
 
       {/* WebGL context lost overlay */}
-      {contextLost && (
-        <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 rounded-lg bg-slate-900/80 text-white">
-          <AlertTriangle className="h-8 w-8 text-amber-400" />
-          <p className="text-sm font-medium">GPU context lost</p>
-          <p className="max-w-xs text-center text-xs text-slate-300">
-            The WebGL rendering context was lost, possibly due to GPU memory pressure.
-          </p>
-          <button
-            onClick={retryRender}
-            className="mt-1 rounded-md border border-slate-500 bg-slate-700 px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-slate-600"
-          >
-            Retry
-          </button>
-        </div>
-      )}
+      {contextLost && <GpuLostOverlay blocked={contextBlocked} onRetry={retryRender} />}
 
       {/* Reset view button */}
       {!minimal && (
