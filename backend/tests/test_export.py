@@ -26,6 +26,7 @@ def _adata() -> ad.AnnData:
     a.var_names = [f"G{i}" for i in range(12)]
     a.obs["cluster"] = pd.Categorical(["0"] * 30 + ["1"] * 30)
     a.obs["cell_type"] = pd.Categorical(["T"] * 20 + ["B"] * 20 + ["NK"] * 20)
+    sc.pp.log1p(a)  # markers ranked on counts are stale (core/marker_matrix.py)
     for col in ("cluster", "cell_type"):
         sc.tl.rank_genes_groups(a, col, method="wilcoxon", pts=True,
                                 key_added=f"rank_genes_groups__{col}")
