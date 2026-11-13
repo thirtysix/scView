@@ -291,6 +291,34 @@ def _matches(values: list[str], wanted: str | None) -> bool:
     return any(v.lower() == w for v in values)
 
 
+def _contains(value: str, wanted: str) -> bool:
+    """Every word of ``wanted`` starts a word of ``value``, ignoring case: "visium" is in
+    "Visium Spatial Gene Expression V1", "10x 3'" in "10x 3' v3", "ventricle" in "heart left
+    ventricle"; "v3" is not in "Slide-seqV2"."""
+    v = value.lower()
+    return all(re.search(r"(?<![\w])" + re.escape(w), v) for w in wanted.lower().split())
+
+
+# Filters matched loosely when no dataset has the exact name (``_filter``). Organism stays
+# exact: its names are few and Latin ("human" would never be a part of "Homo sapiens").
+LOOSE_FIELDS = ("assay", "tissue", "disease")
+
+
+def _filter(hits: list[dict], field: str, wanted: str | None,
+            loose: dict[str, list[str]]) -> list[dict]:
+    """``hits`` whose ``field`` has ``wanted``: the exact name (any case) when some dataset
+    has it, so "10x 3' v3" never takes in "10x 3' v2"; otherwise, for ``LOOSE_FIELDS``, the
+    names that contain its words (``_contains``), recorded in ``loose``."""
+    if not wanted:
+        return hits
+    exact = [d for d in hits if _matches(d[field], wanted)]
+    if exact or field not in LOOSE_FIELDS or not wanted.strip():
+        return exact
+    out = [d for d in hits if any(_contains(v, wanted) for v in d[field])]
+    loose[field] = sorted({v for d in out for v in d[field] if _contains(v, wanted)})
+    return out
+
+
 def search(datasets: list[dict], q: str | None = None, organism: str | None = None,
            tissue: str | None = None, disease: str | None = None, assay: str | None = None,
            max_bytes: int | None = None, sort: str = "cells", limit: int = 50,
@@ -323,10 +351,11 @@ def search(datasets: list[dict], q: str | None = None, organism: str | None = No
         hits = [d for d, m in found if len(m) == len(words)]
     organisms = Counter(o for d in hits for o in d["organism"])
     tissues = Counter(t for d in hits if _matches(d["organism"], organism) for t in d["tissue"])
-    hits = [d for d in hits
-            if _matches(d["organism"], organism) and _matches(d["tissue"], tissue)
-            and _matches(d["disease"], disease) and _matches(d["assay"], assay)
+    hits = [d for d in hits if _matches(d["organism"], organism)
             and (max_bytes is None or d["size_bytes"] <= max_bytes)]
+    loose: dict[str, list[str]] = {}
+    for field, wanted in (("tissue", tissue), ("disease", disease), ("assay", assay)):
+        hits = _filter(hits, field, wanted, loose)
     key = {"cells": lambda d: -d["cell_count"], "size": lambda d: d["size_bytes"],
            "title": lambda d: d["title"].lower(),
            "newest": lambda d: "".join(chr(0x10FFFF - ord(c)) for c in (d.get("published_at") or ""))}
@@ -340,6 +369,8 @@ def search(datasets: list[dict], q: str | None = None, organism: str | None = No
     }
     if partial:
         out["partial"] = partial
+    if loose:  # no dataset had the exact name: the names that matched in part
+        out["matched"] = loose
     return out
 
 

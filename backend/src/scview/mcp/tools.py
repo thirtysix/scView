@@ -351,7 +351,10 @@ async def search_public_datasets(
     organism: Annotated[str | None, Field(description="e.g. Homo sapiens")] = None,
     tissue: Annotated[str | None, Field(description="e.g. blood")] = None,
     disease: Annotated[str | None, Field(description="e.g. COVID-19")] = None,
-    assay: Annotated[str | None, Field(description="e.g. 10x 3' v3")] = None,
+    assay: Annotated[str | None, Field(description=(
+        "e.g. 10x 3' v3. Tissue, disease and assay match the exact name first; when no dataset "
+        "has it, names holding its words (Visium -> Visium Spatial Gene Expression V1), "
+        "listed under matched."))] = None,
     max_mb: Annotated[float | None, Field(gt=0, description="Largest download, MB.")] = None,
     sort: Annotated[Literal["cells", "size", "title", "newest"], Field(
         description="Order: most cells first (default), largest download, title, or newest.")] = "cells",
@@ -378,6 +381,8 @@ async def search_public_datasets(
            "fetched_at": d.get("fetched_at")}
     if d.get("partial"):
         res["partial"] = {**d["partial"], "note": "No dataset has every word: these have the most."}
+    if d.get("matched"):
+        res["matched"] = d["matched"]
     return dumps(res, _max_chars(limit))
 
 
