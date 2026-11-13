@@ -476,6 +476,11 @@ class AnnDataAdaptor:
         from scview.core import saved_scores
 
         saved = saved_scores.record(self.adata)
+        try:
+            runs = saved_scores.current_runs(self.adata, saved) if saved else None
+        except Exception as e:  # the listing never fails on it: no earlier-run flag then
+            logger.warning("Could not read the runs saved scores came from: %s", e)
+            runs = None
         results = []
         for col in self.adata.obs.columns:
             series = self.adata.obs[col]
@@ -506,7 +511,7 @@ class AnnDataAdaptor:
             else:
                 info["n_unique"] = int(series.nunique())
             if col in saved:
-                info["saved_score"] = saved_scores.obs_flag(saved[col])
+                info["saved_score"] = saved_scores.obs_flag(saved[col], runs)
             results.append(info)
         return results
 

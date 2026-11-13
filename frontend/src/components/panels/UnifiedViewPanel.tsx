@@ -768,9 +768,10 @@ export function UnifiedViewPanel() {
       const seq = ++violinSeqRef.current;
       setIsLoadingViolin(true);
       const request: Promise<{ violin?: Record<string, number[]> | null }> =
-        o.type === "program" ? getProgramUsage(datasetId, o.index, groupByColumn)
+        // Only regrouped: the drawing saved it already (save false).
+        o.type === "program" ? getProgramUsage(datasetId, o.index, groupByColumn, false)
         : o.type === "atac_activity" ? getAtacActivity(datasetId, o.gene, groupByColumn)
-        : getChromVarMotif(datasetId, o.motif_id, groupByColumn);
+        : getChromVarMotif(datasetId, o.motif_id, groupByColumn, false);
       request
         .then((r) => { if (seq === violinSeqRef.current) setViolinData(r.violin ?? {}); })
         .catch(fail)
@@ -805,7 +806,7 @@ export function UnifiedViewPanel() {
       return;
     }
     if (o.type === "program") {
-      getProgramUsage(datasetId, o.index, groupByColumn || undefined)
+      getProgramUsage(datasetId, o.index, groupByColumn || undefined, false)
         .then(handleProgramUsage)
         .catch((err) => console.error("Failed to restore the gene program overlay:", err));
       return;
@@ -817,7 +818,7 @@ export function UnifiedViewPanel() {
       return;
     }
     if (o.type === "atac_motif") {
-      getChromVarMotif(datasetId, o.motif_id, groupByColumn || undefined)
+      getChromVarMotif(datasetId, o.motif_id, groupByColumn || undefined, false)
         .then(handleAtacMotif)
         .catch((err) => console.error("Failed to restore the chromVAR overlay:", err));
       return;

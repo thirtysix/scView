@@ -9,7 +9,7 @@
  */
 import type { ObsColumnInfo } from "@/api/types";
 import { rankGroupingColumns } from "@/lib/obsColumns";
-import { isScoreColumn, scoreDetail, scoreTitle } from "@/lib/savedScores";
+import { isScoreColumn, scoreDetail, scoreTitle, scoreTooltip } from "@/lib/savedScores";
 import {
   mapCategoryToColor,
   mapValueToColor,
@@ -89,6 +89,8 @@ export interface CompareColumnOption {
   /** A score's panel title (the set or source) and what it is ("Gene-set score (AUCell)") */
   title?: string;
   detail?: string;
+  /** A score's hover text (lib/savedScores.ts scoreTooltip: says an earlier run) */
+  tooltip?: string;
   /** A score the app saved: the control offers to remove it */
   removable?: boolean;
 }
@@ -119,6 +121,7 @@ export function compareColumnOptions(
       group: "score" as const,
       title: scoreTitle(c),
       detail: scoreDetail(c),
+      tooltip: scoreTooltip(c),
       removable: !!c.saved_score,
     }));
   return [...groupings, ...scores];

@@ -46,7 +46,7 @@ export const PLOT_HELP: Record<string, string> = {
   "plot.compare":
     "The same plot coloured by 2 to 12 columns side by side, one camera for all. Use it to set two clusterings, or a clustering and cell-type labels, against each other: where the same cells form one group in every panel, the columns agree. Scores can join them, each with its own colour bar.",
   "plot.compare-scores":
-    "Per-cell scores. Every gene set you score and every TF or pathway activity you draw is saved here as a column, so it can sit next to the groupings. Scoring the same set again, by any method, replaces it. Cell-cycle and stress scores from the pipeline are listed too.",
+    "Per-cell scores. Every gene set you score, and every TF or pathway activity, gene program or chromVAR motif you draw, is saved here as a column to sit next to the groupings. Drawing the same one again replaces it; a program from an earlier NMF run says so. Cell-cycle and stress scores from the pipeline are listed too.",
   "plot.compare-remove-score":
     "Remove this saved score from the dataset. Only scores scView saved can be removed; score the set again to bring it back.",
   "plot.select-by-group":
