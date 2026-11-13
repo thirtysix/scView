@@ -11,6 +11,13 @@ datasets and take up to 32; per-sample QC gets a genes floor; mouse ATAC on mm39
 crash mid-edit. Found by re-analysing a published heart Visium study (Kuppe 2022) through scView's MCP.
 
 ### Added
+- MCP: 11 spatial tools (Moran's I, domains, neighbourhood enrichment, co-occurrence, niches, spot composition) and
+  the joint embedding (plan, run, cancel), 49 tools in all. Long runs return a job id.
+- MCP `plot` draws a multi-section spatial dataset as sections side by side (12 at most, it says of how many), or
+  one section alone (`section`); before, all sections were drawn on top of each other. `get_dataset` lists the
+  spatial embedding, the sections and the off-tissue record.
+- MCP `search_public_datasets` takes an `offset` and says exactly how many records it shows.
+- A public spatial dataset whose file holds no spot positions says so at import and on its source card.
 - ATAC on mouse mm39 (GRCm39, the build of 10x's current GRCm39-2024-A references): gene activity, TSS
   enrichment, motifs, chromVAR and peak-gene links run on it (GENCODE vM33 and UCSC mm39, fetched on first use).
   Datasets that 0.76.0 imported as mm39 work without importing them again.
@@ -41,6 +48,11 @@ crash mid-edit. Found by re-analysing a published heart Visium study (Kuppe 2022
 - ATAC input on another species or build (T2T-CHM13, rat, zebrafish and the like) gets one note naming the builds
   scView supports; RNA work is unaffected. Before, rat or zebrafish fragments were read as GRCh38.
 - Data Assessment: identical requests for one dataset share one computation.
+- Marker database check: a match on one shared gene is "weak support (one shared gene)", whatever its p; it was
+  "supported".
+- The public dataset check reads a Visium file's header in 10 requests (0.2 to 4 s), not 68 (up to 70 s), and
+  now reaches a verdict on CELLxGENE slides instead of "unknown".
+- The tissue view's chosen section is kept in session files.
 
 ### Fixed
 - Large datasets: an edit written into the file (labels, colours, a kept clustering) goes through a rollback
