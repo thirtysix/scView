@@ -53,6 +53,8 @@ from typing import Any
 
 import httpx
 
+from scview.core import off_tissue
+
 logger = logging.getLogger(__name__)
 
 SOURCE = "CELLxGENE Discover"
@@ -820,6 +822,18 @@ def run_import(rec: dict, data_dir: Path, dataset_id: str, cancel: threading.Eve
         ingest_dir.mkdir(parents=True, exist_ok=True)
         out = ingest_dir / f"{vid}.h5ad"
         summary = prepare(src, out, rec, info)
+        tissue = None
+        counted = off_tissue.file_count(out)
+        if counted and counted[0]:  # a Visium slide's whole capture grid (core/off_tissue.py)
+            yield "stage", {"stage": "tissue", "message": f"Leaving out the {counted[0]:,} spots marked "
+                                                          "off-tissue (in_tissue 0)"}
+            part = out.with_name(f".{out.name}.tissue.part")
+            try:
+                tissue = off_tissue.drop_in_file(out, part, original_filename=src.name)
+                if part.exists():
+                    part.replace(out)
+            finally:
+                part.unlink(missing_ok=True)
         for p in (src, out):
             try:
                 p.chmod(0o444)
@@ -840,6 +854,8 @@ def run_import(rec: dict, data_dir: Path, dataset_id: str, cancel: threading.Eve
             "public_source": {**info, "citation_text": citation_text(info),
                               "author_annotation": summary.get("author_annotation")},
         }
+        if tissue:
+            meta["off_tissue"] = tissue
         (upload_dir / "metadata.json").write_text(json.dumps(meta, indent=2))
         ok = True
         yield "registered", meta

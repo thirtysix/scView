@@ -62,7 +62,7 @@ import numpy as np
 from scipy.spatial import cKDTree
 
 from scview.core import cooccurrence_kernel as kernel
-from scview.core import spatial
+from scview.core import off_tissue, spatial
 from scview.core import spatial_domains as sd
 from scview.core.preflight import cpu_quota
 
@@ -279,6 +279,9 @@ def plan_cooccurrence(adata, cluster_key: str, *, interval: int = DEFAULT_INTERV
                      "distant splits add zeros; below 1 here does not mean less than expected.")
     if scales:
         notes.append("The sections' pixel sizes differ: positions were brought to the first section's scale.")
+    off = off_tissue.note(adata, unit)
+    if off:  # imported before off-tissue spots were left out at ingest
+        notes.append(off)
     return CoOccurrencePlan(
         n_obs=int(adata.n_obs), n_labelled=n_labelled, n_used=n_used, unit=unit, column=cluster_key, labels=labels,
         interval=None if asked is not None else int(interval), thresholds=[float(t) for t in thresholds],

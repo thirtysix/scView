@@ -99,6 +99,8 @@ async def upload_dataset(
     velocity = await _move_velocity_layers(dm, dataset_id, dest_path, file.filename) if ext == ".h5ad" else None
     # A CELLxGENE file (Ensembl ids, symbols in var['feature_name']): symbols as gene names.
     gene_names = await _gene_symbols(dm, dataset_id, dest_path, file.filename) if ext == ".h5ad" else None
+    # A spatial file holding the whole capture grid: the spots off the tissue left out.
+    off_tissue = await _drop_off_tissue(dm, dataset_id, dest_path, file.filename) if ext == ".h5ad" else None
 
     needs_conversion = ext in (".rds", ".rdata")
     status = DatasetStatus.converting if needs_conversion else DatasetStatus.ready
@@ -122,6 +124,8 @@ async def upload_dataset(
         meta["velocity"] = velocity
     if gene_names:
         meta["gene_names"] = gene_names
+    if off_tissue:
+        meta["off_tissue"] = off_tissue
     meta_path = upload_dir / "metadata.json"
     with open(meta_path, "w") as fh:
         json.dump(meta, fh, indent=2)
@@ -234,6 +238,37 @@ async def _gene_symbols(dm: DatasetManager, dataset_id: str, src: Path, filename
         return {"error": f"Gene symbols could not be made the gene names ({e}); the Ensembl ids stay."}
     _make_readonly(out)
     logger.info("Gene symbols for %s: %s", filename, summary)
+    return summary
+
+
+async def _drop_off_tissue(dm: DatasetManager, dataset_id: str, src: Path, filename: str) -> dict | None:
+    """A spatial .h5ad with obs ``in_tissue`` 0 rows (a CELLxGENE Visium slide holds the
+    whole capture grid): the dataset's working source in ``ingested/{id}/`` leaves them out,
+    as the Space Ranger reader does (``core/off_tissue.py``), from the earlier steps' file
+    when one ran. The upload itself stays as sent. A failure keeps them and says so."""
+    from scview.core import off_tissue
+
+    out_dir = dm.data_dir / "ingested" / dataset_id
+    out = out_dir / src.name
+    current = out if out.exists() else src
+    made_dir = not out_dir.exists()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    partial = out_dir / f".{src.name}.tissue.partial"
+    try:
+        summary = await asyncio.to_thread(off_tissue.drop_in_file, current, partial,
+                                          original_filename=Path(filename).name)
+        if summary and partial.exists():
+            if out.exists():
+                out.chmod(0o644)
+            partial.replace(out)
+            _make_readonly(out)
+    except Exception as e:  # never lose the upload over this
+        logger.warning("Off-tissue spots of %s not left out: %s", filename, e)
+        summary = {"error": f"The spots marked off-tissue could not be left out ({e}); they stay in."}
+    finally:
+        partial.unlink(missing_ok=True)
+        if made_dir and not any(out_dir.iterdir()):
+            out_dir.rmdir()
     return summary
 
 

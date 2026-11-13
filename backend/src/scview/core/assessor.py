@@ -14,7 +14,7 @@ import numpy as np
 from pydantic import BaseModel
 from scipy import sparse
 
-from scview.core import provenance, targeted_panel
+from scview.core import off_tissue, provenance, targeted_panel
 from scview.core.cell_cycle import near_zero_phase_calls, phase_caution
 from scview.core.stress import SCORE_COLUMN
 from scview.core.uns_keys import enrichment_column, markers_column
@@ -236,6 +236,10 @@ def _check_filtering(adata: Any) -> StepStatus:
         obs_cols = set(adata.obs.columns)
         from scview.core import qc_filter, spatial
 
+        off = off_tissue.note(adata, spatial.technology(adata)["unit"]) if spatial.has_spatial(adata) else None
+        if off and qc_filter.recorded_filtering(adata) is None:
+            # The whole capture grid (a CELLxGENE Visium file imported before ingest left them out).
+            return StepStatus(done=False, confidence="high", details=off)
         if spatial.has_spatial(adata) and spatial.technology(adata)["unit"] == "bin":
             # Few genes are what a bin has: the heuristic below would never call one filtered.
             if qc_filter.recorded_filtering(adata) is not None:
