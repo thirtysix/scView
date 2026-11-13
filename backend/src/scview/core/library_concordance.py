@@ -499,7 +499,7 @@ def report_lines(result: dict) -> tuple[str | None, list[str]]:
         return None, []
     n, k = result["n_checked"], result["n_flagged"]
     lib, samp = result["library_column"], result["sample_column"]
-    split = f" (within one {', '.join(result['split_by'])})" if result["split_by"] else ""
+    split = f", compared within one {', '.join(result['split_by'])}" if result["split_by"] else ""
     line = (f"Libraries per sample ('{lib}' within '{samp}'{split}): {n} "
             f"{'sample has' if n == 1 else 'samples have'} two or more libraries; "
             + (f"{k} with libraries that disagree ({', '.join(result['flagged'][:4])})."
