@@ -59,6 +59,64 @@ export async function getSexCheck(datasetId: string, column?: string | null): Pr
   return apiFetch<SexCheck>(`/datasets/${datasetId}/qc/sex${q}`);
 }
 
+/** One library of a sample sequenced more than once (backend core/library_concordance.py). */
+export interface LibraryRow {
+  name: string;
+  n_cells: number;
+  median_counts: number | null;
+  median_genes: number | null;
+  too_small: boolean;
+}
+
+/** A sample (or sample x tissue, ``split``) with two or more libraries. */
+export interface LibrarySample {
+  name: string;
+  sample: string;
+  split: Record<string, string>;
+  status: "checked" | "too_small" | "by_design";
+  libraries: LibraryRow[];
+  flagged: boolean;
+  flags: ("composition" | "depth")[];
+  pair: {
+    a: string;
+    b: string;
+    distance: number | null;
+    p: number | null;
+    above_share?: number;
+    depth_log2_ratio: number | null;
+    differing: { group: string; share_a: number; share_b: number }[];
+  } | null;
+  message: string | null;
+}
+
+export interface LibraryConcordance {
+  status: "checked" | "none";
+  reason: string | null;
+  sample_column: string | null;
+  library_column: string | null;
+  library_source: string | null;
+  celltype_column: string | null;
+  split_by: string[];
+  samples: LibrarySample[];
+  n_checked: number;
+  n_flagged: number;
+  flagged: string[];
+  reference: {
+    basis: "matched" | "all" | "rule";
+    matched_on: string[];
+    n_pairs: number;
+    cut: number | null;
+    depth_cut_log2: number;
+  } | null;
+  note: string | null;
+}
+
+/** Libraries of one sample that disagree; ``sampleColumn`` names the samples (default: detected). */
+export async function getLibraryConcordance(datasetId: string, sampleColumn?: string | null): Promise<LibraryConcordance> {
+  const q = sampleColumn ? `?sample_column=${encodeURIComponent(sampleColumn)}` : "";
+  return apiFetch<LibraryConcordance>(`/datasets/${datasetId}/qc/libraries${q}`);
+}
+
 /** One pseudobulk profile: a sample, or a sample x condition, optionally within one cell type. */
 export interface PseudobulkProfile {
   id: string;

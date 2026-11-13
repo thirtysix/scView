@@ -18,7 +18,8 @@ from scview.dependencies import get_dataset_manager, get_settings_dep
 from scview.core.dataset_manager import DatasetManager, DatasetMemoryError
 from scview.core.assessor import assess_preprocessing, recorded_normalization_method
 from scview.core import (
-    cluster_evidence, cluster_qc, doublets, qc_filter, qc_groups, qc_report, sample_pseudobulk, sex_check,
+    cluster_evidence, cluster_qc, doublets, library_concordance, qc_filter, qc_groups, qc_report,
+    sample_pseudobulk, sex_check,
 )
 from scview.core import large_mode, large_run, leiden, working_copy
 from scview.core import batch_methods, qc_states, scaling, spatial, targeted_panel
@@ -230,6 +231,42 @@ async def get_sex_check(
     except Exception as e:
         logger.error("Sex check failed for %s: %s", dataset_id, e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Sex check failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# GET /datasets/{dataset_id}/qc/libraries
+# ---------------------------------------------------------------------------
+
+
+@router.get("/datasets/{dataset_id}/qc/libraries")
+async def get_library_concordance(
+    dataset_id: str,
+    sample_column: str = "",
+    library_column: str = "",
+    celltype_column: str = "",
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """Samples sequenced as two or more libraries (core/library_concordance.py): each
+    library's cells and depth, and a flag when two libraries of one sample differ in cell
+    types (or depth) more than different samples alike in condition, tissue and sex do.
+    Each column empty: detected."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
+
+    def _run() -> dict:
+        return library_concordance.library_concordance(
+            adaptor.adata, adaptor.qc_per_cell(), sample_column=sample_column or None,
+            library_column=library_column or None, celltype_column=celltype_column or None)
+
+    try:
+        # Per-cell counts may need a pass over the matrix the first time: off the loop.
+        return await asyncio.to_thread(_run)
+    except library_concordance.LibraryConcordanceError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error("Library concordance failed for %s: %s", dataset_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Library concordance failed: {e}")
 
 
 # ---------------------------------------------------------------------------

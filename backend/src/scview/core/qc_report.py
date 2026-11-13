@@ -28,7 +28,9 @@ import pandas as pd
 from pydantic import BaseModel
 
 from scview.core.replicates import donor_candidates, pick_donor
-from scview.core import cluster_qc, doublet_source, doublets, seq_metrics, sex_check, spatial, targeted_panel
+from scview.core import (
+    cluster_qc, doublet_source, doublets, library_concordance, seq_metrics, sex_check, spatial, targeted_panel,
+)
 from scview.core.anndata_adaptor import per_cell_qc
 from scview.core.assessor import _check_normalization, assess_preprocessing
 from scview.core.assistant import DEFAULT_MODEL, ChatSource
@@ -327,6 +329,22 @@ def build_facts(adaptor) -> QCFacts:
         if any(r["mismatch"] for r in sex["groups"]):
             step("qc:sex", f"Check the samples whose expression disagrees with "
                            f"'{sex['metadata_column']}' for a sample swap before comparing donors.")
+    # --- Two or more libraries of one sample (core/library_concordance.py) ---
+    try:
+        libs = library_concordance.library_concordance(adata, cells)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("qc report: library concordance failed: %s", exc)
+        libs = None
+    if libs is not None:
+        line, lib_concerns = library_concordance.report_lines(libs)
+        if line:
+            f.overview.append(_fact("qc:libraries", line))
+        for text in lib_concerns[:2]:
+            concern("qc:libraries", text)
+        if lib_concerns:
+            step("qc:libraries", "Before pooling a sample's libraries, compare the flagged library's "
+                                 "cell types and marker genes with the sample's other library; leave it "
+                                 "out if it holds another sample's cells.")
     if batches and not state.batch_correction.done:
         b = batches[0]
         step("qc:design", f"If cells separate by '{b}' rather than biology on the UMAP, run "

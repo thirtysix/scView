@@ -14,6 +14,7 @@ import { bound, pct, thresholdMode } from "@/lib/qcThresholds";
 import { unitTitle, unitWord } from "@/lib/spatial";
 import { SampleQcTable } from "@/components/panels/SampleQcTable";
 import { useSexCheck } from "@/components/panels/SampleSexCheck";
+import { useLibraryConcordance } from "@/components/panels/LibraryConcordance";
 import { RemovalAudit } from "@/components/qc/RemovalAudit";
 import { MitoModeControl } from "@/components/qc/MitoModeControl";
 import { DoubletFilterControl } from "@/components/qc/DoubletFilterControl";
@@ -240,6 +241,8 @@ export function QcFilterSummary({
   // Each sample's sex from expression, for the per-sample table: asked once the
   // samples are known, and again only when they change (not per threshold).
   const sex = useSexCheck(datasetId, preview?.samples?.column ?? null, refreshKey, preview !== null);
+  // Two or more libraries of one sample that disagree: the same samples, asked as rarely.
+  const libraries = useLibraryConcordance(datasetId, preview?.samples?.column ?? null, refreshKey, preview !== null);
 
   useEffect(() => {
     const id = ++request.current;
@@ -369,7 +372,7 @@ export function QcFilterSummary({
         columns={auditColumns}
         onColumns={(columns) => setAudit({ id: datasetId, columns })}
       />
-      <SampleQcTable preview={preview} mad={mad} sex={sex} />
+      <SampleQcTable preview={preview} mad={mad} sex={sex} libraries={libraries} />
     </>
   );
 }

@@ -166,6 +166,12 @@ describe("AtacMotifsCard", () => {
     expect(api.getChromVarMotif).toHaveBeenCalledWith("d1", "MA0080", "cell_type");
     fireEvent.click(await screen.findByText("MA0105"));
     await waitFor(() => expect(api.getChromVarMotif).toHaveBeenCalledWith("d1", "MA0105", "cell_type"));
+    // Drawn and saved: the line says the column.
+    api.getChromVarMotif.mockResolvedValueOnce({ ...MOTIF, saved_column: "chromvar_SPI1_MA0080", save_note: null });
+    fireEvent.click(screen.getByTestId("plot"));
+    expect((await screen.findByTestId("score-saved")).textContent).toBe(
+      "Saved as column chromvar_SPI1_MA0080: Compare and Color offer it.",
+    );
   });
 
   it("says a run on other cells is stale, and asks for a grouping before comparing", async () => {

@@ -70,6 +70,16 @@ async def persist(dm: DatasetManager, dataset_id: str, cells: str, **score: Any)
     Never raises: the score on the plot does not depend on the save."""
     if dm.is_busy(dataset_id):
         return None, BUSY_NOTE
+    # The same score drawn again (a program or motif clicked twice): nothing to write.
+    open_now = dm.get_dataset(dataset_id)
+    if open_now is not None and open_now.cells_fingerprint() == cells:
+        try:
+            same = saved_scores.already_saved(open_now.adata, **score)
+        except Exception as e:  # noqa: BLE001 - only a shortcut: save as usual
+            logger.warning("Could not compare a score with its saved column: %s", e)
+            same = None
+        if same is not None:
+            return same, None
     try:
         column = await _edit_and_save(dm, dataset_id, lambda a: saved_scores.save(a, **score), expect_cells=cells)
     except saved_scores.SavedScoreError as e:

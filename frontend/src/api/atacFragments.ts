@@ -39,7 +39,7 @@ export interface FragmentStatus {
   lines_checked: number | null;
   cells_seen: number | null;
   genome: string | null;
-  /** Why TSS enrichment and gene positions are off (fragments on hg19 or mm9), else null */
+  /** Why TSS enrichment and gene positions are off (fragments on hg19, mm9 or mm39), else null */
   genome_note?: string | null;
   estimate?: FragmentEstimate;
   qc?: FragmentQc | null;

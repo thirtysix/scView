@@ -8,8 +8,10 @@ import {
   type MarkerDbResult,
   type MarkerDbSource,
   type MarkerDbStatus,
+  type MarkerDbTissue,
   type MarkerDbVerdict,
 } from "@/api/annotation";
+import { Help } from "@/components/common/Help";
 import { formatDate, formatPValue, prettyObsLabel } from "@/lib/formatting";
 import { errorMessage } from "@/lib/errorMessage";
 
@@ -78,6 +80,7 @@ function genesText(genes: string[], max = 6): string {
 export function MarkerDbCheck({ datasetId, column }: { datasetId: string; column: string }) {
   const [status, setStatus] = useState<MarkerDbStatus | null>(null);
   const [species, setSpecies] = useState<"" | "human" | "mouse">("");
+  const [tissue, setTissue] = useState("");
   const [result, setResult] = useState<MarkerDbResult | null>(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -88,6 +91,7 @@ export function MarkerDbCheck({ datasetId, column }: { datasetId: string; column
     let live = true;
     setStatus(null);
     setSpecies("");
+    setTissue("");
     getMarkerDbStatus(datasetId)
       .then((s) => live && s?.sources && setStatus(s))
       .catch(() => undefined); // an older backend without the route: the button still works
@@ -133,6 +137,7 @@ export function MarkerDbCheck({ datasetId, column }: { datasetId: string; column
       const r = await runMarkerDbCheck(datasetId, column, {
         ...(species ? { species } : {}),
         ...(retry ? { retry: true } : {}),
+        ...(tissue.trim() ? { tissue: tissue.trim() } : {}),
       });
       if (id !== request.current) return;
       setResult(r);
@@ -186,6 +191,17 @@ export function MarkerDbCheck({ datasetId, column }: { datasetId: string; column
           <option value="human">Human</option>
           <option value="mouse">Mouse</option>
         </select>
+        <label htmlFor="mdb-tissue" className="text-slate-600">
+          Tissue
+        </label>
+        <input
+          id="mdb-tissue"
+          value={tissue}
+          maxLength={200}
+          onChange={(e) => setTissue(e.target.value)}
+          placeholder="From the data"
+          className="w-28 rounded border border-slate-200 bg-white px-1.5 py-0.5 text-xs text-slate-600"
+        />
         <button
           type="button"
           onClick={() => void run(false)}
@@ -247,6 +263,7 @@ export function MarkerDbCheck({ datasetId, column }: { datasetId: string; column
             database markers, {result.verdict_counts.not_in_db} not in the databases ({result.species} rows).
             {result.species_note ? ` ${result.species_note}` : ""}
           </p>
+          {result.tissue && <TissueLine tissue={result.tissue} />}
           <div className="overflow-x-auto">
             <table className="w-full text-[11px]" data-testid="marker-db-labels">
               <thead>
@@ -312,6 +329,27 @@ export function MarkerDbCheck({ datasetId, column }: { datasetId: string; column
         </p>
       )}
     </div>
+  );
+}
+
+/** One line on what the best types keep to: the dataset's tissue and the types found everywhere. */
+function TissueLine({ tissue }: { tissue: MarkerDbTissue }) {
+  return (
+    <p className="text-[11px] text-slate-500" data-testid="marker-db-tissue">
+      {!tissue.organs.length ? (
+        <>Best types from any tissue: {tissue.from}.</>
+      ) : tissue.n_types_left_out !== undefined ? (
+        <>
+          Best types from {tissue.organs.join(" + ")} +{" "}
+          <Help id="markerdb.tissue">types found everywhere</Help> ({tissue.n_types_left_out.toLocaleString()} left
+          out). Tissue: {tissue.from}.
+        </>
+      ) : (
+        <>
+          Tissue: {tissue.from}, but {tissue.note ?? "no type was left out"}.
+        </>
+      )}
+    </p>
   );
 }
 

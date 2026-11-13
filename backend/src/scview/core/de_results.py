@@ -111,6 +111,8 @@ def describe(comparison: dict[str, Any]) -> str:
     if comparison.get("mode") != "groups":
         return f"DE result ({method})"
     within = comparison.get("within_value")
+    if isinstance(within, list):  # several subgroups pooled
+        within = ", ".join(map(str, within))
     scope = within if comparison.get("within_column") and within is not None else "All cells"
     return f"{scope}: {comparison.get('group_a')} vs {comparison.get('group_b')} ({method})"
 

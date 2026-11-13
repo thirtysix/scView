@@ -1,15 +1,19 @@
-"""Per-cell scores kept as obs columns: a scored gene set or one TF / pathway's activity.
+"""Per-cell scores kept as obs columns: a scored gene set, one TF / pathway's activity, one
+gene program's usage or one motif's chromVAR z.
 
-Scoring in the app (``api/v1/genesets.py``, ``api/v1/activity.py``) draws a score on the
-plot; with ``save`` it is also written into the dataset as one float column, so Compare
-colourings, Colour by, the histogram, sessions and the h5ad export see it like any other
-column. Only the score the user put on the plot is saved, never a whole matrix of them.
+Scoring in the app (``api/v1/genesets.py``, ``api/v1/activity.py``, ``api/v1/programs.py``,
+``api/v1/atac_motifs.py``) draws a score on the plot; with ``save`` it is also written into
+the dataset as one float column, so Compare colourings, Colour by, the histogram, sessions
+and the h5ad export see it like any other column. Only the score the user put on the plot
+is saved, never a whole matrix of them.
 
 Column names: ``score_<set>`` for a gene set, ``activity_<source>`` for an activity,
-cleaned to letters, digits, ``_ . -`` and at most ``NAME_MAX`` characters, made unique.
-The record, uns ``scview_scores`` (a JSON string, as the provenance), says per column what
-it holds: kind, name, method, the genes used and missing, the matrix scored, the network,
-when. Scoring the same set again (any method) or the same source replaces its column and
+``program_k<k>_<n>`` for program n of a k-program run, ``chromvar_<motif>_<JASPAR id>`` for
+a motif; cleaned to letters, digits, ``_ . -`` and at most ``NAME_MAX`` characters, made
+unique. The record, uns ``scview_scores`` (a JSON string, as the provenance), says per
+column what it holds: kind, name, method, the genes used and missing, the matrix scored,
+the network, the run it came from, when. Scoring the same set again (any method), the
+same source, the same program of the same run or the same motif replaces its column and
 its entry. Only a column in the record is ever replaced or removed: a column the user or
 the file made is never touched.
 """
@@ -29,8 +33,14 @@ from scview.core import provenance
 logger = logging.getLogger(__name__)
 
 RECORD_KEY = "scview_scores"
-KINDS = ("geneset", "activity")
-PREFIXES = {"geneset": "score_", "activity": "activity_"}
+KINDS = ("geneset", "activity", "program", "chromvar")
+PREFIXES = {"geneset": "score_", "activity": "activity_", "program": "program_", "chromvar": "chromvar_"}
+# The record fields that, with the kind, say which score a column holds: the same ones
+# saved again replace it.
+IDENTITY = {"geneset": ("name",), "activity": ("name", "network"), "program": ("run_id", "program"),
+            "chromvar": ("motif_id",)}
+# What a run-made score's listing carries beyond the common fields (obs_flag).
+_RUN_FLAGS = {"program": ("k", "program", "run_id", "top_genes"), "chromvar": ("motif_id", "run_id", "jaspar")}
 NAME_MAX = 64  # whole column name, as a hand-label column (core/user_labels.COLUMN_MAX)
 MAX_GENES_RECORDED = 2000  # a set's genes in the record (the scoring endpoint's own cap is larger)
 
@@ -65,30 +75,57 @@ def record(adata) -> dict[str, dict[str, Any]]:
     return {str(k): v for k, v in data.items() if isinstance(v, dict) and str(k) in cols}
 
 
-def obs_flag(entry: dict[str, Any]) -> dict[str, Any]:
-    """What the obs column listing carries per saved score (the UI groups on it)."""
-    return {k: entry.get(k) for k in ("kind", "name", "method", "network")}
+def current_runs(adata, entries: dict[str, dict[str, Any]] | None = None) -> dict[str, str | None]:
+    """The run id of the dataset's gene programs and of its chromVAR run now, for the kinds
+    the record holds (``obs_flag``'s ``earlier_run``); nothing is read for other kinds."""
+    kinds = {e.get("kind") for e in (record(adata) if entries is None else entries).values()}
+    out: dict[str, str | None] = {}
+    if "program" in kinds:
+        from scview.core import gene_programs
+
+        info = gene_programs.stored(adata)
+        out["program"] = info.get("run_id") if info else None
+    if "chromvar" in kinds:
+        # The run itself is on disk (core/atac_chromvar.py); its provenance step names it.
+        steps = [h for h in provenance.read_provenance(adata).get("history", []) if h.get("step") == "atac_chromvar"]
+        out["chromvar"] = (steps[-1].get("params") or {}).get("run_id") if steps else None
+    return out
 
 
-def _same(entry: dict[str, Any], kind: str, name: str, network: str | None) -> bool:
-    return (entry.get("kind") == kind and entry.get("name") == name
-            and (kind != "activity" or entry.get("network") == network))
+def obs_flag(entry: dict[str, Any], runs: dict[str, str | None] | None = None) -> dict[str, Any]:
+    """What the obs column listing carries per saved score (the UI groups on it). A program
+    or motif score also names its run, and ``earlier_run`` says whether the dataset's run
+    now is another one (``runs``: ``current_runs``)."""
+    flag = {k: entry.get(k) for k in ("kind", "name", "method", "network")}
+    kind = entry.get("kind")
+    if kind in _RUN_FLAGS:
+        flag.update({k: entry.get(k) for k in _RUN_FLAGS[kind]})
+        if runs is not None and kind in runs:
+            flag["earlier_run"] = entry.get("run_id") != runs[kind]
+    return flag
+
+
+def _same(entry: dict[str, Any], kind: str, ident: dict[str, Any]) -> bool:
+    return entry.get("kind") == kind and all(entry.get(f) == ident.get(f) for f in IDENTITY[kind])
 
 
 def clean_name(kind: str, name: str) -> str:
-    """``score_<name>`` / ``activity_<name>`` with only safe characters, capped."""
+    """``score_<name>``, ``activity_<name>``... with only safe characters, capped."""
     prefix = PREFIXES[kind]
     body = _UNSAFE.sub("_", str(name)).strip("_.-") or "unnamed"
     return (prefix + body)[:NAME_MAX].rstrip("_.-")
 
 
-def column_for(adata, kind: str, name: str, network: str | None = None) -> str:
-    """The column this score goes into: its saved column when the same set (or source)
-    was saved before, else a new name no obs column has."""
+def column_for(adata, kind: str, name: str, network: str | None = None, *,
+               ident: dict[str, Any] | None = None, body: str | None = None) -> str:
+    """The column this score goes into: its saved column when the same score (the
+    ``IDENTITY`` fields, from ``ident``, else ``name`` and ``network``) was saved before,
+    else a new name no obs column has, made from ``body`` (else ``name``)."""
+    ident = ident if ident is not None else {"name": name, "network": network}
     for col, entry in record(adata).items():
-        if _same(entry, kind, name, network):
+        if _same(entry, kind, ident):
             return col
-    base = clean_name(kind, name)
+    base = clean_name(kind, body if body is not None else name)
     taken = {str(c).lower() for c in adata.obs.columns}
     col, i = base, 2
     while col.lower() in taken:
@@ -115,16 +152,42 @@ def _recorded(record) -> None:
         logger.warning("Could not record a saved score's provenance: %s", e)
 
 
+def already_saved(adata, *, kind: str, name: str, values, method: str | None = None,
+                  network: str | None = None, extra: dict[str, Any] | None = None,
+                  genes: list[str] | None = None, **_: Any) -> str | None:
+    """The column that already holds exactly this score (same score, method, genes and
+    values, NaN where NaN), or None. Drawing the same program or motif again then saves
+    nothing and records no step. Takes ``save``'s keywords."""
+    if kind not in KINDS:
+        return None
+    ident = {"name": str(name), "network": network, **(extra or {})}
+    for col, entry in record(adata).items():
+        if not _same(entry, kind, ident) or entry.get("method") != method:
+            continue
+        if genes is not None and entry.get("genes") != [str(g) for g in genes][:MAX_GENES_RECORDED]:
+            return None
+        if kind in _RUN_FLAGS and entry.get("run_id") != ident.get("run_id"):
+            return None  # a later run's motif: its record names that run
+        v = np.asarray(values, dtype=np.float32).ravel()
+        have = np.asarray(adata.obs[col], dtype=np.float32)
+        return col if v.shape == have.shape and np.array_equal(v, have, equal_nan=True) else None
+    return None
+
+
 def save(adata, *, kind: str, name: str, values, method: str | None = None,
          genes: list[str] | None = None, genes_missing: list[str] | None = None,
          source: str | None = None, network: str | None = None,
-         resource: str | None = None, extra: dict[str, Any] | None = None) -> str:
+         resource: str | None = None, extra: dict[str, Any] | None = None,
+         column_body: str | None = None) -> str:
     """Write one per-cell score into ``adata.obs`` and the record; the column name.
 
     ``genes``: the genes scored (a gene set); ``source``: the matrix scored; ``network``
     and ``resource``: an activity's network and where it came from; ``extra``: other
-    settings worth keeping (AUCell's ``max_rank``). Replaces the column of the same set or
-    source saved before. Records the step ``save_score``."""
+    settings worth keeping (AUCell's ``max_rank``; for a program its ``run_id`` and
+    ``program`` number, for a motif its ``motif_id``: the ``IDENTITY`` fields);
+    ``column_body``: the column name after the prefix, when it is not the name. Replaces
+    the column of the same score saved before. A NaN (a cell chromVAR gave no value)
+    stays NaN. Records the step ``save_score``."""
     if kind not in KINDS:
         raise SavedScoreError(f"Unknown score kind '{kind}'.")
     if not str(name).strip():
@@ -135,7 +198,10 @@ def save(adata, *, kind: str, name: str, values, method: str | None = None,
             f"{v.shape[0]:,} scores for {adata.n_obs:,} cells: the dataset changed while it was "
             "scored. Score it again.", status=409)
     entries = record(adata)
-    column = column_for(adata, kind, name, network)
+    ident = {"name": str(name), "network": network, **(extra or {})}
+    if any(ident.get(f) is None for f in IDENTITY[kind]):
+        raise SavedScoreError(f"A saved {kind} score needs {' and '.join(IDENTITY[kind])}.")
+    column = column_for(adata, kind, str(name), network, ident=ident, body=column_body)
     replaced = column in entries
     entry: dict[str, Any] = {
         "kind": kind,

@@ -59,6 +59,10 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Data Assessment > Cell hashing", "", "HTODemux / hashedDrops: singlets, doublets, negatives"),
     ("Data Assessment > QC Distributions", "doublets, sample QC, sex check",
      "per-cell QC plots, per-sample QC, doublet calls, pseudobulk sample QC, sex check"),
+    ("Data Assessment > QC Distributions > QC per sample", "",
+     "each sample's cells and median genes, UMIs and % mito with flags; a sample sequenced as two or more "
+     "libraries is flagged 'Libraries differ' when its libraries' cell-type mix (or depth) differs more than "
+     "different samples alike in condition, tissue and sex do (one library may hold another sample's cells)"),
     ("Data Assessment > QC states: RP share vs mito", "", "damaged or stressed cells per type"),
     ("Data Assessment > Cluster QC > Evidence per cluster", "",
      "why each cluster was labelled or flagged, in words, never a probability: its markers against random genes "
@@ -78,7 +82,8 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Data Assessment > Annotation cross-check", "", "agreement between two annotations"),
     ("Data Assessment > Annotation cross-check > Marker database check", "",
      "each label against PanglaoDB, CellMarker and ACT: supported, weak, no database support or not in "
-     "database, and the 3 database types its markers fit best; downloads the databases on first use"),
+     "database, and the 3 database types its markers fit best (of the dataset's tissue and of every tissue, when "
+     "the tissue is known or given); downloads the databases on first use"),
     ("Unified View", "", "linked scatter (UMAP/tSNE/PCA) with analysis tabs beside it"),
     ("Unified View > Embedding > Tissue", "spatial",
      "spots, bins or cells on the tissue image (Visium, Visium HD); Section, Image on/off; colours, lasso as on UMAP"),
@@ -107,10 +112,12 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Unified View > Gene Sets", "AUCell, ssGSEA, GSVA",
      "browse MSigDB sets; score them with AUCell, ssGSEA or GSVA"),
     ("Unified View > Compare", "saved scores",
-     "the plot coloured by 2-12 columns side by side: groupings, and under Scores every gene-set score and "
-     "TF / pathway activity the user has drawn (each is saved as a column, score_<set> or activity_<source>; "
-     "scoring the same set again replaces it) plus cell-cycle and stress scores; saved scores also show in "
-     "Colour by and the histogram, and Remove beside one drops it"),
+     "the plot coloured by 2-12 columns side by side: groupings, and under Scores every gene-set score, "
+     "TF / pathway activity, gene program usage (Programs) and chromVAR motif z (Accessibility) the user has "
+     "drawn (each is saved as a column, score_<set>, activity_<source>, program_k<k>_<n> or "
+     "chromvar_<motif>_<id>; drawing the same one again replaces it; a program from an earlier NMF run "
+     "says so) plus cell-cycle and stress scores; saved scores also show in Colour by and the histogram, "
+     "and Remove beside one drops it"),
     ("Unified View > Enrichment", "ORA, GSEA", "pathway enrichment (ORA, preranked GSEA)"),
     ("Unified View > Enrichment > Diagram", "Reactome",
      "a Reactome row's pathway diagram coloured by a DE result's fold changes (also on the DE tab's "
@@ -206,7 +213,8 @@ CLOSING = "These are all of scView's tabs and tools; name a feature only by its 
 FULL_ONLY = ("Unified View > Accessibility >", "Unified View > Embedding > Tissue > Draw", "Unified View > Transcripts",
              "Unified View > Domains > Co-occurrence", "Unified View > Spot composition > Reference labels",
              "Data Assessment > Cell-type annotation", "Data Assessment > Cluster QC", "Unified View > Compare",
-             "Data Assessment > Annotation cross-check > Marker database check")
+             "Data Assessment > Annotation cross-check > Marker database check",
+             "Data Assessment > QC Distributions > QC per sample")
 
 
 def compact_guide() -> str:

@@ -1,8 +1,9 @@
 import { useState } from "react";
 import type { FilterGroupLoss, FilterPreview, MadThresholds, SampleFlag } from "@/api/qc";
-import type { SexCheck } from "@/api/sampleQc";
+import type { LibraryConcordance, SexCheck } from "@/api/sampleQc";
 import { bound, pct } from "@/lib/qcThresholds";
 import { SexCaption, SexChip } from "@/components/panels/SampleSexCheck";
+import { flaggedBySample, LibraryCaption, LibraryChip } from "@/components/panels/LibraryConcordance";
 
 export const SAMPLE_FLAG_LABELS: Record<SampleFlag, string> = {
   few_cells: "Few cells",
@@ -135,11 +136,14 @@ function SampleMedians({
   grouping,
   hasMt,
   sex,
+  libraries,
 }: {
   grouping: NonNullable<FilterPreview["samples"]>;
   hasMt: boolean;
   /** The sex check over the same samples (its column must match). */
   sex?: SexCheck | null;
+  /** Libraries of one sample that disagree, by sample name (``flaggedBySample``). */
+  libraries?: Map<string, string[]>;
 }) {
   const rows = grouping.groups;
   const sexOf = new Map((sex && sex.column === grouping.column ? sex.groups : []).map((g) => [g.name, g]));
@@ -233,6 +237,7 @@ function SampleMedians({
                     {SAMPLE_FLAG_LABELS[f] ?? f}
                   </span>
                 ))}
+                {libraries?.get(g.name) && <LibraryChip messages={libraries.get(g.name)!} />}
               </span>
             </td>
           </tr>
@@ -264,16 +269,20 @@ export function SampleQcTable({
   preview,
   mad,
   sex = null,
+  libraries = null,
 }: {
   preview: FilterPreview;
   mad: MadThresholds | null;
   /** Each sample's sex from expression: a Sex column and a caption with the evidence. */
   sex?: SexCheck | null;
+  /** Samples sequenced as two or more libraries: a caution chip and a caption with the numbers. */
+  libraries?: LibraryConcordance | null;
 }) {
   const [view, setView] = useState<"medians" | "thresholds">("medians");
   const grouping = preview.samples;
   const shown = mad ? view : "medians";
-  const flagged = grouping?.groups.filter((g) => (g.flags ?? []).length > 0) ?? [];
+  const libFlags = flaggedBySample(libraries, grouping?.column ?? null);
+  const flagged = grouping?.groups.filter((g) => (g.flags ?? []).length > 0 || libFlags.has(g.name)) ?? [];
   return (
     <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-3" data-testid="sample-qc">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -322,7 +331,7 @@ export function SampleQcTable({
       ) : (
         <>
           <div className="max-h-72 overflow-auto">
-            <SampleMedians grouping={grouping} hasMt={preview.has_mt} sex={sex} />
+            <SampleMedians grouping={grouping} hasMt={preview.has_mt} sex={sex} libraries={libFlags} />
           </div>
           <p className="text-[10px] text-slate-400">
             Medians per cell. Shading runs from 0 to the column&apos;s highest value; a flag marks a median over 3
@@ -331,6 +340,7 @@ export function SampleQcTable({
         </>
       )}
       {sex && (sex.column === (grouping?.column ?? null) || !grouping) && <SexCaption sex={sex} />}
+      {libraries && libraries.sample_column === (grouping?.column ?? null) && <LibraryCaption libs={libraries} />}
     </div>
   );
 }

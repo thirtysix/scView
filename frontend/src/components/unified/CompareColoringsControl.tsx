@@ -18,8 +18,9 @@ import { useSplitViewStore } from "@/stores/splitViewStore";
 
 /**
  * Toolbar "Compare" button: pick 2–12 grouping columns (cell types, clusterings,
- * hand labels...) and per-cell scores (saved gene-set scores and activities, cell
- * cycle) to see the same embedding coloured by each, side by side. A saved score
+ * hand labels...) and per-cell scores (saved gene-set scores, activities, program
+ * usages and chromVAR z, cell cycle) to see the same embedding coloured by each,
+ * side by side. A saved score
  * can be removed here. Sits next to "Split"; one grid at a time.
  */
 export function CompareColoringsControl({ disabledReason = null }: { disabledReason?: string | null } = {}) {
@@ -103,7 +104,7 @@ export function CompareColoringsControl({ disabledReason = null }: { disabledRea
           className={`flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded px-1 py-0.5 hover:bg-slate-50 ${
             !checked && full ? "cursor-not-allowed opacity-50" : ""
           }`}
-          title={score ? `${o.title}, ${o.detail} (column ${o.name})` : undefined}
+          title={score ? o.tooltip ?? `${o.title}, ${o.detail} (column ${o.name})` : undefined}
         >
           <input
             type="checkbox"

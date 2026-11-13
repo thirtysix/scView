@@ -11,6 +11,7 @@ import shutil
 import dataclasses
 import itertools
 import unicodedata
+import uuid
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -133,6 +134,8 @@ class RunReservation:
     # it out (``DatasetManager.outstanding(pre_step=True)``).
     seq: int = 0
     waiting: bool = False
+    # A run on a dataset not in the library yet (a joint embedding): its name in sentences.
+    name: str = ""
 
     def outstanding(self, used_now: int) -> int:
         """Bytes the run is still expected to grow by from ``used_now``."""
@@ -388,18 +391,20 @@ class DatasetManager:
     # -- running runs' reservations ------------------------------------------------
 
     def reserve_run(self, dataset_id: str, need: int,
-                    remaining: Callable[[], int] | None = None) -> RunReservation | None:
+                    remaining: Callable[[], int] | None = None,
+                    name: str = "") -> RunReservation | None:
         """Record that the run starting on ``dataset_id`` is expected to grow by ``need``
         bytes from what is used now (``RunReservation``); ``release_run`` when it ends.
         None (nothing recorded) for no need or no reading of what is used. It starts above
         what the others are still expected to grow by, so their growth is not taken for
-        its own."""
+        its own. ``name``: what sentences call the run's dataset when the library does not
+        know it yet (``RunReservation.name``)."""
         budget = memory_budget.read_budget()
         if need <= 0 or budget.used_bytes is None:
             return None
         base = budget.used_bytes + self.outstanding(budget.used_bytes, dataset_id)
         self._runs[dataset_id] = r = RunReservation(dataset_id, base, int(need), remaining,
-                                                    seq=next(_RUN_SEQ))
+                                                    seq=next(_RUN_SEQ), name=name)
         logger.info("Run on %s reserves %.1f GB over the %.1f GB used", dataset_id,
                     need / 1024**3, budget.used_bytes / 1024**3)
         return r
@@ -457,7 +462,7 @@ class DatasetManager:
         still expected to grow (``outstanding(pre_step=True)``), largest first."""
         held = sorted(((r.outstanding(used_now), r) for r in self._growing(keep, True)),
                       key=lambda x: -x[0])
-        return [r.label or f"the run on {self.dataset_name(r.dataset_id)}" for b, r in held if b > 0]
+        return [r.label or f"the run on {self._run_name(r)}" for b, r in held if b > 0]
 
     def set_waiting(self, dataset_id: str, waiting: bool) -> None:
         """The run on ``dataset_id`` waits before a step (or goes on): ``RunReservation.waiting``."""
@@ -481,6 +486,9 @@ class DatasetManager:
         others = [r for d, r in self._runs.items() if d != keep] + list(self._reads.values())
         r = max(others, key=lambda x: x.outstanding(used))
         return r, r.outstanding(used), max(0, budget.limit_bytes - used)
+
+    def _run_name(self, r: RunReservation) -> str:
+        return r.name or self.dataset_name(r.dataset_id)
 
     def dataset_name(self, dataset_id: str) -> str:
         info = self.get_dataset_info(dataset_id)
@@ -570,7 +578,7 @@ class DatasetManager:
             if held is None or (held[0].label and not last):
                 return None
             r, run_need, available = held
-            return RunMemoryError(dataset_id, self.dataset_name(dataset_id), self.dataset_name(r.dataset_id),
+            return RunMemoryError(dataset_id, self.dataset_name(dataset_id), self._run_name(r),
                                   run_need, available, memory_budget.read_budget().limit_bytes, what, r.label)
 
         free = await self.free_memory_for(need + extra, keep=dataset_id)
@@ -862,21 +870,31 @@ class DatasetManager:
             return False
         target = self.derived_h5ad_path(dataset_id, adaptor.h5ad_path)
         uns_history.before_save(dataset_id, adata)
-        if Path(adaptor.h5ad_path) == target and target.exists():
-            import h5py
-            from anndata.io import write_elem
+        # Edited on a copy and swapped in: a kill mid-write (an OOM) must not leave the only
+        # copy of the dataset as a broken HDF5 file. Copying is a plain file copy, far cheaper
+        # than writing the whole AnnData again.
+        partial = target.with_name(f".{target.name}.{uuid.uuid4().hex[:8]}.part")  # one per writer
+        try:
+            if Path(adaptor.h5ad_path) == target and target.exists():
+                import h5py
+                from anndata.io import write_elem
 
-            with h5py.File(target, "a") as f:
-                if "uns" not in f:
-                    write_elem(f, "uns", {})
-                group = f["uns"]
-                for key in keys:
-                    if key in group:
-                        del group[key]
-                    write_elem(group, key, adata.uns[key])
-        else:
-            adata.write_h5ad(target, compression="gzip")
-            adaptor.h5ad_path = str(target)
+                shutil.copyfile(target, partial)
+                with h5py.File(partial, "a") as f:
+                    if "uns" not in f:
+                        write_elem(f, "uns", {})
+                    group = f["uns"]
+                    for key in keys:
+                        if key in group:
+                            del group[key]
+                        write_elem(group, key, adata.uns[key])
+                os.replace(partial, target)
+            else:
+                adata.write_h5ad(partial, compression="gzip")
+                os.replace(partial, target)
+                adaptor.h5ad_path = str(target)
+        finally:
+            partial.unlink(missing_ok=True)
         return True
 
     def saved_in_place(self, dataset_id: str, adaptor: AnnDataAdaptor, path: str) -> None:

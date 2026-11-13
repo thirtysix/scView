@@ -384,6 +384,18 @@ export interface MarkerDbLabel {
   suggestions: MarkerDbType[];
 }
 
+/** Where the suggestions' tissue came from (core/marker_tissues.dataset_tissue) */
+export interface MarkerDbTissue {
+  /** Coarse organs ("kidney"); empty when no tissue is known */
+  organs: string[];
+  /** "the tissue given ('kidney')", "obs 'tissue' (cortex of kidney)", or why none is known */
+  from: string;
+  /** Database types of other organs left out of the suggestions */
+  n_types_left_out?: number;
+  /** Why nothing was left out although the tissue is known */
+  note?: string;
+}
+
 export interface MarkerDbResult {
   column: string;
   species: "human" | "mouse";
@@ -396,6 +408,8 @@ export interface MarkerDbResult {
   verdict_sources: string[];
   /** Databases the suggestions rank (PanglaoDB + CellMarker 2.0) */
   suggestion_sources: string[];
+  /** The suggestions keep to this tissue (absent from an older backend) */
+  tissue?: MarkerDbTissue;
   ontology: boolean;
   cellmarker?: string | null;
   sources: MarkerDbSource[];
@@ -420,7 +434,7 @@ export function startMarkerDbDownload(datasetId: string, retry = false): Promise
 export function runMarkerDbCheck(
   datasetId: string,
   column: string,
-  opts: { species?: "human" | "mouse"; retry?: boolean } = {},
+  opts: { species?: "human" | "mouse"; retry?: boolean; tissue?: string } = {},
 ): Promise<MarkerDbResult> {
   return apiFetch(`/datasets/${datasetId}/annotation/marker-db/check`, {
     method: "POST",

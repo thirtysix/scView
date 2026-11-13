@@ -244,6 +244,8 @@ async def get_heatmap_cells(
             max_cells=max_cells, seed=seed, scale=scale,
             layer_range=adaptor.layer_scale_range(layer_key) if scale == "none" else None,
         )
+        # What the values are ("Log-normalized (raw)", "Counts (raw)"), not just the key.
+        result["meta"]["layer_label"] = adaptor.layer_label(layer_key)
         return heatmap_cells.to_arrow_ipc(result)
 
     try:

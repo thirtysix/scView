@@ -63,6 +63,9 @@ class _Ctx:
     scaling: dict[str, Any] | None = None
     # True once a step has kept the file's own UMAP as X_umap_original
     kept_umap: bool = False
+    # Whether the script recomputes the latest gene programs ("gene_programs") and
+    # chromVAR ("atac_chromvar", its run id): a saved program or motif score reads them.
+    runs: dict[str, Any] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -2821,7 +2824,21 @@ _SYMBOLS_CODE = [
 ]
 
 
+_OFF_TISSUE_CODE = [
+    "# scView left out the spots marked off-tissue (obs['in_tissue'] 0), as Space Ranger's",
+    "# reader does. scView's stored copy holds none; the original file still has them.",
+    "if \"in_tissue\" in adata.obs.columns:",
+    "    _on = adata.obs[\"in_tissue\"].astype(str).str.strip().str.lower()",
+    "    if _on.isin([\"0\", \"0.0\", \"false\", \"1\", \"1.0\", \"true\"]).all():",
+    "        adata = adata[~_on.isin([\"0\", \"0.0\", \"false\"]).to_numpy()].copy()",
+]
+
+
 def _ingest(p: dict, ctx: _Ctx) -> Snippet:
+    off = p.get("off_tissue")
+    if isinstance(off, dict) and int(off.get("removed") or 0) > 0:  # core/off_tissue.py
+        return Snippet(EXACT, ["# The import itself is read_input() at the top of this script."]
+                       + _OFF_TISSUE_CODE)
     snip = _ingest_steps(p, ctx)
     if isinstance(p.get("gene_symbols"), dict) and not isinstance(p.get("public_import"), dict):
         return Snippet(snip.status, snip.code + _SYMBOLS_CODE, snip.note)
@@ -3234,7 +3251,9 @@ def _packed(items: list[str], width: int = 92) -> list[str]:
 
 def _gene_programs(p: dict, ctx: _Ctx) -> Snippet:
     genes, k, seeds = p.get("genes"), p.get("k"), p.get("seeds")
-    if not isinstance(genes, list) or not genes or not isinstance(k, int) or not isinstance(seeds, list):
+    replayable = isinstance(genes, list) and bool(genes) and isinstance(k, int) and isinstance(seeds, list)
+    ctx.runs["gene_programs"] = replayable
+    if not replayable:
         return Snippet(NOT_REPLAYABLE, ["# Gene programs: genes, k or seeds not recorded. Recorded:",
                                         *_param_comment({x: v for x, v in p.items() if x != "genes"})],
                        "genes, k or seeds not recorded")
@@ -3543,7 +3562,9 @@ def _atac_chromvar(p: dict, ctx: _Ctx) -> Snippet:
 
     keys = ("seed", "iterations", "w", "bs")
     if any(p.get(k) is None for k in keys) or p.get("genome") not in genome_seq.RELEASES:
+        ctx.runs["atac_chromvar"] = None
         return Snippet(NOT_REPLAYABLE, ["# chromVAR: the settings are not recorded. Recorded:", *_param_comment(p)], "settings not recorded")
+    ctx.runs["atac_chromvar"] = p.get("run_id") or True
     _need(ctx, "atac_motifs")
     return Snippet(EXACT, [
         f"# chromVAR per-cell motif activity ({comment_text(p.get('genome'), 12)}): z and deviations, cells x motifs, in obsm.",
@@ -3976,7 +3997,9 @@ def _score_matrix(source: str, ctx: _Ctx) -> tuple[str, str]:
 
 def _save_score(p: dict, ctx: _Ctx) -> Snippet:
     """A per-cell score kept as an obs column (core/saved_scores.py): a gene set scored with
-    score_genes or AUCell is computed again; ssGSEA, GSVA and TF / pathway activity are not."""
+    score_genes or AUCell is computed again; a program's usage or a motif's chromVAR z is
+    read from the gene programs or chromVAR the script ran before it; ssGSEA, GSVA and TF /
+    pathway activity are not computed again."""
     column, kind, name, method = (p.get(x) for x in ("column", "kind", "name", "method"))
     genes, source = p.get("genes"), str(p.get("source") or "")
     recorded = ["# Recorded:", *_param_comment({k: v for k, v in p.items() if k not in ("genes", "genes_missing")})]
@@ -3984,6 +4007,17 @@ def _save_score(p: dict, ctx: _Ctx) -> Snippet:
         return Snippet(NOT_REPLAYABLE, ["# A saved score: its column was not recorded.", *recorded],
                        "column not recorded")
     head = f"# Saved score {comment_text(name, 120)} ({comment_text(kind, 20)}, {comment_text(method, 20)})."
+    program, motif_id = p.get("program"), p.get("motif_id")
+    if kind == "program" and isinstance(program, int) and program >= 1 and ctx.runs.get("gene_programs"):
+        key = "X_nmf_usage_raw" if method == "NMF usage" else "X_nmf_usage"
+        return Snippet(EXACT, [head, "# From the gene programs computed above (the run it was saved from).",
+                               f"adata.obs[{_lit(column)}] = np.asarray(adata.obsm[{_lit(key)}][:, {program - 1}], "
+                               "dtype=np.float32)"])
+    run = ctx.runs.get("atac_chromvar")
+    if kind == "chromvar" and isinstance(motif_id, str) and motif_id and (run is True or (run and run == p.get("run_id"))):
+        return Snippet(EXACT, [head, "# From the chromVAR z computed above (NaN where a cell has no value).",
+                               f"adata.obs[{_lit(column)}] = np.asarray(adata.obsm[\"atac_chromvar_z\"][:, "
+                               f"list(adata.uns[\"atac_chromvar_motifs\"]).index({_lit(motif_id)})], dtype=np.float32)"])
     if kind == "geneset" and isinstance(genes, list) and genes and method in ("score_genes", "aucell"):
         genes_line = f"genes = {_lit([str(g) for g in genes])}  # the genes scored"
         if method == "aucell" and isinstance(p.get("max_rank"), int):
@@ -4011,8 +4045,15 @@ def _save_score(p: dict, ctx: _Ctx) -> Snippet:
                 f"sc.tl.score_genes(tmp, genes, score_name={_lit(column)}, use_raw=False)",
                 f"adata.obs[{_lit(column)}] = tmp.obs[{_lit(column)}].fillna(0).to_numpy(np.float32)",
             ], "scored on normalize_total + log1p of the counts")
-    why = ("scView's own TF / pathway activity (ULM on a network fetched on first use; decoupler-py's "
-           "ulm gives it)" if kind == "activity" else f"scView's own {comment_text(method, 20)} code")
+    if kind == "program":
+        why = "a gene program's usage, and the gene programs it came from are not computed above"
+    elif kind == "chromvar":
+        why = "a motif's chromVAR z, and the chromVAR run it came from is not computed above"
+    elif kind == "activity":
+        why = ("scView's own TF / pathway activity (ULM on a network fetched on first use; decoupler-py's "
+               "ulm gives it)")
+    else:
+        why = f"scView's own {comment_text(method, 20)} code"
     return Snippet(NOT_REPLAYABLE, [
         head,
         f"# It is {why}: not replayed. Its values are in scView's cell metadata export",

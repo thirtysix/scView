@@ -136,6 +136,11 @@ describe("the ingest step's chips", () => {
     ]);
     expect(chips({ public_import: { source: "CELLxGENE Discover", dataset_id: "abc", doi: "10.1/x", license: "CC BY 4.0" } }))
       .toEqual(["CELLxGENE Discover: dataset abc, DOI 10.1/x, CC BY 4.0"]);
+    expect(chips({ formats: ["h5ad"], off_tissue: { removed: 713, kept: 4279, column: "in_tissue" } })).toEqual([
+      "format: AnnData (.h5ad)", "713 spots marked off-tissue (in_tissue 0) left out, 4,279 kept",
+    ]);
+    expect(chips({ off_tissue: { removed: 0, kept: 9, kept_reason: "the file is too large to rewrite in the memory free" } }))
+      .toEqual(["spots marked off-tissue (in_tissue 0) kept: the file is too large to rewrite in the memory free"]);
     expect(chips({ formats: ["dense_table"], genes_in_rows: true })).toEqual([
       "format: expression table (CSV/TSV)", "table read with genes in rows",
     ]);

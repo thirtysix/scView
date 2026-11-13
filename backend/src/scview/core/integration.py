@@ -19,10 +19,10 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Generator
+from typing import TYPE_CHECKING, Any, Callable, Generator
 
 import anndata as ad
 import numpy as np
@@ -38,6 +38,7 @@ from scview.core.uns_keys import BATCH_MIXING_KEY
 
 if TYPE_CHECKING:
     from scview.core.dataset_manager import DatasetManager
+    from scview.core.run_watchdog import RunControl
 
 logger = logging.getLogger(__name__)
 
@@ -172,31 +173,70 @@ def _prefixed_clonotypes(s: pd.Series, label: str) -> pd.Series:
     return s.where(~has, label + ":" + s.astype(str))
 
 
-def carried_obs(adata: ad.AnnData, label: str) -> pd.DataFrame:
-    """Categorical annotations worth keeping in the joint dataset.
+# Per-cell QC metrics the joint run's QC step computes again from the joint counts (scanpy
+# calculate_qc_metrics names, and the older n_genes / n_counts): not carried.
+_RECOMPUTED_RE = re.compile(
+    r"^(log1p_)?(n_genes_by_counts|total_counts(_.+)?|pct_counts_.+|n_genes|n_counts)$")
+# Why a column is not carried (``DroppedColumn.reason``).
+WHY_RECOMPUTED = "recomputed by the joint run"
+WHY_ID = "one value per cell (an id)"
+WHY_CLUSTERS = "this dataset's own clusters (kept as source_cluster)"
+WHY_LEVELS = "too many values to compare"
+WHY_SOME = "a number in only some of the datasets"
+WHY_EMPTY = "empty"
 
-    Cluster ids are dataset-local (cluster "3" in A is unrelated to "3" in B), so
-    the active clustering is carried as ``source_cluster`` prefixed with the
-    dataset label, and other cluster columns are dropped — the joint run
-    clusters afresh. Clonotype ids (``clonotype``, core/vdj.py) are prefixed the
-    same way.
-    """
+
+def _is_number(s: pd.Series) -> bool:
+    return pd.api.types.is_numeric_dtype(s) and not pd.api.types.is_bool_dtype(s)
+
+
+def _plain_number(s: pd.Series) -> pd.Series:
+    """A numeric column as numpy: ints stay ints when no value is missing, else floats."""
+    if s.isna().any():
+        return s.astype(np.float64)
+    if pd.api.types.is_integer_dtype(s):
+        return s.astype(np.int64)
+    return s.astype(s.dtype.numpy_dtype if hasattr(s.dtype, "numpy_dtype") else s.dtype)
+
+
+def obs_choice(adata: ad.AnnData, label: str) -> tuple[dict[str, pd.Series], dict[str, str]]:
+    """The obs columns a joint dataset keeps from one dataset, and the ones it leaves out
+    with the reason (``carried_obs``); ``scview_`` columns are left out unnamed."""
     obs = adata.obs
     active = adata.uns.get("scview_active_clustering")
     keep: dict[str, pd.Series] = {}
+    dropped: dict[str, str] = {}
     for col in obs.columns:
         col = str(col)
-        if col == active or col in ("leiden", "louvain") or col.startswith("scview_"):
+        if col.startswith("scview_"):
+            continue
+        if col == active or col in ("leiden", "louvain"):
+            dropped[col] = WHY_CLUSTERS
             continue
         s = obs[col]
+        if _is_number(s):
+            if _RECOMPUTED_RE.match(col):
+                dropped[col] = WHY_RECOMPUTED
+            elif s.notna().sum() == 0:
+                dropped[col] = WHY_EMPTY
+            elif (pd.api.types.is_integer_dtype(s) and len(s) > 1
+                  and s.nunique(dropna=True) == len(s)):
+                dropped[col] = WHY_ID
+            else:
+                keep[col] = _plain_number(s)
+            continue
         if not (isinstance(s.dtype, pd.CategoricalDtype) or pd.api.types.is_string_dtype(s)
                 or pd.api.types.is_bool_dtype(s)):
             continue
         n_levels = s.nunique(dropna=True)
         # Too many levels, or nearly one per cell (barcodes / ids): not an annotation.
         # Clonotypes are ids with many levels by nature, yet worth carrying.
-        if n_levels == 0 or col != CLONOTYPE_COL and (not 1 <= n_levels <= _MAX_CARRY_CATEGORIES
+        if n_levels == 0:
+            dropped[col] = WHY_EMPTY
+            continue
+        if col != CLONOTYPE_COL and (n_levels > _MAX_CARRY_CATEGORIES
                                      or (n_levels > 1 and n_levels > 0.5 * len(s))):
+            dropped[col] = WHY_ID if n_levels > 0.5 * len(s) else WHY_LEVELS
             continue
         name = "source_dataset" if col == LABEL_COLUMN else col
         keep[name] = s.astype(object).where(s.notna(), None)
@@ -204,7 +244,23 @@ def carried_obs(adata: ad.AnnData, label: str) -> pd.DataFrame:
             keep[name] = _prefixed_clonotypes(keep[name], label)
     if active and active in obs.columns:
         keep["source_cluster"] = (label + ":" + obs[active].astype(str)).astype(object)
-    return pd.DataFrame(keep, index=obs.index)
+    return keep, dropped
+
+
+def carried_obs(adata: ad.AnnData, label: str) -> pd.DataFrame:
+    """Annotations worth keeping in the joint dataset: categorical, text and true/false
+    columns, and numbers (author scores, % mito, in_tissue; ints stay ints when none is
+    missing). Numbers kept only where every dataset has them (``merge_joint``).
+
+    Cluster ids are dataset-local (cluster "3" in A is unrelated to "3" in B), so
+    the active clustering is carried as ``source_cluster`` prefixed with the
+    dataset label, and other cluster columns are dropped — the joint run
+    clusters afresh. Clonotype ids (``clonotype``, core/vdj.py) are prefixed the
+    same way. Left out: per-cell QC metrics the joint run computes again, ids (one
+    value per cell), and text with too many values (``obs_choice`` says which and why).
+    """
+    keep, _ = obs_choice(adata, label)
+    return pd.DataFrame(keep, index=adata.obs.index)
 
 
 @dataclass
@@ -212,8 +268,27 @@ class Unit:
     dataset_id: str
     name: str
     label: str
-    adata: ad.AnnData  # counts in X, carried annotations in obs
+    adata: ad.AnnData | None  # counts in X, carried annotations in obs; None once merged
     counts_source: str
+    n_cells: int = 0  # kept once ``adata`` is dropped (``release_units``)
+    # obs columns of the dataset not carried, with the reason (``obs_choice``)
+    dropped: dict[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.adata is not None:
+            self.n_cells = int(self.adata.n_obs)
+
+
+def release_units(units: dict[str, Unit]) -> None:
+    """Drop each unit's counts once the joint dataset holds them: a joint run that kept
+    them held every dataset's counts twice for its whole length (8 Visium slides: about
+    the size of the joint counts again). Every caller holds these same Unit objects, so
+    this frees them for all of them."""
+    for u in units.values():
+        u.adata = None
+    from scview.core import memory_budget
+
+    memory_budget.release_memory()
 
 
 def build_unit(
@@ -222,7 +297,8 @@ def build_unit(
     counts = recover_counts(adata, fallback_paths)
     var = counts.var
     var.index = var.index.astype(str)
-    obs = carried_obs(adata, label)
+    kept, dropped = obs_choice(adata, label)
+    obs = pd.DataFrame(kept, index=adata.obs.index)
     obs.index = obs.index.astype(str)
     unit = ad.AnnData(X=counts.X, obs=obs, var=var)
     if protein.has_protein(adata):  # CITE-seq counts ride along (same cells, same order)
@@ -236,8 +312,22 @@ def build_unit(
         for col in ("array_row", "array_col"):
             if col in adata.obs.columns:
                 unit.obs[col] = adata.obs[col].to_numpy()
-        unit.uns[spatial.KEY] = dict(adata.uns[spatial.KEY])
-    return Unit(dataset_id, name, label, unit, counts.source)
+        unit.uns[spatial.KEY] = _shown_images_only(adata.uns[spatial.KEY])
+    return Unit(dataset_id, name, label, unit, counts.source, dropped=dropped)
+
+
+def _shown_images_only(libraries: Any) -> dict:
+    """``uns["spatial"]`` with each library's images cut to those scView shows
+    (``spatial.RESOLUTIONS``). CELLxGENE Visium files also carry the full-resolution
+    image (7,874 x 7,874 x 3 per Kuppe slide, 186 MB): 1.5 GB of 8 slides held twice
+    during a joint run, never drawn."""
+    out = {}
+    for lib, entry in dict(libraries).items():
+        if isinstance(entry, dict) and isinstance(entry.get("images"), dict):
+            entry = dict(entry, images={k: v for k, v in entry["images"].items()
+                                        if k in spatial.RESOLUTIONS})
+        out[lib] = entry
+    return out
 
 
 def unique_labels(names: list[str]) -> list[str]:
@@ -268,14 +358,52 @@ class DatasetCheck(BaseModel):
     error: str | None = None
 
 
+class DroppedColumn(BaseModel):
+    """An obs column some dataset has that the joint dataset will not."""
+
+    column: str
+    reason: str  # WHY_* above
+    datasets: list[str] = Field(default_factory=list)  # labels of the datasets that have it
+
+
+def numbers_in_some(units: dict[str, Unit]) -> dict[str, list[str]]:
+    """Numeric obs columns kept in some units but not in every one: column -> the labels
+    of the units that have it. ``merge_joint`` leaves them out (no number for the other
+    datasets' cells)."""
+    have: dict[str, list[str]] = {}
+    for lab, u in units.items():
+        for c in u.adata.obs.columns:
+            if _is_number(u.adata.obs[c]):
+                have.setdefault(str(c), []).append(lab)
+    return {c: labs for c, labs in have.items() if len(labs) < len(units)}
+
+
+def dropped_columns(units: dict[str, Unit]) -> list[DroppedColumn]:
+    """Every obs column the joint dataset leaves out, once, with the reason and the
+    datasets that have it (the plan's list)."""
+    out: dict[str, DroppedColumn] = {}
+    for lab, u in units.items():
+        for col, why in u.dropped.items():
+            out.setdefault(col, DroppedColumn(column=col, reason=why)).datasets.append(lab)
+    for col, labs in numbers_in_some(units).items():
+        out.setdefault(col, DroppedColumn(column=col, reason=WHY_SOME)).datasets.extend(labs)
+    order = [WHY_SOME, WHY_RECOMPUTED, WHY_ID, WHY_LEVELS, WHY_CLUSTERS, WHY_EMPTY]
+    return sorted(out.values(), key=lambda d: (order.index(d.reason) if d.reason in order else 99,
+                                               d.column.lower()))
+
+
 class IntegrationPlan(BaseModel):
     datasets: list[DatasetCheck] = Field(default_factory=list)
     merge: MergePlan | None = None
     shared_columns: list[str] = Field(default_factory=list)
+    # obs columns the joint dataset leaves out, with why (``dropped_columns``)
+    dropped_columns: list[DroppedColumn] = Field(default_factory=list)
     est_cells: int = 0
     blocking: list[str] = Field(default_factory=list)
     # Design notes (not blocking): e.g. each dataset holds one condition.
     notes: list[str] = Field(default_factory=list)
+    # The joint run's memory and time (``joint_preflight``'s verdict, as the other preflight notes).
+    preflight: dict[str, Any] | None = None
     ok: bool = False
 
 
@@ -390,6 +518,7 @@ def build_plan(
         plan.merge = plan_merge({lab: u.adata for lab, u in units.items()})
         col_sets = [set(u.adata.obs.columns) - {"source_cluster"} for u in units.values()]
         plan.shared_columns = sorted(set.intersection(*col_sets))
+        plan.dropped_columns = dropped_columns(units)
         m = plan.merge
         genes = m.reconciliation.overlap_after if (
             m.reconciliation and m.reconciliation.feasible) else m.intersection
@@ -434,12 +563,21 @@ def confounding_notes(units: dict[str, "Unit"]) -> list[str]:
 
 
 def merge_joint(
-    units: dict[str, Unit], *, join: MergeJoin = MergeJoin.inner, apply_reconciliation: bool = True
+    units: dict[str, Unit], *, join: MergeJoin = MergeJoin.inner, apply_reconciliation: bool = True,
+    copy: bool = True,
 ) -> ad.AnnData:
-    """Concatenate units into one counts AnnData labelled by ``dataset``."""
+    """Concatenate units into one counts AnnData labelled by ``dataset``. ``copy=False``:
+    the units' AnnData are changed in place (a caller that drops them after)."""
     adatas = {lab: u.adata for lab, u in units.items()}
     # Pad every unit to the union of annotation columns: concatenating with an
     # inner gene join would otherwise also drop any column one dataset lacks.
+    # A number only some datasets have is left out (the plan lists it): the other cells
+    # would hold no value, and padding turned the column into text.
+    partial = numbers_in_some(units)
+    for a in adatas.values():
+        a.obs = a.obs.drop(columns=[c for c in partial if c in a.obs.columns])
+    numbers = {str(c) for c in next(iter(adatas.values())).obs.columns
+               if all(c in a.obs.columns and _is_number(a.obs[c]) for a in adatas.values())}
     cols = list(dict.fromkeys(c for a in adatas.values() for c in a.obs.columns))
     for a in adatas.values():
         for c in cols:
@@ -448,9 +586,12 @@ def merge_joint(
         a.obs = a.obs[cols]
     recon = plan_merge(adatas).reconciliation if apply_reconciliation else None
     protein.common_panel(list(adatas.values()))  # proteins all of them measured, or none
-    joint = merge_units(adatas, join=join, sample_label=LABEL_COLUMN, reconciliation=recon)
+    joint = merge_units(adatas, join=join, sample_label=LABEL_COLUMN, reconciliation=recon, copy=copy)
     for c in cols:
-        joint.obs[c] = joint.obs[c].astype("category")
+        if c in numbers:  # ints stay ints when no dataset misses a value (``_plain_number``)
+            joint.obs[c] = _plain_number(joint.obs[c])
+        else:
+            joint.obs[c] = joint.obs[c].astype("category")
     protein.renormalise(joint)
     return joint
 
@@ -462,7 +603,7 @@ def record_integration_provenance(
     """Source block + an ``integrate`` history entry. Never raises."""
     merged_from = [
         {"dataset_id": u.dataset_id, "name": u.name, "label": u.label,
-         "n_cells": int(u.adata.n_obs), "counts_source": u.counts_source}
+         "n_cells": u.n_cells, "counts_source": u.counts_source}
         for u in units.values()
     ]
     try:
@@ -788,6 +929,167 @@ def joint_params(method: str, overrides: dict[str, Any] | None = None) -> Pipeli
     return params
 
 
+# ---------------------------------------------------------------------------
+# Memory: the joint run's estimate (the plan's note, the run's reservation)
+# ---------------------------------------------------------------------------
+
+# Merging over the units held: concat cuts each dataset to the shared genes and stacks the
+# cuts (the units are not copied first: ``merge_joint(copy=False)``). 8 Kuppe Visium slides
+# (39,936 spots x 35,477 genes, joint counts 0.58 GB by the header): +0.65 GB measured in a
+# 6 GB container; 1.5 copies leaves room for its error.
+MERGE_COPIES = 1.5
+MERGE_LABEL = "merging the datasets"
+# What a stopped joint run says it kept, and how to make it fit (``run_watchdog.memory_stop``).
+JOINT_NOTHING_KEPT = ("Nothing was kept: the joint dataset was removed, and the source datasets "
+                      "are unchanged.")
+MERGE_NOTHING_KEPT = "Nothing was kept: the source datasets are unchanged."
+JOINT_FIX = ("Raise SCVIEW_MEMORY_GB in .env (then restart scView), or integrate fewer or "
+             "smaller datasets.")
+
+
+def _nested_bytes(d: Any) -> int:
+    if isinstance(d, dict):
+        return sum(_nested_bytes(v) for v in d.values())
+    return int(getattr(d, "nbytes", 0) or 0)
+
+
+def _unit_bytes(a: ad.AnnData) -> int:
+    """Memory one unit holds: its counts, obs, coordinates and tissue images."""
+    X = a.X
+    n = (X.data.nbytes + X.indices.nbytes + X.indptr.nbytes) if sp.issparse(X) else int(np.asarray(X).nbytes)
+    n += int(a.obs.memory_usage(deep=True).sum())
+    n += sum(int(getattr(v, "nbytes", 0) or 0) for v in a.obsm.values())
+    return int(n + _nested_bytes(a.uns))
+
+
+def joint_header(units: dict[str, Unit], n_genes: int) -> preflight.Header:
+    """The joint counts as the run will hold them: every unit's cells over ``n_genes``
+    genes, each unit's stored values scaled by the share of its genes kept (an inner join
+    keeps the shared genes; Visium slides of one study keep 97%)."""
+    n = sum(u.adata.n_obs for u in units.values())
+    nnz = 0
+    for u in units.values():
+        share = min(1.0, n_genes / max(1, u.adata.n_vars))
+        stored = u.adata.X.nnz if sp.issparse(u.adata.X) else u.adata.X.size
+        nnz += int(stored * share)
+    h = preflight.Header("h5ad", n, n_genes, [preflight.Matrix("X", n, n_genes, True, nnz, "float32")])
+    h.obs_columns = len({c for u in units.values() for c in u.adata.obs.columns}) + 1
+    h.obsm_bytes = sum(int(getattr(v, "nbytes", 0) or 0)
+                       for u in units.values() for v in u.adata.obsm.values())
+    h.uns_bytes = sum(_nested_bytes(u.adata.uns) for u in units.values())
+    return h
+
+
+@dataclass
+class JointEstimate:
+    """Memory of a joint run, as growth over what the run holds when it starts (the
+    units' counts, ``units_bytes``): merging, then the pipeline on the joint counts once
+    the units are dropped (``release_units``)."""
+
+    units_bytes: int
+    merge_bytes: int  # growth over the units while merging
+    run: preflight.RunEstimate  # the pipeline on the joint counts (they are its start)
+    header: preflight.Header
+
+    def step_needs(self) -> dict[str, int]:
+        """Per stage ("merge", then each step and the save), its growth over the units held."""
+        out = {"merge": self.merge_bytes}
+        out.update({e.step: max(0, e.peak_bytes - self.units_bytes) for e in self.run.steps})
+        return out
+
+    @property
+    def need(self) -> int:
+        """What the run grows by at its peak, from the units held."""
+        return max(self.step_needs().values(), default=0)
+
+    @property
+    def peak_bytes(self) -> int:
+        return self.units_bytes + self.need
+
+    @property
+    def peak_step(self) -> str:
+        needs = self.step_needs()
+        return max(needs, key=lambda k: needs[k]) if needs else ""
+
+
+def estimate_joint(units: dict[str, Unit], n_genes: int, *, method: str = METHOD_HARMONY,
+                   overrides: dict[str, Any] | None = None) -> JointEstimate:
+    """The joint run's memory and time from the units (read for the plan) and the joint
+    gene count (``joint_genes``)."""
+    h = joint_header(units, n_genes)
+    run = preflight.estimate_run(h, steps=joint_steps(method), params=joint_params(method, overrides),
+                                 warm=preflight.process_warm())
+    held = sum(_unit_bytes(u.adata) for u in units.values())
+    return JointEstimate(held, int(MERGE_COPIES * preflight.resident_bytes(h)), run, h)
+
+
+def joint_genes(plan: IntegrationPlan, join: MergeJoin = MergeJoin.inner) -> int:
+    """Genes of the joint dataset: the shared ones (after reconciliation), or every one."""
+    m = plan.merge
+    if m is None:
+        return 0
+    if join == MergeJoin.outer:
+        return int(m.union)
+    return int(m.reconciliation.overlap_after if m.reconciliation and m.reconciliation.feasible
+               else m.intersection)
+
+
+def _stage_label(step: str) -> str:
+    return "merging" if step == "merge" else preflight.STEP_LABELS.get(step, step)
+
+
+def joint_preflight(est: JointEstimate, avail: preflight.Available, cached: preflight.Cached) -> dict:
+    """The plan's memory and time note (``preflight.make_verdict``), and ``blocking``: a
+    sentence when the run cannot fit in the limit even with every other dataset closed.
+    The plan holds the units while this is measured: they count as free."""
+    if avail.available_bytes is not None and avail.used_bytes is not None:
+        units = min(est.units_bytes, avail.used_bytes)
+        avail = preflight.Available(avail.limit_bytes, avail.used_bytes - units,
+                                    avail.available_bytes + units, avail.limited, avail.source)
+    stage = _stage_label(est.peak_step)
+    need = est.peak_bytes
+    about = preflight._about(need)
+    breakdown = [("The datasets' counts, read", est.units_bytes),
+                 ("While merging them", est.units_bytes + est.merge_bytes),
+                 ("The joint counts", est.run.start_bytes),
+                 (f"At the peak ({stage})", need)]
+    h = est.header
+    notes = [f"Estimated from the joint shape: {h.n_cells:,} cells x {h.n_genes:,} genes, "
+             f"{h.x.nnz:,} stored values."]
+    v = preflight.make_verdict(need=need, peak=need, stage=stage, seconds=est.run.seconds,
+                               avail=avail, cached=cached,
+                               lead=f"{about[0].upper()}{about[1:]} at its peak ({stage})",
+                               breakdown=breakdown, notes=notes, alternatives=[])
+    blocking = None
+    if avail.limited and avail.available_bytes is not None and avail.limit_bytes is not None:
+        room = avail.available_bytes + cached.bytes
+        if need * (1 - preflight.ERROR_BAND) > room:
+            gib = 1024**3
+            blocking = (f"The joint run needs about {need / gib:.1f} GB at its peak ({stage}), and scView "
+                        f"would have about {room / gib:.1f} GB of its {avail.limit_bytes / gib:.1f} GB "
+                        f"limit even with every other dataset closed. {JOINT_FIX}")
+    return {"verdict": v, "blocking": blocking}
+
+
+def joint_before_step(merge_need: int):
+    """The joint run's pre-step check (``RunControl.before_step``): the merge's estimated
+    growth before merging, ``default_before_step``'s check before each pipeline step, in
+    the joint run's words (no step to leave out; the joint dataset is removed)."""
+    from scview.core import run_watchdog
+
+    def check(step: str, adata: Any, params: Any) -> str | None:
+        if step == "merge":
+            return run_watchdog.memory_stop(step, merge_need, label=MERGE_LABEL,
+                                            saved=MERGE_NOTHING_KEPT, fix=JOINT_FIX)
+        reason = run_watchdog.log_only_stop(step, adata)
+        if reason:
+            return reason
+        return run_watchdog.memory_stop(step, preflight.step_peak_for(adata, step, params),
+                                        saved=JOINT_NOTHING_KEPT, fix=JOINT_FIX)
+
+    return check
+
+
 def run_integration_streamed(
     units: dict[str, Unit],
     *,
@@ -799,14 +1101,29 @@ def run_integration_streamed(
     method: str = METHOD_HARMONY,
     apply_reconciliation: bool = True,
     overrides: dict[str, Any] | None = None,
+    control: RunControl | None = None,
+    on_merged: Callable[[], None] | None = None,
 ) -> Generator[tuple[str, dict[str, Any]], None, None]:
     """Merge, persist and process; yields (event, data) for SSE progress.
 
     ``output_path_for(source_path)`` returns the derived output path, so the
-    caller's DatasetManager decides where processed results live.
+    caller's DatasetManager decides where processed results live. ``control`` (the
+    joint run's, ``api/v1/integration.py``) is checked before merging too, as the stage
+    "merge" (``joint_before_step``): a stop there ends with ``pipeline_complete`` of that
+    status before anything is written. The units' counts are dropped once merged
+    (``release_units``), then ``on_merged()`` is called: the pipeline holds the joint
+    counts only.
     """
-    yield ("stage", {"stage": "merge", "message": f"Merging {len(units)} datasets"})
-    joint = merge_joint(units, join=join, apply_reconciliation=apply_reconciliation)
+    yield ("stage", {"stage": "merge", "message": f"Merging {len(units)} datasets",
+                     "dataset_id": dataset_id})
+    halt = control.halt_before("merge", None, None) if control is not None else None
+    if halt is not None:
+        yield ("pipeline_complete", {"status": halt[0], "stop_reason": halt[1], "steps_run": []})
+        return
+    joint = merge_joint(units, join=join, apply_reconciliation=apply_reconciliation, copy=False)
+    release_units(units)
+    if on_merged is not None:
+        on_merged()
     record_integration_provenance(joint, units, join=join, method=method,
                                   apply_reconciliation=apply_reconciliation)
 
@@ -820,7 +1137,7 @@ def run_integration_streamed(
     # Score once both PCA spaces exist, so the pipeline's final write saves it.
     score_after = "pca" if method == METHOD_NONE else "batch_correction"
     for event, data in run_pipeline_streamed(
-        joint, steps, params, output_path=str(output_path_for(str(src)))
+        joint, steps, params, output_path=str(output_path_for(str(src))), control=control
     ):
         # The pipeline's own "complete" isn't the end of the integration.
         yield ("pipeline_complete" if event == "complete" else event, data)

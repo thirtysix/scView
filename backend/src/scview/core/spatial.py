@@ -759,7 +759,8 @@ def adopt(adata) -> bool:
     uns = uns if isinstance(uns, Mapping) else {}
     obs = adata.obs
     if LIBRARY_COLUMN not in obs.columns:
-        keys = [str(k) for k in uns.keys()]
+        # Libraries are the dict entries: CELLxGENE also stores a flag there (``is_single``).
+        keys = [str(k) for k, v in uns.items() if isinstance(v, Mapping)]
         column = _column_of(obs, keys) if len(keys) > 1 else None
         if column is not None:
             obs[LIBRARY_COLUMN] = pd.Categorical(obs[column].astype(str), categories=keys)

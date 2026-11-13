@@ -351,7 +351,10 @@ async def search_public_datasets(
     organism: Annotated[str | None, Field(description="e.g. Homo sapiens")] = None,
     tissue: Annotated[str | None, Field(description="e.g. blood")] = None,
     disease: Annotated[str | None, Field(description="e.g. COVID-19")] = None,
-    assay: Annotated[str | None, Field(description="e.g. 10x 3' v3")] = None,
+    assay: Annotated[str | None, Field(description=(
+        "e.g. 10x 3' v3. Tissue, disease and assay match the exact name first; when no dataset "
+        "has it, names holding its words (Visium -> Visium Spatial Gene Expression V1), "
+        "listed under matched."))] = None,
     max_mb: Annotated[float | None, Field(gt=0, description="Largest download, MB.")] = None,
     sort: Annotated[Literal["cells", "size", "title", "newest"], Field(
         description="Order: most cells first (default), largest download, title, or newest.")] = "cells",
@@ -378,6 +381,8 @@ async def search_public_datasets(
            "fetched_at": d.get("fetched_at")}
     if d.get("partial"):
         res["partial"] = {**d["partial"], "note": "No dataset has every word: these have the most."}
+    if d.get("matched"):
+        res["matched"] = d["matched"]
     return dumps(res, _max_chars(limit))
 
 
@@ -579,6 +584,48 @@ async def sex_check(
 
 
 @tool(READ)
+async def library_concordance(
+    dataset_id: DatasetId,
+    sample_column: Annotated[str, Field(description=(
+        "The samples / donors whose libraries are compared (default: the donor column the QC "
+        "table uses)."))] = "",
+    library_column: Annotated[str, Field(description=(
+        "The libraries: one value per sequencing library, each within one sample (default: "
+        "detected: a library / lane / channel column, a non-person sample column such as "
+        "biosample_id, or the barcodes' prefix or -N suffix)."))] = "",
+    celltype_column: Annotated[str, Field(description=(
+        "The cell types the libraries' mixes are compared over (default: an author cell-type "
+        "column, else the clustering)."))] = "",
+    limit: Limit = DEFAULT_LIMIT,
+) -> str:
+    """Samples sequenced as two or more libraries: each library's cells, median UMIs and
+    genes, and a flag when two libraries of one sample differ in cell-type mix (or depth)
+    more than different samples alike in condition, tissue and sex do (90% quantile of those
+    distances, floor 0.15, chi-square p < 1e-3). A flagged library may hold another sample's
+    cells or a failed capture. A sample's libraries from different tissues or conditions are
+    compared only within one (``split_by``). ``reason`` says why nothing was checked."""
+    d = await _get(f"{_ds(dataset_id)}/qc/libraries", sample_column=sample_column,
+                   library_column=library_column, celltype_column=celltype_column)
+    samples = []
+    for s in d.get("samples") or []:
+        pair = s.get("pair") or {}
+        samples.append({"name": s.get("name"), "status": s.get("status"), "flags": s.get("flags"),
+                        "libraries": [pick(lib, "name", "n_cells", "median_counts", "median_genes", "too_small")
+                                      for lib in s.get("libraries") or []],
+                        **({"pair": pick(pair, "a", "b", "distance", "p", "above_share", "depth_log2_ratio",
+                                         "differing")} if pair else {}),
+                        **({"message": s["message"]} if s.get("message") else {})})
+    n = clamp(limit)
+    out = {"dataset_id": dataset_id,
+           **pick(d, "status", "reason", "sample_column", "library_column", "library_source",
+                  "celltype_column", "split_by", "n_checked", "n_flagged", "flagged", "reference", "note"),
+           "samples": samples[:n]}
+    if len(samples) > n:
+        out["samples_total"] = len(samples)
+    return dumps(out, _max_chars(limit))
+
+
+@tool(READ)
 async def preflight(dataset_id: DatasetId, steps: Steps, params: Annotated[dict[str, Any] | None, Field(
         description="The run's parameters, as run_pipeline takes them (its schema lists them).")] = None) -> str:
     """Before a run: its peak memory and rough time per step and in all, against the memory
@@ -708,7 +755,9 @@ async def get_markers(
 ) -> str:
     """Marker genes of each group of a column vs the rest (Wilcoxon), top n per group with
     log fold change, adjusted p and the share of cells expressing in and out. Computed and
-    saved with the dataset the first time a column is asked for."""
+    saved with the dataset the first time a column is asked for. The current markers live in
+    the dataset itself, one set per column, so they have no result_id and list_results does not
+    show them (it lists earlier markers a re-run replaced): call this again to read them."""
     d = await _get(f"{_ds(dataset_id)}/markers", groupby_column=column, groupby=group or "",
                    format="json", n_genes=n_genes)
     if not d.get("groups"):
@@ -786,23 +835,28 @@ async def marker_db_check(
         "Database rows to use (default: the dataset's species, told from the gene names)."))] = None,
     retry: Annotated[bool, Field(description=(
         "Try a database whose download failed a moment ago again now."))] = False,
+    tissue: Annotated[str, Field(max_length=200, description=(
+        "The dataset's tissue, e.g. 'kidney': suggestions keep to its types and those found in every "
+        "tissue (immune, blood, vessels, stroma). Default: the data's own tissue column, else its title; "
+        "none known: types of any tissue."))] = "",
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
     """The UI's marker database check (PanglaoDB, CellMarker, ACT): for each label of a column, its
     database type matched by name, the verdict (supported / weak support / no database support /
     too few database markers / not in database) with p and the overlapping genes, and the 3
-    database types the group's top 25 markers fit best. Changes nothing in the dataset. The
+    database types the group's top 25 markers fit best, of the dataset's tissue and of every tissue
+    when the tissue is known ('tissue' in the reply says which). Changes nothing in the dataset. The
     databases are downloaded on first use (about a minute); after that cluster_evidence also
     compares markers with them."""
     d = await _post(f"{_ds(dataset_id)}/annotation/marker-db/check",
-                    {"column": column, "species": species, "retry": retry})
+                    {"column": column, "species": species, "retry": retry, "tissue": tissue})
     n = clamp(limit)
     labels = [{**r, "overlap": ", ".join(r.get("overlap") or []),
                "suggestions": "; ".join(f"{s['cell_type']} (p {num(s['p'])})" for s in r.get("suggestions") or [])}
               for r in d.get("labels") or []]
     return dumps({"dataset_id": dataset_id,
                   **pick(d, "column", "species", "species_note", "verdict_counts", "cellmarker",
-                         "verdict_sources", "suggestion_sources", "note"),
+                         "verdict_sources", "suggestion_sources", "tissue", "note"),
                   "labels": table(labels, ["label", "verdict_text", "db_type", "p", "overlap", "n_db_genes",
                                            "suggestions"], n)}, _max_chars(n))
 
@@ -898,8 +952,8 @@ def _de_warnings(r: dict[str, Any]) -> list[str]:
     if comp.get("warn"):
         w.append("composition: " + str(comp.get("message")))
     if r.get("underreplicated"):
-        w.append(f"under-replicated: donors A={r.get('n_donors_a')}, B={r.get('n_donors_b')} "
-                 f"(replicate column {r.get('replicate_key')}); a cell-level p value overstates "
+        w.append(f"under-replicated: '{r.get('n_donors_column') or r.get('replicate_key')}' values "
+                 f"A={r.get('n_donors_a')}, B={r.get('n_donors_b')}; a cell-level p value overstates "
                  "the evidence, check with method='pseudobulk' or per_donor_expression")
     ts = r.get("transcriptome_size") or {}
     if ts.get("caution"):
@@ -922,7 +976,9 @@ async def differential_expression(
     group_a: Annotated[str | None, Field(description="Between groups: side A (e.g. STIM).")] = None,
     group_b: Annotated[str | None, Field(description="Between groups: side B, the reference (e.g. CTRL).")] = None,
     within_column: Annotated[str | None, Field(description="Restrict to one subgroup: its column (e.g. cell_type).")] = None,
-    within_value: Annotated[str | None, Field(description="Restrict to one subgroup: its value (e.g. CD14 Mono).")] = None,
+    within_value: Annotated[str | list[str] | None, Field(description=(
+        "Restrict to one subgroup: its value (e.g. CD14 Mono), or a list of values whose cells are "
+        "pooled."))] = None,
     group: Annotated[str | None, Field(description="One group vs every other cell (with `column`).")] = None,
     filter: Annotated[CellFilter | None, Field(description="Selected cells vs every other cell.")] = None,
     method: Annotated[Literal["wilcoxon", "t-test", "logreg", "pseudobulk"], Field(description=(
@@ -998,7 +1054,7 @@ async def differential_expression(
     out: dict[str, Any] = {
         "dataset_id": dataset_id, "result_id": r.get("result_id"), "label": r.get("label"),
         "method": r.get("method"), "n_a": r.get("n_selected"), "n_b": r.get("n_rest"),
-        **pick(r, "replicate_key", "n_donors_a", "n_donors_b", "n_samples_a", "n_samples_b",
+        **pick(r, "replicate_key", "n_donors_a", "n_donors_b", "n_donors_column", "n_samples_a", "n_samples_b",
                "design", "pb_method", "counts_source", "min_pct", "n_genes_skipped", "covariates"),
         "n_genes_tested": r.get("n_genes_tested") or len(genes),
         "rule": f"padj <= {padj_max} and |log2FC| >= {lfc_min}" if has_p else f"|coef| ranked, |log2FC| >= {lfc_min}",
@@ -1134,8 +1190,9 @@ async def composition_test(
         "Values of the sample column to leave out (e.g. one donor's samples, for a leave-one-out)."))] = None,
     within_column: Annotated[str | None, Field(description=(
         "Test shares among a subset only: its column (e.g. a broad cell class)."))] = None,
-    within_value: Annotated[list[str] | None, Field(description=(
-        "The subset's value(s) of within_column (e.g. ['Immune']: T cells among immune cells)."))] = None,
+    within_value: Annotated[str | list[str] | None, Field(description=(
+        "The subset's value, or a list of values, of within_column (e.g. 'Immune': T cells among "
+        "immune cells)."))] = None,
     donor_key: Annotated[str | None, Field(description=(
         "Person column the samples nest in, for the repeated-donor warning (default: detected)."))] = None,
     covariates: Annotated[list[str] | None, Field(max_length=4, description=(
@@ -1239,8 +1296,8 @@ async def expression_by_group(
     Groups come a page at a time (at most limit, fewer when many genes): next_offset gives the
     next page."""
     d = await _get(f"{_ds(dataset_id)}/expression/by-group", genes=genes, groupby=groupby, layer=layer)
-    out = {"dataset_id": dataset_id, "groupby": d["groupby"], "layer": d["layer"], "genes": d["genes"],
-           "n_groups": len(d["groups"]), "offset": offset,
+    out = {"dataset_id": dataset_id, "groupby": d["groupby"], "layer": d["layer"],
+           **pick(d, "layer_label"), "genes": d["genes"], "n_groups": len(d["groups"]), "offset": offset,
            "note": "mean[i][j] and fraction[i][j] are group i, gene j"}
     missing = [x for x in genes if x not in d["genes"]]
     if missing:
@@ -1544,7 +1601,9 @@ async def list_results(
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
     """The dataset's stored results (DE, markers, enrichment, composition, ...), newest first:
-    id, kind, label, and whether computed on an earlier version of the data (stale)."""
+    id, kind, label, and whether computed on an earlier version of the data (stale). Markers and
+    enrichment listed here are earlier ones a re-run replaced; the current ones live in the
+    dataset and come from get_markers / enrichment."""
     d = await _get(f"{_ds(dataset_id)}/results", kind=kind)
     res = d.get("results") or []
     return dumps({"dataset_id": dataset_id, **rows(res, ["id", "kind", "label", "created_at", "stale", "stale_reason", "status"],
@@ -1605,18 +1664,25 @@ async def plot(
     within_column: Annotated[str | None, Field(description=(
         "Only one subgroup: its obs column (e.g. cell_type). Violin and dotplot use only its cells; "
         "an embedding colours them and draws the other cells grey."))] = None,
-    within_value: Annotated[str | None, Field(description="Only one subgroup: its value (e.g. CD14 Monocyte).")] = None,
+    within_value: Annotated[str | list[str] | None, Field(description=(
+        "Only one subgroup: its value (e.g. CD14 Monocyte), or a list of values whose cells are "
+        "pooled."))] = None,
 ) -> list:
     """A PNG figure of the dataset (at most 1600 px, under 300 KB). A dataset over 50,000 cells
     is drawn from a random 50,000 (said in the caption). The same views are in the browser UI."""
+    if isinstance(within_value, list) and not within_value:
+        within_value = None
     if (within_column is None) != (within_value is None):
         raise ToolError("Give both within_column and within_value, or neither.")
+    within_values = [] if within_value is None else (
+        [within_value] if isinstance(within_value, str) else [str(v) for v in within_value])
+    within_value = ", ".join(within_values) if within_values else None  # for the captions
     scope = f" in {within_column} = {within_value}" if within_column else ""
     if kind == "dotplot":
         if not genes:
             raise ToolError("A dot plot needs genes.")
         if within_column:
-            d = await _dotplot_within(dataset_id, genes, groupby, layer, within_column, within_value or "")
+            d = await _dotplot_within(dataset_id, genes, groupby, layer, within_column, within_values)
         else:
             d = await _get(f"{_ds(dataset_id)}/expression/by-group", genes=genes, groupby=groupby, layer=layer)
         caption = f"{len(d['groups'])} groups of {d['groupby']}{scope}, layer {d.get('layer_label') or d['layer']}"
@@ -1633,7 +1699,7 @@ async def plot(
             col = adaptor.get_obs_column(within_column)
         except KeyError:
             raise ToolError(column_message(within_column, list(adaptor.adata.obs.columns)))
-        mask = (col.astype(str).where(col.notna()) == str(within_value)).to_numpy()
+        mask = col.astype(str).where(col.notna()).isin(within_values).to_numpy()
         if not mask.any():
             raise ToolError(f"No cell has {within_column} = '{within_value}'.")
         return mask
@@ -1642,6 +1708,10 @@ async def plot(
         if g not in set(adaptor._var_names_for_layer(lay or adaptor.default_expression_layer())):
             raise ToolError(f"Gene '{g}' is not in the expression layer.")
         return adaptor.get_expression([g], layer=lay)[:, 0]
+
+    def _layer_words() -> str:
+        # What the values are ("Log-normalized (raw)", "Counts (raw)"), not the bare key.
+        return adaptor.layer_label(lay or adaptor.default_expression_layer())
 
     def _draw() -> tuple[bytes, str]:
         n = adaptor.n_cells()
@@ -1667,7 +1737,7 @@ async def plot(
                     raise ToolError(column_message(color_by, list(adaptor.adata.obs.columns)))
                 label = color_by
             elif gene:
-                values, label = _values_of_gene(gene), gene
+                values, label = _values_of_gene(gene), f"{gene}, {_layer_words()}"
             # A published embedding can leave cells out (NaN coordinates: CELLxGENE sets often
             # do): draw the placed cells only, sampled among themselves, and say how many.
             placed = np.flatnonzero(np.isfinite(np.asarray(xy, dtype=float)).all(axis=1))
@@ -1710,8 +1780,7 @@ async def plot(
                 f" (random {len(rows_):,} drawn)" if rows_ is not None else "")
         if rows_ is not None:
             values, groups = values[rows_], groups.iloc[rows_]
-        return plots.violin(values, groups, f"{gene} by {by}{scope}",
-                            f"{gene} ({lay or adaptor.default_expression_layer()})", note), note
+        return plots.violin(values, groups, f"{gene} by {by}{scope}", f"{gene}, {_layer_words()}", note), note
 
     try:
         png, note = await asyncio.to_thread(_draw)
@@ -1723,13 +1792,15 @@ async def plot(
 
 
 async def _dotplot_within(dataset_id: str, genes: list[str], groupby: str, layer: str,
-                          column: str, value: str) -> dict[str, Any]:
-    """The dot plot's numbers over one subgroup's cells: the by-group route's selection row,
-    once per group of ``groupby`` among those cells (in the column's order)."""
-    flt = CellFilter(op="and", items=[{"kind": "category", "column": column, "values": [value]}])
+                          column: str, values: str | list[str]) -> dict[str, Any]:
+    """The dot plot's numbers over one subgroup's cells (``values`` of ``column``, one or
+    several): the by-group route's selection row, once per group of ``groupby`` among those
+    cells (in the column's order)."""
+    values = [values] if isinstance(values, str) else list(values)
+    flt = CellFilter(op="and", items=[{"kind": "category", "column": column, "values": values}])
     within = await _indices(dataset_id, flt)
     if len(within) == 0:
-        raise ToolError(f"No cell has {column} = '{value}'.")
+        raise ToolError(f"No cell has {column} = '{', '.join(values)}'.")
     if not groupby:
         groupby = (await _get(_ds(dataset_id))).get("active_clustering") or ""
     values = (await _get(f"{_ds(dataset_id)}/metadata/{groupby}", format="json"))["values"]

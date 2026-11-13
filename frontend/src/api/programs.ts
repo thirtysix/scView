@@ -1,4 +1,5 @@
 import { apiFetch } from "./client";
+import { announceSavedScore } from "@/lib/savedScores";
 import { streamEvents } from "./clustering";
 import type { EnrichmentResult } from "./enrichment";
 import type { WatchdogEvent } from "./pipelineRun";
@@ -178,11 +179,27 @@ export interface ProgramUsage {
   values: number[];
   /** The values split by the `groupby` column, for the violin. */
   violin: Record<string, number[]> | null;
+  /** Asked to save: the obs column (program_k<k>_<n>), or null with save_note saying why */
+  saved_column?: string | null;
+  save_note?: string | null;
 }
 
-export function getProgramUsage(datasetId: string, index: number, groupby?: string): Promise<ProgramUsage> {
-  const q = groupby ? `?${new URLSearchParams({ groupby }).toString()}` : "";
-  return apiFetch(`/datasets/${datasetId}/programs/${index}/usage${q}`);
+/** One program's usage per cell. `save` (the default: the user drew it) also keeps it as an
+ *  obs column (backend core/saved_scores.py); a violin regroup or a session drawing it again
+ *  passes false. */
+export async function getProgramUsage(
+  datasetId: string,
+  index: number,
+  groupby?: string,
+  save = true,
+): Promise<ProgramUsage> {
+  const q = new URLSearchParams();
+  if (groupby) q.set("groupby", groupby);
+  if (save) q.set("save", "true");
+  const qs = q.toString();
+  const res = await apiFetch<ProgramUsage>(`/datasets/${datasetId}/programs/${index}/usage${qs ? `?${qs}` : ""}`);
+  if (res.saved_column) announceSavedScore(datasetId, res.saved_column);
+  return res;
 }
 
 export interface ProgramEnrichment {

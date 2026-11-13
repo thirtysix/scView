@@ -10,11 +10,15 @@ import {
   type IntegrationEvent,
   type IntegrationMethod,
   type IntegrationPlan,
+  type DroppedColumn,
 } from "@/api/integration";
 import { formatNumber, prettyObsLabel } from "@/lib/formatting";
 import type { DatasetInfo } from "@/api/types";
 import { JointSummary } from "./JointSummary";
 import { errorMessage } from "@/lib/errorMessage";
+import { PreflightNote } from "@/components/common/PreflightNote";
+import { CancelRunButton, RunWatchNotes } from "@/components/panels/RunWatch";
+import { cancelPipelineRun, type WatchdogEvent } from "@/api/pipelineRun";
 
 /** Pipeline steps of a joint run, in order, with display labels. */
 const STEP_LABELS: Record<string, string> = {
@@ -31,6 +35,7 @@ const STEP_LABELS: Record<string, string> = {
   embeddings: "Joint UMAP",
   marker_genes: "Marker genes",
 };
+const stepLabel = (s: string) => STEP_LABELS[s] ?? (s === "merge" ? "Merging" : s);
 
 // skipped: not run, as a step it needs failed (backend core/step_failures.py)
 type StepStatus = "pending" | "running" | "done" | "error" | "skipped";
@@ -70,6 +75,12 @@ export function JointEmbedding() {
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
   const [resultId, setResultId] = useState<string | null>(null);
+  // The run's new dataset id (Cancel takes it), the watchdog's latest warnings, a requested cancel.
+  const [jointId, setJointId] = useState<string | null>(null);
+  const [memoryNote, setMemoryNote] = useState<WatchdogEvent | null>(null);
+  const [slowNote, setSlowNote] = useState<WatchdogEvent | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+  const [runningStep, setRunningStep] = useState<string | null>(null);
 
   useEffect(() => {
     listDatasets()
@@ -113,6 +124,16 @@ export function JointEmbedding() {
   const defaultName = labelList.length >= 2 ? `joint: ${labelList.join(" + ")}` : "";
 
   const onEvent = useCallback((e: IntegrationEvent) => {
+    if (e.event === "stage" && typeof e.data.dataset_id === "string") setJointId(e.data.dataset_id);
+    if (e.event === "step_start") {
+      setRunningStep(String(e.data.step ?? ""));
+      setSlowNote(null);
+    }
+    if (e.event === "watchdog") {
+      const w = e.data as unknown as WatchdogEvent;
+      if (w.kind === "memory") setMemoryNote(w);
+      else setSlowNote(w);
+    }
     setProgress((p) => {
       if (!p) return p;
       const status = { ...p.status };
@@ -152,6 +173,11 @@ export function JointEmbedding() {
     setRunning(true);
     setRunError(null);
     setResultId(null);
+    setJointId(null);
+    setMemoryNote(null);
+    setSlowNote(null);
+    setCancelling(false);
+    setRunningStep(null);
     setProgress({ stage: "Starting", steps, status: {}, errors: {}, substep: null });
     try {
       const id = await runIntegration(
@@ -172,7 +198,15 @@ export function JointEmbedding() {
       setRunError(errorMessage(e));
     } finally {
       setRunning(false);
+      setCancelling(false);
+      setRunningStep(null);
     }
+  };
+
+  const cancel = () => {
+    if (!jointId) return;
+    setCancelling(true);
+    cancelPipelineRun(jointId).catch(() => setCancelling(false));
   };
 
   const openResult = async () => {
@@ -302,6 +336,10 @@ export function JointEmbedding() {
                   ))}
                 </p>
               )}
+              {plan.dropped_columns && plan.dropped_columns.length > 0 && (
+                <DroppedColumns columns={plan.dropped_columns} nDatasets={plan.datasets.length} />
+              )}
+              {plan.preflight && <PreflightNote verdict={plan.preflight} label="Memory" />}
               {plan.blocking.map((b) => <ErrorLine key={b} text={b} />)}
             </div>
           )}
@@ -369,13 +407,24 @@ export function JointEmbedding() {
       {/* Progress */}
       {progress && (
         <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <h3 className="mb-2 text-sm font-semibold text-slate-700">{progress.stage}</h3>
+          <div className="mb-2 flex items-center gap-2">
+            <h3 className="text-sm font-semibold text-slate-700">{progress.stage}</h3>
+            {running && jointId && (
+              <span className="ml-auto">
+                <CancelRunButton
+                  onCancel={cancel}
+                  cancelling={cancelling}
+                  title="Stop the joint run before its next step. Nothing is kept: the joint dataset is removed and the source datasets stay as they are."
+                />
+              </span>
+            )}
+          </div>
           <ul className="grid gap-1 text-sm sm:grid-cols-2">
             {progress.steps.map((s) => (
               <li key={s} className="flex items-center gap-2">
                 <StepIcon status={progress.status[s] ?? "pending"} />
                 <span className={progress.status[s] === "error" ? "text-red-600" : "text-slate-600"}>
-                  {STEP_LABELS[s] ?? s}
+                  {stepLabel(s)}
                   {progress.status[s] === "skipped" && (
                     <span className="text-slate-400"> (skipped: needs a step that failed)</span>
                   )}
@@ -384,8 +433,17 @@ export function JointEmbedding() {
             ))}
           </ul>
           {progress.substep && <p className="mt-2 text-xs text-slate-400">{progress.substep}</p>}
+          {running && (
+            <RunWatchNotes
+              memory={memoryNote}
+              slow={slowNote}
+              cancelling={cancelling}
+              runningStep={runningStep}
+              label={stepLabel}
+            />
+          )}
           {Object.entries(progress.errors).map(([s, err]) => (
-            <ErrorLine key={s} text={`${STEP_LABELS[s] ?? s}: ${err}`} />
+            <ErrorLine key={s} text={`${stepLabel(s)}: ${err}`} />
           ))}
           {runError && <ErrorLine text={runError} />}
           {resultId && (
@@ -425,6 +483,49 @@ function ErrorLine({ text }: { text: string }) {
       <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
       <span>{text}</span>
     </div>
+  );
+}
+
+/** Columns more than this are listed folded, under a one-line summary. */
+const DROPPED_OPEN_MAX = 6;
+
+/** The annotation columns the joint dataset leaves out, grouped by why; folded when long. */
+export function DroppedColumns({ columns, nDatasets }: { columns: DroppedColumn[]; nDatasets: number }) {
+  const groups = new Map<string, DroppedColumn[]>();
+  for (const c of columns) groups.set(c.reason, [...(groups.get(c.reason) ?? []), c]);
+  const lines = (
+    <ul className="space-y-0.5">
+      {[...groups].map(([reason, cols]) => (
+        <li key={reason}>
+          <span className="text-slate-600">{reason.charAt(0).toUpperCase() + reason.slice(1)}:</span>{" "}
+          {cols.map((c) => (
+            <span
+              key={c.column}
+              title={c.datasets.length < nDatasets ? `In ${c.datasets.join(", ")}` : `In every dataset`}
+              className="mr-1 inline-block rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-500"
+            >
+              {c.column}
+              {c.datasets.length < nDatasets && <span className="text-slate-400"> ({c.datasets.join(", ")})</span>}
+            </span>
+          ))}
+        </li>
+      ))}
+    </ul>
+  );
+  const what = `${columns.length} annotation column${columns.length === 1 ? " is" : "s are"} not carried into the joint dataset`;
+  if (columns.length <= DROPPED_OPEN_MAX) {
+    return (
+      <div className="text-xs text-slate-500" data-testid="dropped-columns">
+        <p>{what}:</p>
+        {lines}
+      </div>
+    );
+  }
+  return (
+    <details className="text-xs text-slate-500" data-testid="dropped-columns">
+      <summary className="cursor-pointer">{what} (show which and why)</summary>
+      <div className="mt-1">{lines}</div>
+    </details>
   );
 }
 

@@ -3,7 +3,7 @@ import { announceSavedScore } from "@/lib/savedScores";
 
 /** One saved score's record entry (backend core/saved_scores.py), as GET /scores lists it. */
 export interface SavedScoreRecord {
-  kind: "geneset" | "activity";
+  kind: "geneset" | "activity" | "program" | "chromvar";
   name: string;
   method?: string | null;
   /** A gene set: the genes scored (found in the dataset) */

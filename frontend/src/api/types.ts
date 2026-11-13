@@ -137,13 +137,24 @@ export interface ObsColumnInfo {
   saved_score?: SavedScoreInfo;
 }
 
-/** A saved score's kind and name: a gene set (method score_genes | aucell | ssgsea | gsva)
- *  or one TF / pathway's activity (network collectri | progeny, method ulm). */
+/** A saved score's kind and name: a gene set (method score_genes | aucell | ssgsea | gsva),
+ *  one TF / pathway's activity (network collectri | progeny, method ulm), one gene program's
+ *  usage (method "NMF usage share" | "NMF usage") or one motif's chromVAR z. */
 export interface SavedScoreInfo {
-  kind: "geneset" | "activity";
+  kind: "geneset" | "activity" | "program" | "chromvar";
   name: string;
   method?: string | null;
   network?: string | null;
+  /** A program: k of its run, its number (P1 = 1) and top genes */
+  k?: number | null;
+  program?: number | null;
+  top_genes?: string[] | null;
+  /** A chromVAR score: the JASPAR motif id and release */
+  motif_id?: string | null;
+  jaspar?: string | null;
+  /** A program or motif score: the run it came from, and whether the dataset's run is a later one */
+  run_id?: string | null;
+  earlier_run?: boolean;
 }
 
 export interface EmbeddingInfo {

@@ -12,7 +12,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 import uuid
+from contextlib import aclosing
 from pathlib import Path
 from typing import Any
 
@@ -22,29 +24,35 @@ from pydantic import BaseModel, Field
 
 from scview.core.sse import keepalive
 from scview.config import Settings
-from scview.core import provenance, working_copy
+from scview.core import preflight, provenance, working_copy
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import dataset_edit
 from scview.core.ingestion.merge import MergeJoin
 from scview.core.integration import (
     LABEL_COLUMN,
+    METHOD_HARMONY,
     METHODS,
     IntegrationPlan,
     build_plan,
+    estimate_joint,
+    joint_before_step,
+    joint_genes,
+    joint_preflight,
     load_units,
     read_need,
     read_batch_mixing,
     record_batch_mixing,
     run_integration_streamed,
 )
+from scview.core.pipeline import SAVED_STATUSES
+from scview.core.processing import iterate_new
+from scview.core.run_watchdog import RunControl
 from scview.core.uns_keys import BATCH_MIXING_KEY
 from scview.dependencies import get_dataset_manager, get_settings_dep
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-_DONE = object()
 
 
 class IntegratePlanRequest(BaseModel):
@@ -69,7 +77,12 @@ def _check_ids(ids: list[str], settings: Settings) -> None:
         )
 
 
-async def _plan(body: IntegratePlanRequest, dm: DatasetManager, settings: Settings):
+async def _plan(body: IntegratePlanRequest, dm: DatasetManager, settings: Settings, *,
+                join: MergeJoin = MergeJoin.inner, method: str = METHOD_HARMONY,
+                overrides: dict[str, Any] | None = None):
+    """The plan, the units read for it, and the joint run's memory estimate (None when
+    the datasets cannot be merged). The plan carries the estimate's note (``preflight``),
+    and is blocked when the run cannot fit even with every other dataset closed."""
     _check_ids(body.dataset_ids, settings)
     # A dataset a pipeline run is changing is read once the run has finished.
     for did in body.dataset_ids:
@@ -86,7 +99,21 @@ async def _plan(body: IntegratePlanRequest, dm: DatasetManager, settings: Settin
         max_datasets=settings.MAX_INTEGRATE_DATASETS,
         max_cells=settings.MAX_INTEGRATE_CELLS,
     )
-    return plan, units
+    est = None
+    genes = joint_genes(plan, join)
+    if len(units) >= 2 and genes > 0:
+        try:
+            est = await asyncio.to_thread(estimate_joint, units, genes, method=method,
+                                          overrides=overrides)
+            note = await asyncio.to_thread(joint_preflight, est, preflight.available_memory(),
+                                           preflight.cached_others(dm))
+            plan.preflight = note["verdict"]
+            if note["blocking"]:
+                plan.blocking.append(note["blocking"])
+                plan.ok = False
+        except Exception as e:  # noqa: BLE001 - never block a plan on the estimate itself
+            logger.warning("No joint run estimate: %s", e, exc_info=True)
+    return plan, units, est
 
 
 @router.post("/integrate/plan", response_model=IntegrationPlan)
@@ -95,8 +122,10 @@ async def plan_integration(
     dm: DatasetManager = Depends(get_dataset_manager),
     settings: Settings = Depends(get_settings_dep),
 ) -> IntegrationPlan:
-    """Read-only compatibility check for a joint embedding."""
-    plan, _ = await _plan(body, dm, settings)
+    """Read-only compatibility check for a joint embedding, with its memory and time
+    estimate (``preflight``)."""
+    plan, units, _ = await _plan(body, dm, settings)
+    del units
     return plan
 
 
@@ -112,45 +141,86 @@ async def run_integration(
 ):
     """Build + process a joint dataset, streaming progress as SSE.
 
-    Events: ``stage`` (merge/persist), ``created`` (the new dataset id), the
-    pipeline's ``step_start``/``step_done``/``step_error``/``substep``,
-    ``pipeline_complete``, then ``complete`` once the dataset is registered — or
-    ``error``.
+    Events: ``stage`` (merge/persist; the first one carries the new dataset id, which
+    Cancel takes: ``POST /datasets/{id}/assessment/cancel``), ``created``, the pipeline's
+    ``step_start``/``step_done``/``step_error``/``substep``, ``watchdog`` (memory, slow
+    step, waiting: as a pipeline run's), ``pipeline_complete``, then ``complete`` once
+    the dataset is registered, or ``error``.
+
+    The run gets a pipeline run's protection (``processing.iterate_new``): the joint
+    run's estimated growth (``integration.estimate_joint``) is made room for and reserved
+    until it ends, it waits behind earlier runs, and the merge and each step are checked
+    before they start (``integration.joint_before_step``). A run that is stopped, cancelled
+    or fails ends with ``error`` and leaves no joint dataset (the merged counts already
+    written are removed); the source datasets are never changed.
     """
     if body.method not in METHODS:
         raise HTTPException(status_code=400, detail=f"Unknown method '{body.method}'.")
-    plan, units = await _plan(body, dm, settings)
+    plan, units, est = await _plan(body, dm, settings, join=body.join, method=body.method,
+                                   overrides=body.params)
     if not plan.ok:
         raise HTTPException(status_code=400, detail=plan.blocking[0])
 
     dataset_id = uuid.uuid4().hex
     name = (body.name or "").strip() or "joint: " + " + ".join(units)
-    gen = run_integration_streamed(
-        units,
-        dataset_id=dataset_id,
-        name=name,
-        data_dir=Path(settings.DATA_DIR),
-        output_path_for=lambda src: dm.derived_h5ad_path(dataset_id, src),
-        join=body.join,
-        method=body.method,
-        apply_reconciliation=body.apply_reconciliation,
-        overrides=body.params,
-    )
+    merged = threading.Event()
+    control = RunControl(before_step=joint_before_step(est.merge_bytes if est is not None else 0))
+    needs = est.step_needs() if est is not None else {}
+    if est is not None:
+        control.watchdog.expected = {e.step: e.seconds for e in est.run.steps}
+    ended: dict[str, Any] = {}
+
+    def remaining() -> int:
+        done = control.watchdog.steps  # filled as each pipeline step finishes
+        return max((b for s, b in needs.items()
+                    if s not in done and not (s == "merge" and merged.is_set())), default=0)
+
+    def make_events():
+        for event, data in run_integration_streamed(
+            units,
+            dataset_id=dataset_id,
+            name=name,
+            data_dir=Path(settings.DATA_DIR),
+            output_path_for=lambda src: dm.derived_h5ad_path(dataset_id, src),
+            join=body.join,
+            method=body.method,
+            apply_reconciliation=body.apply_reconciliation,
+            overrides=body.params,
+            control=control,
+            on_merged=merged.set,
+        ):
+            if event == "pipeline_complete":
+                ended.update(data)
+            yield event, data
+
+    def saved() -> bool:
+        return ended.get("status") in SAVED_STATUSES
 
     async def events():
         try:
-            # Each step runs in a worker thread so the server stays responsive
-            # (other panels keep loading) during a minutes-long integration.
-            while True:
-                item = await asyncio.to_thread(next, gen, _DONE)
-                if item is _DONE:
-                    break
-                yield _sse(*item)
+            # Steps run in a worker thread so the server stays responsive (other panels
+            # keep loading) during a minutes-long integration. aclosing: a client that goes
+            # away stops the run after its current step.
+            async with aclosing(iterate_new(dm, dataset_id, make_events, control, name=name,
+                                            need=est.need if est is not None else 0,
+                                            remaining=remaining, saved=saved)) as items:
+                async for event, data in items:
+                    yield _sse(event, data)
+            if not saved():
+                why = ended.get("stop_reason") or "The run ended before it finished."
+                if ended.get("status") == "cancelled":  # the pipeline's sentence speaks of a source dataset
+                    why = (why.split(":")[0] + ": the joint dataset was not kept; the source datasets "
+                           "are unchanged.")
+                yield _sse("error", {"error": f"The joint embedding did not finish. {why}",
+                                     "status": ended.get("status")})
+                return
             await dm.load_dataset(dataset_id)
             yield _sse("complete", {"dataset_id": dataset_id, "name": name})
         except Exception as e:  # noqa: BLE001 — surface to the client, keep the server up
             logger.error("Integration %s failed: %s", dataset_id, e, exc_info=True)
-            yield _sse("error", {"error": str(e)})
+            detail = e.detail if isinstance(e, HTTPException) else str(e)
+            yield _sse("error", {"error": f"The joint embedding failed: {detail} The joint "
+                                          "dataset was not kept; the source datasets are unchanged."})
 
     return StreamingResponse(
         keepalive(events()),

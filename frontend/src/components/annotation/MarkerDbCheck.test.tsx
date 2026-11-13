@@ -154,6 +154,39 @@ describe("MarkerDbCheck", () => {
     rerender(<MarkerDbCheck datasetId="d1" column="leiden" />);
     await waitFor(() => expect(screen.queryByTestId("marker-db-result")).toBeNull());
   });
+
+  it("sends a tissue and says what the best types keep to", async () => {
+    runMarkerDbCheck.mockResolvedValue({
+      ...RESULT, tissue: { organs: ["kidney"], from: "the tissue given ('kidney')", n_types_left_out: 1234 },
+    });
+    render(<MarkerDbCheck datasetId="d1" column="cell_type" />);
+    fireEvent.change(await screen.findByLabelText("Tissue"), { target: { value: " kidney " } });
+    fireEvent.click(screen.getByRole("button", { name: "Check against marker databases" }));
+    const line = await screen.findByTestId("marker-db-tissue");
+    expect(runMarkerDbCheck).toHaveBeenCalledWith("d1", "cell_type", { tissue: "kidney" });
+    expect(line.textContent).toBe(
+      "Best types from kidney + types found everywhere (1,234 left out). Tissue: the tissue given ('kidney').",
+    );
+  });
+
+  it("says when no tissue is known, and nothing from an older backend", async () => {
+    const none = { organs: [], from: "no tissue known (give one to restrict the database types)" };
+    const noRaw = { organs: ["kidney"], from: "obs 'tissue' (kidney)",
+      note: "the databases' raw files are not on disk: no type left out" };
+    runMarkerDbCheck.mockResolvedValueOnce({ ...RESULT, tissue: none })
+      .mockResolvedValueOnce({ ...RESULT, tissue: noRaw }).mockResolvedValueOnce(RESULT);
+    render(<MarkerDbCheck datasetId="d1" column="cell_type" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Check against marker databases" }));
+    expect((await screen.findByTestId("marker-db-tissue")).textContent).toBe(
+      "Best types from any tissue: no tissue known (give one to restrict the database types).",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Check against marker databases" }));
+    await waitFor(() => expect(screen.getByTestId("marker-db-tissue").textContent).toBe(
+      "Tissue: obs 'tissue' (kidney), but the databases' raw files are not on disk: no type left out.",
+    ));
+    fireEvent.click(screen.getByRole("button", { name: "Check against marker databases" }));
+    await waitFor(() => expect(screen.queryByTestId("marker-db-tissue")).toBeNull());
+  });
 });
 
 const CM3: MarkerDbSource = {

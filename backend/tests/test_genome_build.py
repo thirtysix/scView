@@ -1,6 +1,6 @@
-"""hg19 vs GRCh38 and mm9 vs mm10 on ATAC input (core/genome_build.py): told from a named
+"""hg19 vs GRCh38, mm9 and mm39 vs mm10 on ATAC input (core/genome_build.py): told from a named
 reference, a fragments header or coordinates past the newer build's chromosome ends; recorded as
-hg19 / mm9 and refused by every genome-dependent step with one sentence."""
+hg19 / mm9 / mm39 and refused by every genome-dependent step with one sentence."""
 
 from __future__ import annotations
 
@@ -269,3 +269,119 @@ def test_fragments_on_mm10_stay_mm10(tmp_path):
 def test_tss_table_refuses_mm9(tmp_path):
     with pytest.raises(gene_annotation.AnnotationError, match="mm9"):
         af.tss_table("mm9", tmp_path, auto_download=False)
+
+
+# -- mouse: mm39 vs mm10 -----------------------------------------------------
+
+MM39_HEADER = ("# id=new\n# pipeline_name=cellranger-arc\n"
+               "# reference_path=/refs/refdata-cellranger-arc-GRCm39-2024-A\n")
+# Itgb1's TSS on mm39 chr8 (129,412,134): past mm10's chr8 (129,401,213), within mm39's (130,127,694).
+ITGB1_MM39 = 129_412_000
+
+
+@pytest.mark.parametrize("name", ["mm39", "MM39", "GRCm39", "GRCm39-2024-A", "refdata-cellranger-arc-GRCm39-2024-A",
+                                  "/refs/refdata-gex-GRCm39-2024-A/fasta/genome.fa"])
+def test_names_mm39(name):
+    assert genome_build.names_mm39(name) and genome_build.old_build(name) == genome_build.MM39
+    assert genome_build.refusal(name) == genome_build.MM39_REFUSAL
+
+
+@pytest.mark.parametrize("name", ["mm10", "mm10-2020-A", "GRCm38", "refdata-cellranger-arc-mm10-2020-A-2.0.0",
+                                  "mm9", "NCBIM37", "mm390", "GRCm390", "hg19", "GRCh38", "", None])
+def test_not_mm39(name):
+    assert not genome_build.names_mm39(name)
+    assert genome_build.old_build(name) != genome_build.MM39
+
+
+def test_positions_past_mm10_ends_inside_mm39_are_mm39():
+    assert genome_build.from_positions(["chr1", "chr8"], [1_000, ITGB1_MM39]) == genome_build.MM39
+    # chr13 and chr4 are longer on mm39 than on mm10 but shorter on mm9: only mm39 holds them.
+    assert genome_build.from_positions(["13"], [120_500_000]) == genome_build.MM39
+    assert genome_build.from_positions(["chr4"], [156_520_000]) == genome_build.MM39
+    assert genome_build.from_intervals([("chr8", ITGB1_MM39, ITGB1_MM39 + 500), None]) == genome_build.MM39
+
+
+def test_mm39_is_not_mm9_and_mm9_is_not_mm39():
+    # mm9's distal chr7 (H19/Igf2) runs past mm39's chr7 (144,995,196) too: still mm9.
+    assert genome_build.from_positions(["chr7"], [149_800_500]) == genome_build.MM9
+    assert genome_build.from_positions(["chr7", "chr8"], [149_800_500, ITGB1_MM39]) == genome_build.MM9
+    # chr8 past mm39's end but inside mm9's: mm9.
+    assert genome_build.from_positions(["chr8"], [130_500_000]) == genome_build.MM9
+    # A whole mm39 set also reaches chr13 past mm9's end: never mm9.
+    assert genome_build.from_positions(["chr8", "chr13"], [ITGB1_MM39, 120_500_000]) == genome_build.MM39
+    # Past mm39's end (mm9 chr7) and past mm9's (mm39-only chr13): neither.
+    assert genome_build.from_positions(["chr7", "chr13"], [149_800_500, 120_500_000]) is None
+
+
+def test_mm39_positions_that_say_nothing():
+    # mm10's chr7 runs longer than mm39's: an mm10 set past mm39's end, nothing past mm10's.
+    assert genome_build.from_positions(["chr7", "chr8"], [145_200_000, 129_000_000]) is None
+    # Past mm39's own end on chr8 and past mm9's on chr4: neither other build.
+    assert genome_build.from_positions(["chr8", "chr4"], [130_200_000, 156_000_000]) is None
+    # A human-only chromosome: not mouse.
+    assert genome_build.from_positions(["chr8", "chr21"], [ITGB1_MM39, 1_000]) is None
+
+
+def test_canonical_genome_refuses_mm39_with_the_sentence(tmp_path):
+    from scview.api.v1 import atac_motifs
+    from scview.core import genome_seq
+
+    for name in ("mm39", "GRCm39", "GRCm39-2024-A"):
+        with pytest.raises(gene_annotation.AnnotationError) as e:
+            gene_annotation.canonical_genome(name)
+        assert str(e.value) == genome_build.MM39_REFUSAL
+    with pytest.raises(gene_annotation.AnnotationError, match=r"on mm39 \(GRCm39\)"):
+        genome_seq.file_path(tmp_path, "mm39")  # GC, motifs and links read the 2bit through this
+    with pytest.raises(atac.AtacError) as err:
+        atac_motifs._genome("GRCm39-2024-A")
+    assert err.value.status == 422 and str(err.value) == genome_build.MM39_REFUSAL
+    assert gene_annotation.canonical_genome("GRCm38") == "mm10"
+    choice = atac.choose_genes(mf.as_anndata(), "mm39", tmp_path, auto_download=False)
+    assert choice.names == [] and choice.reason == genome_build.MM39_REFUSAL
+
+
+def test_tenx_h5_naming_grcm39_is_recorded_and_noted(tmp_path):
+    h5 = mf.write_tenx_h5(tmp_path / "e18_filtered_feature_bc_matrix.h5", genome="GRCm39-2024-A")
+    m, sid = _session(tmp_path, h5)
+    did = m._build_dataset(sid)
+    a = _dataset(m, did)
+    with _store(m, did) as s:
+        assert s.meta["genome"] == "mm39" and s.meta["genome_note"] == genome_build.MM39_REFUSAL
+    info = atac_import.read_info(a)
+    assert info["genome"] == "mm39" and info["genome_note"] == genome_build.MM39_REFUSAL
+    assert atac_import.dataset_state(a, m.data_dir, did)["genome_note"] == genome_build.MM39_REFUSAL
+    history = provenance.read_provenance(a)["history"]
+    assert any(genome_build.MM39_REFUSAL in str(h.get("note") or "") for h in history)
+
+
+def test_an_assumed_mm10_with_peaks_past_its_ends_becomes_mm39():
+    itgb1 = f"chr8:{ITGB1_MM39}-{ITGB1_MM39 + 500}"
+    mm39 = atac_import.check_build(_plan(["chr1:100-600", itgb1], genome="mm10"))
+    assert mm39.genome == "mm39" and not mm39.genome_assumed and mm39.genome_note == genome_build.MM39_REFUSAL
+    assert atac_import.check_build(_plan([itgb1], genome=None)).genome == "mm39"
+    named = atac_import.check_build(_plan([itgb1], genome="mm10", assumed=False))
+    assert named.genome == "mm10" and named.genome_note is None
+    human = atac_import.check_build(_plan([itgb1]))  # an assumed human genome stays human
+    assert human.genome == "GRCh38" and human.genome_note is None
+
+
+def test_fragments_header_naming_grcm39(tmp_path):
+    state = _attach(tmp_path, _mouse_lines(), header=MM39_HEADER, species="mouse")
+    assert state["genome"] == "mm39" and state["genome_note"] == genome_build.MM39_REFUSAL
+    st = af.status(tmp_path, "d")
+    assert st["genome"] == "mm39" and st["genome_note"] == genome_build.MM39_REFUSAL
+    with pytest.raises(af.FragmentsError, match="genes are human"):
+        _attach(tmp_path, _mouse_lines(), header=MM39_HEADER, species="human")
+
+
+def test_fragments_index_reaching_past_mm10_ends_on_mm39(tmp_path):
+    # In Itgb1's body: the index only shows a 16 kb window's start, so past mm10's end by more than that.
+    body = ITGB1_MM39 + 20_000
+    late = [("chr8", body + i * 10, body + 50 + i * 10, "AAAC-1", 1) for i in range(5)]
+    state = _attach(tmp_path, _mouse_lines(late))
+    assert state["genome"] == "mm39" and state["genome_note"] == genome_build.MM39_REFUSAL
+
+
+def test_tss_table_refuses_mm39(tmp_path):
+    with pytest.raises(gene_annotation.AnnotationError, match="mm39"):
+        af.tss_table("mm39", tmp_path, auto_download=False)

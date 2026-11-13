@@ -1,4 +1,5 @@
 import { apiFetch, readError } from "./client";
+import type { PreflightVerdict } from "./preflight";
 import { API_BASE } from "@/lib/constants";
 
 export interface IntegrationDatasetCheck {
@@ -21,14 +22,26 @@ export interface IntegrationMergePlan {
   warnings: string[];
 }
 
+/** An obs column some dataset has that the joint dataset leaves out, and why. */
+export interface DroppedColumn {
+  column: string;
+  reason: string;
+  /** Labels of the datasets that have it */
+  datasets: string[];
+}
+
 export interface IntegrationPlan {
   datasets: IntegrationDatasetCheck[];
   merge: IntegrationMergePlan | null;
   shared_columns: string[];
+  /** Columns not carried into the joint dataset (backend integration.dropped_columns) */
+  dropped_columns?: DroppedColumn[];
   est_cells: number;
   blocking: string[];
   /** Design notes that don't block (e.g. each dataset holds one condition). */
   notes?: string[];
+  /** The joint run's memory and time estimate (backend integration.joint_preflight). */
+  preflight?: PreflightVerdict | null;
   ok: boolean;
 }
 
@@ -111,8 +124,10 @@ export interface IntegrationEvent {
 
 /**
  * Build + process a joint dataset, calling `onEvent` for each SSE event
- * (stage, created, step_start/step_done/step_error/substep, pipeline_complete,
- * complete). Resolves with the new dataset id; rejects on an `error` event.
+ * (stage, created, step_start/step_done/step_error/substep, watchdog, pipeline_complete,
+ * complete). The first `stage` event carries the new dataset id (Cancel takes it:
+ * `cancelPipelineRun`). Resolves with the new dataset id; rejects on an `error` event
+ * (a failed, stopped or cancelled run: no joint dataset is kept).
  */
 export async function runIntegration(
   body: IntegrateRequest,

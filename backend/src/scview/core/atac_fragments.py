@@ -183,12 +183,13 @@ def detach(data_dir: str | Path, dataset_id: str) -> None:
 
 
 _AUTOSOME = re.compile(r"^(?:chr)?(\d+)$")
-_SPECIES = {"GRCh38": "human", genome_build.HG19: "human", "mm10": "mouse", genome_build.MM9: "mouse"}
+_SPECIES = {"GRCh38": "human", genome_build.HG19: "human", "mm10": "mouse", genome_build.MM9: "mouse",
+            genome_build.MM39: "mouse"}
 
 
 def genome_from_names(names: Sequence[str]) -> str | None:
-    """GRCh38 or mm10 from the chromosome names: autosomes to 22 or to 19. hg19 and mm9 have their
-    names: ``verify`` tells them by the file's header and the index's chromosome ends (``core/genome_build.py``)."""
+    """GRCh38 or mm10 from the chromosome names: autosomes to 22 or to 19. hg19, mm9 and mm39 have
+    their names: ``verify`` tells them by the file's header and the index's chromosome ends (``core/genome_build.py``)."""
     numbers = [int(m.group(1)) for m in map(_AUTOSOME.match, map(str, names)) if m]
     if not numbers:
         return None
