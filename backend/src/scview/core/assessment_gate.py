@@ -37,9 +37,11 @@ def _retrieve(task: asyncio.Task) -> None:
         task.exception()  # read, so an error nobody awaited any more is not logged as lost
 
 
-async def run(dataset_id: str, key: Hashable, fn: Callable[..., Any], *args: Any) -> Any:
+async def run(dataset_id: str, key: Hashable, fn: Callable[..., Any], *args: Any, lane: bool = True) -> Any:
     """``fn(*args)`` in a worker thread, at most ``MAX_AT_ONCE`` per dataset at a time; a call
-    with the same ``key`` while one is in flight gets that one's result (or its error)."""
+    with the same ``key`` while one is in flight gets that one's result (or its error).
+    ``lane`` False: shared the same way, but not queued behind the lanes (the assessment
+    itself, which the page's checklist waits for: 16 s behind cluster QC and the QC report)."""
     loop = asyncio.get_running_loop()
     gid = (id(loop), dataset_id)
     gate = _gates.get(gid)
@@ -48,6 +50,8 @@ async def run(dataset_id: str, key: Hashable, fn: Callable[..., Any], *args: Any
     task = gate.inflight.get(key)
     if task is None:
         async def work() -> Any:
+            if not lane:
+                return await asyncio.to_thread(fn, *args)
             async with gate.lanes:
                 return await asyncio.to_thread(fn, *args)
 

@@ -102,7 +102,8 @@ async def get_assessment(
     try:
         # Samples the matrix to judge its scale: ~1.6 s on Kang, so off the loop, and two
         # lanes per dataset with identical requests shared (core/assessment_gate.py).
-        return await assessment_gate.run(dataset_id, ("assessment", id(adaptor.adata)), _assess, adaptor.adata)
+        return await assessment_gate.run(dataset_id, ("assessment", id(adaptor.adata)), _assess, adaptor.adata,
+                                         lane=False)
     except Exception as e:
         logger.error("Assessment failed for %s: %s", dataset_id, e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Assessment failed: {e}")

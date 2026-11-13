@@ -65,6 +65,9 @@ async def test_at_most_two_per_dataset_and_other_datasets_are_not_held_up():
     other = asyncio.create_task(assessment_gate.run("small", ("k",), lambda: "small"))
     assert await asyncio.wait_for(other, 2) == "small"
     assert time.monotonic() - t0 < 1.0
+    # Work outside the lanes (the assessment itself) does not queue behind them.
+    quick = asyncio.create_task(assessment_gate.run("big", ("assessment",), lambda: "checklist", lane=False))
+    assert await asyncio.wait_for(quick, 2) == "checklist"
     release.set()
     assert sorted(await asyncio.gather(*tasks)) == [f"big{i}" for i in range(5)]
     assert most[0] == 2
