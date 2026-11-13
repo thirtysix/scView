@@ -32,6 +32,7 @@ import { PublicSourceCard } from "@/components/panels/PublicSourceCard";
 import { PreflightRunNote } from "@/components/common/PreflightNote";
 import { FastLeidenInfo } from "@/components/common/FastLeidenInfo";
 import { TargetedPanelNote, type TargetedPanelInfo } from "@/components/qc/TargetedPanelNote";
+import { LabelCurationNote, type LabelCuration } from "@/components/qc/LabelCurationNote";
 import { DoubletMethodInfo } from "@/components/qc/DoubletMethodInfo";
 import { DOUBLET_METHOD_LABELS, DOUBLET_METHODS } from "@/lib/doubletMethods";
 import { FAST_LEIDEN, FULL_LEIDEN, LEIDEN_ITERATION_LABELS } from "@/lib/fastLeiden";
@@ -121,6 +122,8 @@ interface AssessmentResponse extends PreprocessingState {
   species?: SpeciesCall;
   /** A targeted panel's path (Xenium, CosMx, MERSCOPE); null for any other dataset. */
   targeted_panel?: TargetedPanelInfo | null;
+  /** Curated cell types beside the authors' labels: mappings that look wrong (null: no such pair). */
+  label_curation?: LabelCuration | null;
   /** How scView last normalised it for HVG/PCA ("log" | "pearson_residuals"); null if never. */
   normalization_method?: string | null;
   /** How scView last filtered it ("fixed" for runs before MAD mode); null if never. */
@@ -1254,6 +1257,7 @@ export function DataAssessmentPanel() {
             )}
             <SpeciesNote call={state.species} />
             <TargetedPanelNote info={state.targeted_panel} />
+            <LabelCurationNote info={state.label_curation} />
           </div>
 
           {/* "Explain this data": written QC report from the assessment facts */}

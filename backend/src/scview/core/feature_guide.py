@@ -49,7 +49,8 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Data Assessment", "QC + pipeline",
      "QC plots and the guided pipeline: QC, normalise, HVG, PCA, batch correction, "
      "clustering, UMAP, markers, enrichment; optional ambient RNA correction, doublet "
-     "detection (Scrublet or scDblFinder-style), regress-out"),
+     "detection (Scrublet or scDblFinder-style), regress-out; a note when a file's curated cell_type "
+     "seems to have lost the authors' meaning for some labels (cross-tab against the author column)"),
     ("Data Assessment > Sequencing QC (Cell Ranger)", "", "Cell Ranger metrics, barcode ranks"),
     ("Data Assessment > Ambient RNA", "", "soup from empty droplets, contamination estimate"),
     ("Data Assessment > Cluster QC", "",

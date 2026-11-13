@@ -22,7 +22,7 @@ from scview.core import (
     sample_pseudobulk, sex_check,
 )
 from scview.core import large_mode, large_run, leiden, working_copy
-from scview.core import batch_methods, qc_states, scaling, spatial, targeted_panel
+from scview.core import batch_methods, label_curation, qc_states, scaling, spatial, targeted_panel
 from scview.core.obs_writes import (
     dataset_edit, edit_room, editable, save_edit, uns_snapshot,
 )
@@ -95,7 +95,9 @@ async def get_assessment(
                 "qc_mito_type_column": (filtered.get("qc_mito_type_column")
                                         if filtered and filtered.get("qc_mito_mode") == "per_type" else None),
                 "qc_mito_type_floor": bool(filtered and filtered.get("qc_mito_mode") == "per_type"
-                                           and filtered.get("qc_mito_type_floor"))}
+                                           and filtered.get("qc_mito_type_floor")),
+                # A curated cell_type beside the authors' labels: mappings that look wrong.
+                "label_curation": label_curation.check(adata)}
 
     try:
         # Samples the matrix to judge its scale: ~1.6 s on Kang, so off the loop.
