@@ -74,7 +74,7 @@ def _compact(v: Any, n: int) -> Any:
 
 # Bookkeeping of a saved run that says nothing about its result.
 NOISE = ("available", "created_at", "version", "run_id", "cells_fingerprint", "labels_fingerprint",
-         "inputs_fingerprint", "stage_seconds", "threads", "peak_rss_gb", "visited_pairs")
+         "inputs_fingerprint", "shares_fingerprint", "stage_seconds", "threads", "peak_rss_gb", "visited_pairs")
 
 
 def _rest(d: dict[str, Any], skip: tuple[str, ...], n: int) -> dict[str, Any]:
@@ -123,7 +123,8 @@ def _result(job: jobs.Job) -> dict[str, Any]:
 # --- spatially variable genes (Moran's I) ------------------------------------------------------
 
 Section = Annotated[str | None, Field(max_length=256, description=(
-    "One section only: its library_id (get_dataset lists the sections). Default: every section."))]
+    "One section only: its library_id (get_dataset lists the sections). Default: every section, "
+    "each centred on its own mean, with each section's own I beside the pooled one."))]
 
 
 def _autocorr_reply(r: dict[str, Any], dataset_id: str, n: int) -> dict[str, Any]:
@@ -150,9 +151,11 @@ async def spatial_autocorr(
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
     """Spatially variable genes: Moran's I per gene on the tissue graph (= squidpy's
-    spatial_autocorr), on every section or one (library_id). Saved with the dataset as the
-    UI's Spatial genes tab runs it, with a result_id. A job: waits up to 20 s and answers
-    with the genes of highest I, else returns job_id for job_status."""
+    spatial_autocorr), on every section or one (library_id). Over several sections each is
+    centred on its own mean (centring), and by_section gives each section's own I for the top
+    genes (12 sections side by side at most, the reply says of how many). Saved with the
+    dataset as the UI's Spatial genes tab runs it, with a result_id. A job: waits up to 20 s
+    and answers with the genes of highest I, else returns job_id for job_status."""
     body = _body(genes=genes, library_id=library_id, layer=layer)
 
     def finish(job: jobs.Job) -> dict[str, Any]:
@@ -167,8 +170,8 @@ async def spatial_autocorr(
 async def get_spatial_autocorr(
     dataset_id: DatasetId,
     library_id: Annotated[str | None, Field(max_length=256, description=(
-        "The last run on this section; 'all': the last run over every section. Default: the "
-        "last run."))] = None,
+        "The last run on this section (a library_id); 'all': the last run over every section. "
+        "Default: the last run."))] = None,
     result_id: Annotated[str | None, Field(max_length=64, description=(
         "A kept run's id (from spatial_autocorr or list_results): every gene it tested, a page "
         "at a time."))] = None,
@@ -330,26 +333,37 @@ def _niches_reply(r: dict[str, Any], dataset_id: str, n: int) -> dict[str, Any]:
 @tool(WRITE)
 async def spatial_niches(
     dataset_id: DatasetId,
+    source: Annotated[Literal["labels", "spot_composition"] | None, Field(description=(
+        "labels: the mix of a label column around each cell (cells, Xenium, Visium HD 8 um bins); "
+        "spot_composition: each spot's cell-type shares from spot_composition (Visium). Default: "
+        "what the data allows."))] = None,
     label_column: Annotated[str | None, Field(max_length=256, description=(
-        "Obs column of cell labels whose mix around each cell makes the niches (cells, Xenium, "
-        "Visium HD 8 um bins)."))] = None,
+        "source labels: the obs column of cell labels."))] = None,
+    shares: Annotated[Literal["cells", "rna"] | None, Field(description=(
+        "source spot_composition: the shares of cells (default) or of RNA."))] = None,
     n_niches: Annotated[int | None, Field(ge=2, le=40, description="Number of niches (default 8).")] = None,
-    k_window: Annotated[int | None, Field(ge=2, le=200, description=(
-        "Nearest neighbours in each window (default 20)."))] = None,
+    k_window: Annotated[int | None, Field(ge=1, le=200, description=(
+        "Nearest neighbours in each window (default 20 for labels; 1, each spot alone, for shares)."))] = None,
     seed: Seed = None,
     column: Annotated[str | None, Field(max_length=64, description="Obs column to write (default spatial_niche).")] = None,
     overwrite: Overwrite = None,
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
-    """Composition niches: groups of places with the same mix of labels around them,
-    saved as an obs column; each niche's main labels and its count per section. The route
-    says what it takes on spots (Visium spots mix cells). A job: waits up to 20 s, else job_id."""
-    body = _body(label_column=label_column, n_niches=n_niches, k_window=k_window, seed=seed, column=column,
-                 overwrite=overwrite)
+    """Composition niches: groups of places with the same mix of labels (cells) or of
+    cell-type shares (Visium spots, after spot_composition) around them, saved as an obs
+    column; each niche's main labels or types and its count per section. A job: waits up to
+    20 s, else job_id."""
+    body = _body(source=source, label_column=label_column, shares=shares, n_niches=n_niches, k_window=k_window,
+                 seed=seed, column=column, overwrite=overwrite)
     return await _spatial_run(dataset_id, "spatial_niches", "/spatial/niches/run-stream", body, limit,
                               _niches_reply)
 
 
+CoLabel = Annotated[str | None, Field(max_length=256, description=(
+    "Reply with this label's pairs only (the run covers every pair either way)."))]
+CoSection = Annotated[str | None, Field(max_length=256, description=(
+    "Reply with this section's own scores (a library_id; the run covers every section either way). "
+    "Default: the sections combined."))]
 CO_DISTANCES = 5  # distances shown per pair: the first usable one to the last, evenly
 MIN_PAIRS = 30  # as core/spatial_cooccurrence.MIN_PAIRS: fewer pairs at a distance say little
 
@@ -399,19 +413,44 @@ async def cooccurrence(
     interval: Annotated[int | None, Field(ge=2, le=200, description="Distances scored (default 50).")] = None,
     max_distance: Annotated[float | None, Field(gt=0, description=(
         "Score distances evenly from 0 to this, in the positions' units (default: squidpy's range)."))] = None,
-    label: Annotated[str | None, Field(max_length=256, description=(
-        "Reply with this label's pairs only (the run covers every pair either way)."))] = None,
+    label: CoLabel = None,
+    section: CoSection = None,
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
     """Co-occurrence (= squidpy's co_occurrence): how much more often one label is found
-    within each distance of another than among all pairs at that range. Pairs are counted
-    within each section. Saved with the dataset. A job: waits up to 20 s, else job_id."""
+    within each distance of another than among all pairs at that range. Over several
+    sections each is scored against its own label shares, then combined (sections_combined);
+    sections lists each one's pairs, and section= replies with one section's own scores.
+    Saved with the dataset. A job: waits up to 20 s, else job_id."""
+    n = clamp(limit)
 
-    def reply(r: dict[str, Any], did: str, n: int) -> dict[str, Any]:
-        return _cooccurrence_reply(r, did, n, label)
+    async def finish(job: jobs.Job) -> dict[str, Any]:
+        r = _result(job)
+        if section:
+            r = (await _get(f"{_ds(dataset_id)}/spatial/cooccurrence", column=column, section=section))["result"]
+        return _cooccurrence_reply(r, dataset_id, n, label)
 
-    return await _spatial_run(dataset_id, "cooccurrence", "/spatial/cooccurrence/run-stream",
-                              _body(cluster_key=column, interval=interval, max_distance=max_distance), limit, reply)
+    job = jobs.new("cooccurrence", dataset_id, f"{_ds(dataset_id)}/spatial/cooccurrence/run-stream",
+                   _body(cluster_key=column, interval=interval, max_distance=max_distance), progress_line=_line,
+                   finish=finish)
+    return await _started(job, limit)
+
+
+@tool(READ)
+async def get_cooccurrence(
+    dataset_id: DatasetId,
+    column: Annotated[str | None, Field(max_length=256, description=(
+        "The label column of a saved run (default: the latest run)."))] = None,
+    label: CoLabel = None,
+    section: CoSection = None,
+    limit: Limit = DEFAULT_LIMIT,
+) -> str:
+    """A saved co-occurrence run: the sections combined, or one section's own scores
+    (section), each pair at five of its distances."""
+    r = (await _get(f"{_ds(dataset_id)}/spatial/cooccurrence", column=column, section=section))["result"]
+    if not r or not r.get("available"):
+        raise ToolError("No co-occurrence run on this dataset yet: run cooccurrence first.")
+    return dumps(_cooccurrence_reply(r, dataset_id, clamp(limit), label), _max_chars(limit))
 
 
 # --- spot composition (deconvolution of spots against a reference) -------------------------------

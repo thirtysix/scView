@@ -17,6 +17,7 @@ from tests.test_mcp import PNG, _call, _finish, _png_size, msigdb_dir, test_sett
 from tests.test_spatial_domains import synthetic
 
 SPATIAL_TOOLS = {"spatial_autocorr", "get_spatial_autocorr", "spatial_domains", "nhood_enrichment", "cooccurrence",
+                 "get_cooccurrence",
                  "spatial_niches", "spot_composition_reference", "spot_composition", "joint_embedding_plan",
                  "joint_embedding"}
 
@@ -121,8 +122,13 @@ async def test_morans_i_runs_and_reads_back(client, dataset_manager):
     assert last["result_id"] == res["result_id"]
     page = await _call("get_spatial_autocorr", {"dataset_id": did, "result_id": res["result_id"], "limit": 2})
     assert page["n_rows"] == 3 and len(page["rows"]) == 2 and page["next_offset"] == 2
+    # Two sections: centred on each one's mean, each section's own I beside the pooled one.
+    assert res["centring"] == "section" and res["sections"]["n_total"] == 2
+    assert res["by_section"]["columns"] == ["gene", "s0", "s1"] and res["by_section"]["n_total"] == 3
     one = await _call("spatial_autocorr", {"dataset_id": did, "genes": ["G0"], "library_id": "s0"})
-    assert one["result"]["n_obs"] == 144
+    assert one["result"]["n_obs"] == 144 and one["result"]["library_id"] == "s0" and "by_section" not in one["result"]
+    assert (await _call("get_spatial_autocorr", {"dataset_id": did, "library_id": "all"}))["result_id"] == res["result_id"]
+    assert (await _call("get_spatial_autocorr", {"dataset_id": did, "library_id": "s0"}))["n_obs"] == 144
 
 
 async def test_a_run_past_the_wait_returns_its_job(client, dataset_manager, monkeypatch):
@@ -164,12 +170,20 @@ async def test_domains_enrichment_and_cooccurrence_per_section(client, dataset_m
     only = (await _call("cooccurrence", {"dataset_id": did, "column": "stripe", "interval": 10,
                                          "label": "t0"}))["result"]
     assert only["pairs"]["n_total"] == 3 and {row[0] for row in only["pairs"]["rows"]} == {"t0"}
+    # Each section scored on its own, then combined; one section's own scores on request.
+    assert c["sections_combined"] == "within_sections" and c["sections"]["n_total"] == 2
+    s1 = (await _call("cooccurrence", {"dataset_id": did, "column": "stripe", "interval": 10, "section": "s1"}))["result"]
+    assert s1["section"] == "s1"
+    got = await _call("get_cooccurrence", {"dataset_id": did, "column": "stripe", "section": "s0", "label": "t1"})
+    assert got["section"] == "s0" and {row[0] for row in got["pairs"]["rows"]} == {"t1"}
+    err = await _call("get_cooccurrence", {"dataset_id": did, "section": "s9"}, error=True)
+    assert "s9" in err
 
 
 async def test_niches_are_refused_on_spots_and_run_on_cells(client, dataset_manager):
     did = _register(dataset_manager, _two_sections(10), "nsp")
     r = await _call("spatial_niches", {"dataset_id": did, "label_column": "stripe"})
-    assert r["status"] == "error" and "spot" in r["error"].lower()
+    assert r["status"] == "error" and "spot composition" in r["error"].lower()
     did = _register(dataset_manager, _two_sections(10, "xenium"), "ncell")
     r = await _call("spatial_niches", {"dataset_id": did, "label_column": "stripe", "n_niches": 3})
     res = r["result"]
@@ -197,6 +211,11 @@ async def test_spot_composition_reference_check_and_run(client, dataset_manager)
     assert res["n_fitted"] == 100 and res["types"]["n_total"] == 4
     assert res["per_section_shares"]["columns"][:3] == ["section", "n_spots", "n_fitted"]
     assert res["reference"]["id"] == ref
+    # Niches on the spots from their cell-type shares.
+    r = await _call("spatial_niches", {"dataset_id": did, "source": "spot_composition", "n_niches": 3})
+    res = r["result"]
+    assert res["source"] == "spot_composition" and res["shares"] == "cells" and res["niches"]["n_total"] == 3
+    assert res["reference"]["id"] == ref and "shares_fingerprint" not in res
 
 
 # --- joint embedding -------------------------------------------------------------------------------
