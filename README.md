@@ -63,8 +63,8 @@ reviewer can audit. scView closes both gaps:
   resolution 1.0") via confirm-gated, allow-listed actions, **answers "what is this?"** from a ✦ on any
   cluster, gene, marker, or pathway, and can **write a methods paragraph** from the provenance recipe.
 - **Drive it from your own AI agent (MCP).** Claude Code or any MCP client connects to `/mcp` and gets
-  32 tools over the same code the UI runs: import, processing, donor-aware statistics, enrichment and
-  plots ([how](#use-scview-from-your-ai-agent-mcp)).
+  48 tools over the same code the UI runs: import, processing, donor-aware statistics, enrichment,
+  spatial analysis and plots ([how](#use-scview-from-your-ai-agent-mcp)).
 - **AI-assisted assessment.** A deterministic assessor reports the state of ~15 preprocessing
   steps; an LLM advisor recommends the next steps with reasons and sized parameters; *you* always
   approve before anything runs. A one-line "I notice…" insight on open points you at the right next step.
@@ -516,7 +516,11 @@ The tools: `list_datasets`, `get_dataset`, `describe_column`, `crosstab`, `memor
 `differential_expression` (cell-level or donor-aware pseudobulk), `compare_de_results`,
 `per_donor_expression`,
 `composition_test`, `milo`, `expression_by_group`, `enrichment` (ORA or GSEA), `score_gene_set`,
-`list_results`, `get_result`, `plot` (a PNG), and `job_status` / `cancel_job` for the long runs.
+`list_results`, `get_result`, `plot` (a PNG; tissue sections side by side or one at a time), and
+`job_status` / `cancel_job` for the long runs. For spatial data: `spatial_autocorr` / `get_spatial_autocorr`
+(Moran's I), `spatial_domains`, `nhood_enrichment`, `cooccurrence`, `spatial_niches`,
+`spot_composition_reference` and `spot_composition`; `joint_embedding_plan` and `joint_embedding` pool
+datasets (one file per slide) into one.
 No tool deletes anything. The server runs in a container and cannot read files on your computer:
 upload a file in the UI, or with
 `curl -F "file=@/path/to/data.h5ad" http://127.0.0.1:8080/api/v1/datasets/upload`.
