@@ -25,6 +25,7 @@ from pydantic import Field
 from scview.mcp import api, jobs
 from scview.mcp.compact import DEFAULT_LIMIT, clamp, dumps, num, pick, table
 from scview.mcp.tools import (
+    P0_NOTE,
     READ,
     WRITE,
     DatasetId,
@@ -71,9 +72,20 @@ def _compact(v: Any, n: int) -> Any:
     return v
 
 
+# Bookkeeping of a saved run that says nothing about its result.
+NOISE = ("available", "created_at", "version", "run_id", "cells_fingerprint", "labels_fingerprint",
+         "inputs_fingerprint", "stage_seconds", "threads", "peak_rss_gb", "visited_pairs")
+
+
 def _rest(d: dict[str, Any], skip: tuple[str, ...], n: int) -> dict[str, Any]:
-    """Every field of ``d`` but ``skip``, compact: what a newer route adds comes through."""
-    return {k: _compact(v, n) for k, v in d.items() if k not in skip and v is not None}
+    """Every field of ``d`` but ``skip`` and the bookkeeping, compact: what a newer route
+    adds comes through. The run's memory as its peak only."""
+    out = {k: _compact(v, n) for k, v in d.items() if k not in skip and k not in NOISE and k != "resources"
+           and v is not None}
+    peak = (d.get("resources") or {}).get("peak_gb") if isinstance(d.get("resources"), dict) else None
+    if peak is not None:
+        out["peak_gb"] = peak
+    return out
 
 
 def _sections_wide(rows: list[dict[str, Any]], key: str, n: int) -> dict[str, Any] | None:
@@ -122,6 +134,8 @@ def _autocorr_reply(r: dict[str, Any], dataset_id: str, n: int) -> dict[str, Any
     if wide:
         out["by_section"] = wide
     out["genes_ranked"]["note"] = "highest I first; get_spatial_autocorr pages through every gene"
+    if any(r.get("pval") == 0 for r in rows[:n]):
+        out["note"] = P0_NOTE
     return out
 
 
@@ -357,13 +371,17 @@ def _cooccurrence_reply(r: dict[str, Any], dataset_id: str, n: int, label: str |
     picks = sorted({int(round(x)) for x in np.linspace(first, occ.shape[2] - 1, CO_DISTANCES)})
     unit = r.get("distance_unit") or ""
     names = [f"at {num(float(dist[t]))} {unit}".strip() for t in picks]
+    # squidpy's score is the same both ways round when the counts are: each pair once then.
+    symmetric = bool(np.allclose(occ, occ.transpose(1, 0, 2), equal_nan=True))
+    k = len(labels)
+    pairs = [(i, j) for i in range(k) for j in range(k) if i != j and (i < j or not symmetric)]
+    if label is not None:
+        pairs = [(i, j) if labels[i] == label else (j, i) for i, j in pairs if label in (labels[i], labels[j])
+                 and (symmetric or labels[i] == label)]
     recs = []
-    for i in range(len(labels)):
-        for j in range(len(labels)):
-            if i == j or (label is not None and labels[i] != label):
-                continue
-            recs.append({"label": labels[i], "with": labels[j], **{nm: occ[i, j, t] for nm, t in zip(names, picks)},
-                         "pairs_at_first": int(count[i, j, picks[0]])})
+    for i, j in pairs:
+        recs.append({"label": labels[i], "with": labels[j], **{nm: occ[i, j, t] for nm, t in zip(names, picks)},
+                     "pairs_at_first": int(count[i, j, picks[0]])})
     recs.sort(key=lambda x: -(x[names[0]] if np.isfinite(x[names[0]]) else -1))
     if label is not None and not recs:
         raise ToolError(f"No label '{label}' in this run; its labels: {', '.join(labels[:40])}.")
@@ -450,15 +468,18 @@ def _composition_reply(r: dict[str, Any], dataset_id: str, n: int) -> dict[str, 
            **_rest(r, ("types", "type_stats", "libraries", "clusters", "s_e", "sources", "created_at", "reference",
                        "resources"), n)}
     out["reference"] = pick(r.get("reference") or {}, "id", "name", "celltype_column", "n_reference_cells")
-    out["types"] = table(r.get("type_stats") or [], ["type", "n_reference_cells", "rna_mean", "rna_max", "n_top"], n)
+    stats = sorted(r.get("type_stats") or [], key=lambda t: -(t.get("rna_mean") or 0))  # largest share first
+    out["types"] = table(stats, ["type", "n_reference_cells", "rna_mean", "rna_max", "n_top"], n)
     libs = r.get("libraries") or []
-    shown = types[:MAX_SECTION_COLUMNS]
+    shown = [str(t.get("type")) for t in stats if str(t.get("type")) in types][:MAX_SECTION_COLUMNS] or \
+        types[:MAX_SECTION_COLUMNS]
     recs = [{"section": lib.get("id"), "n_spots": lib.get("n_spots"), "n_fitted": lib.get("n_fitted"),
-             **{t: (lib.get("bulk") or [None] * len(types))[k] for k, t in enumerate(shown)}} for lib in libs]
+             **{t: (lib.get("bulk") or [None] * len(types))[types.index(t)] for t in shown}} for lib in libs]
     out["per_section_shares"] = table(recs, ["section", "n_spots", "n_fitted", *shown], n)
     if len(types) > len(shown):
         out["per_section_shares"]["types_shown"] = f"{len(shown)} of {len(types)}"
-    out["note_shares"] = "per_section_shares: each type's share of the section's RNA over its fitted spots"
+    out["note_shares"] = ("per_section_shares: each type's share of the section's RNA over its fitted spots; types "
+                          "with the largest mean share first")
     return out
 
 
@@ -496,7 +517,9 @@ Labels = Annotated[list[str] | None, Field(description=(
 def _plan_reply(p: dict[str, Any], n: int) -> dict[str, Any]:
     merge = p.get("merge") or {}
     shared = p.get("shared_columns") or []
-    out = {**pick(p, "ok", "est_cells", "blocking", "notes", "preflight"),
+    out = {**pick(p, "ok", "est_cells", "blocking", "notes"),
+           "preflight": pick(p.get("preflight") or {}, "level", "sentence", "peak_stage", "seconds", "suggestions",
+                             "notes"),
            "datasets": table(p.get("datasets") or [], ["id", "name", "label", "n_cells", "n_genes", "counts_source",
                                                        "error"], n),
            "merge": pick(merge, "intersection", "union", "recommended_join", "est_cells", "est_genes",

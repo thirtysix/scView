@@ -158,7 +158,9 @@ async def test_domains_enrichment_and_cooccurrence_per_section(client, dataset_m
     assert all(row[2] < 0 for row in e["most_apart"]["rows"]) and all(row[1] > 0 for row in e["self"]["rows"])
 
     c = (await _call("cooccurrence", {"dataset_id": did, "column": "stripe", "interval": 10}))["result"]
-    assert c["pairs"]["n_total"] == 12 and len(c["pairs"]["columns"]) == 2 + mcp_spatial.CO_DISTANCES + 1
+    # The score is symmetric here: each pair of the 4 stripes once.
+    assert c["pairs"]["n_total"] == 6 and len(c["pairs"]["columns"]) == 2 + mcp_spatial.CO_DISTANCES + 1
+    assert "peak_gb" in c and "resources" not in c and "created_at" not in c
     only = (await _call("cooccurrence", {"dataset_id": did, "column": "stripe", "interval": 10,
                                          "label": "t0"}))["result"]
     assert only["pairs"]["n_total"] == 3 and {row[0] for row in only["pairs"]["rows"]} == {"t0"}
@@ -219,6 +221,7 @@ async def test_joint_embedding_plan_run_and_its_sections(client, dataset_manager
     _add_dataset(tmp_data_dir, "sb", "B", _slide(2))
     plan = await _call("joint_embedding_plan", {"dataset_ids": ["sa", "sb"], "labels": ["ctrl", "mi"]})
     assert plan["ok"] is True and plan["est_cells"] == 360 and plan["datasets"]["n_total"] == 2
+    assert plan["preflight"]["sentence"] and "breakdown" not in plan["preflight"]
     err = await _call("joint_embedding", {"dataset_ids": ["sa", "sb"], "params": {"nope": 1}}, error=True)
     assert "nope" in err
     r = await _call("joint_embedding", {"dataset_ids": ["sa", "sb"], "labels": ["ctrl", "mi"], "name": "slides",
