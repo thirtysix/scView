@@ -467,6 +467,7 @@ def fake(monkeypatch, tmp_path):
     f.handler = handler
     monkeypatch.setattr(pi, "new_client", f.client)
     monkeypatch.setattr(pi, "memory_verdict", lambda p: {"verdict": "fits", "message": "ok"})
+    monkeypatch.setattr(pi, "_UNREADABLE", {})
     api._catalogs.clear()
     yield f
     api._catalogs.clear()

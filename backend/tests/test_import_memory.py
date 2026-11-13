@@ -26,8 +26,10 @@ GB = 1024**3
 @pytest.fixture(autouse=True)
 def _no_cached_headers():
     pi._HEADERS.clear()
+    pi._UNREADABLE.clear()
     yield
     pi._HEADERS.clear()
+    pi._UNREADABLE.clear()
 
 
 class Ranged:
@@ -90,10 +92,65 @@ def test_no_ranges_or_too_many_is_no_estimate_not_a_download(tmp_path, monkeypat
     host = Ranged(body, ranges=False)
     v = pi.memory_before_download(_rec(body), client=host.client())
     assert v["verdict"] == "unknown" and "checked once it is downloaded" in v["message"]
+    # Remembered: the import right after the check answers at once, no request.
+    again = Ranged(body)
+    assert pi.memory_before_download(_rec(body), client=again.client())["message"] == v["message"]
+    assert again.ranged == [] and again.whole == 0
+    pi._UNREADABLE.clear()
     monkeypatch.setattr(pi, "HEADER_MAX_REQUESTS", 0)
     v = pi.memory_before_download(_rec(body), client=Ranged(body).client())
     assert v["verdict"] == "unknown" and "spread too widely" in v["message"]
     assert pi.memory_before_download({"dataset_version_id": LIVER_B, "size_bytes": 0})["verdict"] == "unknown"
+
+
+def test_a_slow_host_stops_the_header_read_in_time(tmp_path, monkeypatch):
+    src = tmp_path / "d.h5ad"
+    discover_h5ad(src)
+    body = src.read_bytes()
+    monkeypatch.setattr(pi, "HEADER_MAX_SECONDS", 0.0)
+    host = Ranged(body)
+    with pytest.raises(pi.PublicImportError, match="too slowly"):
+        with pi.RangeFile("https://x/f.h5ad", len(body), host.client(), block=4096) as fh:
+            preflight._read_h5ad(fh)
+    assert len(host.ranged) == 1  # the first part only
+
+
+def _visium_like(path) -> None:
+    """A Discover h5ad with a full-resolution tissue image in uns, stored in small chunks
+    (as CELLxGENE's Visium files are) after the matrices, so its chunk index is spread out."""
+    import h5py
+    import numpy as np
+
+    discover_h5ad(path)
+    with h5py.File(path, "r+") as f:
+        img = f.create_group("uns/spatial/lib1/images")
+        rng = np.random.default_rng(0)
+        img.create_dataset("fullres", data=rng.integers(0, 255, size=(600, 600, 3), dtype=np.uint8),
+                           chunks=(20, 20, 1))
+        img.create_dataset("hires", data=rng.integers(0, 255, size=(100, 100, 3), dtype=np.uint8))
+
+
+def test_a_chunked_tissue_image_is_sized_without_walking_its_chunk_index(tmp_path):
+    # Kuppe 2022 control_P1 (160 MB): 58 of 68 ranged requests went on the full-resolution
+    # image's chunk index, so the read gave up at 48 ("spread too widely"); now 10.
+    import h5py
+
+    src = tmp_path / "v.h5ad"
+    _visium_like(src)
+    body = src.read_bytes()
+    local = preflight.read_header(src, "h5ad")
+    assert local.uns_bytes >= 600 * 600 * 3 + 100 * 100 * 3
+    with pi.RangeFile("https://x/f.h5ad", len(body), Ranged(body).client(), block=4096,
+                      max_requests=10_000) as fh:
+        h = preflight._read_h5ad(fh)
+        used = fh.requests
+    assert (h.n_cells, h.uns_bytes) == (local.n_cells, local.uns_bytes)
+    # What the old walk (HDF5's full object info) costs on the same file and blocks.
+    with pi.RangeFile("https://x/f.h5ad", len(body), Ranged(body).client(), block=4096,
+                      max_requests=10_000) as fh, h5py.File(fh, "r") as f:
+        f["uns"].visititems(lambda name, obj: None)
+        walked = fh.requests
+    assert used < walked
 
 
 def _budget(monkeypatch, limit_gb: float) -> None:
