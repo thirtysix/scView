@@ -131,7 +131,9 @@ def test_annotation_computes_markers_for_its_column():
     a.obs["cluster"] = pd.Categorical(["0"] * 10 + ["1"] * 10)
     a.uns["rank_genes_groups"] = {"params": {"groupby": "cluster"}}  # the clustering's markers
     _run_cell_type_annotation(a, PipelineParams(annotation_method="marker_score"))
-    rgg = a.uns["rank_genes_groups__cell_type"]
+    # scView's own column by default (<grouping>_celltypeAnno), never cell_type
+    assert "cell_type" not in a.obs.columns
+    rgg = a.uns["rank_genes_groups__cluster_celltypeAnno"]
     assert set(rgg["names"].dtype.names) == {"T cell", "B cell"}
     assert a.uns["rank_genes_groups"]["params"]["groupby"] == "cluster"
 

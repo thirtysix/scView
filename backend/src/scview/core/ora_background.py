@@ -41,7 +41,9 @@ logger = logging.getLogger(__name__)
 # v5: the query also needs adjusted p < 0.05 (marker_selection.MAX_PADJ).
 # v6: genes with an id but no name (Ensembl ids, AC012345.1 clone ids) leave the query
 # (gene_filters.is_unnamed).
-ORA_VERSION = 6
+# v7: markers are ranked on log-normalised values, never the raw counts a CELLxGENE file keeps
+# in .raw (core/marker_matrix.py): the fold changes the query is sorted by changed.
+ORA_VERSION = 7
 
 META_PREFIX = uns_keys.META_PREFIX
 
@@ -56,17 +58,22 @@ def meta_key(column: str, group: str) -> str:
     return uns_keys.meta_key(column, group)
 
 
-def resolve_markers_key(uns: Any, column: str = "") -> str | None:
-    """Locate the rank_genes_groups uns key backing ``column``."""
+def resolve_markers_key(uns: Any, column: str = "", adata: Any = None) -> str | None:
+    """Locate the rank_genes_groups uns key backing ``column``. A table ranked on raw
+    counts (``marker_matrix.on_counts``; ``adata`` adds the check of the matrix it names)
+    is skipped: stale, so readers see no markers and the markers route computes them."""
+    from scview.core.marker_matrix import on_counts
+
+    def usable(key: str) -> bool:
+        return not on_counts(uns[key], adata)
+
     keyed = uns_keys.markers_key(column) if column else "rank_genes_groups"
-    if keyed in uns:
+    if keyed in uns and usable(keyed):
         return keyed
-    if "rank_genes_groups" in uns:
+    if column and "rank_genes_groups" in uns:
         rgg = uns["rank_genes_groups"]
-        if not column:
-            return "rank_genes_groups"
         try:
-            if rgg.get("params", {}).get("groupby") == column:
+            if rgg.get("params", {}).get("groupby") == column and usable("rank_genes_groups"):
                 return "rank_genes_groups"
         except AttributeError:
             pass

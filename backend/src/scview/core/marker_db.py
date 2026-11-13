@@ -935,17 +935,19 @@ def merge(parts: list[tuple[str, dict[str, dict]]]) -> dict[str, dict]:
             k = norm(name)
             if not k:
                 continue
-            m = merged.setdefault(" ".join(sorted(k)), {"cl": "", "w": defaultdict(float), "label": name, "sources": []})
+            m = merged.setdefault(" ".join(sorted(k)), {"cl": "", "w": defaultdict(float), "label": name, "sources": [],
+                                                        "members": []})
             if t["cl"] and not m["cl"]:
                 m["cl"] = t["cl"]
             if src not in m["sources"]:
                 m["sources"].append(src)
+            m["members"].append((src, name))  # the source types merged here (core/marker_tissues.py)
             for i, g in enumerate(t["genes"]):
                 m["w"][g] += max(0.0, (TOP_DB - i) / TOP_DB) + 1e-3
     out: dict[str, dict] = {}
     for key, m in merged.items():
         name = m["label"] if m["label"] not in out else key
-        out[name] = {"cl": m["cl"], "sources": m["sources"],
+        out[name] = {"cl": m["cl"], "sources": m["sources"], "members": m["members"],
                      "genes": sorted(m["w"], key=lambda g: (-m["w"][g], g))}
     return out
 
@@ -1089,21 +1091,17 @@ def _computed(adata, groupby: str, groups: list[str]):
     """Wilcoxon markers (with pts) on a throwaway object sharing the matrix, so the
     dataset is not touched (by blocks of genes, ``core/rank_genes.py``); None when fewer
     than two groups have 3 cells."""
-    import anndata as ad
+    from scview.core import marker_matrix, rank_genes
 
-    from scview.core import rank_genes
-
-    src = adata.raw if adata.raw is not None else adata
-    X = src.X
-    if getattr(adata, "isbacked", False) and not isinstance(X, np.ndarray):
-        X = X[:]
     counts = adata.obs[groupby].astype(str).value_counts()
     keep = [g for g in groups if counts.get(g, 0) >= 3]
     if len(keep) < 2:
         return None
-    obs = pd.DataFrame({groupby: pd.Categorical(adata.obs[groupby].astype(str), categories=groups)},
+    labels = pd.Series(pd.Categorical(adata.obs[groupby].astype(str), categories=groups),
                        index=adata.obs_names)
-    tmp = ad.AnnData(X=X, obs=obs, var=pd.DataFrame(index=src.var_names))
+    # log-normalised values, never raw counts in .raw (core/marker_matrix.py); a backed
+    # dataset's matrix is read whole, as it was here before
+    tmp, _ = marker_matrix.light(adata, groupby, labels)
     rank_genes.rank_genes_groups(tmp, groupby, groups=keep, reference="rest", method="wilcoxon",
                                  pts=True, use_raw=False, key_added=markers_key(groupby))
     return tmp
@@ -1165,12 +1163,14 @@ class Scorer:
     def genes(self, genes) -> list[str]:
         return sorted(self.case[g] for g in genes)
 
-    def suggest(self, Q: frozenset, n: int = N_SUGGEST) -> list[dict]:
+    def suggest(self, Q: frozenset, n: int = N_SUGGEST, names: list[str] | None = None) -> list[dict]:
+        """The ``n`` types (of ``names``, default every open one) ``Q`` fits best."""
+        names = self.open_names if names is None else names
         if not Q:
             return []
-        s, k, size = self.scores(Q, self.open_names, full=True)
+        s, k, size = self.scores(Q, names, full=True)
         order = np.argsort(-s, kind="stable")[:n]
-        return [self._type(self.open_names[i], Q, s[i], k[i], size[i], full=True) for i in order if k[i] > 0]
+        return [self._type(names[i], Q, s[i], k[i], size[i], full=True) for i in order if k[i] > 0]
 
     def _type(self, t: str, Q, s, k, n, full=False) -> dict:
         info = self.sdb.types[t]
@@ -1270,24 +1270,45 @@ def check(adata, column: str, species: str | None = None, db: MarkerDB | None = 
     }
 
 
-def annotate(adata, groupby: str, species: str | None = None, db: MarkerDB | None = None) -> tuple[dict[str, str], dict]:
+def annotate(adata, groupby: str, species: str | None = None, db: MarkerDB | None = None,
+             tissue: str = "") -> tuple[dict[str, str], dict]:
     """Each group's best database type (the top suggestion), "Unknown" when no database
-    type shares a marker with it; and what it rests on, for the provenance."""
+    type shares a marker with it; and what it rests on, for the provenance.
+
+    When the dataset's tissue is known (``tissue``, the user's hint, else the data's own: see
+    ``marker_tissues.dataset_tissue``) only the types of that tissue, of every tissue (immune,
+    blood, vessels, stroma) or of no named tissue compete (``core/marker_tissues.py``)."""
+    from scview.core import marker_tissues
+
     db = db or get_db()
     sp, _ = _species(adata, species)
     parts = db.view("annotate", sp)
-    sc_ = Scorer(db.species(sp, parts), measured_genes(adata))
+    sdb = db.species(sp, parts)
+    sc_ = Scorer(sdb, measured_genes(adata))
+    names = sc_.open_names
+    want, source = marker_tissues.dataset_tissue(adata, tissue)
+    tissue_info: dict[str, Any] = {"organs": sorted(want), "from": source}
+    if want:
+        index = marker_tissues.load(db.dest)
+        if index:
+            names = [t for t in sc_.open_names
+                     if marker_tissues.allowed(marker_tissues.type_organs(sdb.types[t], index, sp), want,
+                                               marker_tissues.everywhere_lineage(sdb.types[t]["cl"], db.ontology))]
+            tissue_info["n_types_left_out"] = len(sc_.open_names) - len(names)
+        else:
+            tissue_info["note"] = "the databases' raw files are not on disk: no type left out"
     markers = _markers_for(adata, groupby)
     mapping: dict[str, str] = {}
     for g in _group_names(adata, groupby):
-        top = sc_.suggest(sc_.query(markers.get(g, [])), n=1)
+        top = sc_.suggest(sc_.query(markers.get(g, [])), n=1, names=names)
         mapping[g] = top[0]["cell_type"] if top else "Unknown"
     return mapping, {
         "marker_source": "database",
         "databases": db.labels(parts),
         "cellmarker": SOURCES[db.cellmarker].label if db.cellmarker else None,
         "species": sp,
-        "n_db_types": len(sc_.open_names),
+        "n_db_types": len(names),
+        "tissue": tissue_info,
     }
 
 

@@ -406,7 +406,7 @@ def test_another_method_drops_an_earlier_llm_runs_ids(monkeypatch, tmp_path):
     a.obs["cluster"] = pd.Categorical(["0"] * 10 + ["1"] * 10)
     a.uns["cell_type_llm_cl"] = json.dumps({"version": None, "labels": {"T cells": {"model_cl_id": "CL:0000084"}}})
     _run_cell_type_annotation(a, PipelineParams(annotation_method="marker_score", annotation_marker_sets="builtin",
-                                                annotation_groupby="cluster"))
+                                                annotation_groupby="cluster", annotation_target="cell_type"))
     assert "cell_type_llm_cl" not in a.uns
 
 

@@ -26,6 +26,7 @@ def _register(dm) -> str:
     labels = np.array(["T"] * 30 + ["B"] * 30 + ["NK"] * 30, dtype=object)
     labels[[0, 1, 2]] = np.nan
     a.obs["cell_type"] = pd.Categorical(labels, categories=["T", "B", "NK"])
+    sc.pp.log1p(a)  # markers ranked on counts are stale (core/marker_matrix.py)
     sc.tl.rank_genes_groups(a, "cell_type", method="wilcoxon", pts=True,
                             key_added="rank_genes_groups__cell_type")
     a.uns["enrichment__cell_type__T"] = "[]"

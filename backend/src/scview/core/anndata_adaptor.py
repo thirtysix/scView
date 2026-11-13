@@ -682,7 +682,8 @@ class AnnDataAdaptor:
         """
         layers: list[dict] = []
 
-        # raw (log-normalized, all genes; an upload's .raw can hold counts instead)
+        # raw: log-normalised after scView's pipeline; an imported file's .raw often holds
+        # the raw COUNTS instead (CELLxGENE), and the label says so.
         if self.adata.raw is not None:
             try:
                 counts = _looks_like_counts(self.adata.raw.X)
@@ -743,6 +744,19 @@ class AnnDataAdaptor:
                 "mode": rec["mode"], "isotypes": rec["isotypes"], "n_droplets": rec["n_droplets"],
                 "denoise": rec["denoise"], "method": rec["method"]},
         }
+
+    def _raw_holds_counts(self) -> bool:
+        from scview.core.pipeline import looks_like_counts
+
+        try:
+            return looks_like_counts(self.adata.raw.X)
+        except Exception:  # noqa: BLE001 - an unreadable .raw: no claim about it
+            return False
+
+    def layer_label(self, layer: str) -> str:
+        """The layer's label as the layer menu shows it ("Counts (raw)", "Log-normalized (X)")."""
+        return next((lyr["label"] for lyr in self.available_expression_layers() if lyr["key"] == layer),
+                    layer)
 
     def default_expression_layer(self) -> str:
         """The default layer key: 'raw' when there is one, else 'X'; but 'X' when .raw
@@ -893,7 +907,8 @@ class AnnDataAdaptor:
         if layer == "X" and self.is_large and genes:
             stats = _group_stats_sparse(self.gene_block(genes), labels, groups)
             return {
-                "groupby": groupby, "layer": layer, "groups": groups, "genes": genes, **stats,
+                "groupby": groupby, "layer": layer, "layer_label": self.layer_label(layer),
+                "groups": groups, "genes": genes, **stats,
                 "scale_range": list(self.layer_scale_range(layer)),
             }
         expr = self.get_expression(genes, layer=layer) if genes else np.zeros((len(labels), 0))
@@ -907,7 +922,8 @@ class AnnDataAdaptor:
             mean_expressing.append([round(float(v), 4) for v in level])
             fraction.append([round(float(v), 4) for v in expressing.mean(axis=0)])
         return {
-            "groupby": groupby, "layer": layer, "groups": groups, "genes": genes,
+            "groupby": groupby, "layer": layer, "layer_label": self.layer_label(layer),
+            "groups": groups, "genes": genes,
             "mean": mean, "mean_expressing": mean_expressing, "fraction": fraction,
             "scale_range": list(self.layer_scale_range(layer)),
         }
@@ -996,8 +1012,8 @@ class AnnDataAdaptor:
     # ------------------------------------------------------------------
 
     def has_markers(self, column: str | None = None) -> bool:
-        if column:
-            return resolve_markers_key(self.adata.uns, column) is not None
+        if column:  # a table ranked on raw counts is stale: none (core/marker_matrix.py)
+            return resolve_markers_key(self.adata.uns, column, self.adata) is not None
         return "rank_genes_groups" in self.adata.uns or any(
             markers_column(k) is not None for k in self.adata.uns
         )
@@ -1034,7 +1050,7 @@ class AnnDataAdaptor:
         (tau, pct_max_other, max_other_group, pct_ratio) when they can be computed.
         """
         # A file's own markers are often under the bare key with params.groupby set.
-        uns_key = resolve_markers_key(self.adata.uns, column or "")
+        uns_key = resolve_markers_key(self.adata.uns, column or "", self.adata)
         if uns_key is None:
             return None
 

@@ -494,12 +494,15 @@ def markers_key(column):
 
 
 def markers_for(adata, column):
-    """Wilcoxon markers of one obs column (2-100 groups), as scView stores them."""
+    """Wilcoxon markers of one obs column (2-100 groups), as scView stores them: on
+    log-normalised values, so not .raw when it holds counts beside a log-normalised X."""
     if column not in adata.obs.columns or not 2 <= adata.obs[column].nunique() <= 100:
         return
     if adata.obs[column].dtype.name != "category":
         adata.obs[column] = adata.obs[column].astype(str).astype("category")
-    sc.tl.rank_genes_groups(adata, groupby=column, method="wilcoxon", pts=True,
+    use_raw = adata.raw is not None and not (looks_like_counts(adata.raw.X)
+                                             and not looks_like_counts(adata.X))
+    sc.tl.rank_genes_groups(adata, groupby=column, method="wilcoxon", pts=True, use_raw=use_raw,
                             key_added=markers_key(column))
 ''',
     "louvain": '''
@@ -895,6 +898,7 @@ _HELPER_NEEDS = {
     "refilter_types": ("looks_like_counts",),
     "gene_programs": ("find_counts",),
     "infer_cnv": ("looks_like_counts", "find_counts"),
+    "markers_key": ("looks_like_counts",),
 }
 
 

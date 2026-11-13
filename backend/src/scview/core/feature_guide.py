@@ -64,18 +64,21 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
      "why each cluster was labelled or flagged, in words, never a probability: its markers against random genes "
      "(best database p vs what 1 in 10 random lists reach), genes and % mito vs the typical cluster with the flags "
      "that fired, a doublet-like cluster's two parents and RNA, database types as shares of the evidence (named "
-     "groupings only), and the label scView gave itself ('Low-quality cells', 'Unidentified'); any grouping"),
+     "groupings only), and the label scView gave itself ('Low-quality cells') or the note the AI got; any grouping"),
     ("Data Assessment > PCA", "", "elbow, variance explained, loadings"),
     ("Data Assessment > Cell-type annotation", "",
-     "name clusters by an LLM from their markers, a CellTypist model or marker-database scores, into an obs "
-     "column; with Cell Ontology ids; <column>_qualified adds the genes that set a cluster apart where clusters "
+     "name clusters by an LLM from their markers, a CellTypist model or marker-database scores (types of other "
+     "tissues left out when the tissue is given or in the data), into an obs column; with Cell Ontology ids; <column>_qualified adds the genes that set a cluster apart where clusters "
      "share a label or a label is a mixture or no cell type, e.g. 'Monocytes (CCL8+ RSAD2+)'; with the LLM, "
-     "scView itself labels clusters cluster QC flags as damaged 'Low-quality cells' and marker lists that match "
-     "no database type better than random genes 'Unidentified', and the LLM names the rest"),
+     "scView itself labels clusters cluster QC flags as damaged 'Low-quality cells', and the LLM names the "
+     "rest, told when a cluster's markers do not beat 9 of 10 random gene lists of the same size"),
     ("Data Assessment > Label from a reference dataset", "reference mapping",
      "label cells from another annotated library dataset; flags cells not in the reference"),
     ("Data Assessment > Annotation confidence", "", "label-fit flags per cell"),
     ("Data Assessment > Annotation cross-check", "", "agreement between two annotations"),
+    ("Data Assessment > Annotation cross-check > Marker database check", "",
+     "each label against PanglaoDB, CellMarker and ACT: supported, weak, no database support or not in "
+     "database, and the 3 database types its markers fit best; downloads the databases on first use"),
     ("Unified View", "", "linked scatter (UMAP/tSNE/PCA) with analysis tabs beside it"),
     ("Unified View > Embedding > Tissue", "spatial",
      "spots, bins or cells on the tissue image (Visium, Visium HD); Section, Image on/off; colours, lasso as on UMAP"),
@@ -202,7 +205,8 @@ CLOSING = "These are all of scView's tabs and tools; name a feature only by its 
 # In the full guide only: the compact block is at its cap (tests/test_feature_guide.py). The tab stays in it.
 FULL_ONLY = ("Unified View > Accessibility >", "Unified View > Embedding > Tissue > Draw", "Unified View > Transcripts",
              "Unified View > Domains > Co-occurrence", "Unified View > Spot composition > Reference labels",
-             "Data Assessment > Cell-type annotation", "Data Assessment > Cluster QC", "Unified View > Compare")
+             "Data Assessment > Cell-type annotation", "Data Assessment > Cluster QC", "Unified View > Compare",
+             "Data Assessment > Annotation cross-check > Marker database check")
 
 
 def compact_guide() -> str:

@@ -481,6 +481,19 @@ def _run_params(raw: dict[str, Any] | None) -> PipelineParams:
 
 
 
+def _check_annotation_target(adaptor, steps: list[str], params: PipelineParams) -> None:
+    """422 before a run whose annotation would write over a column scView did not create."""
+    if "cell_type_annotation" not in steps or not (params.annotation_target or "").strip():
+        return  # scView's own column by default (checked again by the step)
+    from scview.core.pipeline import AnnotationTargetError, check_annotation_target
+
+    try:
+        check_annotation_target(adaptor.adata, params.annotation_target.strip(),
+                                bool(params.annotation_overwrite))
+    except AnnotationTargetError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
 @router.post("/datasets/{dataset_id}/assessment/run")
 async def run_assessment_pipeline(
     dataset_id: str,
@@ -493,6 +506,7 @@ async def run_assessment_pipeline(
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
+    _check_annotation_target(adaptor, body.steps, params)
     control = RunControl(plan=(body.steps, params), allow_large=body.allow_large_mode)
     # Drop this request's hold on the cached copy before the run: run_exclusive
     # reloads the dataset from disk afterwards, and a reference kept here would
@@ -537,6 +551,7 @@ async def run_assessment_pipeline_stream(
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
+    _check_annotation_target(adaptor, body.steps, params)
     del adaptor  # as /assessment/run: no hold on the copy the run replaces
     control = RunControl(plan=(body.steps, params), allow_large=body.allow_large_mode)
 
@@ -670,6 +685,7 @@ async def rerun_step(
         raise HTTPException(status_code=409, detail=plan.message)
 
     params = _run_params(body.params)
+    _check_annotation_target(adaptor, plan.rerun_steps, params)
     control = RunControl(plan=(plan.rerun_steps, params))
     del adaptor  # as /assessment/run: no hold on the copy the run replaces
 

@@ -71,7 +71,14 @@ def test_mutating_actions_are_confirm_gated_with_advisory_and_estimate():
     [a] = _coerce_actions('[{"type":"annotate_cell_types","method":"llm"}]', **ctx)
     assert a.type == "annotate_cell_types" and a.requires_confirm
     assert a.step == "cell_type_annotation" and a.params["annotation_method"] == "llm"
-    assert "Overwrites" in a.advisory and a.estimate  # cell_type already exists
+    # scView's own column, never the existing (curated) cell_type
+    assert a.params["annotation_target"] == "celltypeAnno"
+    assert "Writes a new" in a.advisory and a.estimate
+    [o] = _coerce_actions('[{"type":"annotate_cell_types","method":"llm"}]',
+                          **{**ctx, "columns": ["cluster", "cell_type", "celltypeAnno"]})
+    assert "Overwrites" in o.advisory  # its own column from an earlier run
+    [g] = _coerce_actions('[{"type":"annotate_cell_types","groupby":"cluster"}]', **ctx)
+    assert g.params["annotation_target"] == "cluster_celltypeAnno"
 
     [c] = _coerce_actions('[{"type":"cluster","resolution":1.0}]', **ctx)
     assert c.type == "cluster" and c.requires_confirm and c.step == "clustering"

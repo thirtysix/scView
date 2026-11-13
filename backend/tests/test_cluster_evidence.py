@@ -111,10 +111,12 @@ def test_each_cluster_gets_its_evidence_in_words(markers):
     assert rep.markers and rep.typing and rep.annotation is None
     # Markers vs random genes: the rule's own numbers, in both directions.
     junk = _text(by["junk"], "markers")
-    assert junk.startswith("Markers match no database type better than random genes: best p 1e-")
-    assert "1 in 10 random lists of 25 database genes reach 1e-" in junk
+    assert junk.startswith("Markers do not beat 9 of 10 random lists of ")
+    assert "better than random" not in junk
+    assert "9 of 10 random lists of 25 database genes" in junk and "1 in 10 random lists reach 1e-" in junk
     assert next(ln for ln in by["junk"].lines if ln.kind == "markers").fired
-    assert _text(by["CD8 T"], "markers").startswith("Markers match type0 better than random genes")
+    assert _text(by["CD8 T"], "markers").startswith("Markers match type0 at best p ")
+    assert "which beats 9 of 10 random lists of" in _text(by["CD8 T"], "markers")
     # QC against the typical cluster, naming the flag that fired.
     assert _text(by["damaged"], "qc") == ("1,115 genes vs 1,370 typical; 11.2% vs 5.9% mito. Cluster QC flags it "
                                           "low quality (few genes and high mito).")
@@ -130,8 +132,11 @@ def test_each_cluster_gets_its_evidence_in_words(markers):
     assert "probab" not in json.dumps(rep.model_dump()).lower()
     # The decisions an AI annotation would make (none recorded): the same rules as the annotator.
     assert by["damaged"].label == "Low-quality cells" and not by["damaged"].decided
-    assert by["junk"].label == "Unidentified"
-    assert _text(by["junk"], "decision") == "AI annotation would label this Unidentified itself, without asking the AI."
+    # random-like markers: sent to the AI with a note (v0.75.0), never labelled by scView itself
+    assert by["junk"].label is None and not by["junk"].decided
+    assert _text(by["junk"], "decision") == (
+        "AI annotation would ask the AI with a note that its markers do not beat 9 of 10 random gene lists "
+        "of the same size against the marker databases: a state the databases lack can look like this.")
     assert by["CD8 T"].label is None and not _text(by["CD8 T"], "decision")
 
 
@@ -141,7 +146,7 @@ def test_the_evidence_decides_as_the_annotator_does(markers):
     decided, record = P.decide_clusters(check, report, markers)
     by = _by(CE.build(a, "cell_type", report, db, _index()))
     assert {g: c.label for g, c in by.items() if c.label} == decided
-    assert record == {"llm_decided_low_quality": ["damaged"], "llm_random_markers": ["junk"]}
+    assert record == {"llm_decided_low_quality": ["damaged"], P.RANDOM_NOTED: ["junk"]}
 
 
 def test_cluster_numbers_get_no_database_shares(markers, monkeypatch):
@@ -177,6 +182,24 @@ def test_a_recorded_annotation_says_what_scview_did(markers):
                                                 "asking the AI.")
     assert by["damaged"].decided and by["damaged"].label == "Low-quality cells"
     assert _text(by["CD8 T"], "decision") == "The AI named it CD8 T cells in 'anno'."
+    # an annotation of v0.71-v0.74: its random-like clusters were labelled Unidentified by scView
+    assert by["junk"].label == "Unidentified" and by["junk"].decided
+    assert _text(by["junk"], "decision") == ("scView labelled this Unidentified itself in 'anno', without "
+                                             "asking the AI.")
+
+
+def test_a_v075_annotation_says_the_ai_was_told(markers):
+    a = _adata()
+    provenance.record_step(a, step="cell_type_annotation", tool="scview.cell_type_annotation", params={
+        "annotation_method": "llm", "annotation_groupby": "cell_type", "annotation_target": "anno",
+        P.RANDOM_NOTED: ["junk"]})
+    a.uns["anno_llm_mapping"] = {"CD8 T": "CD8 T cells", "junk": "Injured T cells", "damaged": "B cells",
+                                 "mix": "T cells"}
+    by = _by(CE.build(a, "cell_type", _report(), _FakeDB(), _index()))
+    assert by["junk"].label is None and by["junk"].decided
+    assert _text(by["junk"], "decision") == (
+        "The AI was told that its markers do not beat 9 of 10 random gene lists of the same size against the "
+        "marker databases, and named it Injured T cells in 'anno'.")
 
 
 def test_no_markers_or_no_databases_say_so(monkeypatch, markers):
@@ -211,7 +234,8 @@ def test_grounding_lists_decided_and_flagged_clusters_with_their_tags(markers):
     assert "[result:evidence:cell_type:damaged]" in text and "Cluster QC flags it low quality" in text
     assert "[result:evidence:cell_type:CD8 T]" not in text  # nothing fired: summed up
     assert "The other 1 clusters" in text
-    assert dict(cites)["result:evidence:cell_type:junk"] == "junk: Unidentified"
+    assert dict(cites)["result:evidence:cell_type:junk"] == "junk: evidence"  # flagged, not labelled
+    assert "[result:evidence:cell_type:junk]" in text and "do not beat 9 of 10" in text
 
 
 # ---------------------------------------------------------------------------

@@ -17,7 +17,7 @@ const REPORT: ClusterEvidenceReport = {
   notes: ["Database types are shown as shares of the evidence on named groupings only."],
   clusters: [
     { group: "0", n_cells: 1200, label: null, decided: false, flags: [], lines: [
-      { kind: "markers", fired: false, text: "Markers match T cells better than random genes: best p 1e-17.6, while 1 in 10 random lists of 25 database genes reach 1e-5.7." },
+      { kind: "markers", fired: false, text: "Markers match T cells at best p 1e-17.6, which beats 9 of 10 random lists of 25 database genes (1 in 10 reach 1e-5.7)." },
       { kind: "qc", fired: false, text: "1,400 genes vs 1,370 typical; 5.5% vs 5.9% mito. No cluster QC flag." },
     ] },
     { group: "5", n_cells: 300, label: "Low-quality cells", decided: false, flags: ["low_quality"], lines: [
@@ -25,7 +25,7 @@ const REPORT: ClusterEvidenceReport = {
       { kind: "decision", fired: true, text: "AI annotation would label this Low-quality cells itself, without asking the AI." },
     ] },
     { group: "7", n_cells: 90, label: "Unidentified", decided: true, flags: [], lines: [
-      { kind: "markers", fired: true, text: "Markers match no database type better than random genes: best p 1e-2.1 (NK cells), while 1 in 10 random lists of 18 database genes reach 1e-3.4." },
+      { kind: "markers", fired: true, text: "Markers do not beat 9 of 10 random lists of 18 database genes: best p 1e-2.1 (NK cells), while 1 in 10 random lists reach 1e-3.4." },
       { kind: "decision", fired: true, text: "scView labelled this Unidentified itself in 'cell_type', without asking the AI." },
     ] },
   ],
@@ -53,7 +53,7 @@ describe("ClusterEvidenceList", () => {
   it("explains each kind of line on hover", async () => {
     render(<ClusterEvidenceList datasetId="d1" column="leiden" />);
     await screen.findByText(/11.2% vs 5.9% mito/);
-    expect(await hoverTip(screen.getAllByText("Markers")[0]!)).toMatch(/random genes/);
+    expect(await hoverTip(screen.getAllByText("Markers")[0]!)).toMatch(/beating 9 of 10/);
   });
 
   it("keeps only the groups asked for, all open", async () => {

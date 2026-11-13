@@ -362,7 +362,8 @@ def test_celltypist_annotation_keeps_its_probabilities_and_others_drop_them(monk
     monkeypatch.setattr(P, "_annotate_marker_score", marker_score)
     monkeypatch.setattr(P, "_markers_for_column", lambda adata, col: None)
     P._run_cell_type_annotation(a, P.PipelineParams(
-        annotation_method="marker_score", annotation_groupby="cluster", annotation_target="cell_type"))
+        annotation_method="marker_score", annotation_groupby="cluster", annotation_target="cell_type",
+        annotation_overwrite=True))  # written above without a step record
     assert conf.reference_columns(a) == {} and entry["obsm"] not in a.obsm
 
 

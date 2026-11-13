@@ -57,6 +57,7 @@ def _markers_adata(column: str, labels: list[str]) -> ad.AnnData:
 
 def test_column_with_a_slash_round_trips(tmp_path):
     a = _markers_adata("cell/type", [TCM, "B"])
+    sc.pp.log1p(a)  # markers ranked on counts are stale (core/marker_matrix.py)
     sc.tl.rank_genes_groups(a, "cell/type", method="wilcoxon", key_added=k.markers_key("cell/type"))
     a.uns[k.enrichment_key("cell/type", TCM)] = "[]"
     path = tmp_path / "x.h5ad"
@@ -79,6 +80,7 @@ def test_column_with_a_slash_round_trips(tmp_path):
 def test_file_saved_with_raw_slash_keys_is_repaired_on_load(tmp_path):
     # What earlier versions wrote: h5py nested each "/" into a sub-group.
     a = _markers_adata("ct", [TCM, "B"])
+    sc.pp.log1p(a)  # markers ranked on counts are stale (core/marker_matrix.py)
     sc.tl.rank_genes_groups(a, "ct", method="wilcoxon", key_added="rank_genes_groups__ct")
     a.uns["rank_genes_groups__a/b"] = a.uns["rank_genes_groups__ct"]
     a.uns[f"enrichment__ct__{TCM}"] = json.dumps([{"term": "X"}])

@@ -134,13 +134,14 @@ def markers_line(group: str, check: marker_randomness.RandomCheck | None, has_li
         return Line(kind="markers", text=(
             f"Only {n} of its markers are in the marker databases (best match {kind}, p {p_text(best)}): too few "
             f"to compare with random genes (that needs {marker_randomness.MIN_NAMED})."))
+    # The bar is the 90th percentile of random lists: "beats 9 of 10", never "better than random".
     if group in check.flagged:
         return Line(kind="markers", fired=True, text=(
-            f"Markers match no database type better than random genes: best p {p_text(best)} ({kind}), while 1 in "
-            f"10 random lists of {n} database genes reach {p_text(cut)}."))
+            f"Markers do not beat 9 of 10 random lists of {n} database genes: best p {p_text(best)} ({kind}), "
+            f"while 1 in 10 random lists reach {p_text(cut)}."))
     return Line(kind="markers", text=(
-        f"Markers match {kind} better than random genes: best p {p_text(best)}, while 1 in 10 random lists of "
-        f"{n} database genes reach {p_text(cut)}."))
+        f"Markers match {kind} at best p {p_text(best)}, which beats 9 of 10 random lists of {n} database "
+        f"genes (1 in 10 reach {p_text(cut)})."))
 
 
 def qc_line(row: cluster_qc.ClusterQC, typical: dict[str, float]) -> Line:
@@ -351,19 +352,25 @@ def decision_line(group: str, rec: dict | None, rules: dict[str, list[str]],
                   check: marker_randomness.RandomCheck | None) -> tuple[Line | None, str | None, bool]:
     """(line, scView's own label, recorded): from the annotation's record when there is one,
     else what ``pipeline.decide_clusters`` would decide now."""
-    from scview.core.pipeline import LOW_QUALITY_LABEL, UNIDENTIFIED_LABEL
+    from scview.core.pipeline import LOW_QUALITY_LABEL, RANDOM_NOTED, UNIDENTIFIED_LABEL
 
     best = (check.best.get(group) if check else None) or "a type"
     src = rec["record"] if rec else rules
-    low, unid, to_ai = (_ids(src.get(k)) for k in ("llm_decided_low_quality", "llm_random_markers",
-                                                    "llm_high_mito_type_to_ai"))
+    # llm_random_markers: an annotation of v0.71.0-v0.74.0 labelled those clusters Unidentified itself
+    low, unid, noted, to_ai = (_ids(src.get(k)) for k in (
+        "llm_decided_low_quality", "llm_random_markers", RANDOM_NOTED, "llm_high_mito_type_to_ai"))
     label = LOW_QUALITY_LABEL if group in low else UNIDENTIFIED_LABEL if group in unid else None
+    told = "its markers do not beat 9 of 10 random gene lists of the same size against the marker databases"
     if rec:
         where = f"'{rec['target']}'"
         if label:
             return Line(kind="decision", fired=True, text=(
                 f"scView labelled this {label} itself in {where}, without asking the AI.")), label, True
         named = rec["mapping"].get(group)
+        if group in noted:
+            return Line(kind="decision", text=(
+                f"The AI was told that {told}"
+                f"{f', and named it {named}' if named else ''} in {where}.")), None, True
         if group in to_ai:
             return Line(kind="decision", text=(
                 f"High mito, but its markers best match {best}, a cell type with much mitochondrial RNA by nature, "
@@ -374,6 +381,10 @@ def decision_line(group: str, rec: dict | None, rules: dict[str, list[str]],
     if label:
         return Line(kind="decision", fired=True, text=(
             f"AI annotation would label this {label} itself, without asking the AI.")), label, False
+    if group in noted:
+        return Line(kind="decision", text=(
+            f"AI annotation would ask the AI with a note that {told}: a state the databases lack "
+            "can look like this.")), None, False
     if group in to_ai:
         return Line(kind="decision", text=(
             f"High mito, but its markers best match {best}, a cell type with much mitochondrial RNA by nature: "

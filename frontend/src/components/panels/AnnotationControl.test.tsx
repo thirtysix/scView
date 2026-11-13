@@ -207,6 +207,22 @@ describe("AnnotationControl (CellTypist)", () => {
     expect(screen.getByText(/runs CellTypist instead/)).toBeTruthy();
   });
 
+  it("sends a tissue with the database marker scores, so types of other tissues are left out", async () => {
+    getLlmStatus.mockResolvedValue({ available: false });
+    const onAnnotate = vi.fn().mockResolvedValue(undefined);
+    render(<AnnotationControl onAnnotate={onAnnotate} running={false} species="human" />);
+    expect(await screen.findByLabelText("Marker sets")).toBeTruthy();
+    fireEvent.click(screen.getByText("Annotate cell types"));
+    await waitFor(() => expect(onAnnotate).toHaveBeenCalledTimes(1));
+    expect(onAnnotate.mock.calls[0]![0]).not.toHaveProperty("annotation_tissue"); // empty: the data's own
+    fireEvent.change(screen.getByLabelText("Tissue (optional)"), { target: { value: "kidney" } });
+    fireEvent.click(screen.getByText("Annotate cell types"));
+    await waitFor(() => expect(onAnnotate).toHaveBeenCalledTimes(2));
+    expect(onAnnotate.mock.calls[1]![0]).toMatchObject({ annotation_method: "marker_score", annotation_tissue: "kidney" });
+    fireEvent.change(screen.getByLabelText("Marker sets"), { target: { value: "builtin" } });
+    expect(screen.queryByLabelText("Tissue (optional)")).toBeNull();
+  });
+
   it("names the provider the AI tab sends the marker lists to", async () => {
     getLlmStatus.mockResolvedValue({ available: true, provider: "Privatemode", model: "glm-5.3-flash" });
     render(<AnnotationControl onAnnotate={vi.fn()} running={false} species="human" />);
@@ -263,5 +279,18 @@ describe("AnnotationControl (CellTypist)", () => {
     expect(getClusterEvidence).toHaveBeenCalledWith("d1", "paul15_clusters");
     expect(screen.getByText("high mito four")).toBeInTheDocument();
     expect(screen.queryByText("fine")).toBeNull();
+  });
+
+  it("says which clusters went to the AI with a random-marker note (v0.75.0 records)", async () => {
+    getProvenance.mockResolvedValue({ recorded: { history: [{
+      step: "cell_type_annotation", tool: "t", timestamp: "",
+      params: { annotation_method: "llm", annotation_target: "paul15_clusters_celltypeAnno",
+        llm_random_markers_noted: ["7", "8"] },
+    }] } });
+    render(<AnnotationControl onAnnotate={vi.fn().mockResolvedValue(undefined)} running={false} species="human" />);
+    fireEvent.click(screen.getByText("Annotate cell types"));
+    const note = await screen.findByTestId("annotation-decided");
+    expect(note.textContent).toContain("The AI was told that the markers of clusters 7, 8 do not beat 9 of 10");
+    expect(note.textContent).not.toContain("Unidentified");
   });
 });

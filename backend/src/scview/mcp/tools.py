@@ -723,6 +723,8 @@ async def get_markers(
     if d.get("skipped_groups"):
         extra["skipped_groups"] = d["skipped_groups"]
         extra["skipped_reason"] = d.get("skipped_reason")
+    if d.get("matrix"):  # what the test ranked: log-normalised values (core/marker_matrix.py)
+        extra["ranked_on"] = d["matrix"]
     return dumps({"dataset_id": dataset_id, "column": column, "columns": cols, "markers": out, **extra},
                  _max_chars(DEFAULT_LIMIT * max(1, n_genes // 10)))
 
@@ -734,12 +736,15 @@ async def annotate_celltypist(
                                             "Immune_All_High.pkl, Healthy_COVID19_PBMC.pkl.")] = "Immune_All_Low.pkl",
     groupby: Annotated[str, Field(description="Clusters for the majority vote (default: the active clustering).")] = "",
     target_column: Annotated[str, Field(description="Obs column to write.")] = "celltypist",
+    overwrite: Annotated[bool, Field(description=(
+        "Replace target_column when it is a column that came with the data (an author or curated "
+        "annotation); without it such a column is refused."))] = False,
 ) -> str:
     """Label cells with a CellTypist reference model (the pipeline's cell_type_annotation step;
     a job). The result names the labels' confidence and the model's gene overlap. The model is
     downloaded on first use."""
     p = {"annotation_method": "celltypist", "celltypist_model": model, "annotation_groupby": groupby,
-         "annotation_target": target_column}
+         "annotation_target": target_column, "annotation_overwrite": overwrite}
 
     async def finish(job: jobs.Job) -> dict[str, Any]:
         out = _pipeline_result(job)
@@ -772,6 +777,36 @@ async def cell_ontology_ids(
                   "labels": [[r.get(c) for c in cols] for r in d["labels"]]})
 
 
+@tool(WEB_READ)
+async def marker_db_check(
+    dataset_id: DatasetId,
+    column: Annotated[str, Field(description=(
+        "Label column to check, e.g. an author cell_type or an annotation scView wrote."))],
+    species: Annotated[Literal["human", "mouse"] | None, Field(description=(
+        "Database rows to use (default: the dataset's species, told from the gene names)."))] = None,
+    retry: Annotated[bool, Field(description=(
+        "Try a database whose download failed a moment ago again now."))] = False,
+    limit: Limit = DEFAULT_LIMIT,
+) -> str:
+    """The UI's marker database check (PanglaoDB, CellMarker, ACT): for each label of a column, its
+    database type matched by name, the verdict (supported / weak support / no database support /
+    too few database markers / not in database) with p and the overlapping genes, and the 3
+    database types the group's top 25 markers fit best. Changes nothing in the dataset. The
+    databases are downloaded on first use (about a minute); after that cluster_evidence also
+    compares markers with them."""
+    d = await _post(f"{_ds(dataset_id)}/annotation/marker-db/check",
+                    {"column": column, "species": species, "retry": retry})
+    n = clamp(limit)
+    labels = [{**r, "overlap": ", ".join(r.get("overlap") or []),
+               "suggestions": "; ".join(f"{s['cell_type']} (p {num(s['p'])})" for s in r.get("suggestions") or [])}
+              for r in d.get("labels") or []]
+    return dumps({"dataset_id": dataset_id,
+                  **pick(d, "column", "species", "species_note", "verdict_counts", "cellmarker",
+                         "verdict_sources", "suggestion_sources", "note"),
+                  "labels": table(labels, ["label", "verdict_text", "db_type", "p", "overlap", "n_db_genes",
+                                           "suggestions"], n)}, _max_chars(n))
+
+
 @tool(READ)
 async def cluster_evidence(
     dataset_id: DatasetId,
@@ -782,8 +817,9 @@ async def cluster_evidence(
     (never a probability): its markers against random genes (best marker-database p vs what 1 in
     10 random lists reach), median genes and % mito against the typical cluster with the cluster
     QC flags that fired, a doublet-like cluster's two parents, database types as shares of the
-    evidence (named groupings only), and the label scView gave ('Low-quality cells',
-    'Unidentified') or would give itself in an AI annotation. Markers must be computed first."""
+    evidence (named groupings only), and the label scView gave ('Low-quality cells') or would give
+    itself in an AI annotation, or the note the AI got. Markers must be computed first; the
+    marker lines need the marker databases (marker_db_check downloads them)."""
     d = await _get(f"{_ds(dataset_id)}/clusters/evidence", column=column or None)
     return dumps({"dataset_id": dataset_id, **pick(d, "column", "n_groups", "markers", "typing", "annotation", "notes"),
                   "clusters": [{"group": c["group"], "n_cells": c["n_cells"], "label": c["label"],
@@ -1583,7 +1619,7 @@ async def plot(
             d = await _dotplot_within(dataset_id, genes, groupby, layer, within_column, within_value or "")
         else:
             d = await _get(f"{_ds(dataset_id)}/expression/by-group", genes=genes, groupby=groupby, layer=layer)
-        caption = f"{len(d['groups'])} groups of {d['groupby']}{scope}, layer {d['layer']}"
+        caption = f"{len(d['groups'])} groups of {d['groupby']}{scope}, layer {d.get('layer_label') or d['layer']}"
         png = await asyncio.to_thread(plots.dotplot, d, f"Dot plot by {d['groupby']}{scope}", caption)
         return [Image(data=png, format="png"), TextContent(type="text", text=caption)]
 
@@ -1709,7 +1745,7 @@ async def _dotplot_within(dataset_id: str, genes: list[str], groupby: str, layer
                         {"genes": genes, "groupby": groupby, "layer": layer, "cells": cells.tolist(),
                          "include_groups": False})
         sel = r["selection"]
-        out.update(genes=r["genes"], layer=r["layer"])
+        out.update(genes=r["genes"], layer=r["layer"], layer_label=r.get("layer_label"))
         out["groups"].append(g)
         out["mean"].append(sel["mean"])
         out["fraction"].append(sel["fraction"])
