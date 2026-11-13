@@ -111,7 +111,8 @@ def _de_lines(adaptor, result_id: str) -> tuple[list[str], str]:
         a, b = c.get("group_a"), c.get("group_b")
         what = f"{a} vs {b} in '{c.get('column')}'"
         if c.get("within_column") and c.get("within_value") is not None:
-            what += f", within {c['within_column']} = {c['within_value']}"
+            w = c["within_value"]
+            what += f", within {c['within_column']} = {', '.join(w) if isinstance(w, list) else w}"
     else:
         a, b = c.get("label") or "the selection", "the rest"
         what = f"{a} vs the rest"

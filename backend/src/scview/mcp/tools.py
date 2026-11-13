@@ -750,7 +750,9 @@ async def get_markers(
 ) -> str:
     """Marker genes of each group of a column vs the rest (Wilcoxon), top n per group with
     log fold change, adjusted p and the share of cells expressing in and out. Computed and
-    saved with the dataset the first time a column is asked for."""
+    saved with the dataset the first time a column is asked for. The current markers live in
+    the dataset itself, one set per column, so they have no result_id and list_results does not
+    show them (it lists earlier markers a re-run replaced): call this again to read them."""
     d = await _get(f"{_ds(dataset_id)}/markers", groupby_column=column, groupby=group or "",
                    format="json", n_genes=n_genes)
     if not d.get("groups"):
@@ -940,8 +942,8 @@ def _de_warnings(r: dict[str, Any]) -> list[str]:
     if comp.get("warn"):
         w.append("composition: " + str(comp.get("message")))
     if r.get("underreplicated"):
-        w.append(f"under-replicated: donors A={r.get('n_donors_a')}, B={r.get('n_donors_b')} "
-                 f"(replicate column {r.get('replicate_key')}); a cell-level p value overstates "
+        w.append(f"under-replicated: '{r.get('n_donors_column') or r.get('replicate_key')}' values "
+                 f"A={r.get('n_donors_a')}, B={r.get('n_donors_b')}; a cell-level p value overstates "
                  "the evidence, check with method='pseudobulk' or per_donor_expression")
     ts = r.get("transcriptome_size") or {}
     if ts.get("caution"):
@@ -964,7 +966,9 @@ async def differential_expression(
     group_a: Annotated[str | None, Field(description="Between groups: side A (e.g. STIM).")] = None,
     group_b: Annotated[str | None, Field(description="Between groups: side B, the reference (e.g. CTRL).")] = None,
     within_column: Annotated[str | None, Field(description="Restrict to one subgroup: its column (e.g. cell_type).")] = None,
-    within_value: Annotated[str | None, Field(description="Restrict to one subgroup: its value (e.g. CD14 Mono).")] = None,
+    within_value: Annotated[str | list[str] | None, Field(description=(
+        "Restrict to one subgroup: its value (e.g. CD14 Mono), or a list of values whose cells are "
+        "pooled."))] = None,
     group: Annotated[str | None, Field(description="One group vs every other cell (with `column`).")] = None,
     filter: Annotated[CellFilter | None, Field(description="Selected cells vs every other cell.")] = None,
     method: Annotated[Literal["wilcoxon", "t-test", "logreg", "pseudobulk"], Field(description=(
@@ -1040,7 +1044,7 @@ async def differential_expression(
     out: dict[str, Any] = {
         "dataset_id": dataset_id, "result_id": r.get("result_id"), "label": r.get("label"),
         "method": r.get("method"), "n_a": r.get("n_selected"), "n_b": r.get("n_rest"),
-        **pick(r, "replicate_key", "n_donors_a", "n_donors_b", "n_samples_a", "n_samples_b",
+        **pick(r, "replicate_key", "n_donors_a", "n_donors_b", "n_donors_column", "n_samples_a", "n_samples_b",
                "design", "pb_method", "counts_source", "min_pct", "n_genes_skipped", "covariates"),
         "n_genes_tested": r.get("n_genes_tested") or len(genes),
         "rule": f"padj <= {padj_max} and |log2FC| >= {lfc_min}" if has_p else f"|coef| ranked, |log2FC| >= {lfc_min}",
@@ -1176,8 +1180,9 @@ async def composition_test(
         "Values of the sample column to leave out (e.g. one donor's samples, for a leave-one-out)."))] = None,
     within_column: Annotated[str | None, Field(description=(
         "Test shares among a subset only: its column (e.g. a broad cell class)."))] = None,
-    within_value: Annotated[list[str] | None, Field(description=(
-        "The subset's value(s) of within_column (e.g. ['Immune']: T cells among immune cells)."))] = None,
+    within_value: Annotated[str | list[str] | None, Field(description=(
+        "The subset's value, or a list of values, of within_column (e.g. 'Immune': T cells among "
+        "immune cells)."))] = None,
     donor_key: Annotated[str | None, Field(description=(
         "Person column the samples nest in, for the repeated-donor warning (default: detected)."))] = None,
     covariates: Annotated[list[str] | None, Field(max_length=4, description=(
@@ -1586,7 +1591,9 @@ async def list_results(
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
     """The dataset's stored results (DE, markers, enrichment, composition, ...), newest first:
-    id, kind, label, and whether computed on an earlier version of the data (stale)."""
+    id, kind, label, and whether computed on an earlier version of the data (stale). Markers and
+    enrichment listed here are earlier ones a re-run replaced; the current ones live in the
+    dataset and come from get_markers / enrichment."""
     d = await _get(f"{_ds(dataset_id)}/results", kind=kind)
     res = d.get("results") or []
     return dumps({"dataset_id": dataset_id, **rows(res, ["id", "kind", "label", "created_at", "stale", "stale_reason", "status"],
@@ -1647,18 +1654,25 @@ async def plot(
     within_column: Annotated[str | None, Field(description=(
         "Only one subgroup: its obs column (e.g. cell_type). Violin and dotplot use only its cells; "
         "an embedding colours them and draws the other cells grey."))] = None,
-    within_value: Annotated[str | None, Field(description="Only one subgroup: its value (e.g. CD14 Monocyte).")] = None,
+    within_value: Annotated[str | list[str] | None, Field(description=(
+        "Only one subgroup: its value (e.g. CD14 Monocyte), or a list of values whose cells are "
+        "pooled."))] = None,
 ) -> list:
     """A PNG figure of the dataset (at most 1600 px, under 300 KB). A dataset over 50,000 cells
     is drawn from a random 50,000 (said in the caption). The same views are in the browser UI."""
+    if isinstance(within_value, list) and not within_value:
+        within_value = None
     if (within_column is None) != (within_value is None):
         raise ToolError("Give both within_column and within_value, or neither.")
+    within_values = [] if within_value is None else (
+        [within_value] if isinstance(within_value, str) else [str(v) for v in within_value])
+    within_value = ", ".join(within_values) if within_values else None  # for the captions
     scope = f" in {within_column} = {within_value}" if within_column else ""
     if kind == "dotplot":
         if not genes:
             raise ToolError("A dot plot needs genes.")
         if within_column:
-            d = await _dotplot_within(dataset_id, genes, groupby, layer, within_column, within_value or "")
+            d = await _dotplot_within(dataset_id, genes, groupby, layer, within_column, within_values)
         else:
             d = await _get(f"{_ds(dataset_id)}/expression/by-group", genes=genes, groupby=groupby, layer=layer)
         caption = f"{len(d['groups'])} groups of {d['groupby']}{scope}, layer {d.get('layer_label') or d['layer']}"
@@ -1675,7 +1689,7 @@ async def plot(
             col = adaptor.get_obs_column(within_column)
         except KeyError:
             raise ToolError(column_message(within_column, list(adaptor.adata.obs.columns)))
-        mask = (col.astype(str).where(col.notna()) == str(within_value)).to_numpy()
+        mask = col.astype(str).where(col.notna()).isin(within_values).to_numpy()
         if not mask.any():
             raise ToolError(f"No cell has {within_column} = '{within_value}'.")
         return mask
@@ -1768,13 +1782,15 @@ async def plot(
 
 
 async def _dotplot_within(dataset_id: str, genes: list[str], groupby: str, layer: str,
-                          column: str, value: str) -> dict[str, Any]:
-    """The dot plot's numbers over one subgroup's cells: the by-group route's selection row,
-    once per group of ``groupby`` among those cells (in the column's order)."""
-    flt = CellFilter(op="and", items=[{"kind": "category", "column": column, "values": [value]}])
+                          column: str, values: str | list[str]) -> dict[str, Any]:
+    """The dot plot's numbers over one subgroup's cells (``values`` of ``column``, one or
+    several): the by-group route's selection row, once per group of ``groupby`` among those
+    cells (in the column's order)."""
+    values = [values] if isinstance(values, str) else list(values)
+    flt = CellFilter(op="and", items=[{"kind": "category", "column": column, "values": values}])
     within = await _indices(dataset_id, flt)
     if len(within) == 0:
-        raise ToolError(f"No cell has {column} = '{value}'.")
+        raise ToolError(f"No cell has {column} = '{', '.join(values)}'.")
     if not groupby:
         groupby = (await _get(_ds(dataset_id))).get("active_clustering") or ""
     values = (await _get(f"{_ds(dataset_id)}/metadata/{groupby}", format="json"))["values"]
