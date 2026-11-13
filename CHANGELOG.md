@@ -6,6 +6,8 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.76.0] - 2026-11-13
+
 Joint embeddings get a pipeline run's memory protection; spatial imports leave off-tissue spots out; marker
 database suggestions keep to the tissue; NMF programs and chromVAR motifs are kept as scores; two libraries of one
 sample that disagree are flagged. Found by re-analysing published studies (kidney, fat, heart Visium) through
@@ -31,7 +33,7 @@ scView's MCP.
 - Spatial .h5ad imports, CELLxGENE Visium slides included, leave out spots marked off-tissue (`in_tissue` 0), as
   the Space Ranger reader already did: 713 of 4,992 spots on a Kuppe 2022 heart slide, all empty, which made
   housekeeping genes look spatially patterned. Datasets imported earlier keep their spots; Data Assessment, Moran's
-  I, domains, co-occurrence and spot composition say how many off-tissue spots they still hold.
+  I, domains, co-occurrence and spot composition say how many off-tissue spots they still hold. The replay script leaves the same spots out of the original file.
 - Public dataset search matches part of an assay, tissue or disease name ("Visium") when no name matches whole.
 - Drawing the same score again saves nothing new; the same values from a later run are saved again so the record
   names that run.
