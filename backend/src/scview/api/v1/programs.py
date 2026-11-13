@@ -22,10 +22,12 @@ import logging
 import threading
 from typing import Any
 
+import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from scview.api.v1 import saved_scores as saved_scores_api
 from scview.config import Settings
 from scview.core import gene_programs as gp
 from scview.core import large_mode
@@ -44,6 +46,7 @@ _DONE = object()
 _running: set[str] = set()  # datasets with a programs run streaming: one at a time each
 
 HALLMARK = "h.all"  # a mouse dataset's default is MH (msigdb_loader.HALLMARK)
+SAVED_TOP_GENES = 10  # a saved program's top genes in its record
 
 
 class RunRequest(BaseModel):
@@ -243,13 +246,18 @@ async def get_program_usage(
     index: int,
     groupby: str = Query(default="", description="Also split the values by this column (violin)"),
     raw: bool = Query(default=False, description="Usages before scaling each cell's to sum 1"),
+    save: bool = Query(default=False, description="Also keep it as an obs column (core/saved_scores.py)"),
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """One program's per-cell usage share (``raw``: the unscaled usage), in the
-    dataset's cell order, and split by ``groupby`` when given."""
-    adata = (await _adaptor(dm, dataset_id)).adata
+    dataset's cell order, and split by ``groupby`` when given. With ``save`` it is also
+    kept as an obs column, ``program_k<k>_<n>`` (``saved_column``; ``save_note`` says
+    why not); the same program of the same run drawn again replaces it."""
+    adaptor = await _adaptor(dm, dataset_id)
+    adata = adaptor.adata
+    cells = await asyncio.to_thread(adaptor.cells_fingerprint) if save else None
 
-    def work() -> dict[str, Any]:
+    def work() -> tuple[dict[str, Any], np.ndarray, dict[str, Any]]:
         values = gp.program_usage(adata, index, raw=raw)
         info = gp.stored(adata)
         prog = info["programs"][index - 1]
@@ -261,12 +269,23 @@ async def get_program_usage(
         }
         if groupby and groupby in adata.obs.columns:
             out["violin"] = gp.violin(adata, values, groupby) or None
-        return out
+        return out, values, info
 
     try:
-        return await asyncio.to_thread(work)
+        out, values, info = await asyncio.to_thread(work)
     except gp.ProgramsError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    if save:
+        prog = info["programs"][index - 1]
+        out["saved_column"], out["save_note"] = await saved_scores_api.persist(
+            dm, dataset_id, cells, kind="program", name=f"{prog['name']} (k {info['k']})", values=values,
+            method="NMF usage" if raw else "NMF usage share", source=info.get("source"),
+            column_body=f"k{info['k']}_{index}",
+            extra={"run_id": info["run_id"], "program": index, "k": info["k"], "seeds": info.get("seeds"),
+                   "n_genes": info.get("n_genes"), "run_created": info.get("created_at"),
+                   "top_genes": [g["gene"] for g in prog["top_genes"][:SAVED_TOP_GENES]],
+                   "stable": prog.get("stable")})
+    return out
 
 
 @router.post("/datasets/{dataset_id}/programs/{index}/enrichment")

@@ -31,6 +31,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from scview.api.v1 import atac as atac_api
+from scview.api.v1 import saved_scores as saved_scores_api
 from scview.config import Settings
 from scview.core import atac, atac_chromvar as cv, atac_motifs as am, genome_build, genome_seq, modality_store, results_store, tf_motifs, wnn
 from scview.core.dataset_manager import DatasetManager
@@ -506,14 +507,20 @@ async def chromvar_groups(dataset_id: str, column: str = Query(max_length=256), 
 
 @router.get("/datasets/{dataset_id}/atac/motifs/chromvar/motif")
 async def chromvar_motif(dataset_id: str, motif_id: str = Query(max_length=64), groupby: str = Query(default="", max_length=256),
+                         save: bool = Query(default=False, description="Also keep it as an obs column (core/saved_scores.py)"),
                          dm: DatasetManager = Depends(get_dataset_manager)):
-    """One motif's z per cell (the overlay), and by group when asked."""
+    """One motif's z per cell (the overlay), and by group when asked. With ``save`` it is
+    also kept as an obs column, ``chromvar_<motif>_<id>`` (``saved_column``; ``save_note``
+    says why not); the same motif drawn again, from any run, replaces it."""
     adaptor = await _adaptor(dm, dataset_id)
     adata = adaptor.adata
+    cells = await asyncio.to_thread(adaptor.cells_fingerprint) if save else None
+    kept: dict[str, Any] = {}
 
     def work() -> dict[str, Any]:
         summary = _summary_or_404(dm, dataset_id)
         z = cv.motif_values(dm.data_dir, dataset_id, summary, motif_id, adata.obs_names)
+        kept.update(z=z, summary=summary)
         finite = np.isfinite(z)
         out: dict[str, Any] = {"motif_id": motif_id, "motif": summary["motif_names"][summary["motif_ids"].index(motif_id)],
                                "n_cells": int(z.size), "n_nan": int((~finite).sum()),
@@ -528,9 +535,20 @@ async def chromvar_motif(dataset_id: str, motif_id: str = Query(max_length=64), 
         return out
 
     try:
-        return await asyncio.to_thread(work)
+        out = await asyncio.to_thread(work)
     except cv.ChromVarError as e:
         raise _http(e)
+    if save:
+        summary = kept["summary"]
+        out["saved_column"], out["save_note"] = await saved_scores_api.persist(
+            dm, dataset_id, cells, kind="chromvar", name=out["motif"], values=kept["z"], method="chromVAR deviation z",
+            source=f"ATAC {cv.MATRIX} ({summary.get('genome')})", column_body=f"{out['motif']}_{motif_id}",
+            extra={"motif_id": motif_id, "run_id": summary.get("run_id"), "jaspar": tf_motifs.JASPAR.name,
+                   "jaspar_sha256": tf_motifs.JASPAR.sha256, "iterations": summary.get("iterations"),
+                   "seed": summary.get("seed"), "w": summary.get("w"), "bs": summary.get("bs"),
+                   "genome": summary.get("genome"), "n_peaks_used": summary.get("n_peaks_used"),
+                   "n_nan": out["n_nan"], "run_created": summary.get("created_at")})
+    return out
 
 
 @router.get("/datasets/{dataset_id}/atac/motifs/chromvar/csv")

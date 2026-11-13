@@ -107,10 +107,12 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Unified View > Gene Sets", "AUCell, ssGSEA, GSVA",
      "browse MSigDB sets; score them with AUCell, ssGSEA or GSVA"),
     ("Unified View > Compare", "saved scores",
-     "the plot coloured by 2-12 columns side by side: groupings, and under Scores every gene-set score and "
-     "TF / pathway activity the user has drawn (each is saved as a column, score_<set> or activity_<source>; "
-     "scoring the same set again replaces it) plus cell-cycle and stress scores; saved scores also show in "
-     "Colour by and the histogram, and Remove beside one drops it"),
+     "the plot coloured by 2-12 columns side by side: groupings, and under Scores every gene-set score, "
+     "TF / pathway activity, gene program usage (Programs) and chromVAR motif z (Accessibility) the user has "
+     "drawn (each is saved as a column, score_<set>, activity_<source>, program_k<k>_<n> or "
+     "chromvar_<motif>_<id>; drawing the same one again replaces it; a program from an earlier NMF run "
+     "says so) plus cell-cycle and stress scores; saved scores also show in Colour by and the histogram, "
+     "and Remove beside one drops it"),
     ("Unified View > Enrichment", "ORA, GSEA", "pathway enrichment (ORA, preranked GSEA)"),
     ("Unified View > Enrichment > Diagram", "Reactome",
      "a Reactome row's pathway diagram coloured by a DE result's fold changes (also on the DE tab's "
