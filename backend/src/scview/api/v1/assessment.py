@@ -21,7 +21,7 @@ from scview.core import (
     cluster_evidence, cluster_qc, doublets, library_concordance, qc_filter, qc_groups, qc_report,
     sample_pseudobulk, sex_check,
 )
-from scview.core import large_mode, large_run, leiden, working_copy
+from scview.core import assessment_gate, large_mode, large_run, leiden, working_copy
 from scview.core import batch_methods, label_curation, qc_states, scaling, spatial, targeted_panel
 from scview.core.obs_writes import (
     dataset_edit, edit_room, editable, save_edit, uns_snapshot,
@@ -100,8 +100,9 @@ async def get_assessment(
                 "label_curation": label_curation.check(adata)}
 
     try:
-        # Samples the matrix to judge its scale: ~1.6 s on Kang, so off the loop.
-        return await asyncio.to_thread(_assess, adaptor.adata)
+        # Samples the matrix to judge its scale: ~1.6 s on Kang, so off the loop, and two
+        # lanes per dataset with identical requests shared (core/assessment_gate.py).
+        return await assessment_gate.run(dataset_id, ("assessment", id(adaptor.adata)), _assess, adaptor.adata)
     except Exception as e:
         logger.error("Assessment failed for %s: %s", dataset_id, e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Assessment failed: {e}")
@@ -127,7 +128,8 @@ async def get_cluster_qc(
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
     try:
         # Per-cell metrics may need a pass over the counts: keep it off the loop.
-        report = await asyncio.to_thread(cluster_qc.for_adaptor, adaptor, groupby)
+        report = await assessment_gate.run(dataset_id, ("cluster-qc", groupby, id(adaptor.adata)),
+                                           cluster_qc.for_adaptor, adaptor, groupby)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -157,7 +159,8 @@ async def get_cluster_evidence(
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
     try:
         # The random-marker null and per-cell QC: off the loop (cached afterwards).
-        report = await asyncio.to_thread(cluster_evidence.for_adaptor, adaptor, column or None)
+        report = await assessment_gate.run(dataset_id, ("evidence", column, id(adaptor.adata)),
+                                           cluster_evidence.for_adaptor, adaptor, column or None)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -195,7 +198,7 @@ async def get_qc_by_group(
 
     try:
         # Per-cell metrics may need a pass over the counts: keep it off the loop.
-        return await asyncio.to_thread(_run)
+        return await assessment_gate.run(dataset_id, ("by-group", column, id(adaptor.adata)), _run)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -225,7 +228,8 @@ async def get_sex_check(
         raise HTTPException(status_code=404, detail=f"Column '{column}' not found.")
     try:
         # Reads a few gene columns and every cell's total counts: off the loop.
-        result = await asyncio.to_thread(sex_check.sex_check, adaptor.adata, column or None)
+        result = await assessment_gate.run(dataset_id, ("sex", column, id(adaptor.adata)),
+                                           sex_check.sex_check, adaptor.adata, column or None)
         sex_check.remember(dataset_id, result)  # for a later DE between groups' sex warning
         return result
     except ValueError as e:
@@ -263,7 +267,8 @@ async def get_library_concordance(
 
     try:
         # Per-cell counts may need a pass over the matrix the first time: off the loop.
-        return await asyncio.to_thread(_run)
+        return await assessment_gate.run(
+            dataset_id, ("libraries", sample_column, library_column, celltype_column, id(adaptor.adata)), _run)
     except library_concordance.LibraryConcordanceError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -310,7 +315,8 @@ async def get_pseudobulk_qc(
 
     try:
         # Sums the counts of every cell and runs a PCA: off the loop.
-        return await asyncio.to_thread(_run)
+        return await assessment_gate.run(
+            dataset_id, ("pseudobulk", sample_column, split_by, celltype_column, celltype, id(adata)), _run)
     except sample_pseudobulk.SampleQcError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -403,7 +409,9 @@ async def get_filter_preview(
 
     try:
         # Per-cell metrics may need a pass over the counts the first time: off the loop.
-        return await asyncio.to_thread(_run)
+        key = ("filter-preview", repr(params), sample_column, cluster_column, label_column,
+               condition_column, id(adaptor.adata))
+        return await assessment_gate.run(dataset_id, key, _run)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -439,7 +447,8 @@ async def get_doublets(
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
     try:
-        return await asyncio.to_thread(doublets.summary, adaptor.adata, threshold, column or None)
+        return await assessment_gate.run(dataset_id, ("doublets", threshold, column, id(adaptor.adata)),
+                                         doublets.summary, adaptor.adata, threshold, column or None)
     except doublets.DoubletError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -762,7 +771,8 @@ async def _qc_facts(dataset_id: str, dm: DatasetManager) -> qc_report.QCFacts:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
     try:
         # Per-cell metrics may need a pass over the counts: keep it off the loop.
-        return await asyncio.to_thread(qc_report.build_facts, adaptor)
+        return await assessment_gate.run(dataset_id, ("qc-facts", id(adaptor.adata)),
+                                         qc_report.build_facts, adaptor)
     except Exception as e:
         logger.error("QC facts failed for %s: %s", dataset_id, e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"QC report failed: {e}")
@@ -866,7 +876,8 @@ async def get_mito_by_type(
     try:
         # Obs + cached per-cell QC (a few ms), but the arrays may need a pass first,
         # and placing removed cells reads them from the original upload once.
-        report = await asyncio.to_thread(mito_by_type.for_adaptor, adaptor, column or None, ceiling, _assign)
+        report = await assessment_gate.run(dataset_id, ("mito-by-type", column, ceiling, id(adaptor.adata)),
+                                           mito_by_type.for_adaptor, adaptor, column or None, ceiling, _assign)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -897,7 +908,8 @@ async def get_qc_states(
     if column and column not in adaptor.adata.obs.columns:
         raise HTTPException(status_code=404, detail=f"Column '{column}' not found.")
     try:
-        result, _states = await asyncio.to_thread(qc_states.for_adaptor, adaptor, column or None)
+        result, _states = await assessment_gate.run(dataset_id, ("qc-states", column, id(adaptor.adata)),
+                                                    qc_states.for_adaptor, adaptor, column or None)
         return result
     except qc_states.QcStatesError as e:
         raise HTTPException(status_code=e.status, detail=str(e))
