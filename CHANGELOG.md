@@ -20,7 +20,17 @@ All notable changes to scView are documented here. The format is based on
   activity, nearest genes, motifs, peak-gene links and TSS enrichment say they need mm10 instead of reading the
   wrong sequence.
 
+- Cluster QC sees contamination in nuclei data: where the median cell has no mito reads, it shows the share of
+  cells with any, and a "Mito in nuclei" caution for a cluster far above the rest. % mito is shown with enough
+  digits to tell nuclei clusters apart.
+- New cluster QC cautions: a cluster with another cluster's markers but far less RNA (an ambient-like mix), and
+  marker lists led by non-coding RNAs, pseudogenes or sex genes. They are cautions in the evidence and the report;
+  none changes the labels scView decides itself.
+- The composition test and pseudobulk DE warn when a donor has under a third of the median donor's cells.
+
 ### Changed
+- The assessment recognises CELLxGENE and Seurat columns: `mitochondrial_percent` and other % mito names,
+  cell-cycle scores, `X_harmony` and scVI embeddings, `doublet_id` (also used as a doublet call in filtering).
 - Error messages in the older panels (Gene Expression, Gene Sets, Trajectory, Observations, the co-pilot and
   others) show the server's reason instead of the raw `{"detail": ...}` text; validation errors give their
   messages. A test keeps new code from showing raw error bodies.
