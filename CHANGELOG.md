@@ -6,6 +6,12 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.75.0] - 2026-11-13
+
+Scores are kept and offered in Compare; marker genes no longer rank raw counts on CELLxGENE files; cluster QC
+sees nuclei contamination and ambient mixes; study-design warnings fit the design; Data Assessment fits in 6 GB
+on a 39k-nuclei file. Found by re-analysing two published studies through scView's MCP.
+
 ### Added
 - Scores are kept: a scored gene set (score_genes, AUCell, ssGSEA, GSVA) or a drawn TF/pathway activity is saved
   as a cell column (`score_<set>`, `activity_<source>`) with how it was made (method, genes used and missing,
