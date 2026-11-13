@@ -92,7 +92,12 @@ export interface NichesResult {
   available: boolean;
   columns: string[];
   column?: string;
-  label_column?: string;
+  /** null when the niches come from the spot composition's shares */
+  label_column?: string | null;
+  /** "labels", or "spot_composition" (each spot's cell-type shares); older runs: absent */
+  source?: "labels" | "spot_composition";
+  shares?: "cells" | "rna";
+  reference?: { name: string | null; id: string | null; celltype_column: string | null; method: string | null };
   labels?: string[];
   niches?: string[];
   fractions?: (number | null)[][];
@@ -128,7 +133,15 @@ export interface DomainsInfo {
   free_column: string;
   free_suggested_column: string;
   free_niche_column: string;
-  niches_allowed: { ok: boolean; reason: string | null; note: string | null };
+  niches_allowed: {
+    ok: boolean;
+    reason: string | null;
+    note: string | null;
+    /** Where niches come from here: labels, or the saved spot composition's shares on spots */
+    source?: "labels" | "spot_composition" | null;
+    types?: string[];
+    reference?: { name: string | null; id: string | null; celltype_column: string | null; method: string | null };
+  };
   estimates: { enrichment_seconds: number; enrichment_bytes: number };
   domains: DomainsResult;
   niches: NichesResult;
@@ -267,6 +280,12 @@ export interface CoOccurrenceResult {
   seconds?: number;
   stale?: boolean;
   stale_reason?: string | null;
+  /** "within_sections": several sections, each scored against its own label shares, then combined */
+  sections_combined?: string | null;
+  /** Each section's pairs at the longest distance (several sections) */
+  sections?: { library_id: string; pairs: number }[];
+  /** The one section `occ` and `count` are for; null: the sections combined */
+  section?: string | null;
 }
 
 export interface CoOccurrenceInfo {
@@ -281,7 +300,7 @@ export interface CoOccurrenceInfo {
 
 export function getCoOccurrence(
   datasetId: string,
-  params: { column?: string; interval?: number; combine?: string; max_distance?: number } = {},
+  params: { column?: string; interval?: number; combine?: string; max_distance?: number; section?: string } = {},
 ): Promise<CoOccurrenceInfo> {
   const q = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
@@ -301,7 +320,15 @@ export function runCoOccurrence(
 
 export function runNiches(
   datasetId: string,
-  body: { label_column: string; k_window?: number; n_niches?: number; column: string; overwrite?: boolean },
+  body: {
+    label_column?: string;
+    k_window?: number;
+    n_niches?: number;
+    column: string;
+    overwrite?: boolean;
+    source?: "labels" | "spot_composition";
+    shares?: "cells" | "rna";
+  },
   handlers: RunHandlers = {},
 ): Promise<NichesResult> {
   return run(`/datasets/${datasetId}/spatial/niches/run-stream`, body, "Composition niches", handlers);

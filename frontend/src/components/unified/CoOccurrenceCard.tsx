@@ -50,6 +50,7 @@ export function CoOccurrenceCard({
   const [nDistances, setNDistances] = useState(50);
   const [upTo, setUpTo] = useState("");
   const [splits, setSplits] = useState(false);
+  const [section, setSection] = useState("");
   const [info, setInfo] = useState<CoOccurrenceInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -63,13 +64,17 @@ export function CoOccurrenceCard({
     if (!datasetId || !column) return;
     let cancelled = false;
     setError(null);
-    getCoOccurrence(datasetId, { column, interval: nDistances, combine, max_distance: maxDistance })
+    getCoOccurrence(datasetId, { column, interval: nDistances, combine, max_distance: maxDistance, section: section || undefined })
       .then((i) => !cancelled && setInfo(i))
-      .catch((e) => !cancelled && setError(errorMessage(e)));
+      .catch((e) => {
+        if (cancelled) return;
+        if (section) setSection(""); // that section is not in the run shown: back to all sections
+        else setError(errorMessage(e));
+      });
     return () => {
       cancelled = true;
     };
-  }, [datasetId, column, nDistances, combine, maxDistance, version]);
+  }, [datasetId, column, nDistances, combine, maxDistance, version, section]);
 
   if (!datasetId) return null;
   const plan = info?.plan ?? null;
@@ -79,6 +84,7 @@ export function CoOccurrenceCard({
 
   const go = () => {
     setPicked(column);
+    setSection("");
     void start(
       datasetId,
       "cooccurrence",
@@ -97,8 +103,8 @@ export function CoOccurrenceCard({
             The same statistic as squidpy&apos;s co_occurrence: for labels a and b within a distance, P(b | a) / P(b), both from
             the pairs of observations no further apart than that distance, so each distance includes the shorter ones. Above 1,
             b is near a more often than among all pairs at that range. Pairs are counted within each section, never between
-            sections. On spots or bins that mix cells it speaks about their labels, not about touching cells. It is a
-            description, not a test.
+            sections, and each section is scored against its own label shares before the sections are combined. On spots or
+            bins that mix cells it speaks about their labels, not about touching cells. It is a description, not a test.
           </>}
         >
           Co-occurrence
@@ -107,7 +113,15 @@ export function CoOccurrenceCard({
       <div className="flex flex-wrap items-end gap-2 text-xs">
         <label className={FIELD}>
           <Help id="domains.cooccur-labels">Labels</Help>
-          <select value={column} onChange={(e) => setPicked(e.target.value)} className={INPUT} aria-label="Co-occurrence labels">
+          <select
+            value={column}
+            onChange={(e) => {
+              setPicked(e.target.value);
+              setSection("");
+            }}
+            className={INPUT}
+            aria-label="Co-occurrence labels"
+          >
             {columns.map((c) => (
               <option key={c.name} value={c.name}>
                 {prettyObsLabel(c.name)} ({c.n_unique})
@@ -164,12 +178,27 @@ export function CoOccurrenceCard({
         ))}
       <SpatialRunStatus kind="cooccurrence" />
       <RequestError message={error} />
-      {result?.available && <CoOccurrenceResults key={result.column} result={result} />}
+      {result?.available && (
+        <CoOccurrenceResults
+          key={result.column}
+          result={result}
+          section={section}
+          onSection={setSection}
+        />
+      )}
     </section>
   );
 }
 
-function CoOccurrenceResults({ result }: { result: CoOccurrenceResult }) {
+function CoOccurrenceResults({
+  result,
+  section,
+  onSection,
+}: {
+  result: CoOccurrenceResult;
+  section: string;
+  onSection: (section: string) => void;
+}) {
   const labels = useMemo(() => result.labels ?? [], [result]);
   const distances = useMemo(() => result.distances ?? [], [result]);
   const [condition, setCondition] = useState(labels[0] ?? "");
@@ -187,6 +216,9 @@ function CoOccurrenceResults({ result }: { result: CoOccurrenceResult }) {
   const first = distances[0];
   const last = distances[distances.length - 1];
   const sampled = (result.n_used ?? 0) < (result.n_labelled ?? 0);
+  const perSection = result.sections ?? [];
+  const shownSection = result.section ?? null;
+  const combined = result.sections_combined === "within_sections" && !shownSection;
 
   return (
     <div className="space-y-2" data-testid="cooccurrence-results">
@@ -202,10 +234,34 @@ function CoOccurrenceResults({ result }: { result: CoOccurrenceResult }) {
             ))}
           </select>
         </label>
+        {perSection.length > 1 && (
+          <label className={FIELD}>
+            <Help id="domains.cooccur-section">Section</Help>
+            <select
+              value={section}
+              onChange={(e) => onSection(e.target.value)}
+              className={INPUT}
+              aria-label="Co-occurrence section"
+            >
+              <option value="">All sections, combined</option>
+              {perSection.map((s) => (
+                <option key={s.library_id} value={s.library_id}>
+                  {s.library_id} ({s.pairs.toLocaleString()} pairs)
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <button
           type="button"
           className={OUTLINE}
-          onClick={() => downloadCsv(`co_occurrence_${result.column ?? ""}`, csvHeaders(result), csvRows(result))}
+          onClick={() =>
+            downloadCsv(
+              `co_occurrence_${result.column ?? ""}${shownSection ? `_${shownSection}` : ""}`,
+              csvHeaders(result),
+              csvRows(result),
+            )
+          }
         >
           Download CSV
         </button>
@@ -258,6 +314,10 @@ function CoOccurrenceResults({ result }: { result: CoOccurrenceResult }) {
           {last?.toLocaleString()} {unit} (each includes the shorter ones). A score above 1: that label is found within the distance
           of label {own} more often than among all pairs at that range; below 1, less often; the dashed line is 1. Nearby{" "}
           {units} are not necessarily interacting. {distanceSource(result)}
+          {shownSection ? ` Section ${shownSection} alone, against its own label shares.` : ""}
+          {combined
+            ? ` ${perSection.length} sections: each scored against its own label shares, then combined, each weighted by the pairs of the two labels it would have at random.`
+            : ""}
         </Caption>
       </figure>
       <figure className="space-y-1" data-testid="cooccurrence-heatmap">

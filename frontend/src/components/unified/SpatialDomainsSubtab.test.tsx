@@ -219,10 +219,45 @@ describe("SpatialDomainsSubtab", () => {
     api.getSpatialDomains.mockResolvedValue({ ...INFO, niches_allowed: allowed, niches });
     fireEvent.click(button);
     await waitFor(() => expect(api.runNiches).toHaveBeenCalled());
-    expect(api.runNiches.mock.calls[0]![1]).toEqual({ label_column: "leiden", k_window: 20, n_niches: 8, column: "spatial_niche" });
+    expect(api.runNiches.mock.calls[0]![1]).toEqual({
+      source: "labels", label_column: "leiden", k_window: 20, n_niches: 8, column: "spatial_niche",
+    });
     const figure = await screen.findByTestId("niche-heatmap");
     expect(figure).toHaveTextContent('2 niches in "spatial_niche"');
     await waitFor(() => expect(useSettingsStore.getState().colorBy).toBe("spatial_niche"));
+  });
+
+  it("on spots with a spot composition, finds niches from its shares and names the reference", async () => {
+    // QA round 3 finding 7: niches were refused on spots; Kuppe et al. 2022 clustered each spot's shares.
+    const allowed = {
+      ok: true, reason: null, source: "spot_composition" as const, types: ["B", "T"],
+      reference: { name: "Lymph ref", id: "r1", celltype_column: "cell_type", method: "rctd" },
+      note: "Niches from each spot's cell-type shares from Spot composition against 'Lymph ref' (its column 'cell_type').",
+    };
+    const niches = {
+      available: true, columns: ["spatial_niche"], column: "spatial_niche", label_column: null, labels: ["B", "T"],
+      niches: ["0", "1"], fractions: [[0.9, 0.1], [0.2, 0.8]], sizes: [600, 395], k_window: 1, n_niches: 2,
+      n_labelled: 995, unit: "spot", notes: [], stale: false, stale_reason: null, source: "spot_composition" as const,
+      shares: "rna" as const, reference: allowed.reference,
+    };
+    api.getSpatialDomains.mockResolvedValue({ ...INFO, niches_allowed: allowed });
+    api.runNiches.mockResolvedValue(niches);
+    render(<SpatialDomainsSubtab {...groupProps} />);
+    const button = await screen.findByRole("button", { name: "Find niches" });
+    expect(screen.getByText(/against 'Lymph ref'/)).toBeInTheDocument();
+    expect(screen.queryByTestId("niches-refused")).toBeNull();
+    expect(screen.getByLabelText("Niche window")).toHaveValue(1);
+    expect(await hoverTip(screen.getByText("Shares"))).toBe(SPATIAL_HELP["domains.niche-shares"]);
+    fireEvent.change(screen.getByLabelText("Niche shares"), { target: { value: "rna" } });
+    api.getSpatialDomains.mockResolvedValue({ ...INFO, niches_allowed: allowed, niches });
+    fireEvent.click(button);
+    await waitFor(() => expect(api.runNiches).toHaveBeenCalled());
+    expect(api.runNiches.mock.calls[0]![1]).toEqual({
+      source: "spot_composition", shares: "rna", k_window: 1, n_niches: 8, column: "spatial_niche",
+    });
+    const figure = await screen.findByTestId("niche-heatmap");
+    expect(figure).toHaveTextContent("the mean RNA share of each cell type in the spots of each niche");
+    expect(figure).toHaveTextContent("against Lymph ref");
   });
 
   it("shows a run's progress and Cancel while it streams", async () => {

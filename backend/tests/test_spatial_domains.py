@@ -440,6 +440,94 @@ def test_niches_refuse_spots_and_allow_hd_8um_with_a_note():
         sd.plan_niches(hd16, "stripe")
 
 
+SHARE_TYPES = ["B", "T", "Mono", "Stroma"]
+
+
+def _with_shares(a, seed: int = 0, unfitted: int = 5):
+    """A saved spot composition: each spot's shares mostly its stripe's type; the first
+    ``unfitted`` spots too shallow to fit (NaN)."""
+    rng = np.random.default_rng(seed)
+    stripe = a.obs["stripe"].cat.codes.to_numpy()
+    alpha = np.full((a.n_obs, 4), 0.3)
+    alpha[np.arange(a.n_obs), stripe] = 6.0
+    rna = np.stack([rng.dirichlet(x) for x in alpha]).astype(np.float32)
+    rna[:unfitted] = np.nan
+    a.obsm["spot_deconv"] = rna
+    a.obsm["spot_deconv_cells"] = rna[:, ::-1].copy()  # other numbers, to see which one is read
+    a.uns["scview_spot_deconv"] = json.dumps({
+        "types": SHARE_TYPES, "reference": {"name": "Lymph ref", "id": "r1"}, "celltype_column": "cell_type",
+        "method": "rctd", "method_name": "RCTD-style"})
+    return a
+
+
+def test_share_obsm_names_are_spot_compositions():
+    from scview.core import spot_deconvolution
+
+    assert sd.SHARE_OBSM == {"cells": spot_deconvolution.OBSM_CELLS, "rna": spot_deconvolution.OBSM_RNA}
+
+
+def test_niches_on_spots_need_a_spot_composition():
+    """QA round 3 finding 7: composition niches were refused on spots, while Kuppe et al. 2022's
+    niches are clusters of each spot's cell-type shares."""
+    visium = synthetic.tissue("visium", n_side=12)
+    allowed = sd.niches_allowed(visium)
+    assert allowed["ok"] is False and "run Spot composition first" in allowed["reason"]
+    with pytest.raises(sd.SpatialDomainsError, match="Spot composition"):
+        sd.plan_niches(visium, source="spot_composition")
+    _with_shares(visium)
+    allowed = sd.niches_allowed(visium)
+    assert allowed["ok"] and allowed["source"] == "spot_composition" and allowed["types"] == SHARE_TYPES
+    assert allowed["reference"]["name"] == "Lymph ref" and "Lymph ref" in allowed["note"]
+    # Labels stay refused on spots, even when asked for.
+    with pytest.raises(sd.SpatialDomainsError, match="mixes several cells"):
+        sd.plan_niches(visium, "stripe", source="labels")
+    hd16 = _with_shares(synthetic.tissue("visium_hd", n_side=12, bin_um=16.0))
+    assert sd.plan_niches(hd16, n_niches=3).source == "spot_composition"
+
+
+def test_niches_from_spot_shares_follow_the_composition():
+    a = _with_shares(synthetic.tissue("visium", n_side=16, sections=2))
+    p = sd.plan_niches(a, n_niches=4, shares="rna")
+    assert p.source == "spot_composition" and p.label_column is None and p.labels == SHARE_TYPES
+    assert p.k_window == 1 and p.n_labelled == a.n_obs - 5
+    assert "Lymph ref" in p.notes[0] and any("without shares" in n for n in p.notes)
+    inp = sd.prepare_niches(a, p)
+    res = sd.run_niches(inp)
+    s = sd.save_niches(a, inp, res, cells_fingerprint="fp")
+    niche = a.obs["spatial_niche"]
+    assert niche.isna().sum() == 5 and niche[5:].notna().all()
+    # Four stripes of mostly one type each: each niche is mostly one type, and follows the stripes.
+    assert min(max(row) for row in s["fractions"]) > 0.5
+    assert adjusted_rand_score(a.obs["stripe"][5:], niche[5:].astype(str)) > 0.8
+    np.testing.assert_allclose(np.sum(s["fractions"], axis=1), 1.0, atol=1e-3)
+    assert s["source"] == "spot_composition" and s["shares"] == "rna" and s["labels"] == SHARE_TYPES
+    assert s["reference"]["name"] == "Lymph ref" and s["stale"] is False
+    step = provenance.read_provenance(a)["history"][-1]
+    assert step["step"] == "spatial_niches" and step["params"]["source"] == "spot_composition"
+    assert step["params"]["obsm"] == "spot_deconv" and step["params"]["types"] == SHARE_TYPES
+    lines, _ = sd.grounding_lines(a, "fp")
+    assert any("RNA shares (Spot composition against 'Lymph ref')" in line for line in lines)
+    # A new spot composition makes them stale; so do other spots.
+    a.obsm["spot_deconv"] = a.obsm["spot_deconv"][:, ::-1].copy()
+    assert "Spot composition was run again" in sd.niches_summary(a, "fp")["stale_reason"]
+    assert "changed since this ran" in sd.niches_summary(a, "other")["stale_reason"]
+    del a.obsm["spot_deconv"]
+    assert "is gone" in sd.niches_summary(a, "fp")["stale_reason"]
+
+
+def test_window_means_by_hand_within_each_section():
+    xy = np.array([[0.0, 0], [1, 0], [2, 0], [100, 0], [0, 0], [50, 0]])
+    libs = np.array(["a", "a", "a", "a", "b", "b"])
+    v = np.array([[1.0, 0], [0, 1], [0, 1], [1, 0], [0.5, 0.5], [1, 0]])
+    np.testing.assert_array_equal(sd.window_means(xy, v, libs, 1), v.astype(np.float32))
+    two = sd.window_means(xy, v, libs, 2)
+    np.testing.assert_allclose(two[0], [0.5, 0.5])  # itself and its nearest, in its own section
+    np.testing.assert_allclose(two[4], [0.75, 0.25])
+    assert two.dtype == np.float32
+    p = sd.plan_niches(_with_shares(synthetic.tissue("visium", n_side=12)), k_window=7, n_niches=3)
+    assert p.k_window == 7 and "averaged over the 7 nearest" in p.notes[0]
+
+
 def test_niches_leave_unlabelled_rows_nan():
     a = synthetic.tissue("cells", n_side=14)
     a.obs["stripe"] = a.obs["stripe"].astype(object)
@@ -530,6 +618,23 @@ async def test_api_refuses_spots_for_niches_and_a_dataset_without_positions(clie
     assert info["runnable"]["ok"] is False and "no spatial positions" in info["runnable"]["reason"]
     r = await client.post(f"{API}/datasets/{did2}/spatial/domains/run-stream", json={"k": 3})
     assert r.status_code == 422
+
+
+async def test_api_niches_on_spots_from_shares(client, dataset_manager):
+    did = _register(dataset_manager, _with_shares(synthetic.tissue("visium", n_side=12)), "dsh")
+    info = (await client.get(f"{API}/datasets/{did}/spatial/domains")).json()
+    allowed = info["niches_allowed"]
+    assert allowed["ok"] and allowed["source"] == "spot_composition" and allowed["types"] == SHARE_TYPES
+    r = await client.post(f"{API}/datasets/{did}/spatial/niches/run-stream", json={"n_niches": 3})
+    saved = _events(r.text)[-2][1]
+    assert saved["source"] == "spot_composition" and saved["shares"] == "cells" and saved["k_window"] == 1
+    assert saved["label_column"] is None and saved["labels"] == SHARE_TYPES
+    r = await client.post(f"{API}/datasets/{did}/spatial/niches/run-stream",
+                          json={"n_niches": 3, "source": "labels", "label_column": "stripe"})
+    assert r.status_code == 422
+    did2 = _register(dataset_manager, synthetic.tissue("visium", n_side=10), "dsh2")
+    r = await client.post(f"{API}/datasets/{did2}/spatial/niches/run-stream", json={})
+    assert r.status_code == 422 and "Spot composition" in r.json()["detail"]
 
 
 async def test_api_one_run_at_a_time(client, dataset_manager):
@@ -644,6 +749,37 @@ def test_replay_of_an_unreadable_record_is_a_comment():
     ctx = replay_script._Ctx(adata=None)
     for fn in (replay_script._spatial_domains, replay_script._nhood_enrichment, replay_script._spatial_niches):
         assert fn({"column": "x"}, ctx).status == replay_script.NOT_REPLAYABLE
+    # Niches from shares without the spot composition replayed before them: said, not run.
+    snip = replay_script._spatial_niches({"column": "n", "source": "spot_composition", "obsm": "spot_deconv_cells",
+                                          "types": SHARE_TYPES, "k_window": 1, "n_niches": 3, "seed": 0}, ctx)
+    assert snip.status == replay_script.NOT_REPLAYABLE and "not replayed" in snip.code[0]
+
+
+def test_replay_runs_spot_composition_then_its_niches(tmp_path):
+    from scview.core import spot_deconvolution as spd
+    from tests.test_spot_deconvolution import _fit, _prepare, _profiles, _reference, _spots
+
+    prof = _profiles()
+    ref = _reference(prof)
+    spots, _ = _spots(prof, n=196)
+    inp = spots.copy()
+    p = _prepare(ref, spots)
+    out = _fit(p)
+    summary = spd.summarize(p, out, method="rctd")
+    summary["reference"]["path"] = str(tmp_path / "reference.h5ad")
+    spd.save(spots, p, out, summary)
+    n = sd.prepare_niches(spots, sd.plan_niches(spots, n_niches=3, k_window=5, seed=2))
+    sd.save_niches(spots, n, sd.run_niches(n))
+    assert [x["status"] for x in replay_script.describe(spots)] == ["exact", "exact"]
+    inp.write_h5ad(tmp_path / "input.h5ad")
+    ref.write_h5ad(tmp_path / "reference.h5ad")
+    script = tmp_path / "replay.py"
+    script.write_text(replay_script.build_script(spots, dataset_id="t", dataset_name="test"))
+    r = subprocess.run([sys.executable, str(script), str(tmp_path / "input.h5ad"), str(tmp_path / "out.h5ad")],
+                       cwd=tmp_path, capture_output=True, text=True, timeout=600)
+    assert r.returncode == 0, r.stderr[-3000:]
+    got = ad.read_h5ad(tmp_path / "out.h5ad")
+    assert (got.obs["spatial_niche"].astype(str) == spots.obs["spatial_niche"].astype(str)).all()
 
 
 # ---------------------------------------------------------------------------

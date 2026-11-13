@@ -23,20 +23,26 @@ const TABLE_LIMIT = 200;
 const PADJ = 0.05;
 const LONG_SECONDS = 4; // backend spatial_autocorr.LONG_SECONDS
 
-type SortKey = "gene" | "I" | "pval_adj";
-const COLUMNS: { key: SortKey; label: string; title: string; align: "left" | "right" }[] = [
+/** "lib:<section>": that section's own I */
+type SortKey = "gene" | "I" | "pval_adj" | `lib:${string}`;
+const COLUMNS: { key: "gene" | "I" | "pval_adj"; label: string; title: string; align: "left" | "right" }[] = [
   { key: "gene", label: "Gene", title: "Gene; click to colour the plot by it", align: "left" },
   { key: "I", label: "Moran's I", title: "Spatial autocorrelation: 1 = neighbours alike, 0 = random, < 0 = neighbours unlike", align: "right" },
   { key: "pval_adj", label: "Adjusted p", title: "Benjamini-Hochberg adjusted p (normal approximation, one-tailed in the direction of I)", align: "right" },
 ];
 
-/** Rows in the chosen order; missing values last. */
+function sortValue(row: MoranRow, key: Exclude<SortKey, "gene">): number | null {
+  if (key.startsWith("lib:")) return row.by_library?.[key.slice(4)]?.I ?? null;
+  return row[key as "I" | "pval_adj"];
+}
+
+/** Rows in the chosen order; missing values last. "lib:<section>" sorts by that section's own I. */
 export function sortMoranRows(rows: MoranRow[], key: SortKey, dir: "asc" | "desc"): MoranRow[] {
   const sign = dir === "asc" ? 1 : -1;
   return [...rows].sort((a, b) => {
     if (key === "gene") return sign * a.gene.localeCompare(b.gene);
-    const x = a[key];
-    const y = b[key];
+    const x = sortValue(a, key);
+    const y = sortValue(b, key);
     if (x == null || y == null) return x == null ? (y == null ? 0 : 1) : -1;
     return sign * (x - y);
   });
@@ -79,13 +85,30 @@ export function SpatialGenesSubtab({
     setError(null);
     setResult(null);
     getSpatialAutocorr(datasetId)
-      .then((r) => !cancelled && setResult(r))
+      .then((r) => {
+        if (cancelled) return;
+        setResult(r);
+        setLibrary(r && r.library_id && r.library_id !== "all" ? r.library_id : "");
+      })
       .catch((e) => !cancelled && setError(errorMessage(e)))
       .finally(() => !cancelled && setLoading(false));
     return () => {
       cancelled = true;
     };
   }, [datasetId, hasSpatial]);
+
+  // Another section: its last kept run (each section's runs are kept apart), or none yet.
+  const pickLibrary = (value: string) => {
+    setLibrary(value);
+    if (!datasetId) return;
+    setError(null);
+    setLoading(true);
+    setResult(null);
+    getSpatialAutocorr(datasetId, value || "all")
+      .then(setResult)
+      .catch((e) => setError(errorMessage(e)))
+      .finally(() => setLoading(false));
+  };
 
   const rows = useMemo(
     () => (result ? sortMoranRows(result.rows, sort.key, sort.dir).slice(0, TABLE_LIMIT) : []),
@@ -113,10 +136,13 @@ export function SpatialGenesSubtab({
   };
 
   const onSort = (key: SortKey) =>
-    setSort((s) => (s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: key === "gene" ? "asc" : key === "I" ? "desc" : "asc" }));
+    setSort((s) => (s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: key === "gene" ? "asc" : key === "I" || key.startsWith("lib:") ? "desc" : "asc" }));
 
   const resultUnits = `${result?.unit ?? "spot"}s`;
-  const sortLabel = COLUMNS.find((c) => c.key === sort.key)?.label ?? sort.key;
+  const perSection = result?.centring === "section" ? result.sections : [];
+  const sortLabel = sort.key.startsWith("lib:")
+    ? `I in ${sort.key.slice(4)}`
+    : (COLUMNS.find((c) => c.key === sort.key)?.label ?? sort.key);
 
   return (
     <div className="space-y-3">
@@ -151,7 +177,7 @@ export function SpatialGenesSubtab({
             <Help id="spatial.section">Section</Help>
             <select
               value={library}
-              onChange={(e) => setLibrary(e.target.value)}
+              onChange={(e) => pickLibrary(e.target.value)}
               className="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-700"
             >
               <option value="">All sections</option>
@@ -186,7 +212,9 @@ export function SpatialGenesSubtab({
         </p>
       )}
       {libs.length > 1 && !library && (
-        <p className="text-[11px] text-slate-500">Neighbours are found within each section, never across sections.</p>
+        <p className="text-[11px] text-slate-500">
+          Neighbours are found within each section, never across sections, and each section is centred on its own mean.
+        </p>
       )}
 
       {loading && !result && (
@@ -203,8 +231,15 @@ export function SpatialGenesSubtab({
             <Help id="spatial.table">
               Moran&apos;s I of {result.genes === "hvg" ? "the variable genes" : result.genes === "all" ? "every gene" : "the chosen genes"}
             </Help>
-            {result.libraries.length === 1 && libs.length > 1 ? ` in section ${result.libraries[0]}` : ""};{" "}
-            {result.n_significant.toLocaleString()} spatially variable (I &gt; 0, adjusted p &lt; {PADJ}).
+            {result.libraries.length === 1 && libs.length > 1 ? ` in section ${result.libraries[0]}` : ""}
+            {perSection.length > 1 ? (
+              <>
+                {" "}
+                pooled over {perSection.length} sections, each centred on its own mean, with{" "}
+                <Help id="spatial.by-section">each section&apos;s own I</Help> beside it
+              </>
+            ) : null}
+            ; {result.n_significant.toLocaleString()} spatially variable (I &gt; 0, adjusted p &lt; {PADJ}).
           </Caption>
           {result.notes.map((n) => (
             <p key={n} className="text-[11px] text-amber-700">
@@ -247,6 +282,18 @@ export function SpatialGenesSubtab({
                       {c.label}
                     </SortableTh>
                   ))}
+                  {perSection.map((s) => (
+                    <SortableTh
+                      key={s.library_id}
+                      onSort={() => onSort(`lib:${s.library_id}`)}
+                      sort={ariaSort(`lib:${s.library_id}`, sort.key, sort.dir)}
+                      title={`Moran's I in section ${s.library_id} alone (${s.n_obs.toLocaleString()} ${resultUnits})`}
+                      align="right"
+                      className="whitespace-nowrap px-2 py-1"
+                    >
+                      {s.library_id.length > 12 ? `${s.library_id.slice(0, 11)}…` : s.library_id}
+                    </SortableTh>
+                  ))}
                 </tr>
               </thead>
               <tbody>
@@ -273,6 +320,14 @@ export function SpatialGenesSubtab({
                     <td className="px-2 py-0.5 text-right tabular-nums text-slate-700">
                       {r.pval_adj == null ? "–" : formatPValue(r.pval_adj)}
                     </td>
+                    {perSection.map((s) => {
+                      const v = r.by_library?.[s.library_id];
+                      return (
+                        <td key={s.library_id} className="px-2 py-0.5 text-right tabular-nums text-slate-500">
+                          {v?.I == null ? "–" : v.I.toFixed(3)}
+                        </td>
+                      );
+                    })}
                   </tr>
                 ))}
               </tbody>
