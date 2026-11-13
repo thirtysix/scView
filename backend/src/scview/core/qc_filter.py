@@ -162,6 +162,9 @@ class Thresholds:
     # MAD mode: never below this many counts, whatever a sample's bound (a targeted panel,
     # core/targeted_panel.py). Fixed mode folds it into min_counts.
     counts_floor: float = 0.0
+    # MAD mode: a sample's genes cut is never below this (``apply_genes_floor``); 0 = none,
+    # None = the data's default (``default_genes_floor``, set by ``resolve_floor``).
+    genes_floor: float | None = 0.0
     # "per_type": each cell type's own % mito bound (median + mad_k_mt MADs) instead
     # of the global rule (module docstring); "global": the rule above for every cell.
     mito_mode: str = "global"
@@ -180,11 +183,13 @@ class Thresholds:
         mode = str(getattr(params, "qc_threshold_mode", "fixed") or "fixed")
         floor = float(getattr(params, "qc_counts_floor", 0) or 0)
         min_counts = float(getattr(params, "min_counts", 0) or 0)
+        genes_floor = getattr(params, "qc_genes_floor", None)
         return cls(
             min_genes=float(getattr(params, "min_genes", 0) or 0),
             max_genes=float(getattr(params, "max_genes", 0) or 0),
             min_counts=max(min_counts, floor) if mode == "fixed" else min_counts,
             counts_floor=floor,
+            genes_floor=None if genes_floor is None else float(genes_floor),
             max_pct_mt=None if mt is None else float(mt),
             drop_doublets=bool(getattr(params, "drop_doublets", False)),
             mode=mode,
@@ -213,6 +218,8 @@ class Thresholds:
         for name, k in checks:
             if not (math.isfinite(k) and k > 0):
                 raise ValueError(f"The {name} must be a positive number, not {k}.")
+        if self.genes_floor is not None and not (math.isfinite(self.genes_floor) and self.genes_floor >= 0):
+            raise ValueError(f"The genes floor must be 0 or more, not {self.genes_floor}.")
 
 
 # Spots and bins are positions on a capture grid, not cells: few genes and a high % mito say what
@@ -268,6 +275,42 @@ def grid_rules(adata, t: Thresholds, cells: dict, params=None) -> tuple[Threshol
         t = replace(t, max_pct_mt=None)
         cells = {**cells, "has_mt": False}
     return t, cells
+
+
+# The genes floor under MAD mode (``genes_floor``): a sample whose cells are partly near empty has a
+# wide MAD, so median - 5 MADs can fall to a handful of genes (a Kuppe 2022 heart slide, half its
+# spots near empty: 3.7 genes, and 0 of 708 spots under 200 genes removed). So the genes cut is never
+# below the floor: 200 for cells, the fixed mode's default. On the capture grid few genes say what
+# the tissue is there (``grid_rules``), so spots and Visium HD's segmented cells take 100: on three
+# healthy Visium sections (DLPFC 151673, a lymph node, a mouse brain) 0 to 2 spots have under 100
+# genes, while on Visium HD mouse brain cells 200 genes removes 5.3% of the cells and 100 removes 1.1%.
+# Bins take none (200 genes removes 10% of the 16 um bins and 64% of the 8 um, white matter first),
+# nor does a targeted panel (a few hundred genes; its floor is in counts, core/targeted_panel.py).
+GENES_FLOOR = _FIXED_DEFAULT_MIN_GENES
+GENES_FLOOR_GRID = 100.0
+
+
+def default_genes_floor(adata) -> float:
+    """The genes floor a MAD run uses on ``adata`` when none is given (comment above)."""
+    from scview.core import spatial
+
+    if spatial.targeted_panel(adata):
+        return 0.0
+    if not spatial.has_spatial(adata):
+        return GENES_FLOOR
+    tech = spatial.technology(adata)
+    if tech["unit"] == "bin":
+        return 0.0
+    if tech["unit"] == "spot" or tech["technology"] == "visium_hd":
+        return GENES_FLOOR_GRID
+    return GENES_FLOOR
+
+
+def resolve_floor(adata, t: Thresholds) -> Thresholds:
+    """``t`` with its genes floor set: the data's default when it is None (not given)."""
+    if t.genes_floor is not None:
+        return t
+    return replace(t, genes_floor=default_genes_floor(adata))
 
 
 @dataclass
@@ -328,6 +371,7 @@ class MadBounds:
             "k_mt": self.t.mad_k_mt,
             "upper": self.t.mad_upper,
             **({"counts_floor": self.t.counts_floor} if self.t.counts_floor > 0 else {}),
+            **({"genes_floor": self.t.genes_floor} if (self.t.genes_floor or 0) > 0 else {}),
             "ceiling_pct_mt": self.t.max_pct_mt if "pct_mt" in self.hi else None,
             "min_sample_cells": MIN_SAMPLE_CELLS,
             "samples": groups,
@@ -379,13 +423,44 @@ def _bounds(stats: dict[str, tuple[float, float]], t: Thresholds, ceiling: float
     return out
 
 
+def _recorded_bounds(row: dict) -> dict:
+    """A recorded row's bounds before any genes floor: the floor is applied again on top
+    (``apply_genes_floor``), so a run with another floor can reuse the MAD bounds."""
+    out = {b: row.get(b) for b in _BOUNDS}
+    if "min_genes_mad" in row:
+        out["min_genes"] = row["min_genes_mad"]
+    return out
+
+
+def apply_genes_floor(row: dict, genes: np.ndarray, floor: float) -> None:
+    """Raise ``row``'s genes cut (``min_genes``, the MAD bound) to ``floor`` and say which
+    cut applies (``min_genes_by`` "mad" or "floor") and how many cells the floor removes
+    that the MAD cut keeps (``n_floor``). ``genes``: the genes per cell of the cells the row
+    judges. The floor is not applied where it would remove more than half of them: a floor
+    is for a sample's near-empty tail, not for a sample (or a dataset) of low complexity;
+    ``floor_skipped`` then holds how many it would have removed."""
+    mad_cut = row.get("min_genes")
+    row["min_genes_mad"] = mad_cut
+    g = genes[np.isfinite(genes)]
+    below_floor = g < floor
+    below_mad = g < mad_cut if mad_cut is not None else np.zeros(g.size, dtype=bool)
+    row.update(min_genes_by="mad", n_floor=0)
+    if mad_cut is not None and mad_cut >= floor:
+        return
+    if g.size and below_floor.sum() > HALF * g.size:
+        row["floor_skipped"] = int(below_floor.sum())
+        return
+    row.update(min_genes=float(floor), min_genes_by="floor", n_floor=int((below_floor & ~below_mad).sum()))
+
+
 def _reusable(recorded: dict | None, t: Thresholds, column: str | None,
               ceiling: float | None) -> dict | None:
     """The thresholds the last filtering recorded, when it ran in MAD mode with the
     settings this run has. The cells left are those that kept within them, so
     using them again removes nothing new; bounds worked out afresh from the
     cells left, whose spread is narrower, would trim the tails again on every
-    re-run (Reprocess from Scratch: Kang lost 52 more cells, pbmc_1k_v3 41)."""
+    re-run (Reprocess from Scratch: Kang lost 52 more cells, pbmc_1k_v3 41). The genes
+    floor is not part of the match: it is applied again on top of the MAD bounds."""
     if not recorded or recorded.get("qc_threshold_mode") != "mad":
         return None
     rec = recorded.get("qc_thresholds")
@@ -426,12 +501,12 @@ def mad_bounds(cells: dict, t: Thresholds, samples: Samples | None = None,
     reuse = _reusable(recorded, t, samples.column, ceiling)
     if reuse is not None:
         rec_rows = {r.get("name"): r for r in reuse.get("samples") or []}
-        pooled = {"n_cells": n, **{b: reuse["pooled"].get(b) for b in _BOUNDS},
+        pooled = {"n_cells": n, **_recorded_bounds(reuse["pooled"]),
                   "skipped": reuse["pooled"].get("skipped", [])}
         rows = []
         for name, m in zip(samples.names, groups):
             r = rec_rows.get(name)
-            src = r if r is not None else pooled
+            src = _recorded_bounds(r) if r is not None else pooled
             rows.append({"name": name, "n_cells": int(m.size),
                          "pooled": bool(r.get("pooled")) if r is not None else True,
                          **{b: src.get(b) for b in _BOUNDS}, "skipped": src.get("skipped", [])})
@@ -448,6 +523,11 @@ def mad_bounds(cells: dict, t: Thresholds, samples: Samples | None = None,
             rows.append({"name": name, "n_cells": int(m.size), "pooled": not own,
                          **_bounds(stats, t, ceiling)})
         pooled = {"n_cells": n, **_bounds(pooled_stats, t, ceiling)}
+    if (t.genes_floor or 0) > 0:
+        genes = _values(cells, "n_genes")
+        for row, m in zip(rows, groups):
+            apply_genes_floor(row, genes[m], t.genes_floor)
+        apply_genes_floor(pooled, genes[samples.codes < 0] if samples.column else genes, t.genes_floor)
 
     # Per cell, on the scale the masks compare: log1p for counts and genes, % for
     # mito. Row i < k is sample i; row k the pooled bounds (unlabelled cells).
@@ -787,7 +867,9 @@ def judge_types(adata, cells: dict, t: Thresholds, samples: Samples | None = Non
     type's rule (``type_bounds``, with the global and applied % mito masks filled
     in, and the floor's columns: ``floor_info``). The preview and the filtering
     step both call this, so the preview is what the step does. Raises ValueError as ``judge`` does, and for a per-type column
-    that is missing or has too many groups."""
+    that is missing or has too many groups. A genes floor left to the data
+    (None) takes its default (``resolve_floor``)."""
+    t = resolve_floor(adata, t)
     t.check()
     calls = cell_calls(adata.obs, t)
     per_type = t.mito_mode == "per_type" and _mito_measurable(cells)
@@ -832,6 +914,12 @@ def applied_summary(applied: dict) -> str:
     mt = span("max_pct_mt", 1)
     if mt:
         parts.append(f"% mito below {mt}")
+    floor = applied.get("genes_floor")
+    if floor:
+        n_set = sum(1 for r in rows if r.get("min_genes_by") == "floor")
+        parts.append(f"genes never cut below {floor:,.0f}"
+                     + (f" (this floor set the cut in {n_set} of {len(rows)} samples)" if n_set
+                        else " (no sample's own cut was below it)"))
     n_pooled = sum(1 for s in samples if s.get("pooled"))
     where = (f"within each {applied['column']} ({len(samples)} samples"
              + (f", {n_pooled} too small and judged on all cells" if n_pooled else "") + ")"
@@ -954,6 +1042,7 @@ def preview(adata, cells: dict, t: Thresholds, sample_column: str | None = None,
     ``cells`` is ``AnnDataAdaptor.qc_per_cell()``. Raises ValueError for a named
     column that does not exist, or for thresholds ``judge`` refuses."""
     n = int(adata.n_obs)
+    t = resolve_floor(adata, t)
     samp = samples_of(adata, sample_column)
     removed, bounds, types = judge_types(adata, cells, t, samp)
     drop = ~keep_mask(removed, n)
@@ -983,11 +1072,14 @@ def preview(adata, cells: dict, t: Thresholds, sample_column: str | None = None,
         "n_removed": n_removed,
         "n_kept": n - n_removed,
         "fraction_removed": round(n_removed / n, 4) if n else 0.0,
+        # What applies: in MAD mode the fixed cut-offs do not (each sample's are in ``mad``).
         "thresholds": {
             "mode": t.mode,
-            "min_genes": t.min_genes,
-            "max_genes": t.max_genes,
-            "min_counts": t.min_counts,
+            "min_genes": t.min_genes if t.mode == "fixed" else None,
+            "max_genes": t.max_genes if t.mode == "fixed" else None,
+            "min_counts": t.min_counts if t.mode == "fixed" else None,
+            "genes_floor": (t.genes_floor or 0.0) if t.mode == "mad" else None,
+            "counts_floor": t.counts_floor if t.mode == "mad" else None,
             "max_pct_mt": t.max_pct_mt if has_mt else None,
             "drop_doublets": t.drop_doublets,
             "mad_k": t.mad_k,

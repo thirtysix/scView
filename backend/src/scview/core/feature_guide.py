@@ -62,7 +62,9 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Data Assessment > QC Distributions > QC per sample", "",
      "each sample's cells and median genes, UMIs and % mito with flags; a sample sequenced as two or more "
      "libraries is flagged 'Libraries differ' when its libraries' cell-type mix (or depth) differs more than "
-     "different samples alike in condition, tissue and sex do (one library may hold another sample's cells)"),
+     "different samples alike in condition, tissue and sex do (one library may hold another sample's cells); "
+     "in MAD mode each sample's thresholds, its genes cut never below a floor (200 genes for cells, 100 for "
+     "spots; the Filtering step's 'Min genes/cell floor'), marked where the floor set it"),
     ("Data Assessment > QC states: RP share vs mito", "", "damaged or stressed cells per type"),
     ("Data Assessment > Cluster QC > Evidence per cluster", "",
      "why each cluster was labelled or flagged, in words, never a probability: its markers against random genes "

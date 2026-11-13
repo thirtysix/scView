@@ -402,6 +402,8 @@ export interface FilterThresholds {
   qc_threshold_mode?: QcThresholdMode;
   /** Never below this many counts per cell, whatever the mode (a targeted panel's is 10). */
   qc_counts_floor?: number;
+  /** MAD mode: no sample's genes cut below this (unset: the data's, 200 cells / 100 spots; 0 = off). */
+  qc_genes_floor?: number;
   /** MADs below the median for counts and genes (log scale); above too with `qc_mad_upper`. */
   qc_mad_k?: number;
   /** MADs above the median for % mito. */
@@ -480,6 +482,13 @@ export interface MadSampleBounds {
   /** Metrics whose MAD was 0 in this sample ("total_counts" | "n_genes" | "pct_mt"). */
   skipped: string[];
   n_removed?: number;
+  /** With a genes floor: the sample's own MAD cut, which cut applies (min_genes), and the
+   *  cells the floor removes that the MAD cut keeps (backend qc_filter.apply_genes_floor). */
+  min_genes_mad?: number | null;
+  min_genes_by?: "mad" | "floor";
+  n_floor?: number;
+  /** The floor was not applied: it would have removed this many cells, over half the sample. */
+  floor_skipped?: number;
 }
 
 /** MAD mode's per-sample thresholds (backend qc_filter.MadBounds.to_dict). */
@@ -498,6 +507,8 @@ export interface MadThresholds {
   n_unlabelled: number;
   /** The run whose recorded thresholds these are (a same-settings re-run), if any. */
   reused_from?: string | null;
+  /** No sample's genes cut is below this (absent: no floor). */
+  genes_floor?: number;
 }
 
 /** Removed ~ condition in one group (backend qc_filter.rate_test): over the
@@ -656,6 +667,7 @@ export async function getFilterPreview(
     mode: thresholdMode(t),
   });
   if (t.qc_counts_floor !== undefined) q.set("counts_floor", String(t.qc_counts_floor));
+  if (t.qc_genes_floor !== undefined) q.set("genes_floor", String(t.qc_genes_floor));
   if (t.qc_mad_k !== undefined) q.set("mad_k", String(t.qc_mad_k));
   if (t.qc_mad_k_mt !== undefined) q.set("mad_k_mt", String(t.qc_mad_k_mt));
   if (t.qc_mad_upper !== undefined) q.set("mad_upper", String(t.qc_mad_upper));

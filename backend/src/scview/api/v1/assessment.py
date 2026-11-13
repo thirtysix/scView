@@ -343,6 +343,7 @@ async def get_filter_preview(
     doublet_source: str | None = None,
     drop_hash_negatives: bool | None = None,
     counts_floor: float | None = None,
+    genes_floor: float | None = None,
     grid_mito: bool = False,
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
@@ -359,6 +360,8 @@ async def get_filter_preview(
     ``mito_mode`` "per_type" judges % mito by each type of ``mito_type_column``
     (default: as the step picks it) with ``mito_types`` the per-type table;
     ``mito_type_floor`` makes it never stricter than the global rule.
+    ``genes_floor``: MAD mode's genes cut is never below it (default: the data's, 200 for
+    cells; ``mad`` says per sample which cut applied and what the floor removed).
     ``doublet_source`` (auto | hashing | scrublet | classifier | consensus | either) is whose doublets
     ``drop_doublets`` drops, ``drop_hash_negatives`` drops cell hashing's
     negatives; ``doublets`` describes the choice (core/doublet_source.py).
@@ -376,7 +379,7 @@ async def get_filter_preview(
                        ("qc_mito_type_column", mito_type_column or None),
                        ("qc_mito_type_floor", mito_type_floor),
                        ("qc_doublet_source", doublet_source), ("drop_hash_negatives", drop_hash_negatives),
-                       ("qc_counts_floor", counts_floor)):
+                       ("qc_counts_floor", counts_floor), ("qc_genes_floor", genes_floor)):
         if value is not None:
             setattr(params, key, value)
             params.explicit = (*params.explicit, key)

@@ -91,6 +91,10 @@ class PipelineParams:
     # Keep cells with at least this many counts in both modes (a targeted panel's default
     # is 10, core/targeted_panel.py; 0 = none).
     qc_counts_floor: float = 0.0
+    # MAD mode: a sample's genes cut never below this many genes per cell (a sample with many
+    # near-empty cells has a wide MAD). None: 200 for cells, 100 for spots and Visium HD cells,
+    # none on bins and targeted panels (core/qc_filter.py); 0 = no floor.
+    qc_genes_floor: float | None = None
     # Used only when % mito can be measured (MT- genes); a ceiling in MAD mode.
     max_pct_mt: float = 20.0
     # Spots and bins: % mito rules are off, they cut tissue out (qc_filter.grid_rules); opt-in.
@@ -593,6 +597,7 @@ def filter_judgement(adata: ad.AnnData, params: PipelineParams):
     samples = qc_filter.samples_of(adata, params.qc_sample_column or None)
     cells = per_cell_qc(adata)
     t, cells = qc_filter.grid_rules(adata, t, cells, params)
+    t = qc_filter.resolve_floor(adata, t)
     removed, bounds, types = qc_filter.judge_types(adata, cells, t, samples)
     keep = qc_filter.keep_mask(removed, n_before)
     record = qc_filter.removal_record(adata, cells, removed, ~keep, t, samples.column, types=types)
@@ -602,6 +607,8 @@ def filter_judgement(adata: ad.AnnData, params: PipelineParams):
     used = (("min_genes", "max_genes", "min_counts") if t.mode == "fixed"
             else ("qc_mad_k", "qc_mad_k_mt", "qc_mad_upper", "qc_sample_column"))
     found: dict[str, Any] = {k: getattr(params, k) for k in used}
+    if t.mode == "mad":  # recorded by every run since the floor existed (0: none); older runs had none
+        found["qc_genes_floor"] = t.genes_floor or 0.0
     if t.counts_floor > 0:  # within each sample's bound in MAD mode, min_counts in fixed
         found["qc_counts_floor"] = t.counts_floor
         if t.mode == "fixed":

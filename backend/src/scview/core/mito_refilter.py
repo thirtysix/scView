@@ -305,6 +305,9 @@ def plan_params(adata) -> tuple[list[str], Any, list[str]]:
         for k, v in (h.get("params") or {}).items():
             if k in fields and not k.startswith("qc_mito_"):
                 setattr(params, k, v)
+    filtering = [h for h in history if h.get("step") == "filtering"]
+    if filtering and "qc_genes_floor" not in (filtering[-1].get("params") or {}):
+        params.qc_genes_floor = 0.0  # filtered before the genes floor existed: replayed without it
     steps = [s for s in ALL_STEPS if s in ran and s not in SKIP_STEPS]
     if "filtering" not in steps:
         steps.insert(len([s for s in steps if ALL_STEPS.index(s) < ALL_STEPS.index("filtering")]),
