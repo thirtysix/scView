@@ -350,10 +350,14 @@ async def get_cooccurrence(
     interval: int = Query(default=cc.DEFAULT_INTERVAL, ge=cc.MIN_INTERVAL, le=cc.MAX_INTERVAL),
     combine: str = Query(default=cc.SUM, max_length=32),
     max_distance: float | None = Query(default=None, gt=0),
+    section: str = Query(default="", max_length=256),
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """The saved run of ``column`` (else the latest): ``result`` with ``occ`` (labels x labels x
-    distances), ``count``, ``distances``. With ``column``, what a run would need: ``plan`` and
+    distances), ``count``, ``distances``; over several sections ``sections_combined``
+    ("within_sections": each section scored against its own label shares, then combined) and
+    ``sections`` (each one's pairs). ``section``: that section's own ``occ`` and ``count``
+    instead (``result.section`` names it). With ``column``, what a run would need: ``plan`` and
     its preflight ``verdict``, or ``reason`` when it cannot run. ``max_distance`` in the
     positions' units: the thresholds a run with that reach would use."""
     adaptor = await _adaptor(dm, dataset_id)
@@ -361,8 +365,11 @@ async def get_cooccurrence(
 
     def work() -> dict[str, Any]:
         fp = adaptor.cells_fingerprint()
-        out: dict[str, Any] = {"plan": None, "verdict": None, "reason": None,
-                               "result": cc.cooccurrence_summary(adata, column or None, fp)}
+        try:
+            result = cc.cooccurrence_summary(adata, column or None, fp, section or None)
+        except sd.SpatialDomainsError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from None
+        out: dict[str, Any] = {"plan": None, "verdict": None, "reason": None, "result": result}
         if column:
             try:
                 distances = cc.even_distances(max_distance, interval) if max_distance is not None else None

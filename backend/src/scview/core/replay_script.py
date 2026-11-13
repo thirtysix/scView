@@ -1875,7 +1875,8 @@ def _cooccurrence_helper() -> str:
     lines += ["", "", '''
 def co_occurrence_of(adata, column, labels, interval, combine, max_obs, seed, scales=None):
     """(score, thresholds, ordered pairs), as scView's run: squidpy's score, each section's
-    pairs counted in that section. ``interval``: a number of default thresholds, or a list."""
+    pairs counted in that section (several sections: each scored against its own label
+    shares, then combined). ``interval``: a number of default thresholds, or a list."""
     codes = pd.Categorical(adata.obs[column].astype(str), categories=[str(x) for x in labels]).codes
     keep = codes >= 0
     if "library_id" in adata.obs.columns:
@@ -3964,7 +3965,7 @@ def _co_occurrence(p: dict, ctx: _Ctx) -> Snippet:
     _need(ctx, "cooccurrence")
     return Snippet(EXACT, [
         f"# Co-occurrence of {comment_text(column, 60)} (= squidpy's co_occurrence; each section's pairs counted in that "
-        "section).",
+        "section, several sections each scored against its own label shares).",
         f"occ, interval, pairs = co_occurrence_of(adata, {_lit(column)}, {_lit([str(x) for x in labels])}, {_lit(asked)}, "
         f"{_lit(combine)}, {max_obs}, {seed}, {_lit(p.get('scales'))})",
         f"adata.uns[{_lit(squidpy_key(column))}] = {{\"occ\": occ, \"interval\": interval, \"count\": pairs}}",

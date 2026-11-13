@@ -156,6 +156,64 @@ def test_sections_are_counted_apart_and_summed(kernels):
     assert (pooled >= count).all() and pooled.sum() > count.sum()  # what pooling the coordinates would add
 
 
+def _two_slides(rng, n=900):
+    """Kuppe 2022 in miniature: label 1 (fibroblast) and label 2 (myeloid) both common on slide 1
+    and rare on slide 0, and kept apart within slide 1 (left and right halves); label 0 fills the
+    rest at random."""
+    xy, codes, sections = [], [], []
+    for s in (0, 1):
+        pts = rng.uniform(0, 1000, (n, 2))
+        lab = np.zeros(n, dtype=np.int32)
+        if s == 1:
+            left = pts[:, 0] < 500
+            lab[left & (rng.random(n) < 0.6)] = 1
+            lab[~left & (rng.random(n) < 0.6)] = 2
+        else:
+            lab[rng.random(n) < 0.05] = 1
+            lab[rng.random(n) < 0.05] = 2
+        xy.append(pts)
+        codes.append(lab)
+        sections.append(np.full(n, s, dtype=np.int32))
+    return np.vstack(xy).astype(np.float32), np.concatenate(codes), np.concatenate(sections)
+
+
+def test_sections_are_scored_against_their_own_shares(kernels):
+    """Kuppe 2022: summed pairs over 8 slides gave Fibroblast|Myeloid 1.40 at 180 um and 1.71 at
+    4 mm (both on the same slides) while neighbourhood enrichment said they avoid each other."""
+    xy, codes, sections = _two_slides(np.random.default_rng(0))
+    interval = np.array([0, 100, 300, 700, 1500], dtype=np.float32)
+    score, count, _, by = kernel.compute_sections(xy, codes, 3, sections, interval, kernels=kernels)
+    pooled = kernel.cooccurrence_scores(by.sum(axis=0))  # the score before: one baseline for all
+    np.testing.assert_array_equal(count, by.sum(axis=0))
+    assert pooled[1, 2, -1] > 1.2  # slide composition read as co-location, rising to the longest range
+    assert pooled[1, 2, -1] > pooled[1, 2, -2]
+    assert score[1, 2, 0] < 0.5 and score[1, 2, -2] < 1  # apart, as they are within each slide
+    assert score[1, 2, -1] == pytest.approx(1.0, abs=0.01)  # every pair of each slide: no pattern left
+    # The combination by hand: each section's own score, weighted by its expected pairs of (a, b).
+    own = np.stack([kernel.cooccurrence_scores(c) for c in by])
+    row, col, tot = by.sum(axis=2), by.sum(axis=1), by.sum(axis=(1, 2))
+    weight = row[:, :, None, :] * col[:, None, :, :] / tot[:, None, None, :]
+    np.testing.assert_allclose(score, (own * weight).sum(axis=0) / weight.sum(axis=0), rtol=1e-12)
+    # Each section's own pairs are what that section alone counts.
+    for k in (0, 1):
+        alone, c1, _, none = kernel.compute_sections(xy[sections == k], codes[sections == k], 3,
+                                                     np.zeros(int((sections == k).sum()), dtype=np.int32), interval,
+                                                     kernels=kernels)
+        assert none is None
+        np.testing.assert_array_equal(by[k], c1)
+        np.testing.assert_array_equal(own[k], alone)
+
+
+def test_one_section_is_squidpys_score_bitwise(kernels):
+    a = synthetic.tissue("cells", n_side=12, seed=2)
+    xy, codes, labels = _points(a)
+    zero = np.zeros(a.n_obs, dtype=np.int32)
+    interval = np.array([0, 50, 300, 1500], dtype=np.float32)
+    score, count, _, by = kernel.compute_sections(xy, codes, len(labels), zero, interval, kernels=kernels)
+    assert by is None
+    np.testing.assert_array_equal(score, kernel.cooccurrence_scores(_brute(xy, codes, len(labels), interval[1:])))
+
+
 def test_several_sections_take_the_widest_thresholds():
     xy = np.random.default_rng(3).uniform(0, 100, (40, 2)).astype(np.float32)
     xy[20:] *= 3
@@ -283,6 +341,35 @@ def test_saved_where_squidpy_saves_it_and_goes_stale_as_enrichment_does():
     assert cc.cooccurrence_summary(a, "stripe")["column"] == "stripe"
 
 
+def test_each_sections_curves_are_kept_and_given_by_section():
+    a = synthetic.tissue("xenium", n_side=12, sections=2)
+    inp = cc.prepare_cooccurrence(a, cc.plan_cooccurrence(a, "stripe", interval=8))
+    assert any("own label shares" in n for n in inp.plan.notes)
+    res = cc.run_cooccurrence(inp)
+    assert res.by_section is not None and res.by_section.shape == (2, 4, 4, 7)
+    s = cc.save_cooccurrence(a, inp, res, cells_fingerprint="fp")
+    stored = a.uns["stripe_co_occurrence"]
+    assert stored["occ_by_section"].shape == (2, 4, 4, 7) and stored["count_by_section"].dtype == np.int64
+    np.testing.assert_array_equal(stored["count"], stored["count_by_section"].sum(axis=0))
+    assert s["sections_combined"] == "within_sections" and s["section"] is None
+    libs = s["libraries"]
+    assert [x["library_id"] for x in s["sections"]] == libs and all(x["pairs"] > 0 for x in s["sections"])
+    one = cc.cooccurrence_summary(a, "stripe", "fp", libs[1])
+    assert one["section"] == libs[1]
+    np.testing.assert_allclose(one["occ"], np.round(stored["occ_by_section"][1].astype(np.float64), 4))
+    assert one["count"] == stored["count_by_section"][1].tolist()
+    with pytest.raises(sd.SpatialDomainsError):
+        cc.cooccurrence_summary(a, "stripe", "fp", "nope")
+    lines, _ = cc.grounding_lines(a, "fp")
+    assert "each scored against its own label shares" in lines[1]
+    # One section: nothing per section.
+    b = synthetic.tissue("xenium", n_side=12)
+    inp = cc.prepare_cooccurrence(b, cc.plan_cooccurrence(b, "stripe", interval=8))
+    s = cc.save_cooccurrence(b, inp, cc.run_cooccurrence(inp))
+    assert "occ_by_section" not in b.uns["stripe_co_occurrence"] and s["sections"] == []
+    assert s["sections_combined"] is None
+
+
 def test_a_slash_in_a_column_does_not_nest_the_h5ad_key():
     assert cc.squidpy_key("cell/type") == "cell_type_co_occurrence"
 
@@ -341,6 +428,18 @@ async def test_api_runs_saves_and_answers(client, dataset_manager):
     assert dataset_manager.run_reservations() == {}  # released at the end
     a = (await dataset_manager.get_or_load_dataset(did)).adata
     assert a.uns["stripe_co_occurrence"]["occ"].shape == (4, 4, 9)
+
+
+async def test_api_gives_one_sections_curves(client, dataset_manager):
+    did = _register(dataset_manager, synthetic.tissue("xenium", n_side=12, sections=2), "co_sec")
+    r = await client.post(f"{API}/datasets/{did}/spatial/cooccurrence/run-stream", json={"cluster_key": "stripe", "interval": 6})
+    saved = _events(r.text)[-2][1]
+    assert saved["sections_combined"] == "within_sections" and len(saved["sections"]) == 2
+    lib = saved["libraries"][0]
+    one = (await client.get(f"{API}/datasets/{did}/spatial/cooccurrence", params={"column": "stripe", "section": lib})).json()
+    assert one["result"]["section"] == lib and one["result"]["occ"] != saved["occ"]
+    bad = await client.get(f"{API}/datasets/{did}/spatial/cooccurrence", params={"column": "stripe", "section": "zz"})
+    assert bad.status_code == 404 and "zz" in bad.json()["detail"]
 
 
 async def test_api_max_distance_and_refusals(client, dataset_manager):
