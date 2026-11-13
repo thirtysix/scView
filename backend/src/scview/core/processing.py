@@ -460,3 +460,104 @@ async def iterate_exclusive(
     adaptor = None  # the thread is done with it  # noqa: F841
     await asyncio.to_thread(_give_back_memory)
     await dm.load_dataset(dataset_id)
+
+
+async def iterate_new(
+    dm: DatasetManager,
+    dataset_id: str,
+    make_events: Callable[[], Iterator[Any]],
+    control: RunControl,
+    *,
+    name: str,
+    need: int,
+    remaining: Callable[[], int] | None = None,
+    saved: Callable[[], bool],
+) -> AsyncIterator[Any]:
+    """``iterate_exclusive`` for work that makes a new dataset (a joint embedding,
+    core/integration.py): the items of ``make_events()``, run in a worker thread, with the
+    protection a pipeline run gets. Before it starts, other open datasets are closed for
+    its estimated growth ``need`` (``free_memory_for``), and the growth is reserved until
+    it ends (``remaining()``: what the stages still to run grow by), so a load meanwhile
+    is refused (a 507 naming ``name``) instead of taking that room; its pre-step check
+    waits behind earlier runs (``_queue``); it is registered for Cancel (``POST
+    /datasets/{dataset_id}/assessment/cancel``) and watched, the watchdog's warnings
+    yielded as ``("watchdog", event)``. The new dataset is locked and busy from the
+    start, so nothing reads it half made. When the thread ends without ``saved()`` (an
+    error, a stop, a cancel, the client gone), whatever of the dataset was written is
+    removed."""
+    lock = dataset_lock(dataset_id)
+    await lock.acquire()
+    dm.mark_busy(dataset_id)
+    loop = asyncio.get_running_loop()
+    items: asyncio.Queue = asyncio.Queue()
+    stop = threading.Event()
+
+    def post(kind: str, value: Any = None) -> None:
+        try:
+            loop.call_soon_threadsafe(items.put_nowait, (kind, value))
+        except RuntimeError:  # the loop is gone (server shutting down)
+            pass
+
+    def claimed() -> None:
+        dm.release_run(dataset_id)
+        if not saved():
+            dm.evict(dataset_id)
+            if dm.remove_dataset(dataset_id):
+                logger.info("Removed the unfinished dataset %s", dataset_id)
+        dm.mark_idle(dataset_id)
+        lock.release()
+
+    try:
+        _queue(dm, dataset_id, control)
+        if need > 0:
+            await dm.free_memory_for(need, keep=dataset_id)
+            dm.reserve_run(dataset_id, need, remaining, name=name)
+        unwatch = _watch(dataset_id, control, lambda event: post("item", ("watchdog", event)))
+    except BaseException:
+        claimed()
+        raise
+
+    def release() -> None:
+        unwatch()
+        claimed()
+
+    def drive() -> None:
+        try:
+            gen = make_events()
+            try:
+                for item in gen:
+                    post("item", item)
+                    if stop.is_set():
+                        break
+            finally:
+                gen.close()
+        except BaseException as exc:  # noqa: BLE001 — handed to the consumer
+            post("error", exc)
+        else:
+            post("done")
+
+    try:
+        task = asyncio.ensure_future(asyncio.to_thread(drive))
+    except BaseException:
+        release()
+        raise
+    task.add_done_callback(lambda _t: release())
+
+    finished = False
+    try:
+        while True:
+            kind, value = await items.get()
+            if kind == "item":
+                yield value
+            elif kind == "error":
+                await asyncio.shield(task)  # released (and removed) before the caller hears of it
+                raise value
+            else:
+                finished = True
+                break
+    finally:
+        if not finished:
+            stop.set()
+            control.cancel()  # also ends a Leiden child the step is waiting on
+    await asyncio.shield(task)
+    await asyncio.to_thread(_give_back_memory)

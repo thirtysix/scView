@@ -64,7 +64,7 @@ import scipy.sparse as sp
 from scipy.optimize import nnls
 from scipy.special import gammaln
 
-from scview.core import results_store
+from scview.core import off_tissue, results_store
 
 logger = logging.getLogger(__name__)
 
@@ -926,7 +926,9 @@ def prepare(ref, spots, *, celltype_column: str, ref_info: dict[str, Any], ref_f
               "renamed": match.renamed, "n_ref_genes": match.n_ref, "n_spot_genes": match.n_query,
               "unit": spatial.technology(spots)["unit"] if spatial.has_spatial(spots) else "spot",
               "n_reference_cells": int((codes >= 0).sum()), "excluded_labels": excluded, "merged_labels": merged,
-              "n_excluded_cells": n_labelled - int(labels.notna().sum())},
+              "n_excluded_cells": n_labelled - int(labels.notna().sum()),
+              # imported before off-tissue spots were left out at ingest (core/off_tissue.py)
+              "off_tissue_note": off_tissue.note(spots)},
         check=synth, min_umi=floor,
     )
 
@@ -1104,6 +1106,8 @@ def summarize(p: Prepared, out: dict[str, Any], *, method: str) -> dict[str, Any
         notes.append(f"{n_unconv:,} {unit}s did not settle within {MAX_ITER} rounds; their last estimate is kept.")
     if p.info.get("renamed"):
         notes.append(f"Genes were matched after re-indexing {p.info['renamed']}.")
+    if p.info.get("off_tissue_note"):
+        notes.append(p.info["off_tissue_note"])
     notes.extend(over_share_notes(p.types, p.n_type_cells, rna[fitted]))
     stats_rna, stats_cells = _share_stats(rna, p.types), _share_stats(cells, p.types)
     return {

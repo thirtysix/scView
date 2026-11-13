@@ -12,14 +12,22 @@ type Label = (step: string) => string;
 
 /** Cancel for the run in progress. The run stops before its next step; a step that
  *  is working finishes first (a Leiden clustering is ended at once). */
-export function CancelRunButton({ onCancel, cancelling }: { onCancel: () => void; cancelling: boolean }) {
+export function CancelRunButton({
+  onCancel,
+  cancelling,
+  title = "Stop the run before its next step. Nothing is saved: the dataset stays as it was before the run.",
+}: {
+  onCancel: () => void;
+  cancelling: boolean;
+  title?: string;
+}) {
   return (
     <button
       type="button"
       onClick={onCancel}
       disabled={cancelling}
       className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-      title="Stop the run before its next step. Nothing is saved: the dataset stays as it was before the run."
+      title={title}
     >
       {cancelling ? <Loader2 className="h-3 w-3 animate-spin" /> : <Square className="h-3 w-3" />}
       {cancelling ? "Cancelling..." : "Cancel"}

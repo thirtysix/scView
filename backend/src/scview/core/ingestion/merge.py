@@ -248,12 +248,15 @@ def merge_units(
     join: MergeJoin = MergeJoin.inner,
     sample_label: str = "sample",
     reconciliation: Reconciliation | None = None,
+    copy: bool = True,
 ) -> ad.AnnData:
-    """Merge loaded units into one AnnData, applying a resolved reconciliation."""
+    """Merge loaded units into one AnnData, applying a resolved reconciliation.
+    ``copy=False``: the units are changed in place (gene names), for a caller that drops
+    them after (a joint embedding: a copy of every dataset's counts is memory it never uses)."""
     if not adatas:
         raise ValueError("No samples to merge.")
 
-    work = {lab: a.copy() for lab, a in adatas.items()}
+    work = {lab: a.copy() for lab, a in adatas.items()} if copy else dict(adatas)
 
     if reconciliation and reconciliation.needed and reconciliation.feasible:
         for reset in reconciliation.resets:

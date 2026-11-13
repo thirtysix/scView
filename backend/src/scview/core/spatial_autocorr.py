@@ -54,7 +54,7 @@ import scipy.sparse as sp
 from scipy import stats
 from scipy.spatial import cKDTree
 
-from scview.core import large_mode, results_store
+from scview.core import large_mode, off_tissue, results_store
 
 logger = logging.getLogger(__name__)
 
@@ -455,6 +455,9 @@ def run(adata, *, genes: Any = "hvg", library_id: str | None = None, layer: str 
     unit = unit_of(adata)
     if isolated:
         notes.append(f"{isolated:,} {unit}(s) have no neighbour within reach; they count in the mean only.")
+    off = off_tissue.note(adata, unit)
+    if off:  # imported before off-tissue spots were left out at ingest
+        notes.append(off)
     return Result(
         id=uuid.uuid4().hex[:12], dataset_id=dataset_id, n_obs=int(len(rows)), n_genes=int(len(table)),
         neighbors={"kind": "grid" if grid else "knn", "k": k},

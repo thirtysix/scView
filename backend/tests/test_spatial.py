@@ -302,6 +302,24 @@ def test_adopt_adds_library_and_layout():
     assert not spatial.adopt(a)  # already in the layout
 
 
+def test_adopt_does_not_take_cellxgenes_is_single_flag_for_a_library(caplog):
+    """CELLxGENE Visium files hold the library and an ``is_single`` flag in uns["spatial"]:
+    every open logged "Spatial h5ad with 2 libraries and no library_id column"."""
+    a = _squidpy_like()
+    a.uns["spatial"]["is_single"] = np.True_
+    with caplog.at_level("INFO", logger="scview.core.spatial"):
+        assert spatial.adopt(a)
+    assert a.obs["library_id"].cat.categories.tolist() == ["V1_LN"]
+    assert "libraries and no library_id column" not in caplog.text
+    assert [lib["id"] for lib in spatial.info(a)["libraries"]] == ["V1_LN"]
+    # Two real libraries still say so, the flag beside them or not.
+    b = _squidpy_like()
+    b.uns["spatial"] = {**b.uns["spatial"], "V1_other": dict(b.uns["spatial"]["V1_LN"]), "is_single": False}
+    with caplog.at_level("INFO", logger="scview.core.spatial"):
+        spatial.adopt(b)
+    assert "Spatial h5ad with 2 libraries and no library_id column" in caplog.text
+
+
 def test_adopt_x_spatial_without_uns_is_cells():
     a = _squidpy_like(key="X_spatial", lib=None)
     del a.obs["array_row"]

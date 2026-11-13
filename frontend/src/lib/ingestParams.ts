@@ -61,6 +61,15 @@ function symbolsText(v: Obj): string {
   );
 }
 
+/** "713 spots marked off-tissue (in_tissue 0) left out, 4,279 kept" (backend core/off_tissue.py). */
+function offTissueText(v: Obj): string {
+  const removed = num(v.removed) ?? 0;
+  const kept = num(v.kept);
+  const what = `spots marked off-tissue (${String(v.column ?? "in_tissue")} 0)`;
+  if (!removed) return `${what} kept: ${String(v.kept_reason ?? "not left out")}`;
+  return `${removed.toLocaleString()} ${what} left out` + (kept !== null ? `, ${kept.toLocaleString()} kept` : "");
+}
+
 /** "features split: 33,538 genes, 17 antibodies, 4 multiplexing tags". */
 function featureSplitText(v: Obj): string {
   const parts: [unknown, string, string][] = [
@@ -97,6 +106,7 @@ export function ingestParamText(key: string, value: unknown): string | null {
   if (key === "atac") return atacText(v);
   if (key === "gene_symbols") return symbolsText(v);
   if (key === "feature_split") return featureSplitText(v);
+  if (key === "off_tissue") return offTissueText(v);
   if (key === "public_import") return publicImportText(v);
   return null;
 }

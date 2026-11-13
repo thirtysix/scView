@@ -140,6 +140,35 @@ def test_search_filters_sorts_and_counts():
     assert len(page["results"]) == 2 and page["total"] == 4
 
 
+def test_assay_tissue_and_disease_match_part_of_a_name_when_none_matches_whole():
+    """QA round 3: assay "Visium" found 0 datasets (Discover's name is "Visium Spatial Gene
+    Expression V1"). An exact name still wins, so "10x 3' v3" never takes in "10x 3' v2"."""
+    ds = [pi.slim(r) for r in LISTING]
+    names = ["Visium Spatial Gene Expression V1", "Visium CytAssist Spatial Gene Expression V2",
+             "10x 3' v3", "10x 3' v2"]
+    for d, assay in zip(ds, names):
+        d["assay"] = [assay]
+    ds[3]["tissue"] = ["heart left ventricle"]
+    ds[3]["disease"] = ["myocardial infarction"]
+
+    def ids(r):
+        return sorted(d["assay"][0] for d in r["results"])
+
+    r = pi.search(ds, assay="visium")
+    assert ids(r) == sorted(names[:2]) and r["matched"] == {"assay": sorted(names[:2])}
+    r = pi.search(ds, assay="10x 3' V3")  # exact (any case): the other version stays out
+    assert ids(r) == ["10x 3' v3"] and "matched" not in r
+    assert ids(pi.search(ds, assay="10x 3'")) == ["10x 3' v2", "10x 3' v3"]
+    assert pi.search(ds, assay="v3")["total"] == 1  # a word start, not inside "seqV3"-like names
+    assert ids(pi.search(ds, assay="spatial v2")) == [names[1]]  # words need not be adjacent
+    assert ids(pi.search(ds, assay="cytassist spatial")) == [names[1]]
+    assert pi.search(ds, assay="xenium")["total"] == 0
+    r = pi.search(ds, tissue="ventricle", disease="infarction")
+    assert r["total"] == 1 and r["matched"] == {"tissue": ["heart left ventricle"],
+                                                "disease": ["myocardial infarction"]}
+    assert pi.search(ds, organism="homo")["total"] == 0  # organism stays exact
+
+
 def test_search_reads_collection_descriptions_and_words_not_phrases():
     """Otero-Garcia 2022: "neurofibrillary tangle" found nothing, though the collection's
     description says "neurofibrillary tangles (NFTs)" (the title: "tangle-bearing")."""

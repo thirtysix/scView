@@ -310,7 +310,13 @@ def log_only_stop(step: str, adata: Any) -> str | None:
             f"Nothing was saved: the dataset is as it was before the run.")
 
 
-def others_stop(lead: str, need: int, avail: Any, others: int, waited: float = 0.0) -> str:
+# What a stopped run says it kept, and how to make a step fit (``memory_stop``).
+NOTHING_SAVED = "Nothing was saved: the dataset is as it was before the run."
+RAISE_LIMIT = "Raise SCVIEW_MEMORY_GB in .env (then restart scView), or leave this step out."
+
+
+def others_stop(lead: str, need: int, avail: Any, others: int, waited: float = 0.0,
+                saved: str = NOTHING_SAVED) -> str:
     """The stop of a step that fits by itself but not beside what other work still running
     is expected to grow by (``DatasetManager.outstanding``): that fits again once it ends,
     so the sentence says to run it again, not to raise the limit. ``waited``: seconds the
@@ -319,8 +325,7 @@ def others_stop(lead: str, need: int, avail: Any, others: int, waited: float = 0
     return (f"{lead} about {need / GB:.1f} GB more at its peak, and of the "
             f"{avail.available_bytes / GB:.1f} GB scView has free ({avail.limit_bytes / GB:.1f} GB limit) other "
             f"work still running will take about {others / GB:.1f} GB, so together they would get the backend "
-            f"stopped.{after} Nothing was saved: the dataset is as it was before the run. Run it again once that "
-            "work has finished.")
+            f"stopped.{after} {saved} Run it again once that work has finished.")
 
 
 def _minutes(seconds: float) -> str:
@@ -416,19 +421,32 @@ def default_before_step(step: str, adata: Any, params: Any) -> str | None:
     avail = preflight.available_memory()
     if not avail.limited or avail.available_bytes is None or avail.limit_bytes is None:
         return None
-    need = preflight.step_peak_for(adata, step, params)
+    return memory_stop(step, preflight.step_peak_for(adata, step, params))
+
+
+def memory_stop(step: str, need: int, *, label: str | None = None, saved: str = NOTHING_SAVED,
+                fix: str = RAISE_LIMIT) -> str | None:
+    """The memory half of ``default_before_step`` for a step needing ``need`` more bytes
+    at its peak: None when it fits (after waiting for other work, ``room_for_step``), else
+    the stop sentence. ``label`` names the step in it (default: its name), ``saved`` says
+    what the stop kept and ``fix`` how to make it fit: a joint embedding
+    (core/integration.py) keeps no dataset and has no step to leave out."""
+    from scview.core import preflight
+
+    avail = preflight.available_memory()
+    if not avail.limited or avail.available_bytes is None or avail.limit_bytes is None:
+        return None
     room = room_for_step(current(), step, need)  # waits while other work holds the room
     if room.verdict in ("fits", "cancelled"):  # cancelled: ``halt_before`` says so
         return None
-    label = step.replace("_", " ")
+    label = label or step.replace("_", " ")
     avail = room.avail
     if room.verdict == "others":
-        return others_stop(f"Stopped before {label}: it needs", need, avail, room.others, room.waited)
+        return others_stop(f"Stopped before {label}: it needs", need, avail, room.others, room.waited,
+                           saved)
     return (f"Stopped before {label}: it needs about {need / GB:.1f} GB more at its peak, and scView "
             f"has {avail.available_bytes / GB:.1f} GB free of its {avail.limit_bytes / GB:.1f} GB limit, "
-            f"so the system would have stopped the backend. Nothing was saved: the dataset is as it "
-            f"was before the run. Raise "
-            f"SCVIEW_MEMORY_GB in .env (then restart scView), or leave this step out.")
+            f"so the system would have stopped the backend. {saved} {fix}")
 
 
 _DEFAULT = object()

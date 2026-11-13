@@ -75,7 +75,7 @@ from sklearn.cluster import KMeans
 from sklearn.metrics import adjusted_rand_score
 from sklearn.mixture import GaussianMixture
 
-from scview.core import spatial
+from scview.core import off_tissue, spatial
 from scview.core.spatial_autocorr import knn_edges
 
 logger = logging.getLogger(__name__)
@@ -650,6 +650,9 @@ def plan_domains(adata, *, k: int | None = DEFAULT_K, n_hops: int = DEFAULT_HOPS
     hole = _hole_note(adata, tech["unit"])
     if hole:
         notes.append(hole)
+    off = off_tissue.note(adata, tech["unit"])
+    if off:  # imported before off-tissue spots were left out at ingest
+        notes.append(off)
     k_used = int(k) if k is not None else DEFAULT_K
     return DomainPlan(
         n_obs=n, technology=tech["technology"], unit=tech["unit"], libraries=libs, rep=rep, n_pcs=use,
