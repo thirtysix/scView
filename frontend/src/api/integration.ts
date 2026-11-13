@@ -22,10 +22,20 @@ export interface IntegrationMergePlan {
   warnings: string[];
 }
 
+/** An obs column some dataset has that the joint dataset leaves out, and why. */
+export interface DroppedColumn {
+  column: string;
+  reason: string;
+  /** Labels of the datasets that have it */
+  datasets: string[];
+}
+
 export interface IntegrationPlan {
   datasets: IntegrationDatasetCheck[];
   merge: IntegrationMergePlan | null;
   shared_columns: string[];
+  /** Columns not carried into the joint dataset (backend integration.dropped_columns) */
+  dropped_columns?: DroppedColumn[];
   est_cells: number;
   blocking: string[];
   /** Design notes that don't block (e.g. each dataset holds one condition). */

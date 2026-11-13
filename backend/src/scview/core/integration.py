@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Generator
@@ -173,31 +173,70 @@ def _prefixed_clonotypes(s: pd.Series, label: str) -> pd.Series:
     return s.where(~has, label + ":" + s.astype(str))
 
 
-def carried_obs(adata: ad.AnnData, label: str) -> pd.DataFrame:
-    """Categorical annotations worth keeping in the joint dataset.
+# Per-cell QC metrics the joint run's QC step computes again from the joint counts (scanpy
+# calculate_qc_metrics names, and the older n_genes / n_counts): not carried.
+_RECOMPUTED_RE = re.compile(
+    r"^(log1p_)?(n_genes_by_counts|total_counts(_.+)?|pct_counts_.+|n_genes|n_counts)$")
+# Why a column is not carried (``DroppedColumn.reason``).
+WHY_RECOMPUTED = "recomputed by the joint run"
+WHY_ID = "one value per cell (an id)"
+WHY_CLUSTERS = "this dataset's own clusters (kept as source_cluster)"
+WHY_LEVELS = "too many values to compare"
+WHY_SOME = "a number in only some of the datasets"
+WHY_EMPTY = "empty"
 
-    Cluster ids are dataset-local (cluster "3" in A is unrelated to "3" in B), so
-    the active clustering is carried as ``source_cluster`` prefixed with the
-    dataset label, and other cluster columns are dropped — the joint run
-    clusters afresh. Clonotype ids (``clonotype``, core/vdj.py) are prefixed the
-    same way.
-    """
+
+def _is_number(s: pd.Series) -> bool:
+    return pd.api.types.is_numeric_dtype(s) and not pd.api.types.is_bool_dtype(s)
+
+
+def _plain_number(s: pd.Series) -> pd.Series:
+    """A numeric column as numpy: ints stay ints when no value is missing, else floats."""
+    if s.isna().any():
+        return s.astype(np.float64)
+    if pd.api.types.is_integer_dtype(s):
+        return s.astype(np.int64)
+    return s.astype(s.dtype.numpy_dtype if hasattr(s.dtype, "numpy_dtype") else s.dtype)
+
+
+def obs_choice(adata: ad.AnnData, label: str) -> tuple[dict[str, pd.Series], dict[str, str]]:
+    """The obs columns a joint dataset keeps from one dataset, and the ones it leaves out
+    with the reason (``carried_obs``); ``scview_`` columns are left out unnamed."""
     obs = adata.obs
     active = adata.uns.get("scview_active_clustering")
     keep: dict[str, pd.Series] = {}
+    dropped: dict[str, str] = {}
     for col in obs.columns:
         col = str(col)
-        if col == active or col in ("leiden", "louvain") or col.startswith("scview_"):
+        if col.startswith("scview_"):
+            continue
+        if col == active or col in ("leiden", "louvain"):
+            dropped[col] = WHY_CLUSTERS
             continue
         s = obs[col]
+        if _is_number(s):
+            if _RECOMPUTED_RE.match(col):
+                dropped[col] = WHY_RECOMPUTED
+            elif s.notna().sum() == 0:
+                dropped[col] = WHY_EMPTY
+            elif (pd.api.types.is_integer_dtype(s) and len(s) > 1
+                  and s.nunique(dropna=True) == len(s)):
+                dropped[col] = WHY_ID
+            else:
+                keep[col] = _plain_number(s)
+            continue
         if not (isinstance(s.dtype, pd.CategoricalDtype) or pd.api.types.is_string_dtype(s)
                 or pd.api.types.is_bool_dtype(s)):
             continue
         n_levels = s.nunique(dropna=True)
         # Too many levels, or nearly one per cell (barcodes / ids): not an annotation.
         # Clonotypes are ids with many levels by nature, yet worth carrying.
-        if n_levels == 0 or col != CLONOTYPE_COL and (not 1 <= n_levels <= _MAX_CARRY_CATEGORIES
+        if n_levels == 0:
+            dropped[col] = WHY_EMPTY
+            continue
+        if col != CLONOTYPE_COL and (n_levels > _MAX_CARRY_CATEGORIES
                                      or (n_levels > 1 and n_levels > 0.5 * len(s))):
+            dropped[col] = WHY_ID if n_levels > 0.5 * len(s) else WHY_LEVELS
             continue
         name = "source_dataset" if col == LABEL_COLUMN else col
         keep[name] = s.astype(object).where(s.notna(), None)
@@ -205,7 +244,23 @@ def carried_obs(adata: ad.AnnData, label: str) -> pd.DataFrame:
             keep[name] = _prefixed_clonotypes(keep[name], label)
     if active and active in obs.columns:
         keep["source_cluster"] = (label + ":" + obs[active].astype(str)).astype(object)
-    return pd.DataFrame(keep, index=obs.index)
+    return keep, dropped
+
+
+def carried_obs(adata: ad.AnnData, label: str) -> pd.DataFrame:
+    """Annotations worth keeping in the joint dataset: categorical, text and true/false
+    columns, and numbers (author scores, % mito, in_tissue; ints stay ints when none is
+    missing). Numbers kept only where every dataset has them (``merge_joint``).
+
+    Cluster ids are dataset-local (cluster "3" in A is unrelated to "3" in B), so
+    the active clustering is carried as ``source_cluster`` prefixed with the
+    dataset label, and other cluster columns are dropped — the joint run
+    clusters afresh. Clonotype ids (``clonotype``, core/vdj.py) are prefixed the
+    same way. Left out: per-cell QC metrics the joint run computes again, ids (one
+    value per cell), and text with too many values (``obs_choice`` says which and why).
+    """
+    keep, _ = obs_choice(adata, label)
+    return pd.DataFrame(keep, index=adata.obs.index)
 
 
 @dataclass
@@ -216,6 +271,8 @@ class Unit:
     adata: ad.AnnData | None  # counts in X, carried annotations in obs; None once merged
     counts_source: str
     n_cells: int = 0  # kept once ``adata`` is dropped (``release_units``)
+    # obs columns of the dataset not carried, with the reason (``obs_choice``)
+    dropped: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.adata is not None:
@@ -240,7 +297,8 @@ def build_unit(
     counts = recover_counts(adata, fallback_paths)
     var = counts.var
     var.index = var.index.astype(str)
-    obs = carried_obs(adata, label)
+    kept, dropped = obs_choice(adata, label)
+    obs = pd.DataFrame(kept, index=adata.obs.index)
     obs.index = obs.index.astype(str)
     unit = ad.AnnData(X=counts.X, obs=obs, var=var)
     if protein.has_protein(adata):  # CITE-seq counts ride along (same cells, same order)
@@ -255,7 +313,7 @@ def build_unit(
             if col in adata.obs.columns:
                 unit.obs[col] = adata.obs[col].to_numpy()
         unit.uns[spatial.KEY] = _shown_images_only(adata.uns[spatial.KEY])
-    return Unit(dataset_id, name, label, unit, counts.source)
+    return Unit(dataset_id, name, label, unit, counts.source, dropped=dropped)
 
 
 def _shown_images_only(libraries: Any) -> dict:
@@ -300,10 +358,46 @@ class DatasetCheck(BaseModel):
     error: str | None = None
 
 
+class DroppedColumn(BaseModel):
+    """An obs column some dataset has that the joint dataset will not."""
+
+    column: str
+    reason: str  # WHY_* above
+    datasets: list[str] = Field(default_factory=list)  # labels of the datasets that have it
+
+
+def numbers_in_some(units: dict[str, Unit]) -> dict[str, list[str]]:
+    """Numeric obs columns kept in some units but not in every one: column -> the labels
+    of the units that have it. ``merge_joint`` leaves them out (no number for the other
+    datasets' cells)."""
+    have: dict[str, list[str]] = {}
+    for lab, u in units.items():
+        for c in u.adata.obs.columns:
+            if _is_number(u.adata.obs[c]):
+                have.setdefault(str(c), []).append(lab)
+    return {c: labs for c, labs in have.items() if len(labs) < len(units)}
+
+
+def dropped_columns(units: dict[str, Unit]) -> list[DroppedColumn]:
+    """Every obs column the joint dataset leaves out, once, with the reason and the
+    datasets that have it (the plan's list)."""
+    out: dict[str, DroppedColumn] = {}
+    for lab, u in units.items():
+        for col, why in u.dropped.items():
+            out.setdefault(col, DroppedColumn(column=col, reason=why)).datasets.append(lab)
+    for col, labs in numbers_in_some(units).items():
+        out.setdefault(col, DroppedColumn(column=col, reason=WHY_SOME)).datasets.extend(labs)
+    order = [WHY_SOME, WHY_RECOMPUTED, WHY_ID, WHY_LEVELS, WHY_CLUSTERS, WHY_EMPTY]
+    return sorted(out.values(), key=lambda d: (order.index(d.reason) if d.reason in order else 99,
+                                               d.column.lower()))
+
+
 class IntegrationPlan(BaseModel):
     datasets: list[DatasetCheck] = Field(default_factory=list)
     merge: MergePlan | None = None
     shared_columns: list[str] = Field(default_factory=list)
+    # obs columns the joint dataset leaves out, with why (``dropped_columns``)
+    dropped_columns: list[DroppedColumn] = Field(default_factory=list)
     est_cells: int = 0
     blocking: list[str] = Field(default_factory=list)
     # Design notes (not blocking): e.g. each dataset holds one condition.
@@ -424,6 +518,7 @@ def build_plan(
         plan.merge = plan_merge({lab: u.adata for lab, u in units.items()})
         col_sets = [set(u.adata.obs.columns) - {"source_cluster"} for u in units.values()]
         plan.shared_columns = sorted(set.intersection(*col_sets))
+        plan.dropped_columns = dropped_columns(units)
         m = plan.merge
         genes = m.reconciliation.overlap_after if (
             m.reconciliation and m.reconciliation.feasible) else m.intersection
@@ -476,6 +571,13 @@ def merge_joint(
     adatas = {lab: u.adata for lab, u in units.items()}
     # Pad every unit to the union of annotation columns: concatenating with an
     # inner gene join would otherwise also drop any column one dataset lacks.
+    # A number only some datasets have is left out (the plan lists it): the other cells
+    # would hold no value, and padding turned the column into text.
+    partial = numbers_in_some(units)
+    for a in adatas.values():
+        a.obs = a.obs.drop(columns=[c for c in partial if c in a.obs.columns])
+    numbers = {str(c) for c in next(iter(adatas.values())).obs.columns
+               if all(c in a.obs.columns and _is_number(a.obs[c]) for a in adatas.values())}
     cols = list(dict.fromkeys(c for a in adatas.values() for c in a.obs.columns))
     for a in adatas.values():
         for c in cols:
@@ -486,7 +588,10 @@ def merge_joint(
     protein.common_panel(list(adatas.values()))  # proteins all of them measured, or none
     joint = merge_units(adatas, join=join, sample_label=LABEL_COLUMN, reconciliation=recon, copy=copy)
     for c in cols:
-        joint.obs[c] = joint.obs[c].astype("category")
+        if c in numbers:  # ints stay ints when no dataset misses a value (``_plain_number``)
+            joint.obs[c] = _plain_number(joint.obs[c])
+        else:
+            joint.obs[c] = joint.obs[c].astype("category")
     protein.renormalise(joint)
     return joint
 

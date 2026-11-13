@@ -21,7 +21,7 @@ vi.mock("@/api/pipelineRun", async (importOriginal) => ({
   cancelPipelineRun,
 }));
 
-import { JointEmbedding } from "./JointEmbedding";
+import { DroppedColumns, JointEmbedding } from "./JointEmbedding";
 
 const ds = (id: string): DatasetInfo => ({
   id,
@@ -110,5 +110,27 @@ describe("JointEmbedding dataset picker", () => {
     resolve([]);
     expect(await screen.findByText(/No ready datasets/)).toBeInTheDocument();
     expect(screen.queryByText(/Loading datasets/)).toBeNull();
+  });
+});
+
+describe("DroppedColumns: what the joint dataset leaves out", () => {
+  const some = { column: "Fibroblast", reason: "a number in only some of the datasets", datasets: ["ctrl_P1"] };
+  const qc = { column: "total_counts", reason: "recomputed by the joint run", datasets: ["ctrl_P1", "IZ_P3"] };
+
+  it("lists a short list open, grouped by why, naming the datasets that have a partial column", () => {
+    render(<DroppedColumns columns={[some, qc]} nDatasets={2} />);
+    expect(screen.getByText("2 annotation columns are not carried into the joint dataset:")).toBeInTheDocument();
+    expect(screen.getByText("A number in only some of the datasets:")).toBeInTheDocument();
+    expect(screen.getByText("Recomputed by the joint run:")).toBeInTheDocument();
+    expect(screen.getByText("(ctrl_P1)", { exact: false })).toBeInTheDocument();
+    expect(screen.getByTestId("dropped-columns").tagName).toBe("DIV");
+  });
+
+  it("folds a long list under one line", () => {
+    const many = Array.from({ length: 9 }, (_, i) => ({ ...qc, column: `qc${i}` }));
+    render(<DroppedColumns columns={many} nDatasets={2} />);
+    const box = screen.getByTestId("dropped-columns");
+    expect(box.tagName).toBe("DETAILS");
+    expect(within(box).getByText(/9 annotation columns are not carried .* \(show which and why\)/)).toBeInTheDocument();
   });
 });

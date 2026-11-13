@@ -10,6 +10,7 @@ import {
   type IntegrationEvent,
   type IntegrationMethod,
   type IntegrationPlan,
+  type DroppedColumn,
 } from "@/api/integration";
 import { formatNumber, prettyObsLabel } from "@/lib/formatting";
 import type { DatasetInfo } from "@/api/types";
@@ -335,6 +336,9 @@ export function JointEmbedding() {
                   ))}
                 </p>
               )}
+              {plan.dropped_columns && plan.dropped_columns.length > 0 && (
+                <DroppedColumns columns={plan.dropped_columns} nDatasets={plan.datasets.length} />
+              )}
               {plan.preflight && <PreflightNote verdict={plan.preflight} label="Memory" />}
               {plan.blocking.map((b) => <ErrorLine key={b} text={b} />)}
             </div>
@@ -479,6 +483,49 @@ function ErrorLine({ text }: { text: string }) {
       <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
       <span>{text}</span>
     </div>
+  );
+}
+
+/** Columns more than this are listed folded, under a one-line summary. */
+const DROPPED_OPEN_MAX = 6;
+
+/** The annotation columns the joint dataset leaves out, grouped by why; folded when long. */
+export function DroppedColumns({ columns, nDatasets }: { columns: DroppedColumn[]; nDatasets: number }) {
+  const groups = new Map<string, DroppedColumn[]>();
+  for (const c of columns) groups.set(c.reason, [...(groups.get(c.reason) ?? []), c]);
+  const lines = (
+    <ul className="space-y-0.5">
+      {[...groups].map(([reason, cols]) => (
+        <li key={reason}>
+          <span className="text-slate-600">{reason.charAt(0).toUpperCase() + reason.slice(1)}:</span>{" "}
+          {cols.map((c) => (
+            <span
+              key={c.column}
+              title={c.datasets.length < nDatasets ? `In ${c.datasets.join(", ")}` : `In every dataset`}
+              className="mr-1 inline-block rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-500"
+            >
+              {c.column}
+              {c.datasets.length < nDatasets && <span className="text-slate-400"> ({c.datasets.join(", ")})</span>}
+            </span>
+          ))}
+        </li>
+      ))}
+    </ul>
+  );
+  const what = `${columns.length} annotation column${columns.length === 1 ? " is" : "s are"} not carried into the joint dataset`;
+  if (columns.length <= DROPPED_OPEN_MAX) {
+    return (
+      <div className="text-xs text-slate-500" data-testid="dropped-columns">
+        <p>{what}:</p>
+        {lines}
+      </div>
+    );
+  }
+  return (
+    <details className="text-xs text-slate-500" data-testid="dropped-columns">
+      <summary className="cursor-pointer">{what} (show which and why)</summary>
+      <div className="mt-1">{lines}</div>
+    </details>
   );
 }
 
