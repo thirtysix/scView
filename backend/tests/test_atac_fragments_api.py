@@ -211,3 +211,18 @@ async def test_delete_removes_the_files(client, dataset_manager, files, seeded):
     await _attach(client, did, files)
     assert (await client.delete(f"{API}/datasets/{did}/atac/fragments")).json() == {"deleted": True}
     assert (await client.get(f"{API}/datasets/{did}/atac/fragments")).json()["attached"] is False
+
+
+async def test_fragments_of_another_species_say_why_once(client, dataset_manager, tmp_path):
+    """chr25: no human or mouse build has it. Attached; TSS enrichment refused with the one
+    sentence; coverage drawn without genes, with the same sentence."""
+    fish = sorted(_lines() + [("chr25", 100 + i, 150 + i, _cells()[0], 1) for i in range(20)],
+                  key=lambda x: (x[0], x[1]))
+    frag, idx = write_fragments(tmp_path / "fish.tsv.gz", fish)
+    did = _register(dataset_manager, _adata(), "fo")
+    st = await _attach(client, did, (frag.read_bytes(), idx.read_bytes()))
+    assert st["genome"] == "other" and "chr25" in st["genome_note"] and "work as usual" in st["genome_note"]
+    r = await client.post(f"{API}/datasets/{did}/atac/fragments/qc-stream")
+    assert r.status_code == 422 and r.json()["detail"] == f"{st['genome_note']} Coverage tracks still work."
+    r = await client.get(f"{API}/datasets/{did}/atac/coverage", params={"region": "chr1:49,000-51,000", "bins": 10})
+    assert r.status_code == 200 and r.json()["genes"] == [] and r.json()["genes_note"] == st["genome_note"]

@@ -182,6 +182,8 @@ def detach(data_dir: str | Path, dataset_id: str) -> None:
         path.unlink(missing_ok=True)
 
 
+NO_GENOME = ("This file's chromosome names match no build scView has gene positions for "
+             f"({genome_build.SUPPORTED_TEXT}), so TSS enrichment and gene positions are off.")
 _AUTOSOME = re.compile(r"^(?:chr)?(\d+)$")
 _SPECIES = {"GRCh38": "human", genome_build.HG19: "human", "mm10": "mouse", genome_build.MM9: "mouse",
             genome_build.MM39: "mouse"}
@@ -189,7 +191,8 @@ _SPECIES = {"GRCh38": "human", genome_build.HG19: "human", "mm10": "mouse", geno
 
 def genome_from_names(names: Sequence[str]) -> str | None:
     """GRCh38 or mm10 from the chromosome names: autosomes to 22 or to 19. hg19, mm9 and mm39 have
-    their names: ``verify`` tells them by the file's header and the index's chromosome ends (``core/genome_build.py``)."""
+    their names: ``verify`` tells them by the file's header and the index's chromosome ends, and
+    other species by names and ends no human or mouse build has (``core/genome_build.py``)."""
     numbers = [int(m.group(1)) for m in map(_AUTOSOME.match, map(str, names)) if m]
     if not numbers:
         return None
@@ -248,22 +251,27 @@ def verify(data_dir: str | Path, dataset_id: str, barcodes: Sequence[str], file_
             idx.unlink(missing_ok=True)
             raise FragmentsError(str(e)) from e
         genome = genome_from_names(index.names)
-        if genome in (None, "GRCh38", "mm10") and path.exists():
-            header = genome_build.from_header(genome_build.read_header(path))
-            for old in (header, genome_build.from_index(index.names, index.linear)):
-                if old and genome in (None, genome_build.NEWER[old]):  # an older build of the same species
+        header = genome_build.read_header(path) if path.exists() else {}
+        other = genome_build.other_from_header(header)  # a sentence, or None
+        if not other and (found := genome_build.other_from_chroms(index.names, genome_build.index_ends(index.linear))):
+            other = genome_build.other_sentence(found)
+        if other:
+            genome = genome_build.OTHER
+        elif genome in (None, "GRCh38", "mm10") and path.exists():
+            for old in (genome_build.from_header(header), genome_build.from_index(index.names, index.linear)):
+                if old and genome in (None, genome_build.NEWER[old]):  # another build of the same species
                     genome = old
                     break
         state.update(genome=genome, chromosomes=index.names)
         state.pop("genome_note", None)
-        if genome in genome_build.REFUSALS:
-            state["genome_note"] = genome_build.REFUSALS[genome]
+        if note := genome_build.note(genome, other):
+            state["genome_note"] = note
         expected = {"human": "GRCh38", "mouse": "mm10"}.get(str(species or "").lower())
-        if genome and expected and _SPECIES.get(genome) != _SPECIES[expected]:
+        if genome and genome != genome_build.OTHER and expected and _SPECIES.get(genome) != _SPECIES[expected]:
             detach(data_dir, dataset_id)
             raise FragmentsError(f"The fragments file's chromosomes are {genome}'s but this dataset's genes are "
                                  f"{species}: attach the fragments file of this sample.")
-        if genome:
+        if genome and genome != genome_build.OTHER:
             shared = _names_in_table(index.names, genome, data_dir, auto_download)
             state["chromosomes_in_annotation"] = shared
             if shared == 0:
@@ -289,7 +297,9 @@ def status(data_dir: str | Path, dataset_id: str, n_cells: int | None = None) ->
         "attached": has_f and has_i, "fragments": has_f, "index": has_i, "missing": message,
         "name": state.get("name"), "size_bytes": frag.stat().st_size if has_f else None,
         "barcode_share": state.get("share"), "lines_checked": state.get("lines_checked"),
-        "cells_seen": state.get("cells_seen"), "genome": state.get("genome"), "genome_note": state.get("genome_note"),
+        "cells_seen": state.get("cells_seen"), "genome": state.get("genome"),
+        # worked out again: a file recorded as mm39 by v0.76 (refused then) has no note now
+        "genome_note": genome_build.note(state.get("genome"), state.get("genome_note")),
         "n_chromosomes": len(state.get("chromosomes") or []) or None,
     }
     if has_f and n_cells is not None:

@@ -1,12 +1,15 @@
 """hg19 vs GRCh38, mm9 and mm39 vs mm10 on ATAC input (core/genome_build.py): told from a named
-reference, a fragments header or coordinates past the newer build's chromosome ends; recorded as
-hg19 / mm9 / mm39 and refused by every genome-dependent step with one sentence."""
+reference, a fragments header or coordinates past the assumed build's chromosome ends. hg19 / mm9
+are recorded and refused by every genome-dependent step with one sentence; mm39 is a build scView
+has (since v0.77). Other species and builds get one sentence too."""
 
 from __future__ import annotations
 
+import anndata as ad
 import numpy as np
 import pandas as pd
 import pytest
+import scipy.sparse as sp
 
 from scview.core import atac, atac_import, gene_annotation, genome_build, modality_store, provenance
 from scview.core import atac_fragments as af
@@ -52,7 +55,7 @@ def test_canonical_genome_refuses_hg19_with_the_sentence():
         with pytest.raises(gene_annotation.AnnotationError) as e:
             gene_annotation.canonical_genome(name)
         assert str(e.value) == genome_build.HG19_REFUSAL
-    with pytest.raises(gene_annotation.AnnotationError, match="not 'xenopus'"):
+    with pytest.raises(gene_annotation.AnnotationError, match="'xenopus', a reference scView does not know"):
         gene_annotation.canonical_genome("xenopus")
     assert gene_annotation.canonical_genome("GRCh38-2020-A") == "GRCh38"
 
@@ -283,7 +286,9 @@ ITGB1_MM39 = 129_412_000
                                   "/refs/refdata-gex-GRCm39-2024-A/fasta/genome.fa"])
 def test_names_mm39(name):
     assert genome_build.names_mm39(name) and genome_build.old_build(name) == genome_build.MM39
-    assert genome_build.refusal(name) == genome_build.MM39_REFUSAL
+    # a build scView has since v0.77: no refusal
+    assert genome_build.refusal(name) is None and genome_build.unsupported(name) is None
+    assert genome_build.supported(name) == "mm39"
 
 
 @pytest.mark.parametrize("name", ["mm10", "mm10-2020-A", "GRCm38", "refdata-cellranger-arc-mm10-2020-A-2.0.0",
@@ -322,42 +327,62 @@ def test_mm39_positions_that_say_nothing():
     assert genome_build.from_positions(["chr8", "chr21"], [ITGB1_MM39, 1_000]) is None
 
 
-def test_canonical_genome_refuses_mm39_with_the_sentence(tmp_path):
+def test_mm39_is_a_build_scview_has(tmp_path):
     from scview.api.v1 import atac_motifs
     from scview.core import genome_seq
 
-    for name in ("mm39", "GRCm39", "GRCm39-2024-A"):
-        with pytest.raises(gene_annotation.AnnotationError) as e:
-            gene_annotation.canonical_genome(name)
-        assert str(e.value) == genome_build.MM39_REFUSAL
-    with pytest.raises(gene_annotation.AnnotationError, match=r"on mm39 \(GRCm39\)"):
-        genome_seq.file_path(tmp_path, "mm39")  # GC, motifs and links read the 2bit through this
-    with pytest.raises(atac.AtacError) as err:
-        atac_motifs._genome("GRCm39-2024-A")
-    assert err.value.status == 422 and str(err.value) == genome_build.MM39_REFUSAL
+    for name in ("mm39", "GRCm39", "GRCm39-2024-A", "refdata-cellranger-arc-GRCm39-2024-A"):
+        assert gene_annotation.canonical_genome(name) == "mm39"
+    # GC, motifs and links read the 2bit through this; gene bodies and TSS from GENCODE vM33
+    assert genome_seq.file_path(tmp_path, "GRCm39-2024-A").name == "mm39.2bit"
+    assert atac_motifs._genome("GRCm39-2024-A") == "mm39"
+    assert gene_annotation.source_of("GRCm39") == "GENCODE vM33 basic"
     assert gene_annotation.canonical_genome("GRCm38") == "mm10"
+    st = genome_seq.status(tmp_path, "mm39")
+    assert st == {"genome": "mm39", "source": "UCSC mm39", "size": 714_181_470, "downloaded": False,
+                  "url": "https://hgdownload.soe.ucsc.edu/goldenPath/mm39/bigZips/mm39.2bit"}
+    # without the table on disk and fetching off: a reason about the file, not a refusal
     choice = atac.choose_genes(mf.as_anndata(), "mm39", tmp_path, auto_download=False)
-    assert choice.names == [] and choice.reason == genome_build.MM39_REFUSAL
+    assert choice.names == [] and "ANNOTATION_AUTO_DOWNLOAD" in choice.reason
 
 
-def test_tenx_h5_naming_grcm39_is_recorded_and_noted(tmp_path):
-    h5 = mf.write_tenx_h5(tmp_path / "e18_filtered_feature_bc_matrix.h5", genome="GRCm39-2024-A")
+def test_tenx_h5_naming_grcm39_is_recorded_without_a_note(tmp_path):
+    h5 = mf.write_tenx_h5(tmp_path / "e18_filtered_feature_bc_matrix.h5", genome="GRCm39-2024-A", build="mm39")
     m, sid = _session(tmp_path, h5)
     did = m._build_dataset(sid)
     a = _dataset(m, did)
     with _store(m, did) as s:
-        assert s.meta["genome"] == "mm39" and s.meta["genome_note"] == genome_build.MM39_REFUSAL
+        assert s.meta["genome"] == "mm39" and "genome_note" not in s.meta
     info = atac_import.read_info(a)
-    assert info["genome"] == "mm39" and info["genome_note"] == genome_build.MM39_REFUSAL
-    assert atac_import.dataset_state(a, m.data_dir, did)["genome_note"] == genome_build.MM39_REFUSAL
-    history = provenance.read_provenance(a)["history"]
-    assert any(genome_build.MM39_REFUSAL in str(h.get("note") or "") for h in history)
+    assert info["genome"] == "mm39" and "genome_note" not in info
+    assert "genome_note" not in atac_import.dataset_state(a, m.data_dir, did)
+
+
+def test_a_dataset_v076_recorded_as_mm39_works_without_reimport(tmp_path):
+    """v0.76 refused mm39: it recorded genome "mm39" with the refusal as genome_note in the ATAC
+    record, the store and the fragments state. The note is now worked out again from the genome."""
+    old = ("This ATAC input is on mm39 (GRCm39), and scView has gene positions and genome sequence for "
+           "GRCh38 and mm10 only, so gene activity, ... are off.")
+    a = mf.as_anndata()
+    atac_import.write_info(a, {"n_peaks": 1, "genome": "mm39", "genome_note": old, "computed": ["peak counts"]})
+    store = atac.store_path(tmp_path, "d")
+    modality_store.write(store, {atac.MATRIX: sp.csr_matrix(np.ones((a.n_obs, 1), dtype=np.float32))},
+                         list(a.obs_names), ["chr8:1-500"], atac_import.feature_attrs(["chr8:1-500"]),
+                         {"genome": "mm39", "genome_note": old})
+    assert "genome_note" not in atac_import.dataset_state(a, tmp_path, "d")
+    lines, _ = atac.grounding_lines(a)
+    assert not any("mm39 (GRCm39)" in line for line in lines)
+    af._write_state(tmp_path, "d", {"genome": "mm39", "genome_note": old})
+    assert af.status(tmp_path, "d")["genome_note"] is None
+    # an hg19 record keeps its refusal, in today's words
+    atac_import.write_info(a, {"n_peaks": 1, "genome": "hg19", "genome_note": "old words"})
+    assert atac_import.dataset_state(a, tmp_path, "d")["genome_note"] == genome_build.HG19_REFUSAL
 
 
 def test_an_assumed_mm10_with_peaks_past_its_ends_becomes_mm39():
     itgb1 = f"chr8:{ITGB1_MM39}-{ITGB1_MM39 + 500}"
     mm39 = atac_import.check_build(_plan(["chr1:100-600", itgb1], genome="mm10"))
-    assert mm39.genome == "mm39" and not mm39.genome_assumed and mm39.genome_note == genome_build.MM39_REFUSAL
+    assert mm39.genome == "mm39" and not mm39.genome_assumed and mm39.genome_note is None
     assert atac_import.check_build(_plan([itgb1], genome=None)).genome == "mm39"
     named = atac_import.check_build(_plan([itgb1], genome="mm10", assumed=False))
     assert named.genome == "mm10" and named.genome_note is None
@@ -367,9 +392,9 @@ def test_an_assumed_mm10_with_peaks_past_its_ends_becomes_mm39():
 
 def test_fragments_header_naming_grcm39(tmp_path):
     state = _attach(tmp_path, _mouse_lines(), header=MM39_HEADER, species="mouse")
-    assert state["genome"] == "mm39" and state["genome_note"] == genome_build.MM39_REFUSAL
+    assert state["genome"] == "mm39" and "genome_note" not in state
     st = af.status(tmp_path, "d")
-    assert st["genome"] == "mm39" and st["genome_note"] == genome_build.MM39_REFUSAL
+    assert st["genome"] == "mm39" and st["genome_note"] is None
     with pytest.raises(af.FragmentsError, match="genes are human"):
         _attach(tmp_path, _mouse_lines(), header=MM39_HEADER, species="human")
 
@@ -379,9 +404,128 @@ def test_fragments_index_reaching_past_mm10_ends_on_mm39(tmp_path):
     body = ITGB1_MM39 + 20_000
     late = [("chr8", body + i * 10, body + 50 + i * 10, "AAAC-1", 1) for i in range(5)]
     state = _attach(tmp_path, _mouse_lines(late))
-    assert state["genome"] == "mm39" and state["genome_note"] == genome_build.MM39_REFUSAL
+    assert state["genome"] == "mm39" and "genome_note" not in state
 
 
-def test_tss_table_refuses_mm39(tmp_path):
-    with pytest.raises(gene_annotation.AnnotationError, match="mm39"):
-        af.tss_table("mm39", tmp_path, auto_download=False)
+def _seed_mm39(tmp_path):
+    gtf = tmp_path / "vM33-like.gtf"
+    gtf.write_text(mf.gtf_text("mm39"))
+    gene_annotation.clear_cache()
+    gene_annotation.seed_from(gtf, tmp_path, "GRCm39-2024-A")
+
+
+def test_tss_table_on_mm39(tmp_path):
+    _seed_mm39(tmp_path)
+    try:
+        t = af.tss_table("mm39", tmp_path, auto_download=False)
+    finally:
+        gene_annotation.clear_cache()
+    assert set(t["chrom"]) == {"chr8", "chr17"}
+    assert all(tss > genome_build.MM10_SIZES[c[3:]] for c, tss in zip(t["chrom"], t["tss"]))  # past mm10's ends
+
+
+def test_gene_activity_on_mm39_peaks_past_mm10_ends(tmp_path):
+    """The mm39 fixture: genes and peaks past mm10's chromosome ends, mouse ids; gene activity
+    finds every gene's peaks on mm39's positions."""
+    _g, p, barcodes, table = mf.matrices(n_per=20, build="mm39")
+    _seed_mm39(tmp_path)
+    try:
+        path = atac.store_path(tmp_path, "d")
+        modality_store.write(path, {atac.MATRIX: p}, barcodes, table["name"].tolist(),
+                             atac_import.feature_attrs(table["name"].tolist()), {"genome": "mm39"})
+        genes = mf.genes_of("mm39")
+        a = ad.AnnData(X=sp.csr_matrix(_g), obs=pd.DataFrame(index=barcodes),
+                       var=pd.DataFrame({"gene_ids": [x[1] for x in genes]}, index=[x[0] for x in genes]))
+        chosen = atac.choose_genes(a, "GRCm39-2024-A", tmp_path, auto_download=False)
+        assert chosen.genome == "mm39" and chosen.source == "GENCODE vM33 basic" and len(chosen.names) == 4
+        with modality_store.ModalityStore(path) as store:
+            summary, _totals = atac.write_activity(store, chosen, tmp_path, "d")
+        assert summary["n_genes_with_peaks"] == 4
+    finally:
+        gene_annotation.clear_cache()
+
+
+# -- other species and builds --------------------------------------------------
+
+@pytest.mark.parametrize("name,label", [
+    ("T2T-CHM13v2.0", "T2T-CHM13"), ("hs1", "T2T-CHM13"), ("chm13", "T2T-CHM13"), ("mRatBN7.2", "rat"),
+    ("rn6", "rat"), ("Rnor_6.0", "rat"), ("GRCz11", "zebrafish"), ("danRer11", "zebrafish"), ("dm6", "fly"),
+    ("BDGP6.46", "fly"), ("WBcel235", "worm"), ("ce11", "worm"), ("GRCg7b", "chicken"), ("galGal6", "chicken"),
+    ("Mmul_10", "macaque"), ("rheMac10", "macaque"), ("Sscrofa11.1", "pig"), ("ARS-UCD1.2", "cow"),
+    ("canFam6", "dog"), ("R64-1-1", "yeast"), ("sacCer3", "yeast"), ("TAIR10", "Arabidopsis"),
+    ("refdata-cellranger-arc-mRatBN7.2-2024-A", "rat"),
+])
+def test_other_builds_by_name(name, label):
+    assert label in genome_build.other_build(name)
+    sentence = genome_build.unsupported(name)
+    assert label in sentence and "GRCh38 (human) and mm10 or mm39 (mouse)" in sentence
+    assert "RNA analysis" in sentence and "work as usual" in sentence
+    with pytest.raises(gene_annotation.AnnotationError) as e:
+        gene_annotation.canonical_genome(name)
+    assert str(e.value) == sentence
+
+
+@pytest.mark.parametrize("name", ["GRCh38", "GRCh38-2020-A", "mm10", "GRCm39-2024-A", "hg19", "mm9", "", None,
+                                  "pbmc_granulocyte_sorted_10k", "hs10", "dm60", "rn10"])
+def test_not_other_builds(name):
+    assert genome_build.other_build(name) is None
+
+
+def test_nothing_named_and_unknown_names_say_so():
+    assert "does not say which genome" in genome_build.unsupported(None)
+    assert "does not say which genome" in genome_build.unsupported("nan")
+    assert "'xenopus', a reference scView does not know" in genome_build.unsupported("xenopus")
+    assert genome_build.note(None) is None  # nothing recorded: the steps say why on their own
+    assert genome_build.note("other", "stored words") == "stored words"
+    assert genome_build.note("GRCh38", "stored words") is None
+
+
+@pytest.mark.parametrize("names,word", [
+    (["chr1", "chr2L", "chr3R", "chrX"], "fly"), (["chr1", "chrZ", "chrW"], "bird"),
+    (["chrI", "chrII", "chrIII", "chrX"], "worm or yeast"), (["1", "2", "25"], "chr25"),
+])
+def test_other_by_chromosome_names(names, word):
+    assert word in genome_build.other_from_names(names)
+
+
+@pytest.mark.parametrize("names", [["chr1", "chr22", "chrX", "chrY", "chrM"], ["1", "19", "X", "MT"],
+                                   ["chr1", "KI270728.1", "chrUn_GL000220v1", "chrEBV"], []])
+def test_human_and_mouse_names_are_not_other(names):
+    assert genome_build.other_from_names(names) is None
+
+
+def test_other_by_positions_past_every_human_and_mouse_end():
+    # T2T-CHM13's chr9 is 150.6 Mb (GRCh38 138.4, hg19 141.2); a rat chr1 is 260 Mb.
+    assert "chr9 reaches 150.0 Mb" in genome_build.other_from_positions(["chr9"], [150_000_000])
+    assert "T2T-CHM13" in genome_build.other_from_positions(["chr1"], [260_000_000])
+    # within some human or mouse build: not other (hg19's chr9, mm10's chrY)
+    assert genome_build.other_from_positions(["chr9", "chrY"], [141_000_000, 90_000_000]) is None
+    assert genome_build.other_from_positions(["chrM", "KI270728.1"], [16_000, 300_000_000]) is None
+
+
+def test_import_records_other_species_with_one_note():
+    zebrafish = atac_import.check_build(_plan(["chr1:100-600", "chr25:100-600"], genome=None))
+    assert zebrafish.genome == genome_build.OTHER and "chr25" in zebrafish.genome_note
+    assert "RNA analysis" in zebrafish.genome_note
+    chm13 = atac_import.check_build(_plan(["chr1:100-600", "chr9:150000000-150000500"]))  # assumed GRCh38
+    assert chm13.genome == genome_build.OTHER and "T2T-CHM13" in chm13.genome_note
+    rat = atac_import.check_build(_plan(["chr1:100-600"], genome="mRatBN7.2", assumed=False))
+    assert rat.genome == "mRatBN7.2" and "a rat genome" in rat.genome_note
+    human = atac_import.check_build(_plan(["chr1:100-600", "chr22:100-600"]))
+    assert human.genome == "GRCh38" and human.genome_note is None
+    with pytest.raises(gene_annotation.AnnotationError, match="another species or build"):
+        gene_annotation.canonical_genome(genome_build.OTHER)
+
+
+def test_fragments_of_another_species(tmp_path):
+    fish = sorted([(c, i * 10, i * 10 + 50, "AAAC-1", 1) for c in ("chr1", "chr25") for i in range(200)],
+                  key=lambda x: (x[0], x[1]))
+    state = _attach(tmp_path, fish, species="human")  # kept: the note says why the genome steps are off
+    assert state["genome"] == genome_build.OTHER and "chr25" in state["genome_note"]
+    assert af.status(tmp_path, "d")["genome_note"] == state["genome_note"]
+    rat = "# reference_path=/refs/refdata-cellranger-arc-mRatBN7.2-2024-A\n"
+    state = _attach(tmp_path, _lines(), header=rat)
+    assert state["genome"] == genome_build.OTHER and "a rat genome" in state["genome_note"]
+    # Fragments named on a build scView has are not second-guessed by another word in the path.
+    t2t_dir = "# reference_path=/t2t_project/refdata-cellranger-arc-GRCh38-2020-A\n"
+    assert _attach(tmp_path, _lines(), header=t2t_dir)["genome"] == "GRCh38"

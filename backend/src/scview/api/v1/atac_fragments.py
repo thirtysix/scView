@@ -219,14 +219,12 @@ async def qc_stream(dataset_id: str, settings: Settings = Depends(get_settings_d
         raise _http(e)
     state = await asyncio.to_thread(af.status, settings.DATA_DIR, dataset_id, int(adaptor.adata.n_obs))
     genome = state.get("genome")
-    if not genome:
-        raise HTTPException(status_code=422, detail="scView has gene positions for GRCh38 and mm10, and this file's "
-                                                    "chromosome names match neither, so TSS enrichment cannot be "
-                                                    "computed; coverage tracks still work.")
+    if not genome or state.get("genome_note"):
+        raise HTTPException(status_code=422, detail=f"{state.get('genome_note') or af.NO_GENOME} Coverage tracks still work.")
     try:
         tss = await asyncio.to_thread(af.tss_table, genome, settings.DATA_DIR, settings.ANNOTATION_AUTO_DOWNLOAD)
     except gene_annotation.AnnotationError as e:
-        raise HTTPException(status_code=422 if genome_build.old_build(genome) else 503, detail=str(e))
+        raise HTTPException(status_code=422 if genome_build.unsupported(genome) else 503, detail=str(e))
     est = state["estimate"]
     await dm.reserve(dataset_id, est["peak_bytes"], what=_WHAT)
     fingerprint = await asyncio.to_thread(adaptor.cells_fingerprint)
@@ -350,13 +348,14 @@ async def coverage(
     def work() -> dict[str, Any]:
         t0 = time.monotonic()
         frag, idx = af.require_files(data_dir, dataset_id)
-        genome = af.status(data_dir, dataset_id).get("genome")
-        table, gene_note = None, None
+        st = af.status(data_dir, dataset_id)
+        genome = st.get("genome")
+        table, gene_note = None, st.get("genome_note")
         try:
-            if genome:
+            if not genome:
+                gene_note = f"{af.NO_GENOME} No genes are drawn."
+            elif not gene_note:
                 table = gene_annotation.load(genome, data_dir, auto_download=settings.ANNOTATION_AUTO_DOWNLOAD)
-            else:
-                gene_note = "This file's chromosome names match neither GRCh38 nor mm10, so no genes are drawn."
         except gene_annotation.AnnotationError as e:
             gene_note = str(e)
         focus = None
