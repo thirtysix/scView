@@ -62,6 +62,9 @@ All notable changes to scView are documented here. The format is based on
   about 10 to 15 seconds the first time).
 
 ### Fixed
+- Opening Data Assessment on a 39k-nuclei kidney file ran a 6 GB backend out of memory (also in 0.74.0): the
+  ambient RNA check copied the counts, and four panels started it at once. It now reads the counts in place and
+  runs once per dataset while the others wait: the same page peaks at 3.5 GB.
 - Marker genes were ranked on raw counts when a file keeps them in `.raw` beside log-normalised X, as CELLxGENE
   files do: Wilcoxon on counts and fold changes of counts read as logs (a kidney podocyte gene at log2FC 437).
   Markers now use the same log-normalised matrix as gene-set scoring, the table records it, and stored tables
