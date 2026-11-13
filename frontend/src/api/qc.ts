@@ -38,6 +38,16 @@ export interface ClusterQc {
   doublet_like_of?: string[];
   /** doublet_like: its top markers among the first's, the second's, either's, and its marker count. */
   doublet_like_shared?: number[];
+  /** Mean % mito: in nuclei the median is 0, so the mean and the share below say more. */
+  mean_pct_mt?: number | null;
+  /** Share of its cells with any mitochondrial read. */
+  mt_detected?: number | null;
+  /** low_content: the cluster whose identity it shares, and [its markers among that one's, its markers]. */
+  low_content_of?: string | null;
+  low_content_shared?: number[];
+  /** noncoding_markers / sex_markers: the genes that lead its marker list. */
+  noncoding_markers?: string[];
+  sex_markers?: string[];
   flags: ClusterFlag[];
   reasons: string[]; // one plain-language sentence per flag, with the numbers
   /** Not a problem, but worth saying (an erythroid cluster's haemoglobin is real). */
@@ -54,7 +64,11 @@ export type ClusterFlag =
   | "hb_ambient"
   | "cycling"
   | "low_malat1"
-  | "small";
+  | "small"
+  | "nuclei_mito"
+  | "low_content"
+  | "noncoding_markers"
+  | "sex_markers";
 
 /** A technical score that tracks one of the clustering's leading PCs (backend core/qc_drivers.py). */
 export interface QcDriver {
@@ -98,6 +112,8 @@ export interface ClusterQcReport {
   ambient_markers_approximate?: boolean;
   /** What an ambient marker means; "" when no cluster has one. */
   ambient_markers_help?: string;
+  /** The typical cluster's median cell has under 1% mito (nuclei): mito judged by its share of cells. */
+  nuclei_like_mito?: boolean;
 }
 
 export async function getClusterQc(datasetId: string, groupby?: string): Promise<ClusterQcReport> {
@@ -107,7 +123,7 @@ export async function getClusterQc(datasetId: string, groupby?: string): Promise
 
 /** One evidence sentence (backend core/cluster_evidence.py); `fired`: why a rule fired. */
 export interface EvidenceLine {
-  kind: "markers" | "qc" | "doublet" | "typing" | "decision";
+  kind: "markers" | "qc" | "doublet" | "content" | "makeup" | "typing" | "decision";
   text: string;
   fired: boolean;
 }

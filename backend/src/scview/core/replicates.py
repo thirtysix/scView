@@ -121,6 +121,32 @@ def few_donors(counts: dict[str, int], unit: str) -> str | None:
             "on one or two people, so one unusual person can make or hide a difference.")
 
 
+# A donor (or sample) with fewer cells than this share of the median one's: its shares and its
+# pseudobulk rest on few cells, so they carry over sqrt(3) = 1.7 times a typical donor's sampling
+# error, yet the test weighs it as one replicate like the rest. A third catches the Wilson 2022
+# kidney's diabetic_5 (884 nuclei, 0.30 of the median donor's 2,996: 150 PT nuclei); the QC per
+# sample table's few-cells flag (a tenth, ``qc_groups.FEW_CELLS_SHARE``) is about thresholds, not tests.
+FEW_CELLS_SHARE = 1 / 3
+MIN_DONORS_FOR_SIZE = 3  # a median of two says nothing about which is small
+
+
+def few_cell_donors(sizes: dict[str, int], unit: str = "donor") -> str | None:
+    """A caution naming the donors (``sizes``: donor -> cells in the comparison) with fewer
+    than ``FEW_CELLS_SHARE`` of the median donor's cells, or None."""
+    if len(sizes) < MIN_DONORS_FOR_SIZE:
+        return None
+    med = float(np.median(list(sizes.values())))
+    few = sorted(((k, n) for k, n in sizes.items() if n < FEW_CELLS_SHARE * med), key=lambda kv: kv[1])
+    if not few:
+        return None
+    shown = ", ".join(f"{k} ({n:,} cells)" for k, n in few[:MAX_NAMED]) + (" ..." if len(few) > MAX_NAMED else "")
+    many = len(few) > 1
+    return (f"{'These' if many else 'This'} {unit}{'s have' if many else ' has'} under a third of the median "
+            f"{unit}'s {med:,.0f} cells: {shown}. {'Their' if many else 'Its'} numbers rest on few cells and "
+            f"are noisier, yet {'each counts' if many else 'it counts'} as a full replicate; check that one "
+            f"small {unit} does not drive a difference (leave it out and compare).")
+
+
 def pick_donor(obs, candidates: Sequence[str], groups: Sequence) -> str | None:
     """The first candidate with at least 2 donors in every group (boolean masks
     over the cells), else the best-named one. A sample column that only repeats

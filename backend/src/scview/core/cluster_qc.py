@@ -41,6 +41,7 @@ from scview.core import ambient as ambient_rna
 from scview.core import (
     cell_cycle,
     doublet_source,
+    gene_filters,
     haemoglobin,
     marker_selection,
     qc_drivers,
@@ -96,6 +97,51 @@ DOUBLET_LIKE_EACH = 0.2
 DOUBLET_LIKE_RNA = 0.5
 _NOT_A_PARENT = {"low_quality", "low_genes"}  # damaged cells or ambient RNA, not a cell type
 
+# nuclei_mito: in data where the typical cluster's median cell has under NUCLEI_MITO_MEDIAN % mito
+# (single-nucleus data: nuclei hold no mitochondria, so median % mito reads 0 and the % mito
+# flags cannot see anything), a cluster whose mean % mito is NUCLEI_MITO_FOLD times the typical
+# cluster's (and NUCLEI_MITO_MIN_DIFF points more) AND whose share of cells with any mito read is
+# NUCLEI_MITO_SHARE_DIFF above the typical cluster's. Measured 2026-11-12 on 15 groupings of 9
+# datasets (research/v075-qa): fires on the Emont 2022 mouse fat Leiden 10 (mito reads in
+# 100% of nuclei vs 4%) and author mAd3 (43% vs 17%, mean 0.20% vs 0.02%), on no Wilson 2022
+# kidney cluster (PT included), and never on cell data (the median gate is off: hepatocytes,
+# kidney PT at 12-15% in Tabula Sapiens). A caution, not damage: mAd3 is a population the
+# authors named.
+NUCLEI_MITO_MEDIAN = 1.0
+NUCLEI_MITO_FOLD = 4.0
+NUCLEI_MITO_MIN_DIFF = 0.1
+NUCLEI_MITO_SHARE_DIFF = 0.25
+# low_content: a cluster with the identity of another (at least LOW_CONTENT_SHARE of its top
+# markers are that cluster's top markers, of at least DOUBLET_LIKE_MIN_MARKERS) whose cells carry
+# under LOW_CONTENT_COUNTS of its median counts and LOW_CONTENT_GENES of its genes: the same
+# cells with less RNA (damaged cells, nuclei losing RNA, ambient droplets), split off by depth.
+# Wilson 2022 kidney Seurat cluster 0 (13 of 25 markers PT's cluster 1, 0.36 of its counts, 0.48
+# of its genes) fires; in the 14 other groupings none did. Real low-RNA types sit apart: Kang B cells
+# vs DC share 7 MHC genes (0.34 counts, 0.54 genes), Smart-seq2 read counts move with genes
+# the other way (Tabula Muris oligodendrocytes 0.45 counts but 1.5 genes). A caution.
+LOW_CONTENT_SHARE = 0.4
+LOW_CONTENT_COUNTS = 0.5
+LOW_CONTENT_GENES = 0.6
+# noncoding_markers: at least NONCODING_SHARE of a cluster's top markers (the annotator's list) are
+# small RNAs, multi-copy genes or pseudogenes (NONCODING_RE), or more than half of its top
+# UNINFORMATIVE_TOP (unnamed genes kept) are MALAT1, NEAT1, mouse Gm / Rik genes or unnamed ids.
+# Tabula Sapiens liver Leiden 14 (Smart-seq2 cells among 10x ones; 16 of 25) and its author
+# "myeloid cell" (13 of 25) fire; in the 13 other groupings at most 4 of 25 (hepatocyte pseudogenes
+# FYTTD1P1, CES1P1). A caution: a technical cluster (protocol, ambient RNA, damage), not a type.
+NONCODING_SHARE = 1 / 3
+UNINFORMATIVE_TOP = 10
+NONCODING_RE = re.compile(
+    r"^(?:MIR\d+[A-Z]?(?:-\d+)?|SNOR[AD]\d+\w*|SCARNA\d+\w*|RN7S[KL]\w*|RNU\d\w*|RNU\w+ATAC\w*|RNY\d\w*"
+    r"|VTRNA\w*|POTE[A-Z]\w*|MT(?:ND\d|CO\d|ATP\d|CYB|RNR\d)\w*P\d+|MTRNR2L\d+"
+    # Processed pseudogenes named by their gene plus P and a number (FTH1P20, CES1P1, H3P16), and
+    # mouse -ps ones. A digit before the P keeps real genes (CASP3, MAP4, VAMP2) out.
+    r"|[A-Z][A-Z0-9]*\dP\d+|\w+-ps\d*)$", re.I)
+UNINFORMATIVE_RE = re.compile(r"^(?:(?i:MALAT1|NEAT1)|Gm\d+|\w+Rik\d*)$")  # Gm / Rik: mouse, case kept
+# sex_markers: a sex-linked gene (sex_check.SEX_LINKED_GENES) among a cluster's top SEX_TOP
+# markers. Emont 2022 mouse fat Leiden 1, 2 and 5 (Xist first or second): adipocytes split by the
+# mice's sex. None of the 14 other groupings had one in its top 5.
+SEX_TOP = 3
+
 FLAG_HELP = {
     "low_quality": (
         "Likely low quality: far fewer genes per cell and much more mitochondrial RNA "
@@ -136,6 +182,29 @@ FLAG_HELP = {
         "Very few cells: its markers and DE results are unreliable; it may be a rare "
         "cell type or an artifact."
     ),
+    "nuclei_mito": (
+        "Mitochondrial RNA in far more of its cells than in the typical cluster, in data where most "
+        "cells have almost none (single-nucleus data: nuclei hold no mitochondria). It points to "
+        "cytoplasm still on the nuclei, or whole cells: contamination, or nuclei of a type that keep "
+        "more cytoplasm. Check its markers for cytoplasmic genes (ferritin, Cox genes)."
+    ),
+    "low_content": (
+        "Shares the identity of another cluster (most of its top markers are that cluster's) but its "
+        "cells carry far less RNA: likely the same cells damaged or losing RNA, or droplets of "
+        "ambient RNA, split off by sequencing depth rather than biology. Its markers against that "
+        "cluster are often ambient genes from other cell types."
+    ),
+    "noncoding_markers": (
+        "Its top markers are mostly small RNAs (miRNA, snoRNA, 7SL), multi-copy genes or "
+        "pseudogenes, or unnamed genes and MALAT1: reads a cell type's marker list does not hold. "
+        "Typical of a technical cluster (another protocol or chemistry, ambient RNA, damaged "
+        "cells), not a cell type."
+    ),
+    "sex_markers": (
+        "Sex-linked genes (XIST, TSIX, Y-chromosome genes) lead its markers: it may hold one sex's "
+        "cells of a type that is split by sex (or by donor), not a type of its own. Compare its "
+        "make-up by sex or donor before naming it."
+    ),
 }
 
 
@@ -162,6 +231,12 @@ class ClusterQC(BaseModel):
     median_pct_intronic: float | None = None  # the author's intronic/unspliced share, %
     # Top markers whose signal outside the cluster looks like ambient RNA (core/ambient.py)
     ambient_markers: list[str] = []
+    mean_pct_mt: float | None = None  # mean % mito: a median of 0 in nuclei hides contamination
+    mt_detected: float | None = None  # share of its cells with any mitochondrial read
+    low_content_of: str | None = None  # low_content: the cluster whose identity it shares
+    low_content_shared: list[int] = []  # low_content: [its markers among that cluster's, its markers]
+    noncoding_markers: list[str] = []  # small RNAs / pseudogenes / unnamed genes among its top markers
+    sex_markers: list[str] = []  # sex-linked genes among its top SEX_TOP markers
     flags: list[str] = []
     reasons: list[str] = []  # one plain-language sentence per flag, with the numbers
     notes: list[str] = []  # not a problem, but worth saying (erythroid: Hb is real)
@@ -196,6 +271,9 @@ class ClusterQCReport(BaseModel):
     ambient_markers_approximate: bool = False
     ambient_markers_help: str = ""
     doublet_like_checked: bool = False  # markers were there to look for doublet-like clusters
+    # Nuclei-like data (typical cluster's median % mito under NUCLEI_MITO_MEDIAN): mito is
+    # judged by the share of cells with a mito read (nuclei_mito)
+    nuclei_like_mito: bool = False
 
     @property
     def flagged(self) -> list[ClusterQC]:
@@ -289,6 +367,8 @@ def cluster_qc(
     if cells.get("has_mt", True):
         frame["pct_mt"] = cells["pct_mt"]
         metrics.append("pct_mt")
+        pct_mt = np.asarray(cells["pct_mt"], dtype=np.float64)
+        frame["mt_any"] = np.where(np.isfinite(pct_mt), (pct_mt > 0).astype(np.float64), np.nan)
     if cells.get("pct_ribo") is not None:
         frame["pct_ribo"] = cells["pct_ribo"]
         metrics.append("pct_ribo")
@@ -332,6 +412,9 @@ def cluster_qc(
         medians["cycling"] = grouped["cycling"].mean()
     if "pct_hb" in frame.columns:
         medians["hb"] = grouped["pct_hb"].mean()  # the median cell has no Hb read
+    if "mt_any" in frame.columns:
+        medians["mt_any"] = grouped["mt_any"].mean()  # a share of cells
+        medians["mt_mean"] = grouped["pct_mt"].mean()  # the median nucleus has no mito read
     # Keep the column's own category order (cluster 0, 1, 2 …), not first-seen order.
     order = (
         [str(c) for c in labels.cat.categories] if hasattr(labels, "cat")
@@ -371,6 +454,10 @@ def cluster_qc(
             z["hb"] = (hb - med) / max(_MAD_TO_SD * mad, haemoglobin.SCALE_FLOOR)
 
     small_cut = max(_SMALL_MIN_CELLS, _SMALL_FRACTION * n)
+    nuclei_like = len(order) >= MIN_GROUPS and "mt_any" in medians \
+        and typical.get("pct_mt", np.inf) < NUCLEI_MITO_MEDIAN
+    if nuclei_like:
+        metrics.append("mt_detected")
     rows: list[ClusterQC] = []
     for g in order:
         m = medians.loc[g]
@@ -392,19 +479,26 @@ def cluster_qc(
             cycling_fraction=_num(m.get("cycling"), 3),
             median_pct_malat1=_num(m.get("pct_malat1"), 4),
             median_pct_intronic=_num(m.get("intronic"), 1),
+            mean_pct_mt=_num(m.get("mt_mean"), 4),
+            mt_detected=_num(m.get("mt_any"), 4),
         )
         _flag(row, {k: float(v.loc[g]) for k, v in z.items()}, typical, small_cut,
               markers_checked=sig_markers is not None, hb_checked=ery_markers is not None,
               compare=len(order) >= MIN_GROUPS, median_pct_hb=_num(m.get("pct_hb")))
         _flag_malat1(row, malat1_median, compare=len(order) >= MIN_GROUPS)
+        if nuclei_like:
+            _flag_nuclei_mito(row, typical)
         rows.append(row)
     like_checked = len(order) >= MIN_GROUPS and _flag_doublet_like(adata, column, rows)
+    if len(order) >= MIN_GROUPS:
+        _flag_marker_makeup(adata, column, rows, small_cut)
 
     names = {"genes": "median_genes", "counts": "median_counts", "pct_mt": "median_pct_mt",
              "pct_ribo": "median_pct_ribo", "doublet": "doublet_fraction",
              "doublet_score": "median_doublet_score", "stress": "median_stress_score",
              "hb": "mean_pct_hb", "cycling": "cycling_fraction",
-             "pct_malat1": "median_pct_malat1", "intronic": "median_pct_intronic"}
+             "pct_malat1": "median_pct_malat1", "intronic": "median_pct_intronic",
+             "mt_any": "mt_detected", "mt_mean": "mean_pct_mt"}
     # A score outlier that couldn't be checked against markers isn't flagged: say so.
     unchecked = [] if sig_markers is not None or "stress" not in z else [
         g for g in order if _stress_outlier(float(z["stress"].loc[g]),
@@ -465,6 +559,7 @@ def cluster_qc(
         dataset_median_pct_malat1=malat1_median,
         doublet_source=None if used is None else used.label,
         doublet_like_checked=like_checked,
+        nuclei_like_mito=nuclei_like,
         intronic_column=intronic[0] if intronic is not None else None,
         ambient_markers_approximate=amb_approx,
         ambient_markers_help=(ambient_rna.HELP["flag_approximate"] if amb_approx
@@ -555,6 +650,100 @@ def _flag_doublet_like(adata, column: str, rows: list["ClusterQC"]) -> bool:
     return True
 
 
+def _flag_nuclei_mito(row: ClusterQC, typical: dict[str, float]) -> None:
+    """``nuclei_mito`` (``NUCLEI_MITO_*``): far more cells with mito reads, and a far higher mean
+    % mito, than the typical cluster, where the typical cell has almost none."""
+    share, mean = row.mt_detected, row.mean_pct_mt
+    t_share, t_mean = typical.get("mt_any"), typical.get("mt_mean")
+    if None in (share, mean) or t_share is None or t_mean is None:
+        return
+    if mean >= NUCLEI_MITO_FOLD * t_mean and mean - t_mean >= NUCLEI_MITO_MIN_DIFF \
+            and share - t_share >= NUCLEI_MITO_SHARE_DIFF:
+        row.flags.append("nuclei_mito")
+        row.reasons.append(
+            f"Mitochondrial RNA in nuclei: {share:.0%} of its cells have mito reads vs {t_share:.0%} in a "
+            f"typical cluster, a mean of {mito_text(mean)} of their reads vs {mito_text(t_mean)}. Where most "
+            "cells have almost none, this points to cytoplasm on the nuclei or whole cells (contamination)."
+        )
+
+
+def _flag_marker_makeup(adata, column: str, rows: list[ClusterQC], small_cut: float) -> None:
+    """``low_content``, ``noncoding_markers`` and ``sex_markers`` from the stored markers (none
+    without them). Never fails the table."""
+    from scview.core import sex_check  # sex_check imports qc_groups, which imports this module
+
+    try:
+        named = marker_selection.group_markers(adata, column, n=DOUBLET_LIKE_MARKERS)
+        full = marker_selection.group_markers(adata, column, n=DOUBLET_LIKE_MARKERS, skip_unnamed=False)
+        sex_ids = sex_check.sex_linked_ids(adata)  # Ensembl-id names -> symbols
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("cluster QC: no markers for the marker checks: %s", exc)
+        return
+    if not named and not full:
+        return
+    sex_genes = {g for genes in sex_check.SEX_LINKED_GENES.values() for g in genes}
+    by ={r.group: r for r in rows}
+    for row in rows:
+        mine = named.get(row.group, [])
+        top = full.get(row.group, [])
+        # Led by sex-linked genes
+        sex = [sex_ids.get(g, g) for g in mine[:SEX_TOP] if g in sex_genes or g in sex_ids]
+        if sex:
+            row.sex_markers = sex
+            row.flags.append("sex_markers")
+            row.reasons.append(
+                f"Sex genes lead its markers ({', '.join(sex)} in its top {SEX_TOP}): it may hold one sex's "
+                "cells of a type split by sex or donor, not a type of its own."
+            )
+        # Small RNAs, pseudogenes, unnamed genes
+        junk = [g for g in mine if NONCODING_RE.match(g)]
+        head = top[:UNINFORMATIVE_TOP]
+        vague = [g for g in head if UNINFORMATIVE_RE.match(g) or gene_filters.is_unnamed(g)]
+        if len(mine) >= DOUBLET_LIKE_MIN_MARKERS and len(junk) >= NONCODING_SHARE * len(mine):
+            row.noncoding_markers = junk
+            row.flags.append("noncoding_markers")
+            row.reasons.append(
+                f"Non-coding markers: {len(junk)} of its top {len(mine)} markers are small RNAs, multi-copy "
+                f"genes or pseudogenes ({', '.join(junk[:6])}): a technical cluster (another protocol, "
+                "ambient RNA, damage) more likely than a cell type."
+            )
+        elif len(head) >= UNINFORMATIVE_TOP and len(vague) > len(head) / 2:
+            row.noncoding_markers = vague
+            row.flags.append("noncoding_markers")
+            row.reasons.append(
+                f"Uninformative markers: {len(vague)} of its top {len(head)} are unnamed genes, MALAT1 / NEAT1 "
+                f"or predicted genes ({', '.join(vague[:6])}): little to name a cell type by."
+            )
+    # The same identity with less RNA
+    markers = {g: set(v) for g, v in named.items()}
+    for row in rows:
+        mine = markers.get(row.group, set())
+        if len(mine) < DOUBLET_LIKE_MIN_MARKERS or not row.median_counts or not row.median_genes:
+            continue
+        best, shared = None, 0
+        for other, genes in markers.items():
+            o = by.get(other)
+            if other == row.group or o is None or o.n_cells < small_cut or set(o.flags) & _NOT_A_PARENT:
+                continue
+            k = len(mine & genes)
+            if k > shared:
+                best, shared = o, k
+        if best is None or shared < LOW_CONTENT_SHARE * len(mine) or not best.median_counts \
+                or not best.median_genes:
+            continue
+        rc, rg = row.median_counts / best.median_counts, row.median_genes / best.median_genes
+        if rc <= LOW_CONTENT_COUNTS and rg <= LOW_CONTENT_GENES:
+            row.low_content_of = best.group
+            row.low_content_shared = [shared, len(mine)]
+            row.flags.append("low_content")
+            row.reasons.append(
+                f"Low RNA for its identity: {shared} of its top {len(mine)} markers are {best.group}'s, but its "
+                f"cells carry {rc:.2f}x the counts (median {_fmt(row.median_counts)} vs "
+                f"{_fmt(best.median_counts)}) and {rg:.2f}x the genes of {best.group}: likely the same cells "
+                "damaged or losing RNA, or ambient droplets, split off by depth."
+            )
+
+
 def _drivers(adata, labels: pd.Series, cells: dict, frame: pd.DataFrame,
              erythroid: set[str]) -> qc_drivers.DriverCheck:
     """Technical scores against the leading PCs (``core/qc_drivers.py``). Never
@@ -624,6 +813,17 @@ def _pct(v: float) -> str:
     if v >= 0.01:
         return f"{v:.2f}%"
     return "<0.01%" if v > 0 else "0%"
+
+
+def mito_text(v: float) -> str:
+    """A % mito readable from damaged cells (25%) down to nuclei (0.008%): the digits it needs."""
+    if round(v, 1) >= 1:  # decided on the rounded value: 0.0999 reads 0.10%, like 0.1
+        return f"{v:.1f}%"
+    if round(v, 2) >= 0.1:
+        return f"{v:.2f}%"
+    if round(v, 3) >= 0.001:
+        return f"{v:.3f}%"
+    return "<0.001%" if v > 0 else "0%"
 
 
 def _stress_outlier(z: float, score, typical) -> bool:
@@ -793,7 +993,9 @@ def grounding_block(report: ClusterQCReport) -> tuple[list[str], list[tuple[str,
     t = report.typical
     typ = [f"{_fmt(t['median_genes'])} genes/cell" if "median_genes" in t else "",
            f"{_fmt(t['median_counts'])} counts/cell" if "median_counts" in t else "",
-           f"{t['median_pct_mt']:.1f}% mito" if "median_pct_mt" in t else "",
+           f"{mito_text(t['median_pct_mt'])} mito" if "median_pct_mt" in t else "",
+           f"mito reads in {t['mt_detected']:.0%} of cells (mean {mito_text(t.get('mean_pct_mt', 0.0))})"
+           if report.nuclei_like_mito and "mt_detected" in t else "",
            f"{t['doublet_fraction']:.0%} doublets" if "doublet_fraction" in t else "",
            f"stress score {t['median_stress_score']:.2f}" if "median_stress_score" in t else "",
            f"{_pct(t['mean_pct_hb'])} haemoglobin" if "mean_pct_hb" in t else "",
@@ -821,6 +1023,9 @@ def grounding_block(report: ClusterQCReport) -> tuple[list[str], list[tuple[str,
     if not flagged:
         checked = ["genes", "counts"] + [w for m, w in (("pct_mt", "mito"), ("doublet_fraction", "doublets"),
                                                         ("doublet_like", "doublet-like markers"),
+                                                        ("mt_detected", "mito reads in nuclei"),
+                                                        ("doublet_like", "marker make-up (low RNA, "
+                                                                         "non-coding or sex genes)"),
                                                         ("stress_score", "dissociation stress"),
                                                         ("pct_hb", "haemoglobin"),
                                                         ("cycling_fraction", "cell cycle"),

@@ -14,6 +14,10 @@ function Kind({ kind }: { kind: EvidenceLine["kind"] }) {
       return <Help id="evidence.qc" className={cls}>QC</Help>;
     case "doublet":
       return <Help id="evidence.doublet" className={cls}>Doublet-like</Help>;
+    case "content":
+      return <Help id="evidence.content" className={cls}>Low RNA</Help>;
+    case "makeup":
+      return <Help id="evidence.makeup" className={cls}>Marker make-up</Help>;
     case "typing":
       return <Help id="evidence.types" className={cls}>Types</Help>;
     default:

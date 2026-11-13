@@ -52,7 +52,7 @@ from scipy import optimize, special, stats
 
 from scview.core import paired_design, results_store
 from scview.core.confounding import check, condition_columns, for_comparison
-from scview.core.replicates import few_donors, repeated_donors
+from scview.core.replicates import few_cell_donors, few_donors, repeated_donors
 
 Transform = Literal["logit", "asin"]
 
@@ -608,6 +608,12 @@ def composition_test(
             " A real expansion or loss is possible, but so is a label that was called differently in "
             "each condition; check their markers per condition."))
 
+    if sample is not None:
+        twice = {d for d in s_donor if (s_donor == d).sum() > 1}
+        small = few_cell_donors({f"{d} ({k})" if d in twice else str(d): int(n)
+                                 for d, k, n in zip(s_donor, s_cond, n_per)}, "sample")
+        if small:
+            result.warnings.append(small)
     if sample is None:
         result.warnings.append(
             "No sample or donor column: the cells cannot be grouped into replicates, so "

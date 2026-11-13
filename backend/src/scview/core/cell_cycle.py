@@ -50,9 +50,9 @@ CAUTION_SHARE = 0.10
 # Kang's highest share.
 CYCLING_SHARE = 0.5
 CYCLING_MARGIN = 0.25
-# Score columns as scanpy and Seurat (CellCycleScoring) name them.
-_S_NAMES = ("S_score", "S.Score")
-_G2M_NAMES = ("G2M_score", "G2M.Score")
+# Score columns as scanpy, Seurat (CellCycleScoring) and CELLxGENE files name them.
+_S_NAMES = ("S_score", "S.Score", "cell_cycle_s_score")
+_G2M_NAMES = ("G2M_score", "G2M.Score", "cell_cycle_g2m_score")
 
 FLAG_HELP = (
     "Mostly cycling cells: most of its cells have clear S or G2M cell-cycle scores, far "
