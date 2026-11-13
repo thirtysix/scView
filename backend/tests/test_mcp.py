@@ -677,6 +677,20 @@ async def test_public_search_and_import_job(client, dataset_manager, fake):  # n
     assert new in {d["id"] for d in r["datasets"]}
 
 
+async def test_public_search_pages_with_offset_and_says_what_it_shows(client, fake, monkeypatch):  # noqa: F811
+    first = await _call("search_public_datasets", {"limit": 2})
+    assert first["n_total"] == 4 and first["n_shown"] == 2 and first["next_offset"] == 2
+    rest = await _call("search_public_datasets", {"limit": 2, "offset": 2})
+    assert rest["offset"] == 2 and rest["n_shown"] == 2 and "next_offset" not in rest
+    ids = [d["dataset_version_id"] for d in first["datasets"] + rest["datasets"]]
+    assert len(set(ids)) == 4
+    # A page that does not fit the reply holds whole records, and the next page starts after them.
+    monkeypatch.setattr(compact, "MAX_CHARS", 1200)
+    small = await _call("search_public_datasets", {"limit": 4})
+    assert 1 <= small["n_shown"] < 4 == small["n_total"] and len(small["datasets"]) == small["n_shown"]
+    assert small["next_offset"] == small["n_shown"] and "truncated" not in small
+
+
 # --- compact results -----------------------------------------------------------------------------
 
 def test_numbers_keep_four_significant_digits_and_tiny_p_values():

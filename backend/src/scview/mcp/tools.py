@@ -359,12 +359,16 @@ async def search_public_datasets(
     sort: Annotated[Literal["cells", "size", "title", "newest"], Field(
         description="Order: most cells first (default), largest download, title, or newest.")] = "cells",
     limit: Limit = DEFAULT_LIMIT,
+    offset: Annotated[int, Field(ge=0, description=(
+        "The match to start from: page through the matches with the reply's next_offset."))] = 0,
 ) -> str:
     """Search CELLxGENE Discover's public datasets (listing cached a day). Check one's memory
     need with check_public_dataset; import it with import_public_dataset and its
-    dataset_version_id."""
+    dataset_version_id. A page holds up to limit matches, fewer when they do not fit the
+    reply: n_shown and next_offset say where the next page starts."""
     d = await _get("/public-import/discover/datasets", q=query, organism=organism, tissue=tissue,
-                   disease=disease, assay=assay, max_mb=max_mb, sort=sort, limit=clamp(limit))
+                   disease=disease, assay=assay, max_mb=max_mb, sort=sort, limit=clamp(limit),
+                   offset=offset)
     found = d.get("datasets") or d.get("results") or []
     keep = ("dataset_version_id", "dataset_id", "title", "collection_name", "cell_count", "size_bytes",
             "organism", "tissue", "disease", "assay", "citation")
@@ -377,13 +381,26 @@ async def search_public_datasets(
             if isinstance(e.get(k), list):
                 e[k] = e[k][:5]
         out.append(e)
-    res = {"datasets": out, "n_total": d.get("total", d.get("n_total", len(out))),
-           "fetched_at": d.get("fetched_at")}
+    total = int(d.get("total", d.get("n_total", len(out))) or 0)
+    res: dict[str, Any] = {"n_total": total, "offset": offset, "fetched_at": d.get("fetched_at")}
     if d.get("partial"):
         res["partial"] = {**d["partial"], "note": "No dataset has every word: these have the most."}
     if d.get("matched"):
         res["matched"] = d["matched"]
-    return dumps(res, _max_chars(limit))
+    # Whole records, as many as fit the reply (a cut list said "100 of 200 shown" with no
+    # way to the rest): the count shown and the next page's start are then exact.
+    budget = _max_chars(limit) - len(dumps(res, 10**9)) - 120
+    shown: list[dict[str, Any]] = []
+    for e in out:
+        size = len(dumps(e, 10**9)) + 1
+        if shown and size > budget:
+            break
+        shown.append(e)
+        budget -= size
+    res.update(datasets=shown, n_shown=len(shown))
+    if offset + len(shown) < total:
+        res["next_offset"] = offset + len(shown)
+    return dumps(res, 10**9)
 
 
 def _memory(m: dict[str, Any] | None) -> dict[str, Any]:
