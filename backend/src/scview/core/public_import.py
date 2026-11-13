@@ -791,6 +791,37 @@ def memory_before_download(rec: dict, client: httpx.Client | None = None) -> dic
     return out
 
 
+# Words that name a spatial assay in Discover's assay names (Visium Spatial Gene Expression V1,
+# Slide-seqV2, Visium CytAssist, MERFISH, ...).
+SPATIAL_ASSAY = re.compile(r"visium|slide-?seq|spatial|merfish|xenium|cosmx|stereo-?seq|starmap|seqfish|dbit",
+                           re.I)
+
+
+def spatial_assay(rec: dict) -> str | None:
+    """The record's first assay that is a spatial one, or None."""
+    return next((a for a in rec.get("assay") or [] if SPATIAL_ASSAY.search(str(a))), None)
+
+
+def positions_note(rec: dict, path: Path) -> str | None:
+    """A sentence when the record names a spatial assay but the file holds no positions
+    (obsm 'spatial'): a pooled CELLxGENE file (Guilliams 2022 NAFLD) opens as plain
+    single-cell data, with nothing else saying it was spatial."""
+    import h5py
+
+    assay = spatial_assay(rec)
+    if assay is None:
+        return None
+    try:
+        with h5py.File(path, "r") as f:
+            if "obsm" in f and "spatial" in f["obsm"]:
+                return None
+    except OSError:
+        return None
+    return (f"Discover lists a spatial assay ({assay}), but this file holds no spot positions (obsm "
+            "'spatial'): it opens as single-cell data, with no tissue plot or spatial tools. A study's "
+            "per-section files may hold the positions its pooled file left out.")
+
+
 def dataset_name(rec: dict) -> str:
     from scview.core.dataset_manager import DATASET_NAME_MAX
 
@@ -834,6 +865,10 @@ def run_import(rec: dict, data_dir: Path, dataset_id: str, cancel: threading.Eve
         yield "stage", {"stage": "prepare", "message": "Writing scView's working copy (gene symbols, "
                                                        "source and citation)"}
         info = about(rec, sha, src.stat().st_size, _now())
+        no_positions = positions_note(rec, src)
+        if no_positions:
+            info["about_spatial_note"] = no_positions
+            yield "stage", {"stage": "note", "message": no_positions}
         ingest_dir.mkdir(parents=True, exist_ok=True)
         out = ingest_dir / f"{vid}.h5ad"
         summary = prepare(src, out, rec, info)

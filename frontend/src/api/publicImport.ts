@@ -79,6 +79,8 @@ export interface PublicSource {
   about_size_bytes: string;
   citation_text: string;
   author_annotation?: string | null;
+  /** A spatial assay whose file holds no positions (backend public_import.positions_note). */
+  about_spatial_note?: string;
 }
 
 export function getPublicImportStatus(): Promise<PublicImportStatus> {
