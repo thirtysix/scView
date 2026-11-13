@@ -17,16 +17,19 @@ This module holds what the rest of the viewer needs for that:
   So an endpoint that was never taught about large datasets either works through it
   or fails with a reason, instead of taking the backend down.
 - ``write_in_place``: an edit of obs or uns (labels, category order, colours, a kept
-  clustering) written into the h5ad itself, without reading or copying its matrix.
+  clustering) written into the h5ad itself, without reading or copying its matrix, behind
+  a rollback journal so a process killed mid-write leaves the file as it was (``recover``).
 - ``export_h5ad``: one self-contained h5ad (X, ``layers['counts']``, optionally
   ``.raw``) copied from the files chunk by chunk, never through memory.
 """
 
 from __future__ import annotations
 
+import fcntl
 import logging
 import os
 import shutil
+import struct
 import threading
 import time
 from collections.abc import Callable, Iterable
@@ -142,7 +145,12 @@ REPROCESS = "it reprocesses the dataset in memory; large datasets are processed 
 
 def file_is_large(path: str | Path) -> bool:
     """Whether the h5ad at ``path`` is a large dataset (``uns['scview_large']``), read
-    from its header alone."""
+    from its header alone. An in-place write a crash left unfinished is rolled back
+    first (``recover``)."""
+    try:
+        recover(path)
+    except (OSError, ValueError) as e:  # a broken journal: the open below says what is wrong
+        logger.warning("Could not roll back an unfinished write of %s: %s", path, e)
     try:
         with h5py.File(path, "r") as f:
             uns = f.get("uns")
@@ -415,17 +423,255 @@ def held_bytes(n_cells: int) -> int:
 # Edits written in place
 
 
-def _open_for_write(path: str | Path, tries: int = 20, wait: float = 0.25) -> h5py.File:
-    """The h5ad opened for writing; another read handle open at the moment (a header
-    read) makes HDF5 refuse, so it is tried again for a few seconds."""
+# An in-place write is all or nothing. HDF5 edits a file where it is (its superblock, object
+# headers and B-trees, anywhere in the file) and has no journal, so a process killed while it
+# writes (an OOM kill) can leave a large dataset that no longer opens, and X (20 GB at 1.3M
+# cells) is too big to copy first. Copying the touched groups aside would not help: the damage
+# can be in HDF5's own structures, not in the groups. So HDF5 writes through ``_Journaled``:
+# what it writes past the file's end goes to disk (nothing reads it until the end-of-file
+# address points there), and what it writes over existing bytes stays in memory. At the end,
+# the bytes about to be overwritten are saved to a journal beside the file (fsynced), the
+# writes are applied, and the journal is removed. A journal found later means the write did
+# not finish: ``recover`` puts the saved bytes back and cuts the file to its old length, which
+# is the file exactly as it was. Only the overwritten bytes are copied (metadata, a few pages),
+# never X. A reflink copy would need btrfs or XFS; Docker volumes here are mostly ext4.
+JOURNAL_SUFFIX = ".scview-journal"
+_JOURNAL_MAGIC = b"SCVIEWJ1"
+_PAGE = 4096
+# Test hook: called with the stage of a write ("writing", "written", "journaled", "applying").
+_HOOK: Callable[[str], None] | None = None
+
+
+def journal_path(path: str | Path) -> Path:
+    return Path(str(path) + JOURNAL_SUFFIX)
+
+
+def _hook(stage: str) -> None:
+    if _HOOK is not None:
+        _HOOK(stage)
+
+
+def _fsync_dir(path: Path) -> None:
+    fd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _write_journal(path: Path, orig: int, records: list[tuple[int, bytes]]) -> None:
+    """The journal: the file's length before the write and each (offset, old bytes), written
+    to a temporary name, fsynced and renamed, so a journal on disk is always whole."""
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "wb") as f:
+        f.write(_JOURNAL_MAGIC + struct.pack("<QQ", orig, len(records)))
+        for off, data in records:
+            f.write(struct.pack("<QQ", off, len(data)))
+            f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+    _fsync_dir(path)
+
+
+def _read_journal(path: Path) -> tuple[int, list[tuple[int, bytes]]]:
+    with open(path, "rb") as f:
+        head = f.read(len(_JOURNAL_MAGIC) + 16)
+        if not head.startswith(_JOURNAL_MAGIC):
+            raise ValueError(f"{path} is not a scView journal")
+        orig, n = struct.unpack("<QQ", head[len(_JOURNAL_MAGIC):])
+        records = []
+        for _ in range(n):
+            off, size = struct.unpack("<QQ", f.read(16))
+            data = f.read(size)
+            if len(data) != size:
+                raise ValueError(f"{path} is cut short")
+            records.append((off, data))
+    return orig, records
+
+
+def _lock(fd: int, tries: int, wait: float) -> None:
+    """An exclusive lock on the file (HDF5 locks the files it opens the same way, so a header
+    read open at the moment makes this wait, as HDF5's own write open did)."""
     for i in range(tries):
         try:
-            return h5py.File(path, "r+")
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
         except OSError:
             if i == tries - 1:
                 raise
             time.sleep(wait)
-    raise RuntimeError("unreachable")
+
+
+def recover(path: str | Path) -> bool:
+    """Roll back an in-place write a crash left unfinished: put back the bytes its journal
+    saved and cut the file to its old length. False when there is nothing to do, or a write
+    is still going (it holds the file's lock)."""
+    journal = journal_path(path)
+    if not journal.exists():
+        return False
+    fd = os.open(path, os.O_RDWR)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return False  # a write in progress (this process or another) holds it
+        if not journal.exists():
+            return False  # that write finished meanwhile
+        orig, records = _read_journal(journal)
+        for off, data in records:
+            os.pwrite(fd, data, off)
+        os.ftruncate(fd, orig)
+        os.fsync(fd)
+        journal.unlink()
+        _fsync_dir(journal)
+        logger.warning("Rolled back an unfinished in-place write of %s (%d saved ranges)", path, len(records))
+        return True
+    finally:
+        os.close(fd)
+
+
+class _Journaled:
+    """The file object HDF5 writes the h5ad through (h5py's fileobj driver); see the comment
+    above. Bytes before ``orig`` (the length at open) are never changed on disk until
+    ``commit``: writes to them are kept per page, reads see them."""
+
+    def __init__(self, path: str | Path, tries: int = 20, wait: float = 0.25) -> None:
+        self.path = Path(path)
+        self.journal = journal_path(path)
+        self.fd = os.open(self.path, os.O_RDWR)
+        try:
+            _lock(self.fd, tries, wait)
+            self.orig = os.fstat(self.fd).st_size
+            # An intent journal (no ranges yet): a crash from here on cuts the file back.
+            _write_journal(self.journal, self.orig, [])
+        except BaseException:
+            os.close(self.fd)
+            raise
+        self.pos = 0
+        self.pages: dict[int, bytearray] = {}
+        self.cut: int | None = None  # a truncation below orig, applied at commit
+
+    # -- the file-object interface h5py's fileobj driver uses
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        if whence == 0:
+            self.pos = offset
+        elif whence == 1:
+            self.pos += offset
+        else:
+            self.pos = self._size() + offset
+        return self.pos
+
+    def tell(self) -> int:
+        return self.pos
+
+    def _size(self) -> int:
+        return self.cut if self.cut is not None else max(self.orig, os.fstat(self.fd).st_size)
+
+    def _page(self, p: int) -> bytearray:
+        page = self.pages.get(p)
+        if page is None:
+            start = p * _PAGE
+            page = self.pages[p] = bytearray(os.pread(self.fd, min(_PAGE, self.orig - start), start))
+        return page
+
+    def readinto(self, buf) -> int:
+        n = min(len(buf), max(0, self._size() - self.pos))
+        data = bytearray(os.pread(self.fd, n, self.pos)) if n else bytearray()
+        end = self.pos + len(data)
+        for p in range(self.pos // _PAGE, (min(end, self.orig) - 1) // _PAGE + 1 if end else 0):
+            page = self.pages.get(p)
+            if page is None:
+                continue
+            start = p * _PAGE
+            lo, hi = max(start, self.pos), min(start + len(page), end)
+            if lo < hi:
+                data[lo - self.pos:hi - self.pos] = page[lo - start:hi - start]
+        memoryview(buf).cast("B")[:len(data)] = data
+        self.pos = end
+        return len(data)
+
+    def read(self, n: int = -1) -> bytes:
+        n = max(0, self._size() - self.pos) if n is None or n < 0 else n
+        buf = bytearray(n)
+        got = self.readinto(buf)
+        return bytes(buf[:got])
+
+    def write(self, data) -> int:
+        data = memoryview(data).cast("B")
+        off, end = self.pos, self.pos + len(data)
+        if self.cut is not None and end > self.cut:
+            self.cut = None if end >= self.orig else self.cut
+        i = off
+        while i < min(end, self.orig):  # over the old bytes: kept in memory
+            p = i // _PAGE
+            page = self._page(p)
+            start = p * _PAGE
+            hi = min(end, start + len(page))
+            page[i - start:hi - start] = data[i - off:hi - off]
+            i = hi
+        if end > self.orig:  # past the old end: on disk
+            lo = max(off, self.orig)
+            os.pwrite(self.fd, data[lo - off:], lo)
+        self.pos = end
+        return len(data)
+
+    def truncate(self, size: int | None = None) -> int:
+        size = self.pos if size is None else size
+        if size >= self.orig:
+            os.ftruncate(self.fd, size)
+            self.cut = None
+        else:
+            os.ftruncate(self.fd, self.orig)
+            self.cut = size
+        return size
+
+    def flush(self) -> None:
+        pass  # nothing is made durable before ``commit``
+
+    # -- the end of the write
+
+    def commit(self) -> None:
+        """Make the write durable, all of it or none (the comment above)."""
+        os.fsync(self.fd)  # what went past the old end
+        _hook("written")
+        records = [(p * _PAGE, os.pread(self.fd, len(page), p * _PAGE)) for p, page in sorted(self.pages.items())]
+        if self.cut is not None:
+            records.append((self.cut, os.pread(self.fd, self.orig - self.cut, self.cut)))
+        _write_journal(self.journal, self.orig, records)
+        _hook("journaled")
+        for i, (p, page) in enumerate(sorted(self.pages.items())):
+            os.pwrite(self.fd, page, p * _PAGE)
+            if i == 0:
+                _hook("applying")
+        if self.cut is not None:
+            os.ftruncate(self.fd, self.cut)
+        os.fsync(self.fd)
+        self.journal.unlink()
+        _fsync_dir(self.journal)
+
+    def close(self) -> None:
+        """Release the file; a write not committed is rolled back (the journal says how)."""
+        fd, self.fd = self.fd, -1
+        if fd < 0:
+            return
+        os.close(fd)  # drops the lock
+        if self.journal.exists():
+            recover(self.path)
+
+
+def _open_for_write(path: str | Path, tries: int = 20, wait: float = 0.25) -> tuple[h5py.File, _Journaled]:
+    """The h5ad opened for writing through a journal (``_Journaled``): HDF5's writes are
+    all or nothing. Another read handle open at the moment (a header read) makes it wait
+    for a few seconds, as before."""
+    recover(path)  # a write a crash left unfinished, first
+    raw = _Journaled(path, tries, wait)
+    try:
+        return h5py.File(raw, "r+"), raw
+    except BaseException:
+        raw.close()
+        raise
 
 
 def _replace(group: h5py.Group, key: str, value: Any) -> None:
@@ -456,7 +702,8 @@ def write_in_place(adata, path: str | Path, lock: threading.RLock, *, obs: bool 
     with lock:
         fm.close()
         try:
-            with _open_for_write(path) as f:
+            f, raw = _open_for_write(path)
+            try:
                 if obs:
                     frame = adata.obs
                     if frame.index.name is not None and frame.index.name in frame.columns:
@@ -497,6 +744,13 @@ def write_in_place(adata, path: str | Path, lock: threading.RLock, *, obs: bool 
                         _replace(f["obsp"], key, adata.obsp[key])
                     elif key in f["obsp"]:
                         del f["obsp"][key]
+                _hook("writing")
+                f.close()  # HDF5 writes out what it held: into the journaled file
+                raw.commit()
+            finally:
+                if f.id.valid:
+                    f.close()
+                raw.close()  # rolls back a write that did not commit
         finally:
             fm.open()
 

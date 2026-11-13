@@ -107,7 +107,7 @@ export function AccessibilitySubtab({
         </h3>
         <Caption n={{ value: state.n_cells ?? 0, unit: "cells" }}>
           {(info.n_peaks ?? 0).toLocaleString()} peaks, {Math.round((info.nnz ?? 0) / 1e6).toLocaleString()}M values, on{" "}
-          {info.genome ?? "an unnamed genome"}
+          {info.genome === "other" ? "another species or build" : (info.genome ?? "an unnamed genome")}
           {info.genome_assumed ? " (read from the gene ids; the file does not name one)" : ""}, from {info.source ?? "the upload"}.
         </Caption>
         {info.genome_note && (

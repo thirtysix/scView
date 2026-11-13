@@ -1,9 +1,9 @@
 """Genome sequence for peaks: GC content and the bases a motif scan reads.
 
 Peak-gene links match background peaks on GC content, and motif scans read each peak's
-bases, so both need the reference sequence. UCSC's ``hg38.2bit`` and ``mm10.2bit`` hold the
-same bases as Bioconductor's BSgenome.Hsapiens.UCSC.hg38 and BSgenome.Mmusculus.UCSC.mm10,
-which Signac uses. About 800 MB each, fetched on first use into ``DATA_DIR/genome``, sha256
+bases, so both need the reference sequence. UCSC's ``hg38.2bit``, ``mm10.2bit`` and
+``mm39.2bit`` hold the same bases as Bioconductor's BSgenome.Hsapiens.UCSC.hg38 and
+BSgenome.Mmusculus.UCSC.mm10 / .mm39, which Signac uses. 700 to 840 MB each, fetched on first use into ``DATA_DIR/genome``, sha256
 pinned; ``GENOME_AUTO_DOWNLOAD=false`` turns fetching off and a file placed there by hand is
 used when its sha256 matches.
 
@@ -59,6 +59,10 @@ RELEASES = {
     "mm10": Release("mm10", "UCSC mm10",
                     "https://hgdownload.soe.ucsc.edu/goldenPath/mm10/bigZips/mm10.2bit",
                     "4de06ca0bfca5417ae3782c09cf2caf7afc97c190172f60dc07b783f1bc6f39d", 714_784_109, "mm10.2bit"),
+    # sha256 of the file as fetched 2026-11-13 (dated 2020-07-30); its md5 matches UCSC's md5sum.txt.
+    "mm39": Release("mm39", "UCSC mm39",
+                    "https://hgdownload.soe.ucsc.edu/goldenPath/mm39/bigZips/mm39.2bit",
+                    "40b4c36f83e761a40ba6d1b5357435ae56dd4df4db6cbafd7f5b1a4c85c2e360", 714_181_470, "mm39.2bit"),
 }
 
 

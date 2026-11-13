@@ -100,6 +100,25 @@ def test_ensure_refuses_a_file_that_is_not_the_pinned_one(tmp_path, monkeypatch)
 def test_ensure_with_fetching_off_says_what_to_do(tmp_path):
     with pytest.raises(genome_seq.GenomeUnavailable, match="GENOME_AUTO_DOWNLOAD"):
         genome_seq.ensure(tmp_path, "mm10", auto_download=False)
+    with pytest.raises(genome_seq.GenomeUnavailable, match=r"UCSC mm39 .*GENOME_AUTO_DOWNLOAD.*Place mm39\.2bit"):
+        genome_seq.ensure(tmp_path, "GRCm39-2024-A", auto_download=False)
+
+
+def test_mm39_uses_its_own_pinned_file(tmp_path, monkeypatch):
+    install(monkeypatch, tmp_path, "mm39", {"chr8": "GGCCAATT"})
+    g = genome_seq.ensure(tmp_path, "GRCm39-2024-A", auto_download=False)
+    assert g.path.name == "mm39.2bit" and _text(g.fetch("chr8", 0, 4)) == "GGCC"
+    genome_seq.clear_cache()
+
+
+def test_mm39_download_checks_free_space_first(tmp_path, monkeypatch):
+    import collections
+    import shutil
+
+    monkeypatch.setattr(shutil, "disk_usage", lambda _p: collections.namedtuple("u", "total used free")(1, 1, 10**8))
+    with pytest.raises(genome_seq.GenomeUnavailable, match=r"UCSC mm39 sequence needs 0\.7 GB .* 0\.1 GB free"):
+        genome_seq.ensure(tmp_path, "mm39", auto_download=True)
+    assert not (tmp_path / genome_seq.SUBDIR / "mm39.2bit").exists()
 
 
 def test_status_never_needs_the_file(tmp_path, monkeypatch):
