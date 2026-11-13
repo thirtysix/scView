@@ -536,16 +536,22 @@ async def qc_filter_preview(
     mad_k: Annotated[float | None, Field(description=(
         "MAD mode: cut counts and genes per cell below each sample's median minus k MADs (log1p; default 5)."))] = None,
     mad_k_mt: Annotated[float | None, Field(description="MAD mode: % mito above median + k MADs (default 3).")] = None,
+    genes_floor: Annotated[float | None, Field(ge=0, description=(
+        "MAD mode: a sample's genes cut is never below this many genes per cell (default: the data's "
+        "own, 200 for cells; 0 = none). It is not applied where it would remove more than half a "
+        "sample's cells (floor_skipped)."))] = None,
     drop_doublets: Annotated[bool | None, Field(description="Also drop the cells called doublets (default no).")] = None,
     sample_column: Annotated[str, Field(description="The samples (default: detected).")] = "",
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
     """The cells the filtering step would remove with these thresholds (nothing is changed):
     overall, per rule, per sample and per cluster, with warnings for a sample or cluster
-    mostly lost. Thresholds left out take the pipeline's defaults."""
+    mostly lost. Thresholds left out take the pipeline's defaults. In MAD mode each sample's
+    cuts are in mad_thresholds, with the genes cut's source (its MAD bound or the floor)."""
     d = await _get(f"{_ds(dataset_id)}/qc/filter-preview", mode=mode, min_genes=min_genes,
                    max_genes=max_genes, min_counts=min_counts, max_pct_mt=max_pct_mt, mad_k=mad_k,
-                   mad_k_mt=mad_k_mt, drop_doublets=drop_doublets, sample_column=sample_column)
+                   mad_k_mt=mad_k_mt, genes_floor=genes_floor, drop_doublets=drop_doublets,
+                   sample_column=sample_column)
     n = clamp(limit)
     out = {"dataset_id": dataset_id, **pick(d, "n_cells", "n_removed", "n_kept", "fraction_removed",
                                             "thresholds", "has_mt", "by_criterion", "warnings", "doublets",
@@ -557,8 +563,11 @@ async def qc_filter_preview(
                                 "median_pct_mt", "flags"], n)}
     mad = d.get("mad") or {}
     if mad.get("samples"):
-        out["mad_thresholds"] = {"column": mad.get("column"), **table(
-            mad["samples"], ["name", "min_counts", "max_counts", "min_genes", "max_genes", "max_pct_mt"], n)}
+        # min_genes is the cut that applies; min_genes_by says whether the sample's MAD bound or
+        # the genes floor set it (n_floor: cells only the floor removes).
+        out["mad_thresholds"] = {**pick(mad, "column", "genes_floor", "counts_floor"), **table(
+            mad["samples"], ["name", "min_counts", "max_counts", "min_genes", "min_genes_by", "min_genes_mad",
+                             "n_floor", "floor_skipped", "max_genes", "max_pct_mt"], n)}
     clusters = d.get("clusters") or {}
     if clusters.get("groups"):
         out["clusters"] = {"column": clusters.get("column"), **table(
