@@ -234,16 +234,13 @@ def _h5_bytes(node) -> int:
     if isinstance(node, h5py.Dataset):
         n = int(np.prod(node.shape)) if node.shape else 1
         return n * (_STR_BYTES if node.dtype.kind in "OSU" else node.dtype.itemsize)
-    total = 0
-
-    def add(_name, obj):
-        nonlocal total
-        if isinstance(obj, h5py.Dataset):
-            n = int(np.prod(obj.shape)) if obj.shape else 1
-            total += n * (_STR_BYTES if obj.dtype.kind in "OSU" else obj.dtype.itemsize)
-
-    node.visititems(add)
-    return total
+    # The groups walked by their links, never ``visititems``: that asks HDF5 for each
+    # object's full info, which walks a chunked dataset's whole chunk index. On a
+    # CELLxGENE Visium file the full-resolution image's index is spread over the file:
+    # 58 of the 68 ranged requests of a remote header read (core/public_import.py).
+    if not isinstance(node, h5py.Group):
+        return 0  # a committed datatype
+    return sum(_h5_bytes(node[k]) for k in node.keys() if isinstance(node.get(k, getlink=True), h5py.HardLink))
 
 
 def _n_columns(node) -> int:

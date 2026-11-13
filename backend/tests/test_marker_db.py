@@ -437,6 +437,21 @@ def test_an_overlap_likely_by_chance_is_weak_support(installed, monkeypatch):
     assert res["verdict_counts"]["weak"] == 1 and res["verdict_counts"]["supported"] == 0
 
 
+def test_one_shared_gene_is_weak_support_whatever_its_p(installed, monkeypatch):
+    # Kuppe 2022: Adipocyte "supported" on MT2A alone (p 0.035) while the note called one shared
+    # gene weak support. Every p passes here, so only the one-gene rule can make it weak.
+    monkeypatch.setattr(mdb, "SUPPORT_P", 1.01)
+    a = _cells(extra={"NK cells": ["NKG7", "QQ1", "QQ2", "QQ3"]})
+    res = mdb.check(a, "lab", "human", mdb.load(installed))
+    by = {r["label"]: r for r in res["labels"]}
+    nk = by["NK cells"]
+    assert nk["overlap"] == ["NKG7"]
+    assert nk["verdict"] == "weak" and nk["one_gene"] is True
+    assert nk["verdict_text"] == "weak support (one shared gene)"
+    assert by["B"]["verdict"] == "supported" and by["B"]["one_gene"] is False and len(by["B"]["overlap"]) > 1
+    assert "at least two shared genes" in res["note"]
+
+
 def test_markers_are_computed_without_touching_the_dataset():
     a = _cells()
     out = mdb._markers_for(a, "lab")

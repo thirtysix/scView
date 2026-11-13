@@ -118,6 +118,8 @@ export interface SessionView {
   velocity_arrows?: { on: boolean; scale: number; density: number } | null;
   /** The tissue plot's Draw choice; only saved for a dataset with outlines */
   tissue_draw?: "points" | "cell" | "nucleus";
+  /** The tissue section shown (library id); only saved for a dataset of several sections */
+  tissue_section?: string;
   /** Transcript dots over the tissue; only saved for a dataset with transcripts */
   transcripts?: { genes: string[]; dot_size: number } | null;
 }
@@ -473,6 +475,7 @@ export function parseSession(x: unknown): SessionFile {
         };
       }),
       tissue_draw: (v, at) => oneOf(v, ["points", "cell", "nucleus"] as const, at),
+      tissue_section: (v, at) => text(v, at, { empty: false }),
       transcripts: nullable((v, at) => {
         const o = object(v, at);
         return {

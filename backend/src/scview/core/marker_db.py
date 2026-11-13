@@ -83,6 +83,7 @@ TOP_DB = 50  # a label's database set: its 50 best-evidenced measured genes
 N_MARKERS = 25  # a group's markers
 MIN_DB_GENES = 5  # fewer measured database genes than this: abstain
 SUPPORT_P = 0.05  # an overlap this likely by chance (often one shared gene) is "weak", not "supported"
+MIN_SUPPORT_GENES = 2  # one shared gene is "weak" whatever its p (Kuppe 2022: Adipocyte on MT2A, p 0.035)
 N_SUGGEST = 3
 MAX_GROUPS = 100
 # Mito, ribosomal (incl. RPLP0-2 and RPSA), immunoglobulin / TCR V segments and unnamed genes
@@ -102,8 +103,9 @@ NOTE = (
     "best-evidenced database markers measured here are compared with the group's top 25 "
     "marker genes (detected in at least 20% of its cells, adjusted p < 0.05, sorted by "
     "log fold change, mitochondrial and ribosomal genes left out) with a hypergeometric "
-    "test against the measured genes. \"Supported\" needs that test's p < 0.05; a smaller overlap "
-    "(often one shared gene) is \"weak support\". \"No database support\" means none of them is among the top 25: a "
+    "test against the measured genes. \"Supported\" needs that test's p < 0.05 and at least "
+    "two shared genes; one shared gene, or an overlap as likely by chance, is \"weak support\". "
+    "\"No database support\" means none of them is among the top 25: a "
     "reason to look, not proof the label is wrong. Activation states, fine subtypes of one "
     "lineage (CD4 naive vs memory, CD8 T vs NK) and progenitors fail with every database."
 )
@@ -1248,8 +1250,10 @@ def _label_row(sc_: Scorer, sc_suggest: Scorer, label: str, markers: list[str],
         elif k[i] == 0:
             row["verdict"] = "no_support"
         else:
-            row["verdict"] = "supported" if best["p"] < SUPPORT_P else "weak"
-    row["verdict_text"] = VERDICT_TEXT[row["verdict"]]
+            one = k[i] < MIN_SUPPORT_GENES
+            row["verdict"] = "supported" if best["p"] < SUPPORT_P and not one else "weak"
+            row["one_gene"] = bool(one)
+    row["verdict_text"] = VERDICT_TEXT[row["verdict"]] + (" (one shared gene)" if row.get("one_gene") else "")
     return row
 
 

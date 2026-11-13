@@ -22,7 +22,7 @@ import {
   type SessionView,
 } from "@/lib/session";
 import { COMPARE_MIN_COLUMNS, compareColumnOptions, splitColumnOptions } from "@/lib/splitView";
-import { listedEmbeddings } from "@/lib/spatial";
+import { activeLibrary, listedEmbeddings } from "@/lib/spatial";
 import { resetViewForDataset, useDatasetStore } from "@/stores/datasetStore";
 import { useCommunicationStore } from "@/stores/communicationStore";
 import { useDESettingsStore } from "@/stores/deSettingsStore";
@@ -78,6 +78,8 @@ export function captureSession(now: Date = new Date()): SessionFile {
   // Likewise only for a dataset that has outlines or transcripts.
   const tissueView = useTissueViewStore.getState();
   if (dataset?.spatial?.outlines?.length) view.tissue_draw = tissueView.draw;
+  const section = dataset?.spatial ? activeLibrary(dataset.spatial, tissueView.library) : null;
+  if (section && dataset!.spatial!.libraries.length > 1) view.tissue_section = section.id;
   if (dataset?.spatial?.transcripts) {
     view.transcripts = { genes: tissueView.transcriptGenes, dot_size: tissueView.transcriptDotSize };
   }
@@ -416,6 +418,11 @@ async function applyView(session: SessionFile, d: DatasetInfo, sameCells: boolea
     const tissueView = useTissueViewStore.getState();
     if (v.tissue_draw === "points" || d.spatial?.outlines?.includes(v.tissue_draw)) tissueView.setDraw(v.tissue_draw);
     else notes.push(`Draw ${v.tissue_draw === "cell" ? "cells" : "nuclei"}: this dataset has no such outlines.`);
+  }
+  if (v.tissue_section) {
+    if (d.spatial?.libraries.some((l) => l.id === v.tissue_section)) {
+      useTissueViewStore.getState().setLibrary(v.tissue_section);
+    } else notes.push(`Section ${quote(v.tissue_section)}: this dataset has no such tissue section.`);
   }
   if (v.transcripts) {
     const tissueView = useTissueViewStore.getState();
