@@ -37,6 +37,10 @@ def test_one_sided_value_is_found_with_its_one_sample():
     assert h["share"] == pytest.approx(0.25) and h["samples"] == ["c3"]
     assert "all from one 'donor' value: c3" in h["message"] and "leave c3 out" in h["message"]
     assert "'assay' as a covariate" in h["message"]
+    # CELLxGENE's twin column (the same cells under an ontology id) is not said twice.
+    a.obs["assay_ontology_term_id"] = a.obs["assay"].map(
+        {"10x 3' v3": "EFO:0009922", "10x 5' v1": "EFO:0011025"}).astype("category")
+    assert [h["column"] for h in one_sided_levels(a.obs, sides, skip=["cond"], sample_key="donor")] == ["assay"]
     # Below 10% of its side: not worth a warning.
     small = a[~((a.obs["donor"] == "c3").to_numpy() & (np.arange(a.n_obs) % 30 >= 3))].copy()
     sides = {"DKD": (small.obs["cond"] == "A").to_numpy(), "control": (small.obs["cond"] == "B").to_numpy()}

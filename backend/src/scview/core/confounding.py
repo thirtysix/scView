@@ -216,6 +216,8 @@ def one_sided_levels(obs: pd.DataFrame, sides: dict[str, np.ndarray], *, skip: S
             share = float(counts.loc[level, k]) / max(float(side_sizes[k]), 1.0)
             if share < ONE_SIDED_SHARE:
                 continue
+            if any(h["side"] == str(k) and h["n_cells"] == int(counts.loc[level, k]) for h in out):
+                continue  # the same cells under another column (CELLxGENE's assay_ontology_term_id)
             samples: list[str] = []
             if sample_key and sample_key in obs.columns:
                 cells = ((v == level) & (side == k)).to_numpy()
