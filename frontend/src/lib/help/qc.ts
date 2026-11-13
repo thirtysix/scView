@@ -16,6 +16,10 @@ export const QC_HELP: Record<string, string> = {
     "Share of the cluster's cells with any mitochondrial read. In nuclei the median cell has none, so a median of 0% hides contamination; a cluster where far more nuclei carry mito reads has cytoplasm or whole cells in it. Hover a value for its mean share of reads.",
   "evidence.types":
     "Marker database types that match the cluster's markers, as shares of the evidence: how the database scores split between types, summed up the Cell Ontology. Not the chance that the cells are that type. Shown for named groupings only.",
+  "qc.libraries":
+    "A sample sequenced as two or more libraries should give the same cell types and a similar depth in each. Each pair of its libraries is compared with the spread between different samples alike in condition, tissue and sex, and flagged above 9 in 10 of those. Libraries under 200 cells are listed, not judged.",
+  "qc.libraries-differ":
+    "Two libraries of this sample hold a different mix of cell types (or depth) than different samples alike in condition, tissue and sex usually do. One library may hold another sample's cells, or its capture failed. Compare its cell types and markers with the other library before pooling them; the numbers are under the table.",
   "evidence.decision":
     "The label scView gave the cluster itself, without asking the AI, or would give it in an AI annotation. Fixed rules on the numbers above, not a model.",
 };
