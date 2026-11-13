@@ -157,3 +157,27 @@ def test_a_dataset_imported_before_says_how_many_it_holds():
     tissue = a[a.obs["in_tissue"] == 1].copy()
     assert off_tissue.note(tissue) is None and off_tissue.count(tissue) == 0
     assert not any("off-tissue" in n for n in sa.run(tissue, genes="all").notes)
+
+
+def test_the_replay_leaves_the_off_tissue_spots_out_of_the_original(tmp_path):
+    """A replay from the ORIGINAL file (which still has them) drops what scView dropped;
+    from scView's stored copy it changes nothing."""
+    from scview.core import replay_script
+
+    a = _grid()
+    summary = off_tissue.drop_in_file(_write(a, tmp_path / "s.h5ad"), tmp_path / "o.h5ad",
+                                      original_filename="s.h5ad")
+    snip = replay_script._ingest({"formats": ["h5ad"], "off_tissue": summary}, None)
+    assert snip.status == replay_script.EXACT
+    for start, n in ((a, 70), (ad.read_h5ad(tmp_path / "o.h5ad"), 70)):
+        ns = {"adata": start.copy()}
+        exec("\n".join(snip.code), ns)  # noqa: S102 - the script's own lines
+        assert ns["adata"].n_obs == n
+    # Nothing was left out: no off-tissue code.
+    plain = replay_script._ingest({"formats": ["h5ad"]}, None)
+    assert "in_tissue" not in "\n".join(plain.code)
+
+
+def _write(a, path):
+    a.write_h5ad(path)
+    return path

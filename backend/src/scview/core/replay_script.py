@@ -2824,7 +2824,21 @@ _SYMBOLS_CODE = [
 ]
 
 
+_OFF_TISSUE_CODE = [
+    "# scView left out the spots marked off-tissue (obs['in_tissue'] 0), as Space Ranger's",
+    "# reader does. scView's stored copy holds none; the original file still has them.",
+    "if \"in_tissue\" in adata.obs.columns:",
+    "    _on = adata.obs[\"in_tissue\"].astype(str).str.strip().str.lower()",
+    "    if _on.isin([\"0\", \"0.0\", \"false\", \"1\", \"1.0\", \"true\"]).all():",
+    "        adata = adata[~_on.isin([\"0\", \"0.0\", \"false\"]).to_numpy()].copy()",
+]
+
+
 def _ingest(p: dict, ctx: _Ctx) -> Snippet:
+    off = p.get("off_tissue")
+    if isinstance(off, dict) and int(off.get("removed") or 0) > 0:  # core/off_tissue.py
+        return Snippet(EXACT, ["# The import itself is read_input() at the top of this script."]
+                       + _OFF_TISSUE_CODE)
     snip = _ingest_steps(p, ctx)
     if isinstance(p.get("gene_symbols"), dict) and not isinstance(p.get("public_import"), dict):
         return Snippet(snip.status, snip.code + _SYMBOLS_CODE, snip.note)
