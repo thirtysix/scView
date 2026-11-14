@@ -454,37 +454,114 @@ Content-Type: application/json
 
 ## Trajectory
 
+PAGA, diffusion pseudotime (DPT) and the genes that change along a pseudotime
+(`core/trajectory.py`, `core/pseudotime_genes.py`). A pseudotime column is any numeric obs
+column whose name holds `pseudotime`, `dpt_`, `latent_time` or `monocle`.
+
 ### List Pseudotime Columns
 
 ```
-GET /datasets/{dataset_id}/trajectory/columns
-```
-
-### Get Pseudotime Values
-
-```
-GET /datasets/{dataset_id}/trajectory/values?column=dpt_pseudotime
-```
-
-### Get Gene Expression Along Pseudotime
-
-```
-GET /datasets/{dataset_id}/trajectory/expression?column=dpt_pseudotime&genes=CD3D,CD8A
+GET /datasets/{dataset_id}/trajectory
 ```
 
 **Response** (200):
 ```json
 {
-  "column": "dpt_pseudotime",
+  "pseudotime_columns": ["scview_dpt_pseudotime", "scview_dpt_Ductal"],
+  "n_columns": 2,
+  "computed": {
+    "column": "scview_dpt_pseudotime", "root_named_column": "scview_dpt_Ductal",
+    "root_column": "clusters", "root_value": "Ductal", "root_cell": "GACGCGTCATTTCAGG",
+    "graph": "existing neighbour graph (use_rep=X_pca, k=15)", "n_unreachable": 0,
+    "n_detached": 0, "warnings": [], "stale": null
+  },
+  "runs": {"scview_dpt_Ductal": {"...": "the same record"}},
+  "velocity_layers": true
+}
+```
+
+`computed` is the latest in-app run (null when none), `runs` one record per root's column.
+`stale` says why a run no longer matches the data (a graph, PCA or data step since, or another
+neighbour graph now), else null. `velocity_layers`: spliced and unspliced counts are attached.
+
+### Compute Diffusion Pseudotime
+
+```
+POST /datasets/{dataset_id}/trajectory/dpt
+Content-Type: application/json
+```
+
+**Request body:** `{"root_column": "celltype", "root_value": "Blood progenitors 1"}`
+
+Writes `scview_dpt_pseudotime` (the latest run) and `scview_dpt_<root>` (kept when another root
+runs). The response is the run record above, without `stale`. Cells the root cannot reach get no
+pseudotime (`n_unreachable`). Cells past an extreme gap at the far end (at most 5% of the cells,
+the gap wider than the range below it) are a weakly linked island: they are left out
+(`n_detached`) and DPT is computed again without them. `warnings` says so, and flags a root that
+sits inside the saved PAGA tree of its column or runs against another pseudotime column
+(Spearman rho <= -0.5). 400 when no cell has the root value or there is no graph or PCA.
+
+### PAGA
+
+```
+POST /datasets/{dataset_id}/trajectory/paga
+GET  /datasets/{dataset_id}/trajectory/paga?embedding=X_umap
+```
+
+**POST body:** `{"groupby": "celltype"}`. Returns the record: `groups`, `sizes`, `edges`
+(`[i, j, connectivity]`), `tree` (maximum spanning tree edges), `graph`, `n_cells`.
+GET returns `{"paga": record | null, "positions": [[x, y], ...] | null, "stale": str | null,
+"root_group": str | null}`: each group's median position on `embedding`, why the record is out
+of date (its grouping or graph changed), and the group holding the pseudotime root cell.
+
+### Get Pseudotime Values
+
+```
+GET /datasets/{dataset_id}/trajectory/{column}
+```
+
+**Response** (200): `{"column", "n_cells", "values": [0.01, null, ...], "min", "max"}`; null for
+a cell without a finite pseudotime.
+
+### Get Gene Expression Along Pseudotime
+
+```
+GET /datasets/{dataset_id}/trajectory/{column}/genes?genes=Hba-x,Gata2&n_bins=20
+```
+
+Up to 10 genes. `n_bins` (10-500, default 100) is the most bins: bins hold equal cell counts
+(quantile bins, at least 10 cells each), each at its median pseudotime, as the trend-genes
+ranking bins.
+
+**Response** (200):
+```json
+{
+  "pseudotime_column": "scview_dpt_pseudotime",
+  "n_bins": 20,
+  "binning": "equal cell counts along pseudotime (quantile bins); each bin at its median pseudotime",
   "genes": {
-    "CD3D": {
-      "pseudotime": [0.01, 0.02, 0.03, ...],
-      "expression": [0.0, 1.2, 0.5, ...],
-      "smoothed": [{"x": 0.0, "y": 0.1}, {"x": 0.05, "y": 0.3}, ...]
-    }
+    "Hba-x": {
+      "found": true,
+      "scatter_pseudotime": [0.01, ...], "scatter_expression": [0.0, ...],
+      "binned_pseudotime": [0.11, ...], "binned_expression": [0.11, ...], "binned_counts": [490, ...]
+    },
+    "NOPE": {"found": false}
   }
 }
 ```
+
+### Rank Genes Along Pseudotime
+
+```
+POST /datasets/{dataset_id}/trajectory/{column}/trend-genes
+Content-Type: application/json
+```
+
+**Request body:** `{"n_top": 50, "n_bins": 40, "groups_column": "clusters", "groups": ["Ductal", "Ngn3 low EP"]}`
+(the last two optional: one branch). Each gene's log-normalised expression is fitted with a
+natural cubic spline of pseudotime order and tested against a constant (F); genes are ranked
+by F. Returns `genes` (`f_stat`, `pval`, `pval_adj`, `r2`, `amplitude`, `peak_pseudotime`,
+`pattern` rising | falling | transient, binned `mean` and `fitted`) and `bins`.
 
 ---
 

@@ -700,7 +700,9 @@ def adopt_upload(src: Path, out: Path, dataset_id: str, data_dir: str | Path, *,
     source record in uns. ``src`` is never changed. The caller makes ``out`` read-only."""
     record = adopt_file(src, dataset_id, data_dir, file_name=file_name)
     partial = out.with_name(f".{out.name}.velocity.partial")
-    from anndata.io import write_elem
+    from anndata.io import read_elem, write_elem
+
+    from scview.core import h5_copy
 
     try:
         with h5py.File(src, "r") as fi, h5py.File(partial, "w") as fo:
@@ -708,18 +710,22 @@ def adopt_upload(src: Path, out: Path, dataset_id: str, data_dir: str | Path, *,
                 fo.attrs[k] = v
             for key in fi.keys():
                 if key != "layers":
-                    fi.copy(fi[key], fo, name=key)
+                    # Re-pointed references: a legacy categorical's ``categories`` (core/h5_copy.py).
+                    h5_copy.copy(fi[key], fo, key)
             keep = [k for k in fi["layers"].keys() if k not in LAYERS]
             g = fo.create_group("layers")
             for k, v in fi["layers"].attrs.items():
                 g.attrs[k] = v
             for k in keep:
-                fi["layers"].copy(k, g, name=k)
+                h5_copy.copy(fi["layers"][k], g, k)
             if "uns" not in fo:
                 write_elem(fo, "uns", {})
             if UNS_KEY in fo["uns"]:
                 del fo["uns"][UNS_KEY]
             write_elem(fo["uns"], UNS_KEY, json.dumps({"source": record}))
+            for key in ("obs", "var"):  # the copy must open: fail here, not on the dataset's first read
+                if key in fo:
+                    read_elem(fo[key])
         os.replace(partial, out)
     except BaseException:
         partial.unlink(missing_ok=True)

@@ -173,6 +173,8 @@ _STEPS = [
                           "n_comps": 30, "n_neighbors": 15, "batch_key": "stim",
                           "column": "hvg_x"}),
     ("pseudotime", {"root_cell": "C1", "column": "scview_dpt_pseudotime"}),
+    ("pseudotime", {"root_cell": "C1", "column": "scview_dpt_pseudotime", "root_named_column": "scview_dpt_a'b",
+                    "n_detached": 18}),
     ("paga", {"groupby": "cluster"}),
     ("annotation_confidence", {"column": "ct", "alpha": 0.1}),
     ("annotation_confidence_unknown", {"column": "ct", "output": "ct_unknown"}),
@@ -204,6 +206,15 @@ def test_every_step_type_writes_code_that_compiles():
     # helpers are defined once each, before they are used
     assert script.count("def looks_like_counts(") == 1
     assert script.index("def mad_drop(") < script.index("drop = mad_drop(")
+
+
+def test_pseudotime_replay_writes_the_roots_own_column_too():
+    a = _with_history([("pseudotime", {"root_cell": "C1", "column": "scview_dpt_pseudotime",
+                                       "root_named_column": "scview_dpt_MEP", "n_detached": 18})])
+    script = replay_script.build_script(a)
+    compile(script, "replay.py", "exec")
+    assert "adata.obs['scview_dpt_MEP'] = adata.obs[\"dpt_pseudotime\"]" in script
+    assert "left out 18 weakly linked cells" in script
 
 
 def test_unknown_step_gets_a_placeholder():

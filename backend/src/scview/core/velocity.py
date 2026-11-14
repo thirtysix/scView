@@ -946,6 +946,9 @@ def status(adaptor, data_dir: str | Path, dataset_id: str) -> dict[str, Any]:
     if run is not None and run.get("fingerprint") != adaptor.cells_fingerprint():
         stale = (f"The cells changed since this run ({run.get('n_dataset_cells', 0):,} then, {adata.n_obs:,} now): run "
                  "velocity again.")
+    elif run is not None:  # the same verdict as the results list (a graph rebuilt since, ...)
+        why = results_store.entry_stale(dataset_id, run.get("result_id"), adaptor)
+        stale = f"{why[0].upper()}{why[1:]}: run velocity again." if why else None
     source = record.get("source") or ({"kind": "store"} if attached else None)
     if attached and source is not None and "cells_without" not in source:
         source = {**source, "cells_without": None}

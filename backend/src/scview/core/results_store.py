@@ -251,6 +251,11 @@ def used_user_columns(adaptor: Any, *objs: Any, kind: str | None = None) -> dict
 
 _BASE_KEYS = ("n_cells", "cells", "n_base_steps")
 
+# PAGA and a pseudotime (core/trajectory.py) are kept in uns, not here, but read the
+# neighbour graph: stale once the cells change or a step rebuilds (or clears) the graph or
+# PCs, never after markers, a clustering or a label column (``graph_read_stale``).
+GRAPH_READ_STEPS = frozenset({"pca", "batch_correction", "neighbors", "reset_to_counts"})
+
 
 def _is_stale(stored: dict[str, Any], now: dict[str, Any], columns_now: Any = None,
               kind: str | None = None) -> bool:
@@ -309,6 +314,40 @@ def stale_reason(stored: dict[str, Any], now: dict[str, Any], steps: list[str], 
         if words:
             return f"{', '.join(words[:3])}{' and more' if len(words) > 3 else ''} after this result"
     return "the data changed after this result"
+
+
+def graph_read_stale(adaptor: Any, stored: dict[str, Any] | None) -> str | None:
+    """Why a result that read the neighbour graph no longer matches the data, from the
+    ``fingerprint`` it was stored with: the cells changed, or a ``GRAPH_READ_STEPS`` step ran
+    since. None while it matches (or with no fingerprint to compare)."""
+    if not isinstance(stored, dict):
+        return None
+    now = fingerprint(adaptor)
+    if now is None:
+        return None
+    if stored.get("n_cells") != now.get("n_cells") or stored.get("cells") != now.get("cells"):
+        return "the cells changed after this result (filtered or reloaded)"
+    try:
+        steps = _history_steps(adaptor)
+    except Exception:  # a test double
+        return None
+    start = stored.get("n_steps")
+    if not isinstance(start, int) or not 0 <= start <= len(steps):
+        return None
+    later = [s for s in steps[start:] if s in GRAPH_READ_STEPS]
+    if not later:
+        return None
+    words = list(dict.fromkeys(_STEP_WORDS.get(s, s.replace("_", " ")) for s in later))
+    return f"{', '.join(words)} after this result"
+
+
+def entry_stale(dataset_id: str, result_id: str | None, adaptor: Any) -> str | None:
+    """A stored result's stale reason as ``list_results`` gives it; None when it is current,
+    or not stored."""
+    if not result_id:
+        return None
+    e = next((e for e in entries(dataset_id, adaptor=adaptor) if e["id"] == result_id), None)
+    return (e.get("stale_reason") or "the data changed after this result") if e and e.get("stale") else None
 
 
 def safe_id(value: str | None) -> bool:

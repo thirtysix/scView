@@ -107,6 +107,27 @@ def _sig(v: float) -> float | None:
     return float(f"{v:.4g}") if math.isfinite(v) else None
 
 
+BINNING = "equal cell counts along pseudotime (quantile bins); each bin at its median pseudotime"
+
+
+def equal_count_bins(pt: np.ndarray, n_bins: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Bins of (nearly) equal cell counts along pseudotime, at most ``n_bins`` and at
+    least ``MIN_CELLS_PER_BIN`` cells each (2 bins at the least): each cell's bin, each
+    bin's median pseudotime, each bin's cell count. Bins by value put 9,797 of 9,815 cells
+    in the first of 20 when a few cells sat far out (Pijuan-Sala's erythroid cells)."""
+    pt = np.asarray(pt, dtype=np.float64)
+    n = len(pt)
+    nb = int(min(n_bins, max(2, n // MIN_CELLS_PER_BIN), n))
+    bin_of = np.empty(n, dtype=np.int64)
+    bin_of[np.argsort(pt, kind="stable")] = np.arange(n) * nb // n
+    counts = np.bincount(bin_of, minlength=nb)
+    order = np.argsort(bin_of, kind="stable")
+    bounds = np.r_[0, np.cumsum(counts)]
+    by_bin = pt[order]
+    bin_pt = np.array([np.median(by_bin[bounds[b]:bounds[b + 1]]) for b in range(nb)])
+    return bin_of, bin_pt, counts
+
+
 def cells_used(adata, column: str, groups_column: str | None = None,
                groups: list[str] | None = None) -> tuple[np.ndarray, dict[str, Any] | None]:
     """Indices of the cells with a finite pseudotime (in ``groups`` of
@@ -195,13 +216,10 @@ def trend_genes(
     rank = np.lexsort((names[tested].astype(str), -f_stat))[: max(1, n_top)]
     top = tested[rank]
 
-    # Bins of (nearly) equal cell counts along pseudotime.
-    nb = int(min(n_bins, max(2, n // MIN_CELLS_PER_BIN)))
-    bin_of = np.empty(n, dtype=np.int64)
-    bin_of[np.argsort(pt, kind="stable")] = np.arange(n) * nb // n
+    bin_of, bin_pt, counts = equal_count_bins(pt, n_bins)
+    nb = len(bin_pt)
     B = sp.csr_matrix((np.ones(n), (np.arange(n), bin_of)), shape=(n, nb))
-    counts = np.bincount(bin_of, minlength=nb).astype(np.float64)
-    bin_pt = np.array([np.median(pt[bin_of == b]) for b in range(nb)])
+    counts = counts.astype(np.float64)
     mean = (B.T @ _columns(X, top)) / counts[:, None]  # bins x genes
     fitted = ((B.T @ Q) / counts[:, None]) @ qtx[:, top]
 
@@ -231,6 +249,7 @@ def trend_genes(
         "expression": source,
         "method": METHOD,
         "restrict": restrict,
-        "bins": {"pseudotime": np.round(bin_pt, 4).tolist(), "n_cells": counts.astype(int).tolist()},
+        "bins": {"pseudotime": np.round(bin_pt, 4).tolist(), "n_cells": counts.astype(int).tolist(),
+                 "binning": BINNING},
         "genes": genes,
     }

@@ -32,7 +32,7 @@ import numpy as np
 import pandas as pd
 from anndata.io import read_elem, write_elem
 
-from scview.core import crispr, hashing, protein, provenance
+from scview.core import crispr, h5_copy, hashing, protein, provenance
 
 logger = logging.getLogger(__name__)
 
@@ -115,8 +115,8 @@ def split_h5ad(src: Path, dst: Path, *, original_filename: str, atac_store: Path
                     write_elem(g, name, m)
             elif key == "raw":
                 _copy_raw(fi["raw"], fo)
-            else:  # obs, obsm, obsp, uns: unchanged
-                fi.copy(fi[key], fo, name=key)
+            else:  # obs, obsm, obsp, uns: unchanged (legacy references re-pointed)
+                h5_copy.copy(fi[key], fo, key)
 
         holder = ad.AnnData(obs=pd.DataFrame(index=obs_names),
                             var=pd.DataFrame(index=pd.Index(var.index[genes].astype(str))))
@@ -240,7 +240,7 @@ def _copy_raw(raw: h5py.Group, fo: h5py.File) -> None:
              if isinstance(rvar, pd.DataFrame) and "feature_types" in rvar.columns else None)
     keep = None if types is None else types == protein.GENE_TYPE
     if keep is None or keep.all() or not keep.any():
-        raw.file.copy(raw, fo, name="raw")
+        h5_copy.copy(raw, fo, "raw")
         return
     g = _group_like(raw, fo, "raw")
     for key in raw.keys():
@@ -254,7 +254,7 @@ def _copy_raw(raw: h5py.Group, fo: h5py.File) -> None:
                 m = read_elem(raw["varm"][name])
                 write_elem(vg, name, m.iloc[keep] if isinstance(m, pd.DataFrame) else m[keep])
         else:
-            raw.file.copy(raw[key], g, name=key)
+            h5_copy.copy(raw[key], g, key)
 
 
 def _subset_matrix(src, parent: h5py.Group, name: str, keep: np.ndarray,
