@@ -245,7 +245,7 @@ def other_from_names(names: Iterable[object]) -> str | None:
     return None
 
 
-STANDARD_TEXT = "chr1-22, X, Y (mouse chr1-19, X, Y)"
+STANDARD_TEXT = "chr1-22, X and Y; mouse chr1-19, X and Y"
 
 
 def standard_chromosomes(chrom):
