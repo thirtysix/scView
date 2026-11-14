@@ -160,7 +160,9 @@ GRAPH_STEPS = frozenset({"pca", "batch_correction", "neighbors", "embeddings", "
 # Computed from expression, counts and labels only, never the graph, PCs or a layout.
 GRAPH_FREE_KINDS = frozenset({"de", "composition", "gsea", "de_audit", "ccc", "ccc_compare", "cytokine",
                               "planner"})
-NAMED_COLUMN_KINDS = GRAPH_FREE_KINDS | {"milo", "milode"}
+# Velocity reads the counts, the graph and a layout, never a label column: a clustering or
+# a marker run leaves it current, a graph or layout rebuild does not.
+NAMED_COLUMN_KINDS = GRAPH_FREE_KINDS | {"milo", "milode", "velocity"}
 
 
 def _history_steps(adaptor: Any) -> list[str]:
