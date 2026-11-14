@@ -382,7 +382,8 @@ def test_a_tag_hasheddrops_drops_for_a_zero_ambient_is_blocking():
     call = hashing.hashed_drops(x, tags, ambient=np.array([0.0, 10.0, 12.0]))  # as DropletUtils: A left out
     problems = hashing.check_call(call, x, tags)
     amb = [p for p in problems if p["kind"] == "ambient"]
-    assert len(amb) == 1 and amb[0]["tag"] == "HTO-1" and amb[0]["blocking"]
+    assert len(amb) == 1 and amb[0]["tag"] == ["HTO-1"] and amb[0]["blocking"]
+    assert amb[0]["text"].startswith("HTO-1 has an ambient level of 0")
     assert not any(p["kind"] == "unused" and p["tag"] == "HTO-1" for p in problems)  # named once
     assert hashing.check_call(hashing.hashed_drops(x, tags), x, tags) == []  # a clean panel: nothing
 

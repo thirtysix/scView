@@ -883,12 +883,18 @@ def check_call(call: Call, counts: np.ndarray, tags: list[str], groups: list[dic
                 out.append({"kind": "zeros", "tag": zeros, "blocking": True,
                             "text": f"{_names(zeros)} {'has' if len(zeros) == 1 else 'have'} no counts in more than "
                                     f"{ZERO_SHARE_FLAG:.0%} of the cells of {g['group']}"})
-    fits = call.per_tag if groups is None else [{**p, "where": f" in {p['group']}"} for p in call.per_tag]
-    for p in fits:
-        if call.method == HASHEDDROPS and p.get("ambient") == 0:
-            out.append({"kind": "ambient", "tag": p["tag"], "blocking": True,
-                        "text": f"{p['tag']} has an ambient level of 0{p.get('where', '')} (its lower mode is all "
-                                "zeros), so hashedDrops leaves it out and no cell can be called to it"})
+    if call.method == HASHEDDROPS:  # one sentence for every used tag left out for an ambient of 0
+        zero_amb = [p["tag"] + (f" in {p['group']}" if "group" in p else "") for p in call.per_tag
+                    if p.get("ambient") == 0 and p["tag"] in used]
+        if zero_amb:
+            one = len(zero_amb) == 1
+            out.append({"kind": "ambient", "tag": [p["tag"] for p in call.per_tag
+                                                   if p.get("ambient") == 0 and p["tag"] in used],
+                        "blocking": True,
+                        "text": f"{_names(zero_amb)} {'has' if one else 'have'} an ambient level of 0 (the lower "
+                                "mode is all zeros), so hashedDrops leaves "
+                                f"{'it' if one else 'them'} out and no cell can be called to "
+                                f"{'it' if one else 'them'}"})
     called = pd.Series(call.call).value_counts()
     named = {x for d in out for x in (d["tag"] if isinstance(d["tag"], list) else [d["tag"]])}
     for t in tags:

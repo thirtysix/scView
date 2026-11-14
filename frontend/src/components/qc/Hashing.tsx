@@ -355,24 +355,26 @@ export function Hashing({
                 />
               </>
             )}
-            <label htmlFor="hashing-split">
-              <Help id="hashing.split_by">Within</Help>
-            </label>
-            <select
-              id="hashing-split"
-              value={splitBy}
-              onChange={(e) => setSplitBy(e.target.value)}
-              disabled={running}
-              className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-xs text-slate-600"
-            >
-              <option value="">All cells</option>
-              {(summary.split_columns ?? []).map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                  {summary.split_suggestion?.column === c ? " (suggested)" : ""}
-                </option>
-              ))}
-            </select>
+            <span className="inline-flex items-center gap-1">
+              <label htmlFor="hashing-split">
+                <Help id="hashing.split_by">Within</Help>
+              </label>
+              <select
+                id="hashing-split"
+                value={splitBy}
+                onChange={(e) => setSplitBy(e.target.value)}
+                disabled={running}
+                className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-xs text-slate-600"
+              >
+                <option value="">All cells</option>
+                {(summary.split_columns ?? []).map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                    {summary.split_suggestion?.column === c ? " (suggested)" : ""}
+                  </option>
+                ))}
+              </select>
+            </span>
             <button
               type="button"
               onClick={() => run()}
