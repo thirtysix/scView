@@ -140,6 +140,21 @@ describe("co-occurrence floor (too few pairs)", () => {
     ]);
     expect(firstUsable({ ...result, min_pairs: 100 })).toBe(1); // none reaches 100: the last
   });
+
+  it("opens the heatmap where most pairs of labels are readable, else where more than the diagonal is", () => {
+    // Lymph node at 28 labels: the old rule opened at 183 µm with 660 of 784 cells grey.
+    const three = (t0: number[][], t1: number[][]): CoOccurrenceResult => ({
+      ...result,
+      labels: ["a", "b", "c"],
+      distances: [10, 20],
+      min_pairs: 100,
+      count: t0.map((row, i) => row.map((v, j) => [v, t1[i]![j]!])),
+    });
+    const t0 = [[500, 500, 10], [500, 500, 10], [10, 10, 10]]; // 4 of 9: more than the diagonal, not most
+    const t1 = [[500, 500, 500], [500, 500, 500], [10, 10, 10]]; // 6 of 9
+    expect(firstUsable(three(t0, t1))).toBe(1);
+    expect(firstUsable(three(t0, t0))).toBe(0); // no distance with most: the old rule
+  });
 });
 
 describe("co-occurrence units", () => {

@@ -109,22 +109,23 @@ export function scoreScale(matrix: (number | null)[][]): { zmin: number; zmax: n
 }
 
 /**
- * The shortest distance where more than the diagonal has at least the floor's pairs of
- * observations (backend `first_readable`, the co-pilot's fact; 30 for a result that does not
- * give its floor): at a few cells' range the scores are a few pairs each. The last distance
- * when none has.
+ * The heatmap's first distance (backend `first_readable`, the co-pilot's fact): the shortest
+ * where most pairs of labels have at least the floor's pairs of observations (30 for a result
+ * that does not give its floor); else the shortest where more than the diagonal has; else the last.
  */
 export function firstUsable(result: CoOccurrenceResult): number {
   const count = result.count ?? [];
   const labels = result.labels?.length ?? 0;
   const n = result.distances?.length ?? 0;
   const floor = result.min_pairs ?? 30;
+  let fallback = -1;
   for (let t = 0; t < n; t++) {
     let enough = 0;
     for (const row of count) for (const cell of row) if ((cell[t] ?? 0) >= floor) enough++;
-    if (enough > labels) return t;
+    if (2 * enough > labels * labels) return t;
+    if (fallback < 0 && enough > labels) fallback = t;
   }
-  return Math.max(0, n - 1);
+  return fallback >= 0 ? fallback : Math.max(0, n - 1);
 }
 
 /** Every score, long: one row per pair of labels and distance, with whether it is from too few pairs. */

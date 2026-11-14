@@ -591,6 +591,12 @@ def test_the_floor_greys_scores_from_too_few_pairs_and_keeps_them_stored():
     assert cc.too_few_by_distance(count) == [2, 1, 0]  # each two labels once, a label with itself included
     assert cc.first_readable(count, 2) == 1  # 100, 100, 500 reach the floor: more than the diagonal
     assert cc.first_readable(np.zeros((2, 2, 3)), 2) == 2  # none: the last
+    # Most pairs of labels readable comes first: 4 of 9 at t0 (more than the diagonal), 6 of 9 at t1.
+    three = np.full((3, 3, 2), 500)
+    three[:, :, 0] = [[500, 500, 10], [500, 500, 10], [10, 10, 10]]
+    three[:, :, 1] = [[500, 500, 500], [500, 500, 500], [10, 10, 10]]
+    assert cc.first_readable(three, 3) == 1
+    assert cc.first_readable(three[:, :, :1], 3) == 0  # no distance with most: the old rule
     # The co-pilot's fact: the shortest readable distance; a rare pair is left out and said so.
     s = {"labels": ["a", "b", "rare"], "occ": np.ones((3, 3, 2)).tolist(), "column": "c", "distances": [10.0, 20.0],
          "distance_unit": "µm", "n_used": 500, "n_labelled": 500, "unit": "spot", "available": True, "stale": False}

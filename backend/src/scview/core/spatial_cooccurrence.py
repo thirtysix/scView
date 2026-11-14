@@ -509,11 +509,14 @@ def too_few_by_distance(count) -> list[int]:
 
 
 def first_readable(count, n_labels: int) -> int:
-    """The shortest distance where more pairs of labels than the diagonal reach ``MIN_PAIRS``
-    (the heatmap's first view, the co-pilot's fact); the last distance when none does."""
+    """The heatmap's first view and the co-pilot's fact: the shortest distance where most pairs
+    of labels reach ``MIN_PAIRS`` (on Visium at 28 labels the old rule opened at 183 um with 660
+    of 784 cells grey); else the shortest where more than the diagonal does; else the last."""
     count = np.asarray(count, dtype=np.int64)
-    usable = [t for t in range(count.shape[2]) if (count[:, :, t] >= MIN_PAIRS).sum() > n_labels]
-    return usable[0] if usable else count.shape[2] - 1
+    readable = [int((count[:, :, t] >= MIN_PAIRS).sum()) for t in range(count.shape[2])]
+    most = [t for t, n in enumerate(readable) if 2 * n > n_labels * n_labels]
+    usable = [t for t, n in enumerate(readable) if n > n_labels]
+    return most[0] if most else usable[0] if usable else count.shape[2] - 1
 
 
 def _top_pairs(s: dict[str, Any], n: int = 3) -> tuple[list[str], list[str], int, int]:
