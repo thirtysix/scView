@@ -1280,7 +1280,9 @@ _last: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 _lock = threading.Lock()
 
 
-def remember(adaptor, run: dict[str, Any], result_id: str) -> None:
+def remember(adaptor, run: dict[str, Any], result_id: str, keep_fingerprint: bool = False) -> None:
+    """Keep the run in the results store. ``keep_fingerprint``: the run was only re-checked, so its
+    entry keeps the data it was computed on (a re-check must not make a stale run look fresh)."""
     k = Kept(result_id, public_run(run) or {}, results_store.cells_hash(adaptor.adata))
     try:
         with _lock:
@@ -1293,7 +1295,13 @@ def remember(adaptor, run: dict[str, Any], result_id: str) -> None:
               "n_excluded": len((run.get("params") or {}).get("exclude_genes") or []),
               "group_column": run.get("group_column"), "embeddings": run.get("embeddings"),
               "direction": {"embedding": d.get("embedding"), **(d.get("spec") or {})} if d.get("checked") else None}
+    computed_on = None
+    if keep_fingerprint:
+        dataset_id = results_store.dataset_id_of(adaptor)
+        old = next((e for e in results_store.entries(dataset_id or "", KIND) if e.get("id") == result_id), None)
+        computed_on = (old or {}).get("fingerprint")
     results_store.keep(adaptor, KIND, k, result_id=result_id, key="", params=params, warnings=run.get("warnings"),
+                       computed_on=computed_on,
                        label=f"RNA velocity ({run['method']}, {run['n_velocity_genes']:,} velocity genes)")
 
 

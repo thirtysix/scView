@@ -393,7 +393,7 @@ async def velocity_direction(dataset_id: str, body: DirectionRequest, dm: Datase
             adaptor = await _adaptor(dm, dataset_id)
         else:
             dm.saved_in_place(dataset_id, adaptor, output_path)
-        vel.remember(adaptor, run, str(result_id))
+        await asyncio.to_thread(vel.remember, adaptor, run, str(result_id), True)
     await asyncio.to_thread(results_store.flush)  # the stored result is read back at once (MCP, the next call)
     return {"direction": direction, "warnings": run["warnings"], "run": vel.public_run(run)}
 

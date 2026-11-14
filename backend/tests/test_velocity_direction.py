@@ -330,7 +330,16 @@ async def test_stored_result_has_its_params_and_warnings(client, dataset_manager
     assert r["params"]["n_excluded"] == 1 and r["params"]["exclude_given"] == ["G0"]
     assert r["params"]["direction"]["order"] == ["late", "early"] and r["params"]["direction"]["embedding"] == "X_umap"
     assert any("point backward" in w for w in r["warnings"])
+    from scview.core import results_store
+
+    before = next(e for e in results_store.entries(did, "velocity") if e["id"] == rid)["fingerprint"]
+    adaptor = await dataset_manager.get_or_load_dataset(did)
+    from scview.core import provenance
+
+    provenance.record_step(adaptor.adata, step="neighbors", tool="t", params={})  # the graph rebuilt since the run
     await client.post(f"{API}/datasets/{did}/velocity/direction", json={"order": ["early", "late"]})
+    after = next(e for e in results_store.entries(did, "velocity") if e["id"] == rid)["fingerprint"]
+    assert after == before  # a re-check does not make the run look computed on today's graph
     r = (await client.get(f"{API}/datasets/{did}/results/{rid}")).json()
     assert r["params"]["direction"]["order"] == ["early", "late"] and not any("point backward" in w for w in r["warnings"])
     body = (await client.get(f"{API}/datasets/{did}/velocity")).json()["run"]["direction"]
