@@ -1617,7 +1617,7 @@ export function UnifiedViewPanel() {
                   label="Overlay"
                   value={
                     scatterOverlay
-                      ? `${overlayLabel} (${scatterOverlay.type === "expression" && scatterOverlay.layer ? "protein" : scatterOverlay.type === "density" ? "Nebulosa-style" : scatterOverlay.type === "atac_activity" ? "peak-based" : scatterOverlay.type})`
+                      ? `${overlayLabel} (${scatterOverlay.type === "expression" && scatterOverlay.layer ? "protein" : scatterOverlay.type === "density" ? "Nebulosa-style" : scatterOverlay.type === "atac_activity" ? "gene activity" : scatterOverlay.type})`
                       : "—"
                   }
                 />

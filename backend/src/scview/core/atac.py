@@ -14,11 +14,13 @@ WNN RNA + ATAC: ``core/wnn.py``'s FindMultiModalNeighbors with LSI as the second
 dims 2:n by default, each modality's rows L2-normalised as Seurat does. Own keys:
 ``wnn_atac``, ``X_umap_wnn_atac``, ``wnn_atac_rna_weight``, ``wnn_atac_leiden``.
 
-Gene activity: peak counts within gene body + 2 kb upstream (strand aware; ``core/
-gene_annotation.py``), summed per gene. It is peak-based, not fragment-based like Signac's
-GeneActivity: reads in a gene but outside every called peak are not counted. Stored for every
-barcode in the store ``atac_gene_activity`` (cells x genes, matrix ``gene_activity``) and by
-gene in ``atac_gene_activity_by_gene``, whose rows are genes, so one gene's overlay reads one row.
+Gene activity: with a fragments file attached, Signac's GeneActivity (``core/fragment_activity.py``:
+fragments over the body + 2 kb upstream of protein-coding genes under 500 kb, log-normalised with
+the median cell total as scale factor), the default; without one, peak counts within gene body
++ 2 kb upstream (strand aware; ``core/gene_annotation.py``), summed per gene, where reads in a
+gene but outside every called peak are not counted. Stored by gene in ``atac_gene_activity_by_gene``,
+whose rows are genes, so one gene's overlay reads one row (the peak-based run writes the cells x
+genes store ``atac_gene_activity`` first and turns it).
 
 Differential accessibility, each group vs the rest, peaks detected in >= 5% of the group or the rest,
 BH FDR within each group. Wilcoxon rank-sum on TF-IDF, the fast default, or logistic regression with
@@ -384,6 +386,10 @@ _READ_SECONDS_PER_VALUE = 3.3e-8
 _SPOOL_SECONDS_PER_VALUE = 1.0e-7
 _PRODUCT_SECONDS_PER_VALUE_DIM = 0.9e-9
 _ACTIVITY_SECONDS_PER_VALUE = 3.0e-7
+# Fragment-based activity: one pass over the fragments file, as the QC pass (47 s per GB at 2 CPUs)
+# with the overlaps on top. Measured at 2 CPUs on the 5k mouse kidney (1.35 GB): see FRAGMENT_SECONDS_PER_GB.
+FRAGMENT_SECONDS_PER_GB = 60.0
+FRAGMENT_PASS_BYTES = 600 * 1024**2  # text blocks, parsed arrays, the open genes' pairs, a write's rows
 _DA_SECONDS_PER_VALUE = 3.5e-7
 _DA_SECONDS_PER_VALUE_GROUP = 1.4e-8
 _DA_LR_SECONDS_PER_VALUE = 1.5e-7
@@ -402,9 +408,10 @@ _KEPT_BYTES_PER_CELL = 2_500  # components, layouts, the graph
 
 
 def estimate_seconds(n_cells: int, nnz: int, *, n_iterations: int = -1, activity: bool = True,
-                     n_lsi: int = N_LSI) -> float:
+                     n_lsi: int = N_LSI, fragment_bytes: int | None = None) -> float:
     """A run's time at 2 CPUs: passes of the store, the graph, a UMAP, Leiden (their estimates
-    from ``core/preflight.py``), and the gene activity pass with its turn by gene."""
+    from ``core/preflight.py``), and the gene activity: a pass of the fragments file
+    (``fragment_bytes``, its size) or of the peaks with its turn by gene."""
     from scview.core import preflight
 
     lanczos = 1 + 2 * (LANCZOS_STEPS + 1)
@@ -413,10 +420,11 @@ def estimate_seconds(n_cells: int, nnz: int, *, n_iterations: int = -1, activity
            + nnz * _PRODUCT_SECONDS_PER_VALUE_DIM * (lanczos * LANCZOS_BLOCK + n_lsi))
     return round(_RUN_FIRST_SECONDS + svd + preflight.umap_seconds(n, three_d=False) + 3e-4 * n
                  + preflight.leiden_seconds(n, n_iterations)
-                 + (nnz * _ACTIVITY_SECONDS_PER_VALUE if activity else 0.0), 0)
+                 + (0.0 if not activity else fragment_bytes / 1024**3 * FRAGMENT_SECONDS_PER_GB if fragment_bytes
+                    else nnz * _ACTIVITY_SECONDS_PER_VALUE), 0)
 
 
-def estimate_bytes(n_cells: int, n_peaks: int, *, n_lsi: int = N_LSI) -> int:
+def estimate_bytes(n_cells: int, n_peaks: int, *, n_lsi: int = N_LSI, fragments: bool = False) -> int:
     """What a run holds beyond the loaded dataset at its peak: the libraries, a block, the
     SVD's Lanczos basis (cells) with a step's two sides, and the kept arrays; or the largest of
     a UMAP and the Leiden child."""
@@ -428,7 +436,8 @@ def estimate_bytes(n_cells: int, n_peaks: int, *, n_lsi: int = N_LSI) -> int:
     scale = max(1.0, n / 88_640)
     umap = n * preflight.UMAP_BYTES_PER_CELL * scale ** preflight.UMAP_MEMORY_EXPONENT
     leiden = 60 * 1024**2 + n * 9_000
-    return int(_BASE_BYTES + n * _KEPT_BYTES_PER_CELL + max(svd, umap, leiden, BUCKET_VALUES * 12))
+    activity = FRAGMENT_PASS_BYTES + n * 16 if fragments else BUCKET_VALUES * 12
+    return int(_BASE_BYTES + n * _KEPT_BYTES_PER_CELL + max(svd, umap, leiden, activity))
 
 
 def estimate_da_seconds(nnz: int, n_groups: int = 1, test: str = "wilcoxon", *, n_cells: int = 0, n_fits: int | None = None) -> float:
@@ -485,20 +494,28 @@ class AtacPlan:
     resolution: float = wnn.DEFAULT_RESOLUTION
     n_iterations: int = -1
     activity: bool = True
+    activity_source: str = "peaks"  # fragments (Signac's GeneActivity, with a fragments file) | peaks
+    fragment_bytes: int | None = None
+    fragments_file: str | None = None  # the attached file's own name (the replay looks for it)
     notes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
+        fragments = self.activity and self.activity_source == "fragments"
         d["estimate_seconds"] = estimate_seconds(self.n_cells, self.nnz, n_iterations=self.n_iterations,
-                                                 activity=self.activity, n_lsi=self.n_lsi)
-        d["estimate_bytes"] = estimate_bytes(self.n_cells, self.n_peaks, n_lsi=self.n_lsi)
+                                                 activity=self.activity, n_lsi=self.n_lsi,
+                                                 fragment_bytes=self.fragment_bytes if fragments else None)
+        d["estimate_bytes"] = estimate_bytes(self.n_cells, self.n_peaks, n_lsi=self.n_lsi, fragments=fragments)
         d["estimate_disk_bytes"] = estimate_disk_bytes(self.nnz, self.activity)
         return d
 
 
 def plan(adata, data_dir: str | Path, dataset_id: str, *, n_lsi: int | None = None, dims_to: int | None = None,
-         drop_first: str = "auto", resolution: float | None = None, activity: bool = True) -> AtacPlan:
-    from scview.core import leiden
+         drop_first: str = "auto", resolution: float | None = None, activity: bool = True,
+         activity_source: str = "auto") -> AtacPlan:
+    """``activity_source``: auto (fragments when a fragments file and its index are attached,
+    else peaks), fragments, or peaks."""
+    from scview.core import atac_fragments, leiden
 
     with open_store(adata, data_dir, dataset_id) as store:
         cell_rows(store, adata)
@@ -518,12 +535,24 @@ def plan(adata, data_dir: str | Path, dataset_id: str, *, n_lsi: int | None = No
     if not 0 < res <= 10:
         raise AtacError("Resolution must be above 0 and at most 10.")
     nnz = int(round(nnz * adata.n_obs / max(1, n_store)))  # the cells left after filtering
+    if activity_source not in ("auto", "fragments", "peaks"):
+        raise AtacError("Gene activity comes from fragments, peaks or auto.")
+    try:
+        frag_path, _index = atac_fragments.require_files(data_dir, dataset_id)
+        fragment_bytes = int(frag_path.stat().st_size)
+        fragments_file = atac_fragments.status(data_dir, dataset_id).get("name") or atac_fragments.FRAGMENTS_FILE
+    except atac_fragments.FragmentsError as e:
+        if activity and activity_source == "fragments":
+            raise AtacError(f"Fragment-based gene activity needs the fragments file. {e}", 409) from e
+        fragment_bytes = fragments_file = None
+    source = ("fragments" if fragment_bytes else "peaks") if activity_source == "auto" else activity_source
     emb = wnn._last_params(adata, "embeddings") or {}
     return AtacPlan(n_cells=int(adata.n_obs), n_peaks=n_peaks, nnz=nnz, genome=genome, n_lsi=width, dims_to=to,
                     drop_first=drop_first, resolution=res,
                     min_dist=float(emb["umap_min_dist"] if emb.get("umap_min_dist") is not None
                                    else wnn.DEFAULT_MIN_DIST),
-                    k=min(K_NN, adata.n_obs - 1), n_iterations=leiden.recorded_iterations(adata), activity=activity)
+                    k=min(K_NN, adata.n_obs - 1), n_iterations=leiden.recorded_iterations(adata), activity=activity,
+                    activity_source=source, fragment_bytes=fragment_bytes, fragments_file=fragments_file)
 
 
 # ---------------------------------------------------------------------------
@@ -648,6 +677,15 @@ def iter_run(store: ModalityStore, rows: np.ndarray, p: AtacPlan, *, data_dir: s
             activity = {"available": False}
         elif genes.reason:
             activity = {"available": False, "reason": genes.reason}
+        elif p.activity_source == "fragments":
+            for item in iter_fragment_activity(store, genes, data_dir, dataset_id, stop):
+                if item["type"] == "progress":
+                    yield item
+                else:
+                    activity, totals = item["activity"], item["totals"]
+            activity_total = totals[rows]
+            if activity.get("available"):  # Signac's NormalizeData(scale.factor = median(nCount))
+                activity["scale_factor"] = float(max(1.0, np.median(activity_total))) if activity_total.size else SCALE_FACTOR
         else:
             activity, totals = write_activity(store, genes, data_dir, dataset_id, stop)
             activity_total = totals[rows]
@@ -681,7 +719,8 @@ def replay_params(p: AtacPlan, lsi: LsiResult) -> dict[str, Any]:
             "lanczos_steps": LANCZOS_STEPS, "seed": SEED, "dims": lsi.dims_used, "k": p.k,
             "metric": "cosine", "min_dist": p.min_dist, "resolution": p.resolution,
             "n_iterations": p.n_iterations, "gene_activity": bool(p.activity), "upstream": UPSTREAM,
-            "genome": p.genome, "gene_positions_url": url}
+            "activity_source": p.activity_source if p.activity else None, "genome": p.genome, "gene_positions_url": url,
+            **({"fragments_file": p.fragments_file} if p.activity and p.activity_source == "fragments" else {})}
 
 
 def save_run(adata, p: AtacPlan, res: AtacResult, *, resources: dict | None = None,
@@ -744,6 +783,7 @@ class GeneChoice:
     genome: str | None = None
     source: str | None = None
     reason: str | None = None  # why there are none (a missing annotation, no peak positions)
+    types: np.ndarray | None = None  # each gene's gene_type (fragment-based activity keeps protein-coding ones)
 
 
 def _dataset_genes(adata) -> pd.DataFrame:
@@ -793,7 +833,8 @@ def choose_genes(adata, genome: str | None, data_dir: str | Path, auto_download:
     return GeneChoice(names=genes["name"].to_numpy()[use].tolist(), ids=genes["gene_id"].to_numpy()[use].tolist(),
                       chrom=frame["chrom"].to_numpy(dtype=object), start=start, end=end,
                       n_dataset_genes=len(genes), by_id=int(id_hit.sum()), by_name=int((name_hit & ~id_hit).sum()),
-                      genome=gene_annotation.canonical_genome(genome), source=gene_annotation.source_of(genome))
+                      genome=gene_annotation.canonical_genome(genome), source=gene_annotation.source_of(genome),
+                      types=frame["gene_type"].to_numpy(dtype=object) if "gene_type" in frame.columns else None)
 
 
 def peak_positions(store: ModalityStore) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -861,7 +902,8 @@ def write_activity(store: ModalityStore, genes: GeneChoice, data_dir: str | Path
     n_with = int((per_gene > 0).sum())
     return ({"available": True, "n_genes": n_genes, "n_genes_with_peaks": n_with, "by_id": genes.by_id,
              "by_name": genes.by_name, "n_dataset_genes": genes.n_dataset_genes, "genome": genes.genome,
-             "source": genes.source, "upstream": UPSTREAM, "nnz": int(per_gene.sum()), "caption": ACTIVITY_CAPTION}, totals)
+             "source": genes.source, "upstream": UPSTREAM, "nnz": int(per_gene.sum()), "caption": ACTIVITY_CAPTION,
+             "kind": "peak-based"}, totals)
 
 
 def _write_by_gene(by_cell: Path, dest: Path, per_gene: np.ndarray, meta: dict, stop: Callable[[], bool]) -> None:
@@ -904,8 +946,54 @@ def _write_by_gene(by_cell: Path, dest: Path, per_gene: np.ndarray, meta: dict, 
                 p.unlink(missing_ok=True)
 
 
+def iter_fragment_activity(store: ModalityStore, genes: GeneChoice, data_dir: str | Path, dataset_id: str,
+                           stop: Callable[[], bool] = lambda: False) -> Iterator[dict[str, Any]]:
+    """Signac's GeneActivity from the attached fragments file, every barcode of the store, written
+    by gene. Yields ``progress``, then ``{"type": "done", "activity": summary, "totals": per barcode}``."""
+    from scview.core import atac_fragments, fragment_activity as fa, fragment_file as ff
+
+    frag, index = atac_fragments.require_files(data_dir, dataset_id)
+    keep = fa.signac_genes(genes.start, genes.end, genes.types if genes.types is not None
+                           else np.full(len(genes.names), "protein_coding", dtype=object))
+    in_file = ff.load_index(index).names
+    keep &= np.isin(genes.chrom.astype(str), in_file)  # as Signac: genes on a contig the file never names (chrM) go
+    if not keep.any():
+        yield {"type": "done", "activity": {"available": False, "reason": "None of this dataset's genes is a protein-coding "
+                                                                          "gene under 500 kb."}, "totals": np.zeros(store.n_obs)}
+        return
+    names = np.asarray(genes.names, dtype=object)[keep]
+    chrom, start, end = genes.chrom[keep], genes.start[keep], genes.end[keep]
+    order = fa.row_order(chrom, start, in_file)
+    folder = modality_store.store_dir(data_dir, dataset_id)
+    meta = {"genome": genes.genome, "source": genes.source, "upstream": fa.UPSTREAM, "kind": "fragment-based",
+            "biotypes": list(fa.BIOTYPES), "max_width": fa.MAX_WIDTH}
+    result: dict[str, Any] = {}
+    with modality_store.StoreWriter(folder / f"{ACTIVITY_BY_GENE}.h5", names[order].tolist(), store.barcodes, None, meta) as w:
+        try:
+            for item in fa.iter_counts(frag, store.barcodes, chrom[order], start[order], end[order],
+                                       lambda m: w.append(ACTIVITY_MATRIX, m), stop=stop):
+                if item["type"] == "progress":
+                    yield item
+                else:
+                    result = item
+        except fa.FragmentActivityCancelled:
+            raise AtacCancelled() from None
+        except fa.FragmentActivityError as e:
+            raise AtacError(str(e), 422) from e
+    (folder / f"{ACTIVITY_STORE}.h5").unlink(missing_ok=True)  # an earlier peak-based run's cells x genes copy
+    yield {"type": "done", "totals": result["totals"].astype(np.float64), "activity": {
+        "available": True, "kind": "fragment-based", "n_genes": int(keep.sum()),
+        "n_genes_with_fragments": int(result["n_genes_with_fragments"]), "n_genes_left_out": int((~keep).sum()),
+        "by_id": genes.by_id, "by_name": genes.by_name, "n_dataset_genes": genes.n_dataset_genes, "genome": genes.genome,
+        "source": genes.source, "upstream": fa.UPSTREAM, "biotypes": list(fa.BIOTYPES), "max_width": fa.MAX_WIDTH,
+        "nnz": int(result["n_counted"]), "n_fragments_read": int(result["n_lines"]), "seconds": result["seconds"],
+        "caption": fa.CAPTION}}
+
+
 def activity_gene(adata, data_dir: str | Path, dataset_id: str, gene: str) -> dict[str, Any]:
-    """One gene's activity for the dataset's cells: counts, and log1p per 10k for display."""
+    """One gene's activity for the dataset's cells: counts, and log1p of counts over the cell's
+    total times the scale factor for display (the median cell total for fragment-based activity,
+    as Signac's vignette; 10,000 for peak-based)."""
     path = store_path(data_dir, dataset_id, ACTIVITY_BY_GENE)
     if not path.exists():
         raise AtacError("No gene activity for this dataset yet: run ATAC analysis on the Accessibility tab.", 404)
@@ -925,8 +1013,11 @@ def activity_gene(adata, data_dir: str | Path, dataset_id: str, gene: str) -> di
     if OBS_ACTIVITY_TOTAL not in adata.obs.columns:
         raise AtacError("The activity totals are missing: run ATAC analysis on the Accessibility tab again.", 409)
     total = adata.obs[OBS_ACTIVITY_TOTAL].to_numpy(dtype=np.float64)
-    values = np.log1p(np.divide(counts * SCALE_FACTOR, total, out=np.zeros(counts.shape), where=total > 0))
-    return {"gene": gene, "counts": counts, "values": values.astype(np.float32), "caption": ACTIVITY_CAPTION}
+    saved = (atac_import.read_info(adata) or {}).get("activity") or {}
+    scale = float(saved.get("scale_factor") or SCALE_FACTOR)
+    values = np.log1p(np.divide(counts * scale, total, out=np.zeros(counts.shape), where=total > 0))
+    return {"gene": gene, "counts": counts, "values": values.astype(np.float32),
+            "caption": saved.get("caption") or ACTIVITY_CAPTION, "kind": saved.get("kind") or "peak-based"}
 
 
 
@@ -1814,7 +1905,11 @@ def grounding_lines(adata, data_dir: str | Path | None = None) -> tuple[list[str
                      f"sequencing depth, {kept}; graph on components {dims[0]}:{dims[-1]}; {lsi.get('n_clusters')} ATAC "
                      f"clusters (obs {OBS_CLUSTERS}) [{TAG}]")
     activity = info.get("activity") or {}
-    if activity.get("available"):
+    if activity.get("available") and activity.get("kind") == "fragment-based":
+        lines.append(f"- ATAC gene activity: fragment-based (Signac's GeneActivity: fragments over body + 2 kb upstream), "
+                     f"{activity.get('n_genes_with_fragments', 0):,} of {activity.get('n_genes', 0):,} protein-coding genes "
+                     f"have fragments [{TAG}]")
+    elif activity.get("available"):
         lines.append(f"- ATAC gene activity: {activity.get('n_genes_with_peaks', 0):,} genes have at least one overlapping "
                      f"peak of {activity.get('n_genes', 0):,}; peak-based (body + 2 kb upstream), not fragment-based [{TAG}]")
     w = info.get("wnn") or {}

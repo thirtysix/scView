@@ -1422,13 +1422,14 @@ def _atac_helper() -> str:
     computes them as scView did; the peaks are read again from the input."""
     import inspect
 
-    from scview.core import atac, atac_lr
+    from scview.core import atac, atac_lr, fragment_activity
 
     lines = ["import gzip", "import os", "import re", "from concurrent.futures import ThreadPoolExecutor",
              "from scipy.special import expit, ndtr", ""]
     lines += [f"{name} = {_lit(getattr(atac_lr, name))}" for name in atac_lr.REPLAY_CONSTANTS]
     lines += [f"{name} = {_lit(getattr(atac, name))}" for name in atac.REPLAY_CONSTANTS]
-    for obj in (*atac_lr.REPLAY_CODE, *atac.REPLAY_CODE):
+    lines += [f"{name} = {_lit(getattr(fragment_activity, name))}" for name in fragment_activity.REPLAY_CONSTANTS]
+    for obj in (*atac_lr.REPLAY_CODE, *atac.REPLAY_CODE, *fragment_activity.REPLAY_CODE):
         lines += ["", "", inspect.getsource(obj).rstrip("\n")]
     lines += ["", "", _ATAC_READERS.strip("\n")]
     return "\n".join(lines) + "\n"
@@ -1566,15 +1567,13 @@ def atac_gene_table(url):
             attr = lambda key: (re.search(rf'{key} "([^"]+)"', parts[8]) or [None, ""])[1]  # noqa: E731
             if attr("gene_id").endswith("_PAR_Y"):
                 continue
-            rows.append((attr("gene_id").split(".")[0], attr("gene_name"), parts[0], int(parts[3]) - 1, int(parts[4]), parts[6]))
-    return pd.DataFrame(rows, columns=["gene_id", "gene_name", "chrom", "start", "end", "strand"])
+            rows.append((attr("gene_id").split(".")[0], attr("gene_name"), parts[0], int(parts[3]) - 1, int(parts[4]), parts[6],
+                         attr("gene_type")))
+    return pd.DataFrame(rows, columns=["gene_id", "gene_name", "chrom", "start", "end", "strand", "gene_type"])
 
 
-def atac_gene_activity(adata, counts, peak_names, table, upstream):
-    """Peak counts in each dataset gene's body + ``upstream`` (matched by gene id, else name):
-    a cells x genes CSR and its gene names."""
-    from types import SimpleNamespace
-
+def atac_dataset_genes(adata, table):
+    """The dataset's genes with a position (by gene id, else name): their names and table rows."""
     genes = adata.raw.var if adata.raw is not None and adata.raw.n_vars > adata.n_vars else adata.var
     ids = genes["gene_ids"].astype(str).str.replace(r"\\.\\d+$", "", regex=True) if "gene_ids" in genes.columns else None
     by_id = table.drop_duplicates("gene_id").set_index("gene_id")
@@ -1588,7 +1587,15 @@ def atac_gene_activity(adata, counts, peak_names, table, upstream):
         else:
             continue
         names.append(name)
-    frame = pd.DataFrame(picked)
+    return names, pd.DataFrame(picked)
+
+
+def atac_gene_activity(adata, counts, peak_names, table, upstream):
+    """Peak counts in each dataset gene's body + ``upstream`` (matched by gene id, else name):
+    a cells x genes CSR and its gene names."""
+    from types import SimpleNamespace
+
+    names, frame = atac_dataset_genes(adata, table)
     start, end = gene_regions(frame, upstream)
     parts = [re.split(r"[:_-]", n[::-1], maxsplit=2) for n in peak_names]
     chrom = np.asarray([p[2][::-1] for p in parts], dtype=object)
@@ -1597,6 +1604,24 @@ def atac_gene_activity(adata, counts, peak_names, table, upstream):
     m = overlap_matrix(chrom, p_start, p_end, SimpleNamespace(chrom=frame["chrom"].to_numpy(dtype=object), start=start,
                                                               end=end, names=names))
     return (counts @ m).tocsr(), names
+
+
+def atac_fragment_activity(adata, table, upstream, name):
+    """Signac's GeneActivity from the fragments file beside the input or here: fragments over the
+    body + ``upstream`` of the dataset's protein-coding genes under MAX_WIDTH. (cells x genes CSR,
+    gene names), or (None, []) when the file is not there."""
+    path = next((p for p in (name, os.path.join(os.path.dirname(os.path.abspath(INPUT)), name)) if os.path.exists(p)), None)
+    if path is None:
+        print(f"Gene activity: {name} (and its .tbi) is not beside the input or here, so the fragment-based "
+              "activity is left out.")
+        return None, []
+    names, frame = atac_dataset_genes(adata, table)
+    start, end = gene_regions(frame, upstream)
+    keep = signac_genes(start, end, frame["gene_type"].to_numpy(dtype=object))
+    chrom = frame["chrom"].to_numpy(dtype=object)
+    m, seen = fragment_gene_counts(path, list(adata.obs_names.astype(str)), chrom[keep], start[keep], end[keep])
+    in_file = np.isin(chrom[keep].astype(str), sorted(seen))  # as Signac: genes on a contig the file never names go
+    return m[:, np.flatnonzero(in_file)].tocsr(), [n for n, k in zip(np.asarray(names)[keep], in_file) if k]
 '''
 _HELPERS["atac"] = _atac_helper()
 _HELPER_ORDER += ("atac",)
@@ -3456,17 +3481,28 @@ adata.uns["atac_gene_activity_genes"] = list(activity_genes)
 adata.obs["atac_activity_total"] = np.asarray(activity.sum(axis=1), dtype=np.float32).ravel()
 '''
 
+_ATAC_FRAGMENT_ACTIVITY_CODE = '''
+gene_table = atac_gene_table(ATAC["gene_positions_url"])
+activity, activity_genes = atac_fragment_activity(adata, gene_table, ATAC["upstream"], ATAC["fragments_file"])
+if activity is not None:
+    adata.obsm["atac_gene_activity"] = activity
+    adata.uns["atac_gene_activity_genes"] = list(activity_genes)
+    adata.obs["atac_activity_total"] = np.asarray(activity.sum(axis=1), dtype=np.float32).ravel()
+    # Signac's NormalizeData(scale.factor = median(nCount)): log1p(count / total * this)
+    adata.uns["atac_gene_activity_scale_factor"] = float(max(1.0, np.median(adata.obs["atac_activity_total"])))
+'''
+
 
 def _atac_lsi(p: dict, ctx: _Ctx) -> Snippet:
     """ATAC LSI (core/atac.py, Signac's recipe) from the input's peaks, its graph under its own
-    key, the UMAP, Leiden, and the peak-based gene activity."""
+    key, the UMAP, Leiden, and the gene activity (fragment-based from the fragments file, or peak-based)."""
     need = ("n_lsi", "dims", "lanczos_block", "lanczos_steps")
     if any(not p.get(x) for x in need):
         return Snippet(NOT_REPLAYABLE, ["# ATAC LSI: its settings are not recorded. Recorded:", *_param_comment(p)],
                        "settings not recorded")
     _need(ctx, "atac")
     keys = ("percentile", "n_lsi", "lanczos_block", "lanczos_steps", "seed", "dims", "k", "metric", "min_dist",
-            "resolution", "upstream", "gene_positions_url")
+            "resolution", "upstream", "gene_positions_url", "fragments_file")
     settings = {x: p.get(x) for x in keys}
     n_iter = p.get("n_iterations")
     passes = f", n_iterations={_lit(n_iter)}" if n_iter not in (None, -1) else ""
@@ -3478,7 +3514,11 @@ def _atac_lsi(p: dict, ctx: _Ctx) -> Snippet:
         'sc.tl.leiden(adata, resolution=ATAC["resolution"], key_added="atac_leiden", neighbors_key="atac", '
         f'flavor="leidenalg"{passes})',
     ]
-    if p.get("gene_activity") and p.get("gene_positions_url"):
+    if p.get("gene_activity") and p.get("gene_positions_url") and p.get("activity_source") == "fragments":
+        lines += ["# Fragment-based gene activity (Signac's GeneActivity): fragments over the body + 2 kb upstream of",
+                  "# protein-coding genes under 500 kb. Needs the fragments file (and its .tbi) beside the input.",
+                  *_block(_ATAC_FRAGMENT_ACTIVITY_CODE)]
+    elif p.get("gene_activity") and p.get("gene_positions_url"):
         lines += ["# Peak-based gene activity: peak counts in gene body + 2 kb upstream, not fragments.",
                   *_block(_ATAC_ACTIVITY_CODE)]
     return Snippet(EXACT, lines)

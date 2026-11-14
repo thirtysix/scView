@@ -64,8 +64,13 @@ export interface AtacWnn {
 export interface AtacActivitySummary {
   available: boolean;
   reason?: string;
+  /** fragment-based (Signac's GeneActivity, a fragments file attached) or peak-based; absent before v0.78: peak-based */
+  kind?: "fragment-based" | "peak-based";
   n_genes?: number;
   n_genes_with_peaks?: number;
+  n_genes_with_fragments?: number;
+  /** fragment-based: the median cell total, Signac's scale factor */
+  scale_factor?: number;
   n_dataset_genes?: number;
   genome?: string;
   source?: string;
@@ -121,6 +126,7 @@ export interface AtacQc {
 export interface AtacActivity {
   gene: string;
   caption: string;
+  kind?: "fragment-based" | "peak-based";
   n_cells: number;
   n_nonzero: number;
   /** log1p per 10k per cell, in the dataset's cell order */
@@ -183,7 +189,14 @@ export interface AtacDa {
   note?: string | null;
 }
 
-export type AtacRunBody = { n_lsi?: number; dims_to?: number; drop_first?: "auto" | "yes" | "no"; resolution?: number; activity?: boolean };
+export type AtacRunBody = {
+  n_lsi?: number;
+  dims_to?: number;
+  drop_first?: "auto" | "yes" | "no";
+  resolution?: number;
+  activity?: boolean;
+  activity_source?: "auto" | "fragments" | "peaks";
+};
 export type AtacWnnBody = { lsi_first?: number; lsi_last?: number; resolution?: number };
 export type AtacDaBody = { column: string; groups?: string[]; min_pct?: number; test?: AtacDaTest; vs?: string };
 

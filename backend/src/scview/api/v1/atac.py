@@ -63,6 +63,8 @@ class RunRequest(BaseModel):
     drop_first: Literal["auto", "yes", "no"] = "auto"
     resolution: float | None = Field(default=None, gt=0, le=10)
     activity: bool = True
+    # gene activity from the fragments file (Signac's GeneActivity) when one is attached, else from peaks
+    activity_source: Literal["auto", "fragments", "peaks"] = "auto"
 
 
 class WnnRequest(BaseModel):
@@ -234,11 +236,12 @@ async def run_atac(dataset_id: str, body: RunRequest, dm: DatasetManager = Depen
     adata = adaptor.adata
     try:
         p = await asyncio.to_thread(atac.plan, adata, dm.data_dir, dataset_id, n_lsi=body.n_lsi, dims_to=body.dims_to,
-                                    drop_first=body.drop_first, resolution=body.resolution, activity=body.activity)
+                                    drop_first=body.drop_first, resolution=body.resolution, activity=body.activity,
+                                    activity_source=body.activity_source)
     except atac.AtacError as e:
         raise _http(e)
     fingerprint = await asyncio.to_thread(adaptor.cells_fingerprint)
-    need = atac.estimate_bytes(p.n_cells, p.n_peaks, n_lsi=p.n_lsi)
+    need = atac.estimate_bytes(p.n_cells, p.n_peaks, n_lsi=p.n_lsi, fragments=p.activity and p.activity_source == "fragments")
     await dm.reserve(dataset_id, need, what=_WHAT["run"])
     store = await asyncio.to_thread(atac.open_store, adata, dm.data_dir, dataset_id)
     rows = await asyncio.to_thread(atac.cell_rows, store, adata)

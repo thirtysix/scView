@@ -29,7 +29,7 @@ type ScatterOverlay =
     }
   // One gene program's per-cell usage share (Programs subtab; 1-based index, P1..Pk)
   | { type: "program"; index: number; name: string }
-  // One gene's peak-based activity (Accessibility subtab, core/atac.py): its own kind, an
+  // One gene's ATAC gene activity (Accessibility subtab, core/atac.py): its own kind, an
   // expression overlay's layer means a protein
   | { type: "atac_activity"; gene: string }
   // One motif's chromVAR z per cell (Accessibility subtab, core/atac_chromvar.py), signed: the diverging map
