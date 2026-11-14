@@ -132,11 +132,40 @@ def _mixscape_reply(r: dict[str, Any], dataset_id: str, n: int) -> dict[str, Any
         if r.get(key):
             recs = sorted(r[key], key=lambda x: rank.get(x.get("target"), len(rank)))
             out[key] = _rows(recs, n)
+    if r.get("protein"):
+        out["protein"] = _protein_reply(r["protein"], n)
     out["columns_written"] = ["mixscape_class", "mixscape_class_global", "mixscape_p_ko"]
     out["note"] = ("KO: the guide's cells that moved away from the controls; NP: not perturbed (escapers). "
                    "per_guide / per_replicate: each target's KO share per guide and per replicate. "
-                   "list_results(kind='mixscape') keeps each run.")
+                   + ("protein: each protein's shift (CLR) vs the controls in all / KO / NP cells per target; "
+                      "flags = a protein effect with no RNA KO class. " if r.get("protein") else "")
+                   + "list_results(kind='mixscape') keeps each run.")
     return out
+
+
+_PROTEIN_COLUMNS = ("target", "protein", "ko_fraction", "all_n", "all_diff", "all_padj", "ko_diff", "ko_padj",
+                    "np_diff", "np_padj", "n_replicates", "same_sign", "p_replicate", "unit", "significant",
+                    "flag")
+
+
+def _protein_reply(pr: dict[str, Any], n: int) -> dict[str, Any]:
+    """The Mixscape run's protein check: flags in words, then the target x protein rows
+    (flags first, then significant, by cell-level adjusted p)."""
+    recs = []
+    for r in pr.get("rows") or []:
+        rec = {k: r.get(k) for k in ("target", "protein", "ko_fraction", "n_replicates", "same_sign", "p_replicate",
+                                     "unit", "significant", "flag")}
+        for g in ("all", "ko", "np"):
+            s = r.get(g) or {}
+            rec[f"{g}_diff"], rec[f"{g}_padj"] = s.get("diff"), s.get("padj")
+            if g == "all":
+                rec["all_n"] = s.get("n")
+        recs.append(rec)
+    recs.sort(key=lambda x: (not x["flag"], not x["significant"],
+                             1.0 if x["all_padj"] is None else x["all_padj"]))
+    return {**pick(pr, "layer", "proteins", "control", "n_control", "replicate_column", "notes"),
+            "flags": [f["text"] for f in pr.get("flags") or []],
+            "rows": table(recs, list(_PROTEIN_COLUMNS), n)}
 
 
 @tool(WRITE)
@@ -162,12 +191,15 @@ async def mixscape(
     guide_column: Annotated[str | None, Field(max_length=256, description=(
         "Obs column of each cell's guide for the per-guide KO table (default: the assignment's)."))] = None,
     replicate_column: Annotated[str | None, Field(max_length=256, description=(
-        "Obs column for the per-replicate KO table (default: split_by)."))] = None,
+        "Obs column of each cell's replicate, for the per-replicate KO table and the protein check's "
+        "replicate unit (default: split_by)."))] = None,
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
     """Mixscape (Papalexi 2021): per target, which guide cells are knocked out (KO) and which
     escaped (NP), saved as mixscape_class / mixscape_class_global / mixscape_p_ko; the per-target
-    table (cells, KO share, DE genes), each target's KO share per guide and per replicate. Run
+    table (cells, KO share, DE genes), each target's KO share per guide and per replicate. With
+    protein (CITE / ECCITE-seq): each protein's shift vs the controls per target, and flags for a
+    protein effect with no RNA KO class (judged on replicate_column / split_by when given). Run
     guide_assignment(save=true) first, or name labels and control. A job: waits up to 20 s,
     else job_id."""
     body = _body(labels=labels, control=control, split_by=split_by, de_genes=de_genes, n_dims=n_dims,
@@ -479,7 +511,7 @@ def _da_reply(r: dict[str, Any], dataset_id: str, n: int) -> dict[str, Any]:
     counts = [{"group": g, "n_tested": (r.get("n_tested") or {}).get(g),
                "n_significant": (r.get("n_significant") or {}).get(g)} for g in groups]
     out: dict[str, Any] = {"dataset_id": dataset_id, "result_id": r.get("id"),
-                           **pick(r, "column", "vs", "test", "method", "note", "n_fit"),
+                           **pick(r, "column", "vs", "test", "fold_change", "method", "note", "n_fit"),
                            "params": pick(r.get("params") or {}, "min_pct", "max_peaks", "on", "latent", "lrt_peaks",
                                           "standard_only", "n_peaks_left_out", "n_cells_vs"),
                            "counts": table(counts, ["group", "n_tested", "n_significant"], n),
@@ -508,6 +540,9 @@ async def atac_differential(
         "lr: true likelihood-ratio fits per group (the rest from the score test)."))] = None,
     standard_only: Annotated[bool | None, Field(description=(
         "Leave out chrM, unplaced scaffolds and alt contigs (default true, Signac's keepStandardChromosomes)."))] = None,
+    fold_change: Annotated[Literal["signac", "tfidf"] | None, Field(description=(
+        "log2fc formula. signac (default): Signac's FoldChange for peaks, mean log1p(TF-IDF) + 1e-4, the numbers "
+        "FindMarkers prints. tfidf: mean TF-IDF + 1, scView's before 0.79, about 4x smaller."))] = None,
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
     """Differential accessibility: each group's peaks vs the rest, or one group vs another
@@ -517,7 +552,7 @@ async def atac_differential(
     if vs is not None and (not groups or len(groups) != 1):
         raise ToolError("A vs B needs exactly one group in groups (A) and vs (B).")
     body = _body(column=column, groups=groups, vs=vs, test=test, min_pct=min_pct, max_peaks=max_peaks,
-                 lrt_peaks=lrt_peaks, standard_only=standard_only)
+                 lrt_peaks=lrt_peaks, standard_only=standard_only, fold_change=fold_change)
     return await _atac_job(dataset_id, "atac_differential", "/atac/differential", body, limit, _da_reply)
 
 

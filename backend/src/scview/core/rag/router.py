@@ -148,6 +148,7 @@ _RESULT_FACET_HINTS = {
         "co-occur", "cooccur", "co occur", "near each other", "close to each other", "close together",
         "found together", "occur together", "spatial proximity", "how close", "nearby cell types",
         "velocity", "scvelo", "spliced", "unspliced", "phase portrait", "arrows", "gamma", "latent time",
+        "murk", "direction check", "backward", "wrong direction", "pointing the wrong way",
     ),
     "markers": ("gene program", "programs", "nmf"),
     "qc": ("targeted panel", "gene panel", "panel genes", "the panel", "xenium", "control counts",

@@ -6,6 +6,67 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.79.0] - 2026-11-14
+
+RNA velocity checks its own direction and can leave genes out; pseudotime warns about a wrong start and stray
+cells; the MCP gains trajectory and velocity tools; Mixscape reads the protein panel; differential peaks report
+Signac's fold change. Found by re-analysing Pijuan-Sala et al. 2019 (mouse gastrulation, erythroid lineage) and
+Bastidas-Ponce et al. 2019 (pancreas endocrinogenesis) through scView's MCP, plus follow-ups from v0.78's QA.
+
+### Added
+- RNA velocity checks its direction against an order you give (cell types in order, a start group with the PAGA
+  tree, a stage or a pseudotime; scView's pseudotime by default). Each step gets a cross-boundary score with an
+  interval, and a step whose arrows point backward is named in a warning. On the erythroid atlas the default run
+  points Erythroid2 -> Erythroid3 backward (-0.19, n = 169), as Barile et al. 2021 showed; velocity confidence
+  (0.70 there) cannot show it. Pancreas: every step forward.
+- Velocity runs can leave genes out: type them, or tick the built-in MURK list (Barile et al. 2021, 89 mouse
+  erythroid genes). On the erythroid atlas that turns the backward step forward (-0.19 to +0.26, stochastic model).
+  The genes left out are kept in the recipe and the replay script.
+- Velocity flags genes whose expression rises along a step while their velocity says it falls (the MURK pattern),
+  says how many of the top velocity genes they are, and can leave them out and run again.
+- Mixscape checks the protein panel (CITE / ECCITE-seq): each protein's shift per target in all, KO and NP cells,
+  judged on the replicates when Within names them, and flags targets that move a protein with no RNA KO class.
+  On Papalexi 2021 it finds CMTM6 (PD-L1 -0.19, 3 of 3 replicates, all cells NP), MYC (+0.13) and CD86 on its own
+  protein (-0.17).
+- MCP: trajectory and RNA velocity tools (`paga`, `pseudotime`, `pseudotime_genes`, `velocity`, `get_velocity`,
+  `velocity_direction`). `plot` draws velocity arrows and the PAGA graph over an embedding, a phase portrait, and a
+  numeric column (a pseudotime) by group. 71 tools in all.
+- MCP: `run_pipeline` names clusters that are almost all one sample (erythroid atlas: 3 clusters, e.g. 469 cells
+  100% from one of 27 samples); none on Kang's 8 donors. `get_dataset` and `upload_instructions` say whether velocity
+  counts are attached and how to attach them.
+- Pseudotime keeps one column per start group (`scview_dpt_<group>`) next to the latest.
+- The file's own PCA is kept as `X_pca_original`, as its UMAP already was.
+
+### Changed
+- Differential peaks: log2FC follows Signac's FoldChange for peaks (what FindMarkers reports), so numbers and
+  cut-offs match Signac's vignettes. The older formula (mean TF-IDF + 1) was about 4x smaller on PBMC 10k (0.64-0.87
+  vs 3.5-4.0 for the vignette's CD4 vs CD14 peaks). It stays as a choice, and results saved earlier say they used
+  it. Peaks and p values are unchanged.
+- Pseudotime: a few weakly linked cells no longer squeeze the rest into the bottom 2% (18 vs 9,797 on the erythroid
+  atlas after Harmony); they are left out and named. A start group that looks like the wrong end is flagged.
+- Genes along pseudotime: bins hold equal cell counts (before, 9,797 of 9,815 cells could land in one bin).
+- A new Mixscape run or guide assignment no longer marks every DE and Mixscape result stale: only results that used
+  a column whose labels changed.
+- RNA velocity, PAGA and pseudotime go stale when the graph, PCs or cells change, not after a clustering or a marker
+  run, and every view says the same.
+- ATAC time estimates refit on PBMC 10k, mouse kidney and E18: WNN, LSI and peak-gene links land within 20% on both
+  QA datasets (they were up to 49% over); first-run compile time is added only while it is still to come.
+- A long step's "still running" note waits for 1.5 times its estimate (at least a minute) and states the estimate;
+  ATAC runs no longer note a slow step a minute into their SVD.
+- Stored velocity results show their settings and warnings.
+
+### Fixed
+- Uploading scVelo's own datasets (anndata 0.7 layout with spliced/unspliced, e.g. gastrulation_erythroid) gave a
+  dataset that could not be opened ("Invalid HDF5 object reference"). Two other import paths had the same flaw.
+- No false ambient-haemoglobin warning on erythroid datasets: Hb is read as the cells' own when most cells of a
+  cluster express other red-cell genes too.
+- Marker-database check: short code labels (IC, PT) no longer match unrelated longer names such as "Type IC spiral
+  ganglion neuron" or "Non PT tubular cell".
+- `describe_column` on a pseudotime with unreachable cells failed; infinite values now come back as missing.
+- The trajectory status said no velocity counts were attached when they were.
+- docs/API_REFERENCE.md listed three trajectory routes that do not exist; the real PAGA, pseudotime and trend-gene
+  routes are documented.
+
 ## [0.78.0] - 2026-11-14
 
 Single-nucleus and multiome data stop losing a quarter of their nuclei to the % mito rule; Cell Ranger ARC outputs

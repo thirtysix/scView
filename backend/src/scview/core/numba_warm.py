@@ -17,6 +17,12 @@ Measured at 2 CPUs (Kang 13,836 cells, 50 PCs, numba 0.68.1, umap-learn 0.5.12, 
 weights (``smooth_knn_dist``, ``compute_membership_strengths``) 2.6 s; pynndescent's search (scanpy
 uses it from 8,192 cells with the euclidean metric, exact neighbours below) about 20 s; the UMAP
 layout's epoch about 1 s. A neighbour graph of Kang took 28-31 s first and 1.3 s after.
+
+pynndescent compiles its search once per distance (its dispatcher's signatures name the distance
+function): the ATAC graph (cosine) after the pipeline's euclidean search, or WNN's euclidean index
+after an ATAC graph, still compiles. Measured at 2 CPUs (2026-11-14): cosine first 11-19 s, the
+other distance after it 4-7 s (5k mouse kidney: ATAC graph 20.7 s cold, 1.7 s warm; WNN 21.3 s
+with its euclidean search to compile, 14.1 s after).
 """
 
 from __future__ import annotations
@@ -24,6 +30,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import os
+import re
 import sys
 
 IMPORT_COLD_SECONDS = 8.9  # import umap.umap_ (pynndescent compiles its typed functions on import)
@@ -32,6 +39,7 @@ GRAPH_SECONDS = 2.6  # umap-learn's graph weights
 SEARCH_SECONDS = 20.0  # pynndescent's neighbour search
 LAYOUT_SECONDS = 1.0  # the UMAP layout's epoch
 SEARCH_MIN_CELLS = 8192  # scanpy searches exactly below this (euclidean); pynndescent from here
+SEARCH_OTHER_METRIC_SECONDS = 6.0  # the search for one more distance once it is compiled for another
 
 
 def _compiled(module: str, name: str) -> bool:
@@ -48,6 +56,38 @@ def graph_compiled() -> bool:
 def search_compiled() -> bool:
     """pynndescent's approximate neighbour search."""
     return _compiled("pynndescent.pynndescent_", "nn_descent")
+
+
+def search_metrics() -> set[str]:
+    """The distances pynndescent's search is compiled for in this process ("cosine",
+    "euclidean", or a function's own name), from its dispatcher's signatures. Never imports."""
+    sigs = getattr(getattr(sys.modules.get("pynndescent.pynndescent_"), "nn_descent", None), "signatures", None) or []
+    found = set()
+    for sig in sigs:
+        for name in re.findall(r"function ([\w.<>]+) at", " ".join(str(a) for a in sig)):
+            name = name.rsplit(".", 1)[-1]
+            found.add(next((m for m in ("cosine", "euclidean") if m in name), name))
+    return found
+
+
+def search_seconds(metric: str) -> float:
+    """pynndescent's compile still to come before a search with ``metric``: none when compiled
+    for it, ``SEARCH_OTHER_METRIC_SECONDS`` when compiled for another distance only, else
+    ``SEARCH_SECONDS``."""
+    done = search_metrics()
+    if metric in done:
+        return 0.0
+    return SEARCH_OTHER_METRIC_SECONDS if done else SEARCH_SECONDS
+
+
+def graph_umap_seconds(n_cells: int, metric: str = "euclidean", exact_below: int = SEARCH_MIN_CELLS) -> float:
+    """Compile still to come before a neighbour graph with ``metric`` and its UMAP: scanpy searches
+    exactly (no pynndescent) only for euclidean below ``exact_below`` cells; the import when anything
+    is left."""
+    exact = metric == "euclidean" and int(n_cells) < exact_below
+    secs = (0.0 if exact else search_seconds(metric)) + (0.0 if graph_compiled() else GRAPH_SECONDS) \
+        + (0.0 if layout_compiled() else LAYOUT_SECONDS)
+    return secs + import_seconds() if secs else 0.0
 
 
 def layout_compiled() -> bool:

@@ -14,9 +14,12 @@ from scipy.stats import spearmanr
 from scview.core import provenance
 from scview.core.trajectory import (
     DPT_COLUMN,
+    PAGA_KEY,
     PARAMS_KEY,
+    RUNS_KEY,
     TrajectoryError,
     compute_dpt,
+    detached_tail,
     root_cell,
 )
 
@@ -123,6 +126,72 @@ def test_dpt_refuses_what_it_cannot_compute():
     del a.obsm["X_pca"]
     with pytest.raises(TrajectoryError, match="PCA"):
         compute_dpt(a, "stage", "early")
+
+
+def test_detached_tail_finds_a_gap_not_a_long_tail():
+    rng = np.random.default_rng(0)
+    main = rng.uniform(0, 0.02, 980)
+    assert detached_tail(np.r_[main, rng.uniform(0.92, 1.0, 20)]).sum() == 20
+    # A long continuous tail (paul15's dendritic cells): no gap wider than what lies below.
+    assert detached_tail(np.r_[rng.uniform(0, 0.3, 950), np.linspace(0.3, 1.0, 50)]) is None
+    # A gap with more than 5% of the cells past it is a part of the data, not an island.
+    assert detached_tail(np.r_[main, rng.uniform(0.92, 1.0, 100)]) is None
+    assert detached_tail(np.zeros(100)) is None
+
+
+def test_dpt_leaves_a_weakly_linked_island_out_of_the_scale(monkeypatch):
+    """Pijuan-Sala's erythroid cells after Harmony: 18 weakly linked cells took 0.92-1.0 and
+    the other 9,797 were squeezed into 0-0.016. Here the first diffusion is made to give
+    that picture for 15 path cells; they are left out and the rest diffused again."""
+    from scview.core import trajectory
+
+    a, t = _path_adata()
+    island = np.flatnonzero(t > 0.95)[-15:]
+    real, calls = trajectory._diffuse, []
+
+    def first_gapped(work, reach, in_group):
+        pt, root = real(work, reach, in_group)
+        calls.append(int(reach.sum()))
+        if len(calls) == 1:
+            pt = pt * 0.02
+            pt[np.isin(np.flatnonzero(reach), island)] = np.linspace(0.92, 1.0, len(island))
+        return pt, root
+
+    monkeypatch.setattr(trajectory, "_diffuse", first_gapped)
+    params = compute_dpt(a, "stage", "early")
+    pt = a.obs[DPT_COLUMN].to_numpy()
+    assert calls == [N_PATH, N_PATH - 15]  # the islands of _line_adata stay unreachable
+    assert params["n_detached"] == 15 and params["n_unreachable"] == N_ISLAND
+    assert np.isnan(pt[island]).all() and np.isinf(pt[N_PATH:]).all()
+    main = np.setdiff1d(np.arange(N_PATH), island)
+    assert pt[main].max() == 1.0 and np.median(pt[main]) > 0.2  # the path fills the scale again
+    assert spearmanr(pt[main], t[main]).statistic > 0.95
+    w = params["warnings"]
+    assert len(w) == 1 and w[0].startswith("15 cells hang on the rest of the graph by weak links: from this root "
+                                           "they came out at 0.92-1.00 while the other 285 took 0-0.02")
+
+
+def test_each_root_keeps_its_column_and_a_reversed_root_is_flagged():
+    a, t = _path_adata()
+    first = compute_dpt(a, "stage", "early")
+    assert first["root_named_column"] == "scview_dpt_early" and first["warnings"] == []
+    second = compute_dpt(a, "stage", "late")
+    assert {"scview_dpt_early", "scview_dpt_late", DPT_COLUMN} <= set(a.obs.columns)
+    assert (a.obs[DPT_COLUMN] == a.obs["scview_dpt_late"]).all()
+    assert set(json.loads(a.uns[RUNS_KEY])) == {"scview_dpt_early", "scview_dpt_late"}
+    # Reversed against the earlier run (and the imported dpt_pseudotime is constant: skipped).
+    assert any("runs against 'scview_dpt_early'" in w for w in second["warnings"])
+    again = compute_dpt(a, "stage", "late")  # its own earlier column is not "another" pseudotime
+    assert sum("runs against" in w for w in again["warnings"]) == 1
+
+
+def test_a_root_inside_the_paga_tree_is_flagged():
+    a, _ = _path_adata()
+    a.uns[PAGA_KEY] = json.dumps({"groupby": "stage", "groups": ["early", "mid", "late"],
+                                  "tree": [[0, 1], [1, 2]], "edges": [], "sizes": [1, 1, 1]})
+    assert compute_dpt(a, "stage", "early")["warnings"] == []
+    got = compute_dpt(a, "stage", "mid")["warnings"]
+    assert any("'mid' sits inside the PAGA tree of stage (linked to 'early', 'late')" in w for w in got)
 
 
 def _register(dm, adata) -> tuple[str, Path]:

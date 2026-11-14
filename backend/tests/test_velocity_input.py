@@ -15,7 +15,7 @@ import scipy.sparse as sp
 
 from scview.core import modality_store as ms
 from scview.core import velocity_input as vi
-from tests.velocity_fixture import barcode, legacy_h5ad, splicing_counts, write_loom, write_starsolo
+from tests.velocity_fixture import barcode, legacy_categories_h5ad, legacy_h5ad, splicing_counts, write_loom, write_starsolo
 
 
 def test_barcode_of_reads_each_tools_convention():
@@ -84,6 +84,35 @@ def test_adopt_upload_of_a_legacy_h5ad(tmp_path):
         assert st.matrices == ["spliced", "unspliced"]
         assert (st.read("spliced", np.arange(60)).toarray() == a.layers["spliced"].toarray()).all()
         assert st.barcodes[3] == a.obs_names[3]
+
+
+def test_adopt_upload_keeps_legacy_category_references_valid(tmp_path):
+    """anndata 0.7.x categoricals (``categories`` = an HDF5 object reference): a raw h5py copy
+    left them pointing into the upload, and the dataset could not be opened (QA round 5)."""
+    a = splicing_counts(60, 70)
+    src = tmp_path / "erythroid.h5ad"
+    legacy_categories_h5ad(src, a)
+    want = ad.read_h5ad(src)
+    out = tmp_path / "out.h5ad"
+    vi.adopt_upload(src, out, "ds", tmp_path, file_name="erythroid.h5ad")
+    back = ad.read_h5ad(out)
+    assert "spliced" not in back.layers
+    assert back.obs["clusters"].tolist() == want.obs["clusters"].tolist()
+    assert list(back.obs["stage"].cat.categories) == ["E7", "E8"]
+    assert back.var["chrom"].tolist() == want.var["chrom"].tolist()
+
+
+def test_adopt_upload_refuses_a_copy_that_does_not_open(tmp_path, monkeypatch):
+    from scview.core import h5_copy
+
+    a = splicing_counts(30, 40)
+    src = tmp_path / "erythroid.h5ad"
+    legacy_categories_h5ad(src, a)
+    monkeypatch.setattr(h5_copy, "repoint", lambda s, d: 0)  # the old raw copy
+    out = tmp_path / "out.h5ad"
+    with pytest.raises(Exception, match="(?i)reference"):
+        vi.adopt_upload(src, out, "ds", tmp_path, file_name="erythroid.h5ad")
+    assert not out.exists() and not list(tmp_path.glob(".out.h5ad*"))
 
 
 @pytest.mark.parametrize("kind", ["loom", "starsolo", "starsolo_gz", "h5ad"])

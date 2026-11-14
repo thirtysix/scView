@@ -27,9 +27,11 @@ RIBO = [f"RPL{i}" for i in range(5)] + [f"RPS{i}" for i in range(5)]
 EXTRA = ["KLF1", "RHD", "ALAS2", "HBEGF"]  # HBEGF: an "HB" name that isn't haemoglobin
 
 
-def _blood(hb: dict[str, float] | None = None, *, base: float = 0.005, seed: int = 0) -> ad.AnnData:
+def _blood(hb: dict[str, float] | None = None, *, base: float = 0.005, seed: int = 0,
+           red: float = 0.2) -> ad.AnnData:
     """Raw counts for clusters '0'..'5' (~215 counts per cell). ``hb[g]`` is the
-    Poisson mean of EACH haemoglobin gene per cell in cluster g (else ``base``)."""
+    Poisson mean of EACH haemoglobin gene per cell in cluster g (else ``base``);
+    ``red`` that of KLF1, RHD and ALAS2 (red-cell genes besides haemoglobin)."""
     rng = np.random.default_rng(seed)
     n = N_PER * N_GROUPS
     labels = np.repeat([str(k) for k in range(N_GROUPS)], N_PER)
@@ -38,7 +40,7 @@ def _blood(hb: dict[str, float] | None = None, *, base: float = 0.005, seed: int
         rng.poisson(1.0, (n, len(FILLER))),
         rng.poisson(1.5, (n, len(RIBO))),
         rng.poisson(lam[:, None], (n, len(HUMAN))),
-        rng.poisson(0.2, (n, len(EXTRA))),
+        np.c_[rng.poisson(red, (n, 3)), rng.poisson(0.2, (n, len(EXTRA) - 3))],
     ]).astype("float32")
     a = ad.AnnData(X)
     a.var_names = FILLER + RIBO + list(HUMAN) + EXTRA
@@ -151,6 +153,16 @@ def test_without_markers_elevated_haemoglobin_is_not_judged():
     # A red-cell level is erythroid even without markers.
     row = _rows(cluster_qc(_blood({"5": 100.0})))["5"]
     assert row.erythroid and row.flags == [] and "red-cell level" in row.notes[0]
+
+
+def test_haemoglobin_in_red_cell_lineage_clusters_is_their_own():
+    """Pijuan-Sala's erythroid cells: every cluster red-cell lineage, so no cluster has red-cell
+    markers, and 'Haemoglobin RNA is spread across the non-erythroid clusters' was a false alarm."""
+    a = _markers(_blood({"5": 6.0}, base=1.0, red=3.0), {})
+    report = cluster_qc(a)
+    assert report.ambient_hb == "" and not report.flagged
+    assert "These are red-cell lineage cells and the haemoglobin is their own" in report.note
+    assert "in a typical cluster 9" in report.note  # ~98% of cells detect 2+ of KLF1, RHD, ALAS2
 
 
 def test_haemoglobin_across_all_clusters_is_reported_as_ambient():

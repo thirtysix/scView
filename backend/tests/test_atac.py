@@ -366,6 +366,52 @@ def test_differential_context_columns(world):
     assert "on hg19 (GRCh37)" in note2 and (table2["nearest_gene"] == "").all()
 
 
+def _signac_fc(data: np.ndarray, one: np.ndarray, other: np.ndarray) -> np.ndarray:
+    """Signac 1.17.1 FoldChange.ChromatinAssay: log2(rowMeans(data) + 1/10000) of each side, data = log1p(TF-IDF)."""
+    return np.log2(data[one].mean(axis=0) + 1e-4) - np.log2(data[other].mean(axis=0) + 1e-4)
+
+
+def test_fold_change_is_signacs_by_default_and_the_old_one_on_request(world):
+    """Signac's FoldChange for peaks (FindMarkers' avg_log2FC) under both tests, each group vs the rest and one
+    group vs another; "tfidf" keeps the formula before 0.79, log2 of mean TF-IDF + 1."""
+    a = world["adata"]
+    data = _manual_tfidf(world["peaks"])
+    labels = a.obs["group"].astype(str).to_numpy().copy()
+    labels[np.flatnonzero(labels == "B")[::2]] = "C"
+    a.obs["trio"] = pd.Categorical(labels)
+    for test in ("wilcoxon", "lr"):
+        for groups, vs, other in ((["A"], None, labels != "A"), (["A"], "C", labels == "C")):
+            use = atac.group_codes(a, "trio", groups, vs)
+            run = {fc: [i for i in atac.iter_differential(world["store"], world["rows"], *use, test=test,
+                                                          **({} if fc is None else {"fold_change": fc}))
+                        if i["type"] == "result"][0]["frame"] for fc in (None, "signac", "tfidf")}
+            f = run[None]
+            idx = f["peak_index"].to_numpy()
+            np.testing.assert_allclose(f["log2fc"], _signac_fc(data, labels == "A", other)[idx], rtol=1e-5, atol=1e-5)
+            pd.testing.assert_frame_equal(f, run["signac"])
+            old = run["tfidf"].set_index("peak_index").loc[idx, "log2fc"].to_numpy()
+            e = np.expm1(data)
+            ref = np.log2((e[labels == "A"].mean(axis=0) + 1) / (e[other].mean(axis=0) + 1))[idx]
+            np.testing.assert_allclose(old, ref, rtol=1e-5, atol=1e-5)
+            # the formula changes log2fc only: same peaks, same p
+            np.testing.assert_array_equal(run["tfidf"]["pval"].to_numpy(), f["pval"].to_numpy())
+    with pytest.raises(atac.AtacError, match="Unknown fold change"):
+        next(i for i in atac.iter_differential(world["store"], world["rows"], *atac.group_codes(a, "group"), fold_change="v5")
+             if i["type"] == "result")
+
+
+def test_the_method_and_an_old_result_name_their_fold_change():
+    assert "Signac's FoldChange for peaks" in atac.da_method("lr", 0.05, 100, 10)
+    assert "A vs C" in atac.da_method("wilcoxon", 0.05, 100, 10, ("A", "C"), "tfidf")
+    assert "mean TF-IDF + 1" in atac.da_method("wilcoxon", 0.05, 100, 10, None, "tfidf")
+    old = atac.DaResult(result_id="r", column="g", groups=["A"], table=pd.DataFrame({"group": ["A"], "peak_index": [0]}),
+                        n_tested={"A": 1}, n_significant={"A": 0}, params={"test": "lr"}, method="m", cells="c",
+                        created_at="t")
+    assert atac.da_payload(old)["fold_change"] == "tfidf"
+    old.params["fold_change"] = "signac"
+    assert atac.da_payload(old)["fold_change"] == "signac"
+
+
 def test_one_group_against_another_leaves_every_other_cell_out(world):
     """FindMarkers(ident.1 = A, ident.2 = C): the B cells take no part; TF-IDF over all cells as Signac's data slot."""
     a = world["adata"]
@@ -606,3 +652,44 @@ def test_grounding_lines_say_nothing_without_atac_and_tag_their_facts(world):
     assert atac.grounding_lines(ad.AnnData(X=np.zeros((2, 2), dtype=np.float32))) == ([], "")
     lines, detail = atac.grounding_lines(world["adata"])
     assert "72 peaks" in detail and all(atac.TAG in line for line in lines[1:])
+
+
+# Measured at 2 CPUs through a running server, 2026-11-14 (v0.79): seconds of whole runs.
+# (cells, values, fragments file bytes or None, measured s, compile still to come)
+_LSI_RUNS = [
+    (11_208, 97_980_766, None, 102.3, "warm"),  # PBMC 10k, peak activity
+    (11_208, 97_980_766, 2_403_785_496, 197.7, "warm"),  # PBMC 10k, fragment activity
+    (5_116, 24_025_758, None, 45.1, "cold"),  # 5k mouse kidney, first ATAC graph in the process (cosine search)
+    (5_116, 24_025_758, 1_351_160_196, 81.3, "warm"),
+]
+
+
+@pytest.mark.parametrize("cells,nnz,fragments,measured,state", _LSI_RUNS)
+def test_lsi_estimate_is_within_20_percent_of_the_measured_runs(monkeypatch, cells, nnz, fragments, measured, state):
+    """QA round 4: the mouse kidney's LSI ran in 30 s against an estimate of 57 (a 20 s first-run constant on
+    every run, and a per-value SVD cost fit on PBMC alone)."""
+    from scview.core import numba_warm
+
+    monkeypatch.setattr(numba_warm, "search_metrics", lambda: set() if state == "cold" else {"cosine", "euclidean"})
+    monkeypatch.setattr(numba_warm, "graph_compiled", lambda: True)
+    monkeypatch.setattr(numba_warm, "layout_compiled", lambda: True)
+    monkeypatch.setattr(numba_warm, "import_seconds", lambda: 0.0)
+    est = atac.estimate_seconds(cells, nnz, activity=True, fragment_bytes=fragments)
+    assert abs(est / measured - 1) < 0.2, (est, measured)
+
+
+@pytest.mark.parametrize("cells,metrics,measured", [
+    (11_208, {"cosine", "euclidean"}, 19.9),  # PBMC 10k (19.5-21.5 s in three runs)
+    (5_116, {"cosine", "euclidean"}, 14.1),  # 5k mouse kidney
+    (5_116, {"cosine"}, 21.3),  # its first WNN: the euclidean index still to compile
+])
+def test_wnn_estimate_is_within_20_percent_of_the_measured_runs(monkeypatch, cells, metrics, measured):
+    """QA round 4: WNN took 20 s and 14 s against estimates of 39 and 28."""
+    from scview.core import numba_warm
+
+    monkeypatch.setattr(numba_warm, "search_metrics", lambda: metrics)
+    monkeypatch.setattr(numba_warm, "graph_compiled", lambda: True)
+    monkeypatch.setattr(numba_warm, "layout_compiled", lambda: True)
+    monkeypatch.setattr(numba_warm, "import_seconds", lambda: 0.0)  # umap-learn imported by the pipeline
+    est = atac.estimate_wnn_seconds(cells)
+    assert abs(est / measured - 1) < 0.2, (est, measured)

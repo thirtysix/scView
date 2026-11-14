@@ -739,3 +739,34 @@ def test_module_file_has_no_scview_imports_in_the_replayed_code():
 
     for obj in atac_links.REPLAY_CODE:
         assert "scview" not in inspect.getsource(obj).replace("scView", "")
+
+
+@pytest.mark.parametrize("nnz,peaks,genes,cis,mode,measured", [
+    (97_980_766, 143_887, 2_000, 141_363, "variable", 54.2),  # PBMC 10k, 2 CPUs, 2026-11-14
+    (97_980_766, 143_887, 26_200, 2_166_317, "all", 163.6),
+    (24_025_758, 73_918, 2_000, 73_604, "variable", 12.3),  # 5k mouse kidney
+    (24_025_758, 73_918, 23_999, 1_216_893, "all", 59.2),
+    (38_404_934, 172_193, 2_000, 167_633, "variable", 44.1),  # E18 mouse brain
+])
+def test_links_estimate_is_within_20_percent_of_the_measured_runs(nnz, peaks, genes, cis, mode, measured):
+    """QA round 4: the kidney's all-gene links took 138 s against 257 (with the download): the pair cost was
+    fixed at PBMC's, not per peak and per value of the mean peak."""
+    est = atac_links.estimate_seconds(nnz, peaks, genes, mode=mode, n_cis=cis)
+    assert abs(est / measured - 1) <= 0.2, (est, measured)
+
+
+def test_links_estimate_errs_on_the_safe_side_where_few_pairs_pass():
+    # E18 all genes: 2.6% of its cis pairs passed the cutoff (PBMC 3.4%, kidney 4.8%): 106 s measured
+    est = atac_links.estimate_seconds(38_404_934, 172_193, 21_544, mode="all", n_cis=1_938_976)
+    assert 1.0 < est / 106.2 < 1.4
+
+
+def test_cis_pairs_counts_what_the_run_would_correlate():
+    genes = pd.DataFrame({"name": ["a", "b", "c", "d"], "chrom": ["chr1", "chr1", "chr2", "chr3"],
+                          "tss": [1_000_000, 3_000_000, 100, 50]})
+    chrom = np.array(["chr1"] * 4 + ["chr2"] * 3 + ["chr3", "chrUn_x", "chrUn_x"])
+    start = np.array([600_000, 900_000, 1_400_000, 1_600_000, 0, 10, 499_000, 0, 0, 10])
+    end = start + 500
+    # a: 3 peaks within 500 kb on chr1 (not the one at 1.6 Mb); b: none; c: 3 on chr2; d: one peak only (never tested);
+    # the unplaced contig is no candidate
+    assert atac_links.cis_pairs(genes, chrom, start, end) == 3 + 3

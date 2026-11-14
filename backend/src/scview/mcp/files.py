@@ -59,6 +59,12 @@ A side file for a dataset already in the library:
   curl --data-binary @atac_fragments.tsv.gz.tbi "BASE/api/v1/datasets/<id>/atac/fragments?name=atac_fragments.tsv.gz.tbi"
   curl -F "file=@per_barcode_metrics.csv" BASE/api/v1/datasets/<id>/atac/metrics
 
+RNA velocity counts (spliced + unspliced) for a dataset already in the library: a velocyto .loom (one per
+sample, sent together), an .h5ad with spliced and unspliced layers, or STARsolo's Velocyto files
+(features.tsv, barcodes.tsv, spliced.mtx, unspliced.mtx, ambiguous.mtx). Matched to the cells by barcode:
+  curl -F "files=@sample1.loom" -F "files=@sample2.loom" BASE/api/v1/datasets/<id>/velocity/attach
+An .h5ad uploaded with spliced and unspliced layers has them attached at upload. Then get_velocity.
+
 Or drag the files onto the UI's Data tab. Then list_datasets.
 """
 
@@ -67,7 +73,8 @@ Or drag the files onto the UI's Data tab. Then list_datasets.
 async def upload_instructions() -> str:
     """How to add files from your own machine: the MCP server runs inside scView's container and
     cannot read your disk, so local files go up over the REST API (curl recipes for one file, a
-    multi-file or folder upload with its side files, and a side file for an existing dataset),
+    multi-file or folder upload with its side files, a side file or RNA velocity counts for an existing
+    dataset),
     or through the UI's Data tab. import_server_path reads files already on the server."""
     s = api.settings()
     text = UPLOAD_RECIPE

@@ -435,6 +435,10 @@ def cluster_qc(
         typical.pop("hb")
         if others:
             typical["hb"] = float(np.nanmedian(medians.loc[others, "hb"]))
+    # Red-cell genes besides haemoglobin detected in the clusters' own cells: when every
+    # cluster is red-cell lineage, markers cannot show it and their haemoglobin is their own.
+    lineage = haemoglobin.lineage_detected(adata, labels.astype(str).to_numpy(), others) \
+        if "hb" in medians and others else None
     z: dict[str, pd.Series] = {}
     if len(order) >= MIN_GROUPS:
         z["genes"] = _robust_z(np.log1p(medians["genes"]), _SCALE_FLOOR["log_genes"])
@@ -508,8 +512,23 @@ def cluster_qc(
         g for g in others if haemoglobin.ambient_outlier(
             float(z["hb"].loc[g]), medians.loc[g, "hb"], typical.get("hb"))
     ]
-    ambient = ""
-    if typical.get("hb") is not None and typical["hb"] >= haemoglobin.AMBIENT_WIDE_PCT:
+    ambient = lineage_note = ""
+    own = {g for g, share in (lineage or {}).items() if share >= haemoglobin.LINEAGE_SHARE}
+    for row in rows:
+        if row.group in own and "hb_ambient" in row.flags:
+            i = row.flags.index("hb_ambient")
+            row.flags.pop(i)
+            row.reasons = [r for r in row.reasons if not r.startswith("Haemoglobin RNA without erythroid markers")]
+    wide_own = bool(lineage) and float(np.median(list(lineage.values()))) >= haemoglobin.LINEAGE_SHARE
+    if typical.get("hb") is not None and typical["hb"] >= haemoglobin.AMBIENT_WIDE_PCT and wide_own:
+        share = float(np.median(list(lineage.values())))
+        lineage_note = (
+            f"Haemoglobin RNA is in every cluster ({_pct(typical['hb'])} of the reads in a typical one), "
+            f"but so are red-cell genes besides it: in a typical cluster {share:.0%} of the cells detect "
+            f"{haemoglobin.MIN_ERYTHROID_MARKERS} or more of {', '.join(haemoglobin.ERYTHROID_GENES[:4])} ... "
+            "These are red-cell lineage cells and the haemoglobin is their own, not ambient RNA."
+        )
+    elif typical.get("hb") is not None and typical["hb"] >= haemoglobin.AMBIENT_WIDE_PCT:
         ambient = (
             f"Haemoglobin RNA is spread across the non-erythroid clusters ({_pct(typical['hb'])} "
             "of the reads in a typical one): likely ambient RNA from lysed red cells. It adds "
@@ -532,6 +551,7 @@ def cluster_qc(
         clusters=rows,
         computed_on_demand=bool(cells.get("computed")),
         note=" ".join(n for n in (
+            lineage_note,
             "" if len(order) >= MIN_GROUPS
             else f"Only {len(order)} groups: too few to say which stands out; only size is flagged.",
             "" if cells.get("has_mt", True)

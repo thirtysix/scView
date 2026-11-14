@@ -454,37 +454,114 @@ Content-Type: application/json
 
 ## Trajectory
 
+PAGA, diffusion pseudotime (DPT) and the genes that change along a pseudotime
+(`core/trajectory.py`, `core/pseudotime_genes.py`). A pseudotime column is any numeric obs
+column whose name holds `pseudotime`, `dpt_`, `latent_time` or `monocle`.
+
 ### List Pseudotime Columns
 
 ```
-GET /datasets/{dataset_id}/trajectory/columns
-```
-
-### Get Pseudotime Values
-
-```
-GET /datasets/{dataset_id}/trajectory/values?column=dpt_pseudotime
-```
-
-### Get Gene Expression Along Pseudotime
-
-```
-GET /datasets/{dataset_id}/trajectory/expression?column=dpt_pseudotime&genes=CD3D,CD8A
+GET /datasets/{dataset_id}/trajectory
 ```
 
 **Response** (200):
 ```json
 {
-  "column": "dpt_pseudotime",
+  "pseudotime_columns": ["scview_dpt_pseudotime", "scview_dpt_Ductal"],
+  "n_columns": 2,
+  "computed": {
+    "column": "scview_dpt_pseudotime", "root_named_column": "scview_dpt_Ductal",
+    "root_column": "clusters", "root_value": "Ductal", "root_cell": "GACGCGTCATTTCAGG",
+    "graph": "existing neighbour graph (use_rep=X_pca, k=15)", "n_unreachable": 0,
+    "n_detached": 0, "warnings": [], "stale": null
+  },
+  "runs": {"scview_dpt_Ductal": {"...": "the same record"}},
+  "velocity_layers": true
+}
+```
+
+`computed` is the latest in-app run (null when none), `runs` one record per root's column.
+`stale` says why a run no longer matches the data (a graph, PCA or data step since, or another
+neighbour graph now), else null. `velocity_layers`: spliced and unspliced counts are attached.
+
+### Compute Diffusion Pseudotime
+
+```
+POST /datasets/{dataset_id}/trajectory/dpt
+Content-Type: application/json
+```
+
+**Request body:** `{"root_column": "celltype", "root_value": "Blood progenitors 1"}`
+
+Writes `scview_dpt_pseudotime` (the latest run) and `scview_dpt_<root>` (kept when another root
+runs). The response is the run record above, without `stale`. Cells the root cannot reach get no
+pseudotime (`n_unreachable`). Cells past an extreme gap at the far end (at most 5% of the cells,
+the gap wider than the range below it) are a weakly linked island: they are left out
+(`n_detached`) and DPT is computed again without them. `warnings` says so, and flags a root that
+sits inside the saved PAGA tree of its column or runs against another pseudotime column
+(Spearman rho <= -0.5). 400 when no cell has the root value or there is no graph or PCA.
+
+### PAGA
+
+```
+POST /datasets/{dataset_id}/trajectory/paga
+GET  /datasets/{dataset_id}/trajectory/paga?embedding=X_umap
+```
+
+**POST body:** `{"groupby": "celltype"}`. Returns the record: `groups`, `sizes`, `edges`
+(`[i, j, connectivity]`), `tree` (maximum spanning tree edges), `graph`, `n_cells`.
+GET returns `{"paga": record | null, "positions": [[x, y], ...] | null, "stale": str | null,
+"root_group": str | null}`: each group's median position on `embedding`, why the record is out
+of date (its grouping or graph changed), and the group holding the pseudotime root cell.
+
+### Get Pseudotime Values
+
+```
+GET /datasets/{dataset_id}/trajectory/{column}
+```
+
+**Response** (200): `{"column", "n_cells", "values": [0.01, null, ...], "min", "max"}`; null for
+a cell without a finite pseudotime.
+
+### Get Gene Expression Along Pseudotime
+
+```
+GET /datasets/{dataset_id}/trajectory/{column}/genes?genes=Hba-x,Gata2&n_bins=20
+```
+
+Up to 10 genes. `n_bins` (10-500, default 100) is the most bins: bins hold equal cell counts
+(quantile bins, at least 10 cells each), each at its median pseudotime, as the trend-genes
+ranking bins.
+
+**Response** (200):
+```json
+{
+  "pseudotime_column": "scview_dpt_pseudotime",
+  "n_bins": 20,
+  "binning": "equal cell counts along pseudotime (quantile bins); each bin at its median pseudotime",
   "genes": {
-    "CD3D": {
-      "pseudotime": [0.01, 0.02, 0.03, ...],
-      "expression": [0.0, 1.2, 0.5, ...],
-      "smoothed": [{"x": 0.0, "y": 0.1}, {"x": 0.05, "y": 0.3}, ...]
-    }
+    "Hba-x": {
+      "found": true,
+      "scatter_pseudotime": [0.01, ...], "scatter_expression": [0.0, ...],
+      "binned_pseudotime": [0.11, ...], "binned_expression": [0.11, ...], "binned_counts": [490, ...]
+    },
+    "NOPE": {"found": false}
   }
 }
 ```
+
+### Rank Genes Along Pseudotime
+
+```
+POST /datasets/{dataset_id}/trajectory/{column}/trend-genes
+Content-Type: application/json
+```
+
+**Request body:** `{"n_top": 50, "n_bins": 40, "groups_column": "clusters", "groups": ["Ductal", "Ngn3 low EP"]}`
+(the last two optional: one branch). Each gene's log-normalised expression is fitted with a
+natural cubic spline of pseudotime order and tested against a constant (F); genes are ranked
+by F. Returns `genes` (`f_stat`, `pval`, `pval_adj`, `r2`, `amplitude`, `peak_pseudotime`,
+`pattern` rising | falling | transient, binned `mean` and `fitted`) and `bins`.
 
 ---
 
@@ -602,7 +679,7 @@ and read as expression layers `protein` (CLR), `protein_counts` and `protein_dsb
 | `GET /datasets/{id}/atac/qc` | `groupby` | the ATAC QC columns per cell |
 | `POST /datasets/{id}/atac/metrics` | multipart `file` (per_barcode_metrics.csv), `sample`, `column` | adds FRiP, TSS and mito fractions |
 | `GET /datasets/{id}/atac/differential-estimate` | `column`, `test`, `group`, `vs` | time and memory of a differential run |
-| `POST /datasets/{id}/atac/differential` | `{"column", "groups", "vs", "test": "wilcoxon"\|"lr", "min_pct": 0.05, "max_peaks", "lrt_peaks", "standard_only": true}` | SSE: each group vs the rest, or `groups: [A]` vs `vs: B`; kept by id |
+| `POST /datasets/{id}/atac/differential` | `{"column", "groups", "vs", "test": "wilcoxon"\|"lr", "min_pct": 0.05, "max_peaks", "lrt_peaks", "standard_only": true, "fold_change": "signac"\|"tfidf"}` | SSE: each group vs the rest, or `groups: [A]` vs `vs: B`; kept by id; `fold_change` = the log2fc formula (Signac's FoldChange, or mean TF-IDF + 1 as before 0.79) |
 | `GET /datasets/{id}/atac/differential[/{rid}[/csv]]` | `group`, `offset`, `limit` | the last result, a page, or the CSV |
 | `GET /datasets/{id}/atac/export` | | an h5ad of the peak counts |
 | `GET /datasets/{id}/atac/fragments` | | the attached fragments file, its QC estimate and saved QC |
@@ -634,10 +711,26 @@ The differential, links, motif enrichment and chromVAR results are also in the r
 |-------|--------------|------|
 | `GET /datasets/{id}/velocity` | | spliced / unspliced counts attached, what matched, the last run, its estimate |
 | `POST /datasets/{id}/velocity/attach` | multipart `files` (a velocyto .loom, an .h5ad with the layers, or STARsolo Velocyto files; one loom per sample together) | matched to the cells; replaces earlier counts |
-| `POST /datasets/{id}/velocity/run-stream` | `{"method": "stochastic"\|"steady_state", "n_top_genes", "n_neighbors", "group_by"}` | SSE: scVelo 0.3.3's steady-state or stochastic model |
+| `POST /datasets/{id}/velocity/run-stream` | `{"method": "stochastic"\|"steady_state", "n_top_genes", "n_neighbors", "group_by", "exclude_genes", "exclude_sets", "direction", "embedding"}` | SSE: scVelo 0.3.3's steady-state or stochastic model, then the direction check |
+| `POST /datasets/{id}/velocity/direction` | `{"group_by", "order"\|"transitions"\|"root"\|"column" (+ "column_order"), "embedding"}` | the saved run's arrows checked against an order and kept with the run; `{direction, warnings, run}` |
 | `GET /datasets/{id}/velocity/grid` | `embedding`, `density` | arrows on an embedding |
 | `GET /datasets/{id}/velocity/phase` | `gene`, `color_by` | one gene's phase portrait |
 | `GET /datasets/{id}/velocity/genes` | | the fitted genes: gamma, r2, whether each passed |
+
+Run fields: `exclude_genes` (names, up to 5,000) and `exclude_sets` (`["murk_barile2021"]`: the 89 mouse
+erythroid MURK genes of Barile et al. 2021) are left out before the variable genes are chosen; the run's
+`excluded` says how many matched. `direction` is the order the arrows are checked against after the run,
+one of: `order` (groups of `group_by`, earliest first), `transitions` (`[[from, to], ...]`), `root` (the
+earliest group: transitions follow the PAGA tree of `group_by`, so run PAGA on it first) or `column` (a
+numeric pseudotime or time, or a stage column; `column_order` gives a text column's values in order).
+Without one, scView's diffusion pseudotime is used when there is one, else the check is skipped.
+`embedding` is the 2D plot it is checked on (default `X_umap`). The run (and `GET .../velocity`) carries
+`direction`: per transition the boundary cells' mean cosine with its 95% interval and a status
+(`forward`, `backward`, `unclear`, `few_cells`, `no_boundary`), and `gene_flags`, the velocity genes whose
+expression and unspliced share rise along an expected step while their velocity reads them as switching off
+(MURK-like; the rule is in `gene_flags.rule`). A backward
+transition adds a warning to `warnings`, which the stored result (`GET /datasets/{id}/results/{rid}`) also
+carries.
 
 ---
 
@@ -648,7 +741,9 @@ private mode). The tools for the routes above: `guide_assignment`, `mixscape`, `
 `hashing_demux`, `hashing_samples`, `atac_status`, `atac_fragment_qc`, `atac_lsi`, `wnn`,
 `atac_gene_activity`, `atac_differential`, `atac_links`, `atac_motif_enrichment`, `atac_chromvar`,
 `plot(kind="coverage")`, and `layer="protein"` on `differential_expression` /
-`per_donor_expression`. `upload_instructions` gives the curl recipes above;
+`per_donor_expression`. Trajectory and velocity: `paga`, `pseudotime`, `pseudotime_genes`,
+`velocity`, `get_velocity`, `velocity_direction`, `plot(overlay=["velocity", "paga"])`,
+`plot(kind="phase")` and `plot(kind="violin", value_column=...)`. `upload_instructions` gives the curl recipes above;
 `import_server_path` imports a file or folder on the server under `MCP_IMPORT_DIRS` (off when
 unset, always off with `DEPLOYMENT_MODE=public`).
 

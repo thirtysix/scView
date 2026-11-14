@@ -625,3 +625,20 @@ async def test_a_result_still_being_written_is_found(client, dataset_manager, tm
     assert r.json()["label"] == "late"
     # a result that never existed is still a 404 (after one wait for the queue)
     assert (await client.get(f"/api/v1/datasets/{did}/results/{uuid.uuid4().hex}")).status_code == 404
+
+
+def test_velocity_goes_stale_on_the_graph_not_on_a_clustering(tmp_path):
+    """v0.79: a clustering marked velocity stale (and hid it in the panel); velocity reads
+    the graph and a layout, not labels."""
+    a = FakeAdaptor(tmp_path, "dsvel", _adata())
+    results_store.keep(a, "velocity", {"v": 1}).result()
+
+    def state():
+        e = next(e for e in results_store.entries("dsvel", adaptor=a) if e["kind"] == "velocity")
+        return e["stale"], e.get("stale_reason")
+
+    a.adata.obs["scview_leiden_r0.5"] = pd.Categorical(["0", "1"] * 10)
+    provenance.record_step(a.adata, step="clustering", tool="scanpy")
+    assert state() == (False, None)
+    provenance.record_step(a.adata, step="neighbors", tool="scanpy")
+    assert state() == (True, "neighbours rebuilt after this result")

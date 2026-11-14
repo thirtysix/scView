@@ -137,9 +137,12 @@ ADDITIVE_STEPS = frozenset({
 # write their own columns only (hash_*, the sample column): QA 2026-11-14 found one demux
 # marking every DE and Mixscape result stale. A demux that moved antibody features into
 # or out of the protein modality changes that modality's data: it counts as
-# data-changing (``HASHING_PROTEIN``, see ``_history_steps``).
+# data-changing (``HASHING_PROTEIN``, see ``_history_steps``). A guide assignment and a
+# Mixscape run (core/crispr.py, core/mixscape.py) write their own obs columns only too: a
+# result goes stale after one only when it named a column whose labels changed (a DE by
+# ``mixscape_class`` after Mixscape re-ran, a Mixscape run after the guides were re-assigned).
 LABEL_STEPS = frozenset({"label_cells", "undo_label_cells", "combine_columns", "hashing_demux",
-                         "hashing_samples"})
+                         "hashing_samples", "crispr_assign", "mixscape"})
 HASHING_PROTEIN = "hashing_demux_protein"
 
 # Wilson 2022: a neighbours rebuild and a new annotation column marked all 20 DE,
@@ -157,7 +160,9 @@ GRAPH_STEPS = frozenset({"pca", "batch_correction", "neighbors", "embeddings", "
 # Computed from expression, counts and labels only, never the graph, PCs or a layout.
 GRAPH_FREE_KINDS = frozenset({"de", "composition", "gsea", "de_audit", "ccc", "ccc_compare", "cytokine",
                               "planner"})
-NAMED_COLUMN_KINDS = GRAPH_FREE_KINDS | {"milo", "milode"}
+# Velocity reads the counts, the graph and a layout, never a label column: a clustering or
+# a marker run leaves it current, a graph or layout rebuild does not.
+NAMED_COLUMN_KINDS = GRAPH_FREE_KINDS | {"milo", "milode", "velocity"}
 
 
 def _history_steps(adaptor: Any) -> list[str]:
@@ -215,15 +220,31 @@ def _strings(obj: Any) -> list[str]:
     return out
 
 
+def label_step_columns(adata: Any) -> set[str]:
+    """The obs columns a ``LABEL_STEPS`` step writes that a result of any kind may name:
+    the user annotation columns, the guide assignment's and Mixscape's."""
+    from scview.core.user_labels import user_columns
+
+    out = set(user_columns(adata))
+    try:
+        from scview.core import crispr, mixscape
+
+        cols = (crispr.read_state(adata).get("call") or {}).get("columns") or {}
+        out |= {str(c) for c in cols.values() if isinstance(c, str)}
+        out |= set(mixscape.OBS_COLUMNS)
+    except Exception:  # an unreadable record: the user columns still count
+        pass
+    return {c for c in out if c in adata.obs.columns}
+
+
 def used_user_columns(adaptor: Any, *objs: Any, kind: str | None = None) -> dict[str, str | None]:
     """The obs columns ``objs`` (a result, its parameters) name, each with its labels'
-    hash now: the user annotation columns, and for a ``NAMED_COLUMN_KINDS`` result every
-    obs column (a clustering or annotation step then stales it only through them)."""
+    hash now: the columns label steps write (``label_step_columns``), and for a
+    ``NAMED_COLUMN_KINDS`` result every obs column (a clustering or annotation step then
+    stales it only through them)."""
     try:
-        from scview.core.user_labels import user_columns
-
         adata = adaptor.adata
-        mine = set(adata.obs.columns.astype(str)) if kind in NAMED_COLUMN_KINDS else set(user_columns(adata))
+        mine = set(adata.obs.columns.astype(str)) if kind in NAMED_COLUMN_KINDS else label_step_columns(adata)
         names = sorted({s for o in objs for s in _strings(o) if s in mine})
         return {c: (column_fingerprint(adata, c, cells="-") or {}).get("labels") for c in names}
     except Exception:  # a test double, or no data
@@ -231,6 +252,11 @@ def used_user_columns(adaptor: Any, *objs: Any, kind: str | None = None) -> dict
 
 
 _BASE_KEYS = ("n_cells", "cells", "n_base_steps")
+
+# PAGA and a pseudotime (core/trajectory.py) are kept in uns, not here, but read the
+# neighbour graph: stale once the cells change or a step rebuilds (or clears) the graph or
+# PCs, never after markers, a clustering or a label column (``graph_read_stale``).
+GRAPH_READ_STEPS = frozenset({"pca", "batch_correction", "neighbors", "reset_to_counts"})
 
 
 def _is_stale(stored: dict[str, Any], now: dict[str, Any], columns_now: Any = None,
@@ -290,6 +316,40 @@ def stale_reason(stored: dict[str, Any], now: dict[str, Any], steps: list[str], 
         if words:
             return f"{', '.join(words[:3])}{' and more' if len(words) > 3 else ''} after this result"
     return "the data changed after this result"
+
+
+def graph_read_stale(adaptor: Any, stored: dict[str, Any] | None) -> str | None:
+    """Why a result that read the neighbour graph no longer matches the data, from the
+    ``fingerprint`` it was stored with: the cells changed, or a ``GRAPH_READ_STEPS`` step ran
+    since. None while it matches (or with no fingerprint to compare)."""
+    if not isinstance(stored, dict):
+        return None
+    now = fingerprint(adaptor)
+    if now is None:
+        return None
+    if stored.get("n_cells") != now.get("n_cells") or stored.get("cells") != now.get("cells"):
+        return "the cells changed after this result (filtered or reloaded)"
+    try:
+        steps = _history_steps(adaptor)
+    except Exception:  # a test double
+        return None
+    start = stored.get("n_steps")
+    if not isinstance(start, int) or not 0 <= start <= len(steps):
+        return None
+    later = [s for s in steps[start:] if s in GRAPH_READ_STEPS]
+    if not later:
+        return None
+    words = list(dict.fromkeys(_STEP_WORDS.get(s, s.replace("_", " ")) for s in later))
+    return f"{', '.join(words)} after this result"
+
+
+def entry_stale(dataset_id: str, result_id: str | None, adaptor: Any) -> str | None:
+    """A stored result's stale reason as ``list_results`` gives it; None when it is current,
+    or not stored."""
+    if not result_id:
+        return None
+    e = next((e for e in entries(dataset_id, adaptor=adaptor) if e["id"] == result_id), None)
+    return (e.get("stale_reason") or "the data changed after this result") if e and e.get("stale") else None
 
 
 def safe_id(value: str | None) -> bool:
@@ -644,13 +704,15 @@ def keep(
     adaptor: Any = None,
     computed_on: dict[str, Any] | None = None,
     archived: bool = False,
+    warnings: list[str] | None = None,
 ) -> Future | None:
     """Store ``value`` for a dataset (``target`` is its adaptor or its id) in the
     background; returns the write's future (tests wait on it), or None when the
     dataset is unknown. ``key`` names what the result is about: a newer result of
     the same kind and key supersedes it. ``archived``: an older copy of a result
     whose current one lives in the h5ad (always superseded here); ``computed_on``
-    is the fingerprint of the data it was computed on (default: the adaptor's now)."""
+    is the fingerprint of the data it was computed on (default: the adaptor's now).
+    ``warnings``: what to read the result with, kept on the entry (``GET .../results/{id}``)."""
     if isinstance(target, str):
         dataset_id = target
     else:
@@ -671,6 +733,8 @@ def keep(
     }
     if archived:
         entry["archived"] = True
+    if warnings:
+        entry["warnings"] = [str(w) for w in warnings]
     return _writer.submit(_save, dataset_id, entry, value)
 
 

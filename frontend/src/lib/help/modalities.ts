@@ -136,6 +136,10 @@ export const MODALITIES_HELP: Record<string, string> = {
     "Per target: its cells, the share called KO and the genes that differ from the controls; a target with too few such genes is all NP. Click a row for its top genes and P(KO) histogram; DE opens its KO cells against the controls.",
   "perturbation.posterior":
     "How the probability of being perturbed spreads over this target's cells. Two clear peaks, near 0 and near 1, mean KO and NP cells separate well; many cells in the middle mean the split is uncertain.",
+  "perturbation.protein":
+    "Each protein's mean shift (CLR) from the controls, per target: in all its guide cells, its KO cells and its NP cells. A shift counts from 0.1 with adjusted p < 0.05 and, when 'Within' names 3 or more replicates, the same direction in every replicate.",
+  "perturbation.protein_flag":
+    "Mixscape calls cells KO only when their transcriptome moves. A guide that changes a protein without moving RNA (CMTM6 keeps PD-L1 at the surface) leaves every cell NP. These targets shift a protein in all their guide cells while at most 10% are called KO.",
   "perturbation.lda":
     "A 2D view that best separates the targets' KO cells from the controls on their perturbation signatures. Targets whose cells sit together have a similar effect; the grey cloud is the controls.",
 
@@ -186,6 +190,16 @@ export const MODALITIES_HELP: Record<string, string> = {
     "Colour the cells by velocity confidence: how well each cell's velocity agrees with its neighbours', from 0 to 1. Low values mark regions where the arrows mean little.",
   "velocity.summary":
     "Coherence is a group's mean confidence; groups with low coherence or few velocity genes give arrows to trust less. Unspliced is the share of reads not yet spliced; very low values leave little to fit.",
+  "velocity.direction":
+    "Whether the arrows point the way an order you trust says, such as cell types in order or a pseudotime. Each transition scores the cells at the border between two groups. Confidence cannot catch a backward run: neighbours can agree on the wrong direction.",
+  "velocity.direction_against":
+    "The order to check against: scView's pseudotime (if you ran it), groups you put in order, a root group with the PAGA tree of the table's column, or a column such as a time point or stage. The table's groups are the ones compared.",
+  "velocity.exclude":
+    "Genes the fit leaves out, as if they were not in the counts (each cell's total too). Use it for genes known to mislead velocity, such as genes whose transcription rate changes along the path; the gene flags below suggest some.",
+  "velocity.murk":
+    "Barile et al. 2021 (Genome Biology, Table S2): 89 mouse erythroid genes whose transcription steps up late. They turn scVelo's erythroid flow backwards; leaving them out restored it. For mouse blood and erythroid data only.",
+  "velocity.gene_flags":
+    "Velocity genes whose expression rises from one group to the next while their velocity says it falls, with the unspliced share rising too: the pattern of genes whose transcription rate steps up along the path. Click a gene for its phase portrait; leaving them out can turn a backward step around.",
   "velocity.phase":
     "Each dot is a cell's spliced and unspliced levels for this gene, averaged over the cell and its neighbours. The red line is the fitted steady-state ratio (gamma). Cells above it are read as inducing the gene, cells below as repressing it. A gene with no clear almond shape gives little to fit.",
 };

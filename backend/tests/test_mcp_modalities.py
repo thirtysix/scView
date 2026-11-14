@@ -191,9 +191,10 @@ async def test_the_multiome_path_lsi_wnn_activity_differential_and_results(clien
     assert da["result_id"] and da["counts"]["n_total"] == 2 and set(da["top_peaks"]) == {"A", "B"}
     t = await _call("get_result", {"dataset_id": did, "result_id": da["result_id"], "sort_by": "pval_adj"})
     assert t["kind"] == "atac_differential" and {"peak", "group", "pval_adj"} <= set(t["columns"]) and t["rows"]
+    assert da["fold_change"] == "signac"
     pair = await _done(await _call("atac_differential", {"dataset_id": did, "column": "group", "groups": ["A"],
-                                                          "vs": "B", "test": "wilcoxon"}))
-    assert pair["vs"] == "B" and set(pair["top_peaks"]) == {"A"}
+                                                          "vs": "B", "test": "wilcoxon", "fold_change": "tfidf"}))
+    assert pair["vs"] == "B" and set(pair["top_peaks"]) == {"A"} and pair["fold_change"] == "tfidf"
     text = await _call("atac_differential", {"dataset_id": did, "column": "group", "vs": "B"}, error=True)
     assert "exactly one group" in text
     # Motifs: the scan runs inside the job, then the enrichment; then chromVAR (scanned already).
@@ -389,3 +390,18 @@ async def test_prefs_json_dtype_in_the_metadata_route(client, dataset_manager):
     did = _register(dataset_manager, a, "mdt")
     r = await client.get(f"/api/v1/datasets/{did}/metadata/leiden", params={"format": "json"})
     assert r.json()["dtype"] == "category" and json.dumps(r.json())
+
+
+async def test_mixscape_reply_carries_the_protein_check(client, dataset_manager):
+    from tests.test_perturbation_protein import _guides_with_protein
+
+    a, _ko = _guides_with_protein()
+    did = _register(dataset_manager, a, "mpp")
+    await _call("guide_assignment", {"dataset_id": did, "save": True})
+    r = await _done(await _call("mixscape", {"dataset_id": did, "replicate_column": "rep3", "lda": False}))
+    pr = r["protein"]
+    assert pr["proteins"] == ["PDL1", "CD86"] and pr["replicate_column"] == "rep3"
+    assert len(pr["flags"]) == 1 and pr["flags"][0].startswith("B: PDL1 -0.")
+    first = dict(zip(pr["rows"]["columns"], pr["rows"]["rows"][0]))
+    assert first["target"] == "B" and first["flag"] is True and first["unit"] == "replicate"
+    assert "protein effect with no RNA KO class" in r["note"]

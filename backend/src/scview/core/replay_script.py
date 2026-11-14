@@ -63,6 +63,8 @@ class _Ctx:
     scaling: dict[str, Any] | None = None
     # True once a step has kept the file's own UMAP as X_umap_original
     kept_umap: bool = False
+    # True once a step has kept the file's own PCA as X_pca_original
+    kept_pca: bool = False
     # Whether the script recomputes the latest gene programs ("gene_programs") and
     # chromVAR ("atac_chromvar", its run id): a saved program or motif score reads them.
     runs: dict[str, Any] = field(default_factory=dict)
@@ -1347,11 +1349,15 @@ def velocity_barcode(name):
     return max(runs, key=len) if runs else str(name)
 
 
-def velocity_run(adata, files, method, n_top_genes, n_neighbors, n_pcs, min_shared_counts=20):
+def velocity_run(adata, files, method, n_top_genes, n_neighbors, n_pcs, min_shared_counts=20, exclude=None):
     """RNA velocity as scVelo 0.3.3 (steady state or stochastic), written where scView writes it:
     obs velocity_length, velocity_confidence, velocity_unspliced_fraction; obsm velocity_<embedding>;
-    var velocity_gamma, velocity_r2, velocity_gene."""
+    var velocity_gamma, velocity_r2, velocity_gene. ``exclude``: gene names left out before the
+    variable genes are chosen, as if not in the file (cell totals too)."""
     names, genes, S0, U0 = velocity_counts(files)
+    if exclude:  # as if those genes were not in the file
+        keep = ~np.isin(np.asarray(genes, dtype=object), list(exclude))
+        genes, S0, U0 = [g for g, k in zip(genes, keep) if k], S0[:, keep], U0[:, keep]
     rows = pd.Index(names).get_indexer(adata.obs_names)
     if (rows < 0).mean() > 0.5:  # other naming: by the barcode inside each name
         first = {}
@@ -1497,7 +1503,8 @@ def atac_differential(counts, peak_names, labels, settings):
         peak_mask = standard_chromosomes([re.split(r"[:_-]", n[::-1], maxsplit=2)[-1][::-1] for n in peak_names])
     for item in iter_differential(AtacCounts(counts), np.arange(counts.shape[0]), codes, every, chosen,
                                   test=settings["test"], min_pct=settings["min_pct"], max_peaks=settings["max_peaks"],
-                                  lrt_per_group=settings.get("lrt_peaks", LRT_PER_GROUP), peak_mask=peak_mask):
+                                  lrt_per_group=settings.get("lrt_peaks", LRT_PER_GROUP), peak_mask=peak_mask,
+                                  fold_change=settings.get("fold_change", "tfidf")):  # a step before 0.79: "tfidf"
         if item["type"] == "result":
             frame = item["frame"]
             frame.insert(1, "peak", np.asarray(peak_names, dtype=object)[frame["peak_index"].to_numpy()])
@@ -2018,8 +2025,23 @@ def _keep_umap(ctx: _Ctx) -> str:
     return _KEEP_UMAP.strip("\n") + "\n"
 
 
+_KEEP_PCA = '''
+if "X_pca" in adata.obsm and "X_pca_original" not in adata.obsm:  # the file's own PCA
+    adata.obsm["X_pca_original"] = np.asarray(adata.obsm["X_pca"]).astype(np.float32)
+'''
+
+
+def _keep_pca(ctx: _Ctx) -> str:
+    """The line keeping the file's own PCA (as pipeline.keep_original_pca), only in the
+    first step that would clear or overwrite it: later, X_pca is scView's."""
+    if ctx.kept_pca:
+        return ""
+    ctx.kept_pca = True
+    return _KEEP_PCA.strip("\n") + "\n"
+
+
 def _reset_to_counts(p: dict, ctx: _Ctx) -> Snippet:
-    keep = _keep_umap(ctx)
+    keep = _keep_umap(ctx) + _keep_pca(ctx)
     return Snippet(EXACT, _block(keep + '''
 if "counts_uncorrected" in adata.layers:  # the counts before an ambient RNA correction
     adata.layers["counts"] = adata.layers["counts_uncorrected"]
@@ -2034,7 +2056,7 @@ if "counts" in adata.layers or adata.raw is not None:
         "highly_variable", "means", "dispersions", "dispersions_norm", "variances",
         "residual_variances", "highly_variable_rank", "highly_variable_nbatches",
         "highly_variable_intersection") if c in adata.var.columns], inplace=True)
-    for k in [k for k in list(adata.obsm.keys()) if k.startswith("X_") and k != "X_umap_original"]:
+    for k in [k for k in list(adata.obsm.keys()) if k.startswith("X_") and k not in ("X_umap_original", "X_pca_original")]:
         del adata.obsm[k]
     for k in list(adata.obsp.keys()):
         del adata.obsp[k]
@@ -2502,6 +2524,12 @@ def _regress_covariates(keys: list[str], ctx: _Ctx) -> list[str]:
 
 
 def _pca(p: dict, ctx: _Ctx) -> Snippet:
+    snippet = _pca_code(p, ctx)
+    keep = _keep_pca(ctx)
+    return Snippet(snippet.status, [*_block(keep), *snippet.code], snippet.note) if keep else snippet
+
+
+def _pca_code(p: dict, ctx: _Ctx) -> Snippet:
     n = p.get("n_comps", 50)
     plan = ctx.scaling if p.get("pca_input") else None
     if plan is None:  # scaling skipped, or an older scView's scaled X
@@ -3084,14 +3112,18 @@ def _pseudotime(p: dict, ctx: _Ctx) -> Snippet:
     if not root:
         return Snippet(NOT_REPLAYABLE, ["# Pseudotime: no root cell recorded. Recorded:",
                                         *_param_comment(p)], "no root cell recorded")
+    named = p.get("root_named_column")
+    also = f'adata.obs[{_lit(str(named))}] = adata.obs["dpt_pseudotime"].to_numpy()\n' if named else ""
+    detached = (f"# scView also left out {int(p['n_detached'])} weakly linked cells (NaN) and diffused again\n"
+                "# without them; this keeps them in.\n") if p.get("n_detached") else ""
     return Snippet(APPROXIMATE, _block(f'''
 # NOTE: scView runs DPT on the cells its graph connects to the root and gives the
 # others an infinite pseudotime; this runs it on every cell of the main graph.
-sc.tl.diffmap(adata, n_comps={_lit(p.get("diffmap_n_comps", DIFFMAP_COMPS))})
+{detached}sc.tl.diffmap(adata, n_comps={_lit(p.get("diffmap_n_comps", DIFFMAP_COMPS))})
 adata.uns["iroot"] = int(adata.obs_names.get_loc({_lit(str(root))}))
 sc.tl.dpt(adata, n_dcs={_lit(p.get("n_dcs", N_DCS))})
 adata.obs[{_lit(str(p.get("column") or DPT_COLUMN))}] = adata.obs["dpt_pseudotime"].to_numpy()
-'''), "DPT on the whole graph, not only the root's component")
+{also}'''), "DPT on the whole graph, not only the root's component")
 
 
 def _paga(p: dict, ctx: _Ctx) -> Snippet:
@@ -3225,12 +3257,17 @@ def _velocity(p: dict, ctx: _Ctx) -> Snippet:
                        "settings not recorded")
     files = p.get("source_stored_as") or None
     _need(ctx, "velocity")
+    exclude = [str(g) for g in p.get("exclude_genes") or []]
+    sets = ", ".join(str(s) for s in p.get("exclude_sets") or [])
     return Snippet(EXACT, [
         f"# RNA velocity, {comment_text(vel.METHOD_NAMES[method], 60)} (ported from scVelo 0.3.3): counts from "
         + (comment_text(", ".join(p.get("source_files") or files), 120) + " (beside this script or the input)." if files
            else "the input's layers spliced and unspliced."),
+        *([f"# {len(exclude):,} genes left out" + (f" (lists: {comment_text(sets, 80)})" if sets else "") + "."]
+          if exclude else []),
         f"velocity_run(adata, {_lit(files)}, {_lit(method)}, {ints[0]}, {ints[1]}, {ints[2]}, "
-        f"{_lit(int(p.get('min_shared_counts', vel.MIN_SHARED_COUNTS)))})",
+        f"{_lit(int(p.get('min_shared_counts', vel.MIN_SHARED_COUNTS)))}"
+        + (f", exclude={_lit(exclude)}" if exclude else "") + ")",
     ])
 
 
@@ -3602,11 +3639,13 @@ def _atac_differential(p: dict, ctx: _Ctx) -> Snippet:
         return Snippet(NOT_REPLAYABLE, ["# Differential peaks: the settings are not recorded. Recorded:", *_param_comment(p)],
                        "settings not recorded")
     _need(ctx, "atac")
-    keys = ("column", "groups", "min_pct", "max_peaks", "test", "lrt_peaks", "standard_only", "vs")
+    keys = ("column", "groups", "min_pct", "max_peaks", "test", "lrt_peaks", "standard_only", "vs", "fold_change")
     settings = {x: p.get(x) for x in keys if p.get(x) is not None}
     return Snippet(EXACT, [
         f"# Differential peaks by {comment_text(p.get('column'), 80)}, {comment_text(p.get('test'), 12)}: each group vs "
         "the rest, a table in uns.",
+        "# log2fc: " + ("Signac's FoldChange for peaks, mean log1p(TF-IDF) + 1e-4." if p.get("fold_change") == "signac"
+                        else "mean TF-IDF + 1 (scView before 0.79; about 4x smaller than Signac's)."),
         f"ATAC_DA = {_lit(settings)}",
         *_block(_ATAC_DIFFERENTIAL_CODE),
     ])

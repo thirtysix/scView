@@ -144,3 +144,40 @@ def test_pipeline_neighbours_and_velocity_leave_out_a_done_compile(monkeypatch):
     assert pf.estimate_velocity(13_836, 13_836, 10**7, 3 * 10**6)["compile_seconds"] == 0
     _state(monkeypatch, compiled=False)
     assert pf.estimate_velocity(13_836, 13_836, 10**7, 3 * 10**6)["compile_seconds"] == pf.VELOCITY_SECONDS_KNN_COMPILE
+
+
+def test_the_search_is_compiled_per_distance(monkeypatch):
+    """pynndescent compiles nn_descent once per distance function; its signatures name it."""
+    mod = types.ModuleType("pynndescent.pynndescent_")
+
+    def alternative_cosine(x):
+        return x
+
+    def squared_euclidean(x):
+        return x
+
+    class Dispatcher:
+        signatures: list = []
+
+    mod.nn_descent = Dispatcher()
+    monkeypatch.setitem(sys.modules, "pynndescent.pynndescent_", mod)
+    monkeypatch.setattr(nw, "graph_compiled", lambda: True)
+    monkeypatch.setattr(nw, "layout_compiled", lambda: True)
+    monkeypatch.setattr(nw, "import_seconds", lambda: 0.0)
+    assert nw.search_metrics() == set() and nw.search_seconds("cosine") == nw.SEARCH_SECONDS
+    assert nw.graph_umap_seconds(100, "euclidean") == 0.0  # exact neighbours, nothing to compile
+    assert nw.graph_umap_seconds(100, "cosine") == nw.SEARCH_SECONDS  # scanpy searches cosine at any size
+    mod.nn_descent.signatures = [("array(float32, 2d, C)", f"type(CPUDispatcher({alternative_cosine}))")]
+    assert nw.search_metrics() == {"cosine"} and nw.graph_umap_seconds(100, "cosine") == 0.0
+    assert nw.search_seconds("euclidean") == nw.SEARCH_OTHER_METRIC_SECONDS
+    assert nw.graph_umap_seconds(5_000, "euclidean", exact_below=4_097) == nw.SEARCH_OTHER_METRIC_SECONDS
+    mod.nn_descent.signatures.append(("array(float32, 2d, C)", f"type(CPUDispatcher({squared_euclidean}))"))
+    assert nw.search_metrics() == {"cosine", "euclidean"} and nw.search_seconds("euclidean") == 0.0
+
+
+def test_real_search_signatures_name_the_distance():
+    from pynndescent import NNDescent
+
+    X = np.random.default_rng(0).normal(size=(300, 5)).astype(np.float32)
+    NNDescent(X, metric="cosine", n_neighbors=5, random_state=0)
+    assert "cosine" in nw.search_metrics()

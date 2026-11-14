@@ -126,7 +126,8 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Unified View > Accessibility > Differential peaks", "LR with depth, or Wilcoxon",
      "peaks per group vs the rest or one group against another (A vs B, as Signac's FindMarkers ident.1 / "
      "ident.2), chrM and unplaced scaffolds left out by default, logistic regression with a depth covariate (Seurat's LR, the default) or Wilcoxon on TF-IDF, with "
-     "nearest gene, distance to TSS, class; CSV"),
+     "nearest gene, distance to TSS, class; CSV. log2FC is Signac's FoldChange (FindMarkers' avg_log2FC) by default; "
+     "the older mean TF-IDF + 1 formula, about 4x smaller, is a choice and names results made before v0.79"),
     ("Unified View > Gene Sets", "AUCell, ssGSEA, GSVA",
      "browse MSigDB sets; score them with AUCell, ssGSEA or GSVA"),
     ("Unified View > Compare", "saved scores",
@@ -162,6 +163,10 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Unified View > Perturbation > DE genes from", "",
      "Mixscape's DE genes per target from all genes (Seurat RunMixscape's rule, the default) or the variable genes; "
      "the result has each target's KO share per guide (Per guide) and per replicate"),
+    ("Unified View > Perturbation > Protein by target", "",
+     "with a protein panel (CITE / ECCITE-seq): each protein's shift per target in all, KO and NP cells against the "
+     "controls, judged on the replicates when 'Within' names them, and targets that move a protein with no RNA KO "
+     "class (which Mixscape alone calls all NP)"),
     ("Unified View > Spatial genes", "Moran's I",
      "spatially variable genes (Moran's I) on Visium spots, Visium HD bins or imaging cells, one section or all (then "
      "within each section, with each section's own I); click a gene to colour the tissue"),

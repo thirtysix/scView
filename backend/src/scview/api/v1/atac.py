@@ -82,6 +82,8 @@ class DifferentialRequest(BaseModel):
     lrt_peaks: int = Field(default=atac.LRT_PER_GROUP, ge=1, le=500_000)  # lr: true likelihood ratios per group
     standard_only: bool = True  # leave out chrM, unplaced scaffolds and alt contigs (Signac's keepStandardChromosomes)
     vs: str | None = Field(default=None, max_length=512)  # one group (groups=[A]) against this one, not the rest
+    # log2fc: "signac" = Signac's FoldChange for peaks (what FindMarkers prints); "tfidf" = scView's before 0.79
+    fold_change: Literal["signac", "tfidf"] = "signac"
 
 
 def _sse(event: str, data: dict[str, Any]) -> str:
@@ -150,11 +152,15 @@ def _stream(events) -> StreamingResponse:
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
+STEP = "atac"  # the watchdog's step: a whole run
+
+
 def _events(dm: DatasetManager, dataset_id: str, kind: str, start: dict, need: int, open_gen: Callable[[Any], Iterator],
             on_result: Callable, label: str, closers: list[Callable[[], None]] | None = None):
     """The stream every run shares. ``open_gen(stop)`` in a worker thread gives the run's
     generator; each of its items comes from a worker thread; ``on_result(item, resources)``
-    saves the last one and returns the ``result`` event's body. A client going away stops it."""
+    saves the last one and returns the ``result`` event's body. A client going away stops it.
+    The watchdog times the whole run as one step, ``STEP``, against ``start["estimate_seconds"]``."""
 
     async def events():
         if dataset_id in _running:  # another request started between the check and here
@@ -163,6 +169,7 @@ def _events(dm: DatasetManager, dataset_id: str, kind: str, start: dict, need: i
         _running[dataset_id] = kind
         stop = threading.Event()
         watchdog = RunWatchdog()
+        watchdog.expect(STEP, start.get("estimate_seconds"))
         control = RunControl(watchdog=watchdog, before_step=None)
         reservation = dm.reserve_run(dataset_id, need)
         sent = 0
@@ -171,7 +178,7 @@ def _events(dm: DatasetManager, dataset_id: str, kind: str, start: dict, need: i
 
         def step_next():
             # The Leiden child registers with the control, so Cancel ends it.
-            with control.step("atac"):
+            with control.step(STEP, timed=False):
                 return next(gen, _DONE)  # type: ignore[arg-type]
 
         def finish(fut: asyncio.Future | None = None) -> None:
@@ -181,6 +188,7 @@ def _events(dm: DatasetManager, dataset_id: str, kind: str, start: dict, need: i
                 gen.close()
             for close in closers or []:
                 close()
+            watchdog.step_finished(STEP)
             watchdog.stop()
             if reservation is not None:
                 dm.release_run(dataset_id)
@@ -188,6 +196,7 @@ def _events(dm: DatasetManager, dataset_id: str, kind: str, start: dict, need: i
 
         try:
             watchdog.start()
+            watchdog.step_started(STEP)
             yield _sse("start", start)
             pending = asyncio.ensure_future(asyncio.to_thread(open_gen, stop.is_set))
             gen = await asyncio.shield(pending)
@@ -204,6 +213,7 @@ def _events(dm: DatasetManager, dataset_id: str, kind: str, start: dict, need: i
                 if item is _DONE:
                     break
                 if item["type"] == "result":
+                    watchdog.step_finished(STEP)
                     yield _sse("result", await on_result(item, watchdog.summary()))
                 else:
                     yield _sse(item["type"], {k: v for k, v in item.items() if k != "type"})
@@ -554,7 +564,7 @@ async def run_differential(dataset_id: str, body: DifferentialRequest, dm: Datas
 
     async def on_result(item, res):
         params: dict[str, Any] = {"column": body.column, "groups": body.groups, "min_pct": body.min_pct,
-                                  "max_peaks": body.max_peaks, "test": body.test,
+                                  "max_peaks": body.max_peaks, "test": body.test, "fold_change": body.fold_change,
                                   "on": "log1p(TF-IDF)" if body.test == "lr" else "TF-IDF",
                                   "standard_only": body.standard_only, "n_peaks_left_out": int(item.get("n_left_out", 0)),
                                   **({"vs": body.vs, "n_cells_vs": int((codes == 1).sum())} if body.vs is not None else {})}
@@ -564,7 +574,7 @@ async def run_differential(dataset_id: str, body: DifferentialRequest, dm: Datas
         def finish() -> dict[str, Any]:
             table, note = atac.attach_context(item["frame"], store, genome, dm.data_dir, _auto_download())
             method = atac.da_method(body.test, body.min_pct, body.max_peaks, lrt_peaks,
-                                    (chosen[0], body.vs) if body.vs is not None else None)
+                                    (chosen[0], body.vs) if body.vs is not None else None, body.fold_change)
             method += atac.left_out_text(params["n_peaks_left_out"])
             kept = atac.DaResult(result_id=uuid.uuid4().hex[:12], column=body.column, groups=chosen, table=table,
                                  n_tested=item["n_tested"], n_significant=item["n_significant"], params=params,
@@ -580,14 +590,15 @@ async def run_differential(dataset_id: str, body: DifferentialRequest, dm: Datas
         return {**atac.da_payload(out["kept"], limit=100), "note": out["note"], "resources": res}
 
     start = {"column": body.column, "groups": chosen, "vs": body.vs, "n_cells": n_labelled, "min_pct": body.min_pct,
-             "test": body.test,
+             "test": body.test, "fold_change": body.fold_change,
              "estimate_seconds": atac.estimate_da_seconds(store.nnz(atac.MATRIX), len(chosen), body.test, n_cells=n_labelled,
                                                           n_fits=_da_fits(len(chosen), lrt_peaks, body.max_peaks, store.n_vars)),
              "estimate_bytes": need}
     return _stream(_events(
         dm, dataset_id, "differential", start, need,
         lambda stop: atac.iter_differential(store, rows, codes, every, chosen, test=body.test, min_pct=body.min_pct,
-                                            max_peaks=body.max_peaks, stop=stop, lrt_per_group=lrt_peaks, peak_mask=peak_mask),
+                                            max_peaks=body.max_peaks, stop=stop, lrt_per_group=lrt_peaks, peak_mask=peak_mask,
+                                            fold_change=body.fold_change),
         on_result, "Differential accessibility", closers=[store.close]))
 
 

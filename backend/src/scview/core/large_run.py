@@ -108,6 +108,7 @@ from scview.core.pipeline import (
     check_chunked,
     check_umap_3d,
     clear_processing,
+    keep_original_pca,
     filter_judgement,
     large_backend,
     looks_like_counts,
@@ -1143,6 +1144,7 @@ class LargeRun:
 
     def _pca(self) -> dict[str, Any] | None:
         light, params = self.light, self.params
+        keep_original_pca(light)  # the file's own X_pca, as the in-memory step keeps it
         # chunked caps it at cells - 1 and variable genes - 1, or says what to change
         n_comps = params.n_comps
         plan = scaling.read_plan(light)

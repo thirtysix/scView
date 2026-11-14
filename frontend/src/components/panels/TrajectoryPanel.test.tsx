@@ -123,7 +123,7 @@ describe("TrajectoryPanel: PAGA graph and genes along pseudotime", () => {
       expect(ids).toEqual(["paga-edges-halo", "paga-edges", "paga-nodes", "paga-labels"]);
     });
     expect(screen.getByTestId("paga-summary")).toHaveTextContent("3 of 3 edges shown");
-    expect(screen.getByTestId("velocity-note")).toHaveTextContent("spliced");
+    expect(screen.getByTestId("velocity-note")).toHaveTextContent("run it in Unified View > Velocity");
 
     await waitFor(() => expect(rankTrendGenes).toHaveBeenCalledWith("d1", "scview_dpt_pseudotime", {}, expect.anything()));
     // Heatmap rows: ordered by where each trend peaks (Apoe early, Hba-a2 late).
@@ -165,5 +165,44 @@ describe("TrajectoryPanel: PAGA graph and genes along pseudotime", () => {
     await screen.findByText(/has changed since PAGA/);
     expect(scatterProps.current!.overlayLayers).toBeNull();
     expect(screen.getByLabelText("Cells:")).toBeDisabled();
+  });
+
+  it("shows how the pseudotime was computed, its warnings and whether its graph is gone", async () => {
+    const run = {
+      column: "scview_dpt_pseudotime",
+      root_named_column: "scview_dpt_MEP",
+      root_column: "cluster",
+      root_value: "MEP",
+      root_cell: "c1",
+      graph: "existing neighbour graph (use_rep=X_pca_harmony, k=30)",
+      n_unreachable: 0,
+      n_detached: 18,
+      warnings: ["18 cells hang on the rest of the graph by weak links: from this root they came out at 0.92-1.00"],
+      stale: "PCA rerun, neighbours rebuilt after this result.",
+    };
+    apiFetch.mockImplementation((path: string) => {
+      if (path.endsWith("/trajectory")) {
+        return Promise.resolve({
+          pseudotime_columns: ["scview_dpt_pseudotime", "scview_dpt_MEP"],
+          n_columns: 2,
+          computed: run,
+          runs: { scview_dpt_MEP: run },
+          velocity_layers: false,
+        });
+      }
+      if (path.includes("/trajectory/scview_dpt_")) {
+        return Promise.resolve({ column: "x", n_cells: 3, values: [0, 0.5, null], min: 0, max: 1 });
+      }
+      return Promise.resolve([]);
+    });
+    renderPanel();
+    const note = await screen.findByTestId("dpt-computed");
+    expect(note).toHaveTextContent("started from MEP");
+    expect(note).toHaveTextContent("18 cells hang on the rest of the graph by weak links");
+    expect(note).toHaveTextContent("Out of date: PCA rerun, neighbours rebuilt after this result.");
+    expect(screen.queryByTestId("velocity-note")).toBeNull();
+    // The root's own column carries the same record.
+    fireEvent.change(screen.getByLabelText("Pseudotime"), { target: { value: "scview_dpt_MEP" } });
+    expect(await screen.findByTestId("dpt-computed")).toHaveTextContent("Current scview_dpt_MEP: started from MEP");
   });
 });

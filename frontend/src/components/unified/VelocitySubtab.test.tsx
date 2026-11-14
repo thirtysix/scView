@@ -155,6 +155,64 @@ describe("VelocitySubtab", () => {
     await waitFor(() => expect(api.attachVelocity).toHaveBeenCalledWith("d1", files));
   });
 
+  it("shows the direction check and runs again with the same order, on the plot on screen", async () => {
+    const direction = {
+      checked: true, kind: "order", label: "the order of clusters given", spec: { group_by: "clusters", order: ["Pre", "Beta"] },
+      group_column: "clusters", embedding: "X_umap", k: 30, n_backward: 1, note: "Direction check.",
+      transitions: [{ from: "Pre", to: "Beta", n_cells: 86, mean_cos: -0.4, low: -0.5, high: -0.3, share_forward: 0.2, status: "backward" }],
+    };
+    api.getVelocity.mockResolvedValue({ ...base, attached: true, source: { file: "x" }, run: { ...run, direction }, estimate: null });
+    api.getVelocityGenes.mockResolvedValue({ genes: [], n_genes: 0, n_velocity_genes: 0, sort: "" });
+    api.runVelocity.mockResolvedValue({ ...run, direction });
+    render(<VelocitySubtab />);
+    await screen.findByText(/Backward at Pre -> Beta \(-0.40, n = 86\)/);
+    expect((screen.getByLabelText("Group order") as HTMLInputElement).value).toBe("Pre > Beta");
+    fireEvent.click(screen.getByText("Run again"));
+    await waitFor(() => expect(api.runVelocity).toHaveBeenCalled());
+    expect(api.runVelocity.mock.calls[0]![1]).toMatchObject({
+      group_by: "clusters", embedding: "X_umap", direction: { group_by: "clusters", order: ["Pre", "Beta"] },
+    });
+  });
+
+  it("leaves out typed genes and the MURK list, and says what was left out", async () => {
+    const murk = { id: "murk_barile2021", name: "MURK genes (Barile 2021)", n_genes: 89, species: "mouse", source: "", url: "", note: "" };
+    const excluded = { sets: ["murk_barile2021"], n_given: 91, n_matched: 90, n_unmatched: 1, unmatched: ["Nope"], n_passing_filter: 78 };
+    const withRun = { ...run, params: { ...run.params, exclude_sets: ["murk_barile2021"], exclude_given: ["Gata1", "Nope"] }, excluded };
+    api.getVelocity.mockResolvedValue({ ...base, attached: true, source: { file: "x" }, run: withRun, estimate: null, gene_sets: [murk] });
+    api.getVelocityGenes.mockResolvedValue({ genes: [], n_genes: 0, n_velocity_genes: 0, sort: "" });
+    api.runVelocity.mockResolvedValue(withRun);
+    render(<VelocitySubtab />);
+    await screen.findByText(/Left out: 90 genes \(with MURK genes \(Barile 2021\)\), 78 of them with enough counts/);
+    expect(screen.getByText(/Not in the counts: Nope \(1\)/)).toBeTruthy();
+    const box = screen.getByLabelText("Genes to leave out") as HTMLTextAreaElement;
+    expect(box.value).toBe("Gata1 Nope");
+    const murkBox = screen.getByText(/MURK genes \(Barile 2021\), 89 mouse/).closest("label")!.querySelector("input")!;
+    expect(murkBox.checked).toBe(true);
+    fireEvent.change(box, { target: { value: "Gata1, Klf1\nGata1" } });
+    fireEvent.click(screen.getByText("Run again"));
+    await waitFor(() => expect(api.runVelocity).toHaveBeenCalled());
+    expect(api.runVelocity.mock.calls[0]![1]).toMatchObject({ exclude_genes: ["Gata1", "Klf1"], exclude_sets: ["murk_barile2021"] });
+    expect(await hoverTip(screen.getByText(/MURK genes \(Barile 2021\), 89 mouse/))).toMatch(/Barile et al. 2021/);
+  });
+
+  it("leaves the flagged genes out and runs again", async () => {
+    const direction = {
+      checked: true, kind: "order", label: "x", spec: { group_by: "clusters", order: ["Pre", "Beta"] }, group_column: "clusters",
+      embedding: "X_umap", k: 30, note: "", transitions: [],
+      gene_flags: { checked: true, rule: "rule", n_velocity_genes: 100, n_flagged: 1, top_n: 50, n_in_top: 1,
+        genes: [{ gene: "Smim1", r2: 0.5, rank: 3, steps: [] }] },
+    };
+    const withRun = { ...run, params: { ...run.params, exclude_given: ["Gata1"] }, direction };
+    api.getVelocity.mockResolvedValue({ ...base, attached: true, source: { file: "x" }, run: withRun, estimate: null });
+    api.getVelocityGenes.mockResolvedValue({ genes: [], n_genes: 0, n_velocity_genes: 0, sort: "" });
+    api.runVelocity.mockResolvedValue(withRun);
+    render(<VelocitySubtab />);
+    fireEvent.click(await screen.findByText("Leave these out and run again"));
+    await waitFor(() => expect(api.runVelocity).toHaveBeenCalled());
+    expect(api.runVelocity.mock.calls[0]![1].exclude_genes).toEqual(["Gata1", "Smim1"]);
+    expect((screen.getByLabelText("Genes to leave out") as HTMLTextAreaElement).value).toBe("Gata1 Smim1");
+  });
+
   it("says when the cells changed and draws nothing, and on 3D says why no arrows", async () => {
     api.getVelocity.mockResolvedValue({ ...base, attached: true, source: { file: "x" }, run, stale: "The cells changed: run velocity again.", estimate: null });
     render(<VelocitySubtab />);

@@ -174,6 +174,49 @@ describe("PerturbationSubtab", () => {
     expect(screen.queryByTestId("mixscape-per-replicate")).toBeNull(); // no rows for B
   });
 
+  it("shows the protein check: flags, a protein chooser, the plot and the table", async () => {
+    const row = (target: string, protein: string, diff: number, ko: number, sig: boolean, flag: boolean) => ({
+      target, protein, ko_fraction: ko, unit: "replicate" as const, significant: sig, flag,
+      all: { n: 100, diff, p: 1e-10, padj: 1e-9 }, ko: ko ? { n: 70, diff: diff * 1.3, p: 1e-12, padj: 1e-11 } : null,
+      np: { n: 30, diff: diff / 4, p: 0.2, padj: 0.3 },
+      replicates: [{ replicate: "r1", n: 33, diff }, { replicate: "r2", n: 33, diff }, { replicate: "r3", n: 34, diff }],
+      n_replicates: 3, same_sign: 3, p_replicate: 0.03,
+    });
+    const withProtein: MixscapeResult = {
+      ...RESULT,
+      protein: {
+        layer: "protein_clr", proteins: ["PDL1", "CD86"], n_proteins: 2, control: "NT", n_control: 150,
+        replicate_column: "rep", min_cells: 5, ko_share_none: 0.1, alpha: 0.05, n_pairs: 4,
+        rows: [row("A", "PDL1", -0.4, 0.7, true, false), row("B", "PDL1", -0.2, 0, true, true),
+          row("A", "CD86", 0.01, 0.7, false, false), row("B", "CD86", 0.02, 0, false, false)],
+        flags: [{ target: "B", protein: "PDL1", diff: -0.2, unit: "replicate", ko_fraction: 0,
+          text: "B: PDL1 -0.20 (CLR) in all 100 guide cells vs the controls" }],
+        notes: ["CLR per cell over 2 proteins: read with care."], default_protein: "PDL1",
+      },
+    };
+    api.getPerturbation.mockResolvedValue({ ...BASE, call: CALL, mixscape: withProtein });
+    render(<PerturbationSubtab />);
+    const box = await screen.findByTestId("mixscape-protein");
+    expect(within(box).getByTestId("mixscape-protein-flags")).toHaveTextContent("B: PDL1 -0.20 (CLR)");
+    expect(within(box).getByTestId("plot")).toHaveTextContent("All cells: no RNA KO class");
+    expect(within(box).getByTestId("plot")).toHaveTextContent("Each replicate");
+    const table = within(box).getByTestId("mixscape-protein-table");
+    expect(table.querySelectorAll("tbody tr")[0]).toHaveTextContent(/^A\s*70%\s*-0\.40/); // most negative first
+    expect(within(box).getByTestId("mixscape-protein-row-B")).toHaveTextContent(/protein only.*-0\.20.*3\/3/);
+    expect(box).toHaveTextContent("CLR per cell over 2 proteins");
+    fireEvent.click(within(box).getByRole("button", { name: "CD86" }));
+    expect(within(box).getByTestId("mixscape-protein-row-A")).toHaveTextContent("+0.01");
+    fireEvent.click(within(box).getByTestId("mixscape-protein-row-B")); // opens the target's detail
+    expect(screen.getByTestId("mixscape-detail")).toBeInTheDocument();
+  });
+
+  it("has no protein section without a protein check", async () => {
+    api.getPerturbation.mockResolvedValue({ ...BASE, call: CALL, mixscape: RESULT });
+    render(<PerturbationSubtab />);
+    await screen.findByTestId("mixscape-row-A");
+    expect(screen.queryByTestId("mixscape-protein")).toBeNull();
+  });
+
   it("says how to get guides when there are none", async () => {
     api.getPerturbation.mockResolvedValue({ ...BASE, has_counts: false, guides: [], suggested: { source: null, column: null } });
     render(<PerturbationSubtab />);

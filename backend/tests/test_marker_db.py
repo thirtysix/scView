@@ -206,6 +206,33 @@ def test_dc2_label_is_cdc2_not_the_legacy_pdc_synonym():
     assert bare.label_ids("DC2") == set()
 
 
+def test_a_code_label_matches_only_whole_names():
+    """QA round 4: mouse kidney "IC" (intercalated cells) matched "Type IC spiral ganglion neuron",
+    human "IC" reached motor neurons through CL's "inferior cardiac neuron" (exact synonym IC),
+    and Wilson 2022's "PT" matched "Non PT tubular cell"."""
+    onto = mn.Ontology({
+        "CL:0000100": ("motor neuron", [], []),
+        "CL:4070012": ("inferior cardiac neuron", ["IC"], ["CL:0000100"]),
+        "CL:0000236": ("B cell", ["B lymphocyte"], []),
+        "CL:0000786": ("plasma cell", [], ["CL:0000236"]),
+    })
+    m = mn.Matcher({"Type IC spiral ganglion neuron": "", "Motor neurons": "CL:0000100", "Non PT tubular cell": "",
+                    "Proximal tubule cells": "", "NK cells": "", "Intercalated cells": "", "T cells": "",
+                    "B cells": "CL:0000236", "Goblet cells": "", "Intestinal cell": ""}, onto)
+    assert mn.is_code("IC") and mn.is_code("NK T") and mn.is_code("PT cells")
+    assert not mn.is_code("Mo", abbr=True) and not mn.is_code("CD4") and not mn.is_code("Goblet")
+    assert m.match("IC") == ([], "none")  # neither the longer name nor CL's parent of its synonym
+    assert m.match("PT") == ([], "none")
+    assert m.match("NK") == (["NK cells"], "exact")  # a code still matches whole
+    assert m.match("NK T") == (["T cells"], "subset")  # names made of its codes; the head noun breaks the tie
+    assert m.match("Intercalated") == (["Intercalated cells"], "exact")
+    # Words, not codes: partial names and parent terms as before, but never a negated name
+    assert m.match("Intestinal goblet cells") == (["Goblet cells"], "subset")
+    assert m.match("Plasma cells") == (["B cells"], "cl-ancestor")
+    assert m.match("Tubular") == ([], "none")  # not "Non PT tubular cell"
+    assert m.match("Proximal tubule") == (["Proximal tubule cells"], "exact")
+
+
 # --- fetch and store -------------------------------------------------------------
 
 

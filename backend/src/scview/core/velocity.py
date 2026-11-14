@@ -58,7 +58,7 @@ import pandas as pd
 import scipy.sparse as sp
 
 from scview.core import modality_store as ms
-from scview.core import results_store, velocity_input as vi
+from scview.core import results_store, velocity_direction as vd, velocity_gene_sets as vgs, velocity_input as vi
 
 logger = logging.getLogger(__name__)
 
@@ -390,6 +390,10 @@ class Params:
     n_pcs: int = N_PCS
     min_shared_counts: int = MIN_SHARED_COUNTS
     group_by: str | None = None
+    direction: dict[str, Any] | None = None  # the order to check the arrows against (velocity_direction.resolve)
+    embedding: str | None = None  # the plot that check is made on (default: a UMAP)
+    exclude_genes: tuple[str, ...] = ()  # genes left out before the variable genes are chosen
+    exclude_sets: tuple[str, ...] = ()  # built-in lists (velocity_gene_sets.GENE_SETS) left out too
 
 
 @dataclass
@@ -413,6 +417,50 @@ class Prepared:
     group_column: str | None
     source: dict[str, Any] = field(default_factory=dict)
     var_names: list[str] = field(default_factory=list)
+    ordering: Any = None  # velocity_direction.Ordering, or None (then ``unchecked`` says why)
+    unchecked: str | None = None
+    direction_embedding: str | None = None
+    exclude: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))  # store gene rows left out
+    excluded: dict[str, Any] = field(default_factory=dict)  # what was asked for and what matched
+
+
+MAX_EXCLUDE = 5000
+UNMATCHED_LISTED = 20
+
+
+def resolve_exclusion(features: list[str], var: pd.DataFrame | None, genes, sets) -> tuple[np.ndarray, dict[str, Any]]:
+    """The store's gene rows to leave out: each name as written, else through a symbol column of
+    var (a dataset named by Ensembl id), else ignoring case. Unknown set names are refused."""
+    from scview.core.cellxgene_export import SYMBOL_COLUMNS
+
+    unknown = [s for s in sets if s not in vgs.GENE_SETS]
+    if unknown:
+        raise VelocityError(f"Unknown gene list {unknown[0]!r}: choose from {', '.join(vgs.GENE_SETS)}.")
+    wanted = list(dict.fromkeys([str(g).strip() for g in genes if str(g).strip()]
+                                + [g for s in sets for g in vgs.GENE_SETS[s]["genes"]]))
+    if not wanted:
+        return np.zeros(0, dtype=np.int64), {}
+    if len(wanted) > MAX_EXCLUDE:
+        raise VelocityError(f"{len(wanted):,} genes to leave out: at most {MAX_EXCLUDE:,}.")
+    index = {f: i for i, f in enumerate(features)}
+    by_symbol: dict[str, int] = {}
+    if var is not None:
+        for col in SYMBOL_COLUMNS:
+            if col in var.columns:
+                for name, sym in zip(map(str, var.index), var[col].astype(str)):
+                    if name in index:
+                        by_symbol.setdefault(sym, index[name])
+    lower: dict[str, int] = {}
+    for f, i in index.items():
+        lower.setdefault(f.lower(), i)
+    rows, unmatched = [], []
+    for g in wanted:
+        i = index.get(g, by_symbol.get(g, lower.get(g.lower())))
+        (rows.append(i) if i is not None else unmatched.append(g))
+    rows_arr = np.unique(np.asarray(rows, dtype=np.int64))
+    return rows_arr, {"sets": list(sets), "n_given": len(wanted), "n_matched": int(rows_arr.size),
+                      "n_unmatched": len(unmatched), "unmatched": unmatched[:UNMATCHED_LISTED],
+                      "genes": [features[i] for i in rows_arr]}
 
 
 def embedding_names(adata) -> list[str]:
@@ -425,6 +473,18 @@ def embedding_names(adata) -> list[str]:
         if len(shape) == 2 and shape[0] == adata.n_obs and (shape[1] == 2 or key == "X_pca"):
             out.append(str(key))
     return out
+
+
+def direction_embedding(names: list[str], wanted: str | None) -> str | None:
+    """The plot the direction check is made on: the one asked for (the panel sends the plot on
+    screen), else the UMAP the main plot opens on, else another UMAP, else the first 2D one."""
+    if wanted in names:
+        return wanted
+    for key in ("X_umap", *sorted(n for n in names if "umap" in n.lower())):
+        if key in names:
+            return key
+    flat = [n for n in names if n != "X_pca"]
+    return flat[0] if flat else (names[0] if names else None)
 
 
 def obsm_key(embedding: str) -> str:
@@ -464,6 +524,7 @@ def prepare(adaptor, data_dir: str | Path, dataset_id: str, params: Params) -> P
     with ms.ModalityStore(path) as store:
         rows = store.rows_of(adata.obs_names)
         var_names = list(map(str, store.features))
+    exclude, excluded = resolve_exclusion(var_names, getattr(adata, "var", None), params.exclude_genes, params.exclude_sets)
     mask = rows >= 0
     positions = np.flatnonzero(mask)
     if positions.size < MIN_CELLS:
@@ -490,9 +551,14 @@ def prepare(adaptor, data_dir: str | Path, dataset_id: str, params: Params) -> P
         if column not in adata.obs.columns:
             raise VelocityError(f"This dataset has no column '{column}' to group the table by.")
         groups = adata.obs[column].astype(object).where(adata.obs[column].notna(), None).astype(str)
+    try:
+        ordering, unchecked = vd.resolve(adata, params.direction, column)
+    except vd.DirectionError as e:
+        raise VelocityError(str(e))
     return Prepared(dataset_id, str(data_dir), params, rows[mask], positions, [str(adata.obs_names[i]) for i in positions],
                     int(adata.n_obs), adaptor.cells_fingerprint(), pca, pca_note, conn, dist, k, note, embeddings, groups,
-                    column, vi.read_record(adata).get("source") or {}, var_names)
+                    column, vi.read_record(adata).get("source") or {}, var_names, ordering, unchecked,
+                    direction_embedding(list(embeddings), params.embedding), exclude, excluded)
 
 
 def fit_block_genes(n_cells: int) -> int:
@@ -569,15 +635,27 @@ def iter_run(p: Prepared, stop: Callable[[], bool] | None = None) -> Iterator[di
             n_genes = store.n_vars
             size_s, size_u = np.zeros(n), np.zeros(n)
             shared = np.zeros(n_genes)
+            drop = None
+            if p.exclude.size:
+                mask = np.ones(n_genes, dtype=np.float32)
+                mask[p.exclude] = 0
+                drop = sp.diags(mask, format="csr")
             for a in range(0, n, BLOCK_CELLS):
                 check()
                 rows = p.store_rows[a:a + BLOCK_CELLS]
                 S, U = store.read("spliced", rows), store.read("unspliced", rows)
-                size_s[a:a + BLOCK_CELLS] = np.asarray(S.sum(axis=1), dtype=np.float64).ravel()
-                size_u[a:a + BLOCK_CELLS] = np.asarray(U.sum(axis=1), dtype=np.float64).ravel()
                 both = S.multiply(U > 0) + U.multiply(S > 0)
                 shared += np.asarray(both.sum(axis=0), dtype=np.float64).ravel()
+                if drop is not None:  # as if the genes were not in the data: out of each cell's total too
+                    S, U = S @ drop, U @ drop
+                size_s[a:a + BLOCK_CELLS] = np.asarray(S.sum(axis=1), dtype=np.float64).ravel()
+                size_u[a:a + BLOCK_CELLS] = np.asarray(U.sum(axis=1), dtype=np.float64).ravel()
             kept = np.flatnonzero(shared >= params.min_shared_counts)
+            left_out = int(np.isin(kept, p.exclude).sum())
+            if p.exclude.size:
+                kept = kept[~np.isin(kept, p.exclude)]
+                yield _progress("genes", f"{p.exclude.size:,} genes left out ({left_out:,} of them pass the shared-counts "
+                                         "filter)")
             if kept.size < MIN_GENES:
                 raise VelocityError(f"Only {kept.size:,} of {n_genes:,} genes have {params.min_shared_counts}+ counts in "
                                     "cells with both spliced and unspliced: too few to fit. Check the file's unspliced "
@@ -717,11 +795,25 @@ def iter_run(p: Prepared, stop: Callable[[], bool] | None = None) -> Iterator[di
                 check()
                 arrows[name] = _project(run_store, np.arange(n), self_prob, emb[p.positions])
         table = _cluster_table(p, confidence, length, size_u, size_s, V, U, vidx, genes)
+        emb = p.direction_embedding
+        if emb is None:
+            direction = vd.unchecked("This dataset has no 2D plot to check the arrows on.")
+        elif p.ordering is None:
+            direction = vd.unchecked(p.unchecked or "No order to check against.", emb)
+        else:
+            check()
+            yield _progress("direction", f"Checking the direction against {p.ordering.label}")
+            direction = vd.evaluate(p.ordering, p.embeddings[emb][p.positions], arrows[emb], p.positions, emb)
+            check()
+            yield _progress("direction", "Looking for genes that turn the direction")
+            direction["gene_flags"] = vd.gene_flags(
+                p.ordering, direction["transitions"], run_next, fit_next, p.positions,
+                {"gene": genes, "gamma": gamma.tolist(), "r2": r2.tolist(), "velocity_gene": velocity_genes.tolist()})
         out = {"genes": genes, "gamma": gamma, "r2": r2, "velocity_genes": velocity_genes, "n_kept": int(kept.size),
                "n_store_genes": int(n_genes), "length": length, "confidence": confidence,
                "unspliced_fraction": unspliced_fraction, "arrows": arrows, "table": table,
                "self_prob": self_prob, "pca_note": pca_note, "sum_u": float(size_u.sum()), "sum_s": float(size_s.sum()),
-               "n_velocity_genes": int(vidx.size)}
+               "n_velocity_genes": int(vidx.size), "direction": direction, "n_excluded_kept": left_out}
         del V, U, S
         yield {"type": "result", "out": out}
     except BaseException:
@@ -876,13 +968,16 @@ def save(adata, p: Prepared, out: dict[str, Any], summary_extra: dict[str, Any],
     unspliced = out["sum_u"] / max(out["sum_u"] + out["sum_s"], 1)
     params = p.params
     cells_without = int(n_total - p.positions.size)
-    warnings = warnings_for(unspliced, float(np.median(conf)), out["n_velocity_genes"], cells_without)
+    direction = out.get("direction")
+    warnings = warnings_for(unspliced, float(np.median(conf)), out["n_velocity_genes"], cells_without) + vd.warnings(direction)
     run = {
         **summary_extra,
         "method": params.method, "method_name": METHOD_NAMES[params.method],
         "params": {"n_top_genes": params.n_top_genes, "n_neighbors": params.n_neighbors, "n_pcs": params.n_pcs,
                    "min_shared_counts": params.min_shared_counts, "min_r2": MIN_R2, "min_ratio": MIN_RATIO,
-                   "percentile": PERCENTILE, "scale": SCALE, "n_recurse_neighbors": 2},
+                   "percentile": PERCENTILE, "scale": SCALE, "n_recurse_neighbors": 2,
+                   "exclude_sets": list(params.exclude_sets), "exclude_genes": list(p.excluded.get("genes") or []),
+                   "exclude_given": list(params.exclude_genes)},
         "fingerprint": p.fingerprint, "n_cells": int(p.positions.size), "n_dataset_cells": int(n_total),
         "cells_without": cells_without, "n_genes_store": out["n_store_genes"], "n_genes_kept": out["n_kept"],
         "n_genes_fit": len(out["genes"]), "n_velocity_genes": out["n_velocity_genes"], "genes_in_var": in_var,
@@ -892,7 +987,9 @@ def save(adata, p: Prepared, out: dict[str, Any], summary_extra: dict[str, Any],
         "embeddings": sorted(out["arrows"]), "embedding_hashes": hashes, "obsm_keys": keys,
         "gene_table": {"gene": out["genes"], "gamma": [float(f"{g:.5g}") for g in gamma],
                        "r2": [round(float(x), 4) for x in r2], "velocity_gene": [bool(x) for x in vg]},
-        "grid": grids,
+        "grid": grids, "direction": direction,
+        "excluded": ({k: v for k, v in p.excluded.items() if k != "genes"} | {"n_passing_filter": out.get("n_excluded_kept", 0)}
+                     if p.excluded else None),
     }
     record = vi.read_record(adata)
     adata.uns[UNS_KEY] = json.dumps({"source": record.get("source") or p.source, "run": run})
@@ -907,6 +1004,7 @@ def save(adata, p: Prepared, out: dict[str, Any], summary_extra: dict[str, Any],
             params={
                 "method": params.method, "n_top_genes": params.n_top_genes, "n_neighbors": params.n_neighbors,
                 "n_pcs": params.n_pcs, "min_shared_counts": params.min_shared_counts,
+                "exclude_sets": list(params.exclude_sets), "exclude_genes": list(p.excluded.get("genes") or []),
                 "source_kind": src.get("kind"), "source_file": src.get("file"), "source_stored_as": src.get("stored_as"),
                 "source_files": src.get("files"), "group_column": p.group_column,
                 "embeddings": sorted(out["arrows"]), "n_velocity_genes": out["n_velocity_genes"],
@@ -917,6 +1015,57 @@ def save(adata, p: Prepared, out: dict[str, Any], summary_extra: dict[str, Any],
         )
     except Exception as e:  # provenance must never block the result
         logger.warning("Could not record velocity provenance: %s", e)
+    return run
+
+
+def run_warnings(run: dict[str, Any]) -> list[str]:
+    """A saved run's warnings from its own numbers and its direction check."""
+    return warnings_for(float(run.get("unspliced_fraction") or 0), float(run.get("median_confidence") or 0),
+                        int(run.get("n_velocity_genes") or 0), int(run.get("cells_without") or 0)) + \
+        vd.warnings(run.get("direction"))
+
+
+def recheck(adaptor, data_dir: str | Path, dataset_id: str, spec: dict[str, Any] | None,
+            embedding: str | None) -> dict[str, Any]:
+    """The saved run's arrows checked against another order, or on another plot (a worker
+    thread; nothing saved here: ``set_direction``)."""
+    adata = adaptor.adata
+    run = saved(adata)
+    if run is None:
+        raise VelocityError("Run velocity on this dataset first.", 404)
+    if run.get("fingerprint") != adaptor.cells_fingerprint():
+        raise VelocityError("The cells changed since the velocity run: run it again.", 409)
+    names = embedding_names(adata)
+    if embedding and embedding not in names:
+        raise VelocityError(f"The direction is checked on a 2D plot; this dataset has none called '{embedding}'.", 422)
+    emb = direction_embedding(names, embedding)
+    if emb is None:
+        return vd.unchecked("This dataset has no 2D plot to check the arrows on.")
+    try:
+        ordering, why = vd.resolve(adata, spec, run.get("group_column"))
+    except vd.DirectionError as e:
+        raise VelocityError(str(e))
+    if ordering is None:
+        return vd.unchecked(why or "No order to check against.", emb)
+    coords, arrows, _ = arrows_for(adaptor, data_dir, dataset_id, emb)
+    positions = np.flatnonzero(np.isfinite(arrows).all(axis=1))
+    out = vd.evaluate(ordering, coords[positions], arrows[positions], positions, emb)
+    run_path, fit_path = ms.store_path(data_dir, dataset_id, RUN_STORE), ms.store_path(data_dir, dataset_id, FIT_STORE)
+    if run_path.exists() and fit_path.exists():
+        with ms.ModalityStore(run_path) as store:
+            store_positions = adata.obs_names.get_indexer(store.barcodes)
+        out["gene_flags"] = vd.gene_flags(ordering, out["transitions"], run_path, fit_path, store_positions,
+                                          run["gene_table"])
+    return out
+
+
+def set_direction(adata, direction: dict[str, Any]) -> dict[str, Any]:
+    """Keep a direction check with the saved run (its warnings follow); the caller saves uns."""
+    record = vi.read_record(adata)
+    run = dict(record.get("run") or {})
+    run["direction"] = direction
+    run["warnings"] = run_warnings(run)
+    adata.uns[UNS_KEY] = json.dumps({**record, "run": run})
     return run
 
 
@@ -946,6 +1095,9 @@ def status(adaptor, data_dir: str | Path, dataset_id: str) -> dict[str, Any]:
     if run is not None and run.get("fingerprint") != adaptor.cells_fingerprint():
         stale = (f"The cells changed since this run ({run.get('n_dataset_cells', 0):,} then, {adata.n_obs:,} now): run "
                  "velocity again.")
+    elif run is not None:  # the same verdict as the results list (a graph rebuilt since, ...)
+        why = results_store.entry_stale(dataset_id, run.get("result_id"), adaptor)
+        stale = f"{why[0].upper()}{why[1:]}: run velocity again." if why else None
     source = record.get("source") or ({"kind": "store"} if attached else None)
     if attached and source is not None and "cells_without" not in source:
         source = {**source, "cells_without": None}
@@ -957,7 +1109,7 @@ def status(adaptor, data_dir: str | Path, dataset_id: str) -> dict[str, Any]:
         "attached": attached, "source": source, "run": public_run(run), "stale": stale, "methods": list(METHODS),
         "method_names": METHOD_NAMES, "defaults": {"method": METHODS[0], "n_top_genes": N_TOP_GENES,
                                                    "n_neighbors": N_NEIGHBORS, "n_pcs": N_PCS},
-        "note": NOTE, "n_cells": int(adata.n_obs),
+        "note": NOTE, "n_cells": int(adata.n_obs), "gene_sets": vgs.describe(),
     }
 
 
@@ -1131,14 +1283,28 @@ _last: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 _lock = threading.Lock()
 
 
-def remember(adaptor, run: dict[str, Any], result_id: str) -> None:
+def remember(adaptor, run: dict[str, Any], result_id: str, keep_fingerprint: bool = False) -> None:
+    """Keep the run in the results store. ``keep_fingerprint``: the run was only re-checked, so its
+    entry keeps the data it was computed on (a re-check must not make a stale run look fresh)."""
     k = Kept(result_id, public_run(run) or {}, results_store.cells_hash(adaptor.adata))
     try:
         with _lock:
             _last[adaptor] = k
     except TypeError:  # a test double
         pass
-    results_store.keep(adaptor, KIND, k, result_id=result_id, key="",
+    d = run.get("direction") or {}
+    params = {"method": run.get("method"),
+              **{key: val for key, val in (run.get("params") or {}).items() if key != "exclude_genes"},
+              "n_excluded": len((run.get("params") or {}).get("exclude_genes") or []),
+              "group_column": run.get("group_column"), "embeddings": run.get("embeddings"),
+              "direction": {"embedding": d.get("embedding"), **(d.get("spec") or {})} if d.get("checked") else None}
+    computed_on = None
+    if keep_fingerprint:
+        dataset_id = results_store.dataset_id_of(adaptor)
+        old = next((e for e in results_store.entries(dataset_id or "", KIND) if e.get("id") == result_id), None)
+        computed_on = (old or {}).get("fingerprint")
+    results_store.keep(adaptor, KIND, k, result_id=result_id, key="", params=params, warnings=run.get("warnings"),
+                       computed_on=computed_on,
                        label=f"RNA velocity ({run['method']}, {run['n_velocity_genes']:,} velocity genes)")
 
 
@@ -1158,6 +1324,19 @@ def grounding_lines(adaptor) -> tuple[list[str], str | None]:
         tops = [f"{r['group']}: {', '.join(r['top_genes'][:3])}" for r in rows[:6] if r.get("top_genes")]
         if tops:
             lines.append("- Highest mean velocity per group: " + "; ".join(tops) + ".")
+    ex = run.get("excluded")
+    if ex:
+        sets = ", ".join(vgs.GENE_SETS[x]["name"] for x in ex.get("sets") or [] if x in vgs.GENE_SETS)
+        lines.append(f"- Left out {ex['n_matched']:,} genes before the fit" + (f" ({sets})" if sets else "") + f" [{TAG}].")
+    d = run.get("direction") or {}
+    if d.get("checked"):
+        rows = d.get("transitions") or []
+        lines.append(f"- Direction checked against {d['label']} on {d['embedding']}: "
+                     + "; ".join(f"{r['from']} -> {r['to']} {r['status'].replace('_', ' ')}"
+                                 + (f" (mean cosine {r['mean_cos']:+.2f}, n = {r['n_cells']})" if "mean_cos" in r else "")
+                                 for r in rows[:8]) + f" [{TAG}].")
+    elif d:
+        lines.append(f"- Direction unchecked: {d.get('reason')}")
     lines.extend(f"- Caution: {w}" for w in run.get("warnings") or [])
     lines.append("- Arrows show direction on a 2D plot, not a fate claim; the dynamical model and latent time are not "
                  "offered.")

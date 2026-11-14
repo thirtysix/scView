@@ -237,3 +237,25 @@ def test_split_reads_the_cell_names_alone(tmp_path):
     with h5py.File(tmp_path / "x.h5ad", "r") as f:
         names = feature_split._obs_names(f["obs"])
     assert list(names) == list(a.obs_names)
+
+
+def test_split_keeps_legacy_category_references_valid(tmp_path):
+    """obs copied as stored: an anndata 0.7.x categorical (``categories`` = an HDF5 object
+    reference into ``obs/__categories``) must still open in the split file."""
+    import h5py
+
+    a = _cite()
+    src = tmp_path / "legacy.h5ad"
+    a.write_h5ad(src)
+    with h5py.File(src, "a") as f:  # rewrite obs/donor in the 0.7.x layout
+        codes = a.obs["donor"].cat.codes.to_numpy().astype("i1")
+        del f["obs/donor"]
+        cats = f["obs"].create_group("__categories")
+        cats.create_dataset("donor", data=np.asarray(["d1", "d2"], dtype=object), dtype=h5py.special_dtype(vlen=str))
+        f["obs/donor"] = codes
+        f["obs/donor"].attrs["categories"] = cats["donor"].ref
+        f["obs"].attrs["encoding-version"] = "0.1.0"
+    assert ad.read_h5ad(src).obs["donor"].tolist() == a.obs["donor"].tolist()
+    dst = tmp_path / "out.h5ad"
+    feature_split.split_h5ad(src, dst, original_filename="legacy.h5ad")
+    assert ad.read_h5ad(dst).obs["donor"].tolist() == a.obs["donor"].tolist()

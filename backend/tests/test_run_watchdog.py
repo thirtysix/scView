@@ -143,18 +143,57 @@ def test_slow_step_event_every_60_seconds_of_one_step():
 def test_slow_step_event_carries_the_step_estimate_when_the_run_has_one():
     clock = FakeClock()
     wd, events = _watchdog(FakeMemory(1.0), clock)
-    wd.expected = {"clustering": (240.0, 960.0)}
+    wd.expected = {"clustering": (240.0, 960.0)}  # the preflight's half to twice 480 s
     wd.step_started("clustering")
-    clock.t += 60
-    wd.sample()
+    for t in (60, 600, 719, 720, 779, 780):
+        clock.t = 1000 + t
+        wd.sample()
     wd.step_finished("clustering")
-    wd.step_started("embeddings")  # no estimate for it: the plain note
+    wd.step_started("embeddings")  # no estimate for it: the plain note at 60 s
     clock.t += 60
     wd.sample()
     slow = [e for e in events if e["kind"] == "slow_step"]
-    assert slow[0]["expected_s"] == [240.0, 960.0]
+    # First at 1.5 x the estimate (not at 60 s, inside it), then every minute
+    assert [(e["step"], e["elapsed_s"]) for e in slow] == [("clustering", 720), ("clustering", 780), ("embeddings", 60)]
+    assert slow[0]["expected_s"] == [240.0, 960.0] and slow[0]["estimate_s"] == 480
     assert slow[0]["expected_text"] == "roughly 4 to 16 min"
-    assert "expected_s" not in slow[1] and "expected_text" not in slow[1]
+    assert "expected_s" not in slow[2] and "expected_text" not in slow[2] and "estimate_s" not in slow[2]
+
+
+def test_a_single_estimate_sets_the_first_note_never_before_a_minute():
+    """QA round 4: an ATAC run estimated at 139 s had its note at 61 s."""
+    clock = FakeClock()
+    wd, events = _watchdog(FakeMemory(1.0), clock)
+    wd.expect("atac", 139)
+    wd.expect("quick", 20)
+    wd.expect("none", None)
+    assert wd.expected["atac"] == pytest.approx((111.2, 166.8)) and "none" not in wd.expected
+    for step, times in (("atac", (61, 208, 209)), ("quick", (59, 60)), ("none", (60,))):
+        wd.step_started(step)
+        t0 = clock.t
+        for t in times:
+            clock.t = t0 + t
+            wd.sample()
+        wd.step_finished(step)
+    slow = [(e["step"], e["elapsed_s"], e.get("estimate_s")) for e in events if e["kind"] == "slow_step"]
+    assert slow == [("atac", 209, 139), ("quick", 60, 20), ("none", 60, None)]
+    first = next(e for e in events if e["kind"] == "slow_step")
+    assert first["expected_text"] == "roughly 2 to 3 min"
+
+
+def test_a_step_timed_by_its_caller_runs_untimed_parts():
+    """An ATAC-style run: one watched step around many parts, each part only cancellable."""
+    clock = FakeClock()
+    wd, _ = _watchdog(FakeMemory(1.0), clock)
+    control = RunControl(watchdog=wd, before_step=None)
+    wd.step_started("atac")
+    for _ in range(3):
+        with control.step("atac", timed=False):
+            assert run_watchdog.current() is control and control.current_step == "atac"
+            clock.t += 30
+    assert wd.steps == {}  # the parts did not restart or end the step's clock
+    wd.step_finished("atac")
+    assert wd.steps["atac"]["elapsed_s"] == 90
 
 
 def test_a_new_step_starts_its_own_clock():

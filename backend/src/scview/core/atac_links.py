@@ -562,25 +562,58 @@ def plan_links(adaptor, data_dir: str | Path, *, genome: str | None, mode: str =
                     _selection_hash(adata, mask), len(names), missing)
 
 
-# Measured at 2 CPUs through a running server. PBMC 10k (99M values, 143,887 peaks): 617 listed genes 39 s (estimate 35),
-# variable 52 s (58), all 171 s (162). Mouse E18 (38M, 172,193): variable 53 s (50), all 121 s (129). A tested pair costs its
-# draw and its background's products; how many a gene has is what differs between the choices.
-_FIRST_SECONDS = 5.0
+# Measured at 2 CPUs through a running server (2026-11-14, v0.79). Each cis pair (a peak within DISTANCE of the TSS)
+# is correlated, cheaply; each pair past SCORE_CUTOFF ("tested") draws its background from every peak (a cost per peak
+# of the dataset) and correlates it (per value of the mean peak, nnz / peaks). Runs (cells, values, peaks; tested genes,
+# cis pairs, tested pairs, seconds):
+#   PBMC 10k (11,208, 98.0M, 143,887): variable 1,710 / 123,256 / 16,615 / 54 s; all 21,297 / 1,830,919 / 72,773 / 164 s
+#   5k mouse kidney (5,116, 24.0M, 73,918): variable 1,763 / 67,376 / 5,250 / 12.3 s; all 19,953 / 1,048,245 / 58,108 / 59 s
+#   E18 mouse brain (4,494, 38.4M, 172,193): variable 1,775 / 148,064 / 15,956 / 44 s; all 17,893 / 1,631,427 / 49,747 / 106 s
+# With the tested pairs known the model is within 6% of all six. Before the run they are not: the share of the cis
+# pairs counted at plan time (``cis_pairs``) that pass the cutoff is the data's (variable 7.1-11.8%, all 2.6-4.8%), so
+# the share by mode is about the geometric mean of the three (all-gene runs a little above, so the kidney's stays
+# inside 20%): estimates 45, 166, 14, 49, 42 and 145 s (-17% to +37%, the E18 all-gene run over). The v0.78 model (a fixed cost per pair, fit on PBMC) said 44 and 137 s for the kidney.
+_FIRST_SECONDS = 2.0
 _BY_PEAK_SECONDS_PER_VALUE = 1.5e-7  # the store read twice and the by-peak copy written
 _PER_PEAK_SECONDS = 3e-5  # GC, and each chromosome's densities and sorted features
-_PAIR_SECONDS = 2.1e-3
-_PAIRS_PER_GENE = {"variable": 8.0, "list": 8.0, "all": 2.5}
+_TESTED_SECONDS_PER_PEAK = 1.03e-8  # a tested pair's background draw, per peak of the dataset
+_TESTED_SECONDS_PER_VALUE = 5.55e-7  # its background's correlations, per value of the mean peak
+_TESTED_SHARE = {"variable": 0.093, "list": 0.093, "all": 0.036}
 DOWNLOAD_SECONDS = 120.0  # about 800 MB
 _BASE_BYTES = 600 * 1024**2  # scanpy and friends loaded
 
 
-def estimate_seconds(nnz: int, n_peaks: int, n_genes: int, *, mode: str = "variable", cell_share: float = 1.0) -> float:
-    """``cell_share``: the share of the dataset's cells used. Fewer cells: fewer genes pass and fewer peaks, but more of a
-    gene's pairs reach |r| > 0.05 by chance, so this is only rough for chosen groups (the card says so). Measured: PBMC 10k,
-    variable genes, 2,717 cells 36 s, estimate 42; 259 cells 19 s, 33; all genes, 4,506 cells 190 s, 140; mouse E18, variable
-    genes, 580 cells 39 s, 38."""
-    pairs = n_genes * _PAIRS_PER_GENE.get(mode, 8.0) * min(1.0, cell_share) ** 0.1
-    return round(_FIRST_SECONDS + nnz * _BY_PEAK_SECONDS_PER_VALUE + n_peaks * _PER_PEAK_SECONDS + pairs * _PAIR_SECONDS, 0)
+def cis_pairs(genes: pd.DataFrame, chrom, start, end, distance: int = DISTANCE) -> int:
+    """The (gene, peak) pairs within ``distance`` of each gene's TSS, peaks on standard chromosomes:
+    what the run correlates (``iter_links``, before its cell filters). One sort per chromosome."""
+    chrom = np.asarray(chrom).astype(str)
+    start, end = np.asarray(start, dtype=np.int64), np.asarray(end, dtype=np.int64)
+    ok = standard_chromosomes(chrom) & (start >= 0)
+    g_chrom = genes["chrom"].to_numpy(dtype=str)
+    tss1 = genes["tss"].to_numpy(dtype=np.int64) + 1
+    total = 0
+    for c in np.unique(g_chrom):
+        here = np.flatnonzero(ok & (chrom == c))
+        if here.size < 2:
+            continue
+        order = np.argsort(start[here], kind="stable")
+        starts, reach = start[here][order], np.maximum.accumulate(end[here][order])
+        t = tss1[g_chrom == c]
+        n = np.searchsorted(starts, t + distance, side="right") - np.searchsorted(reach, t - distance, side="left")
+        total += int(np.maximum(n, 0)[n >= 2].sum())
+    return total
+
+
+def estimate_seconds(nnz: int, n_peaks: int, n_genes: int, *, mode: str = "variable", cell_share: float = 1.0,
+                     n_cis: int | None = None) -> float:
+    """``n_cis``: the plan's cis pairs (``cis_pairs``); without it, 70 per gene (the datasets above: 51 to 90).
+    ``cell_share``: the share of the dataset's cells used (``nnz`` is already the used cells'). Fewer cells: fewer
+    genes pass and fewer peaks, but more of a gene's pairs reach |r| > 0.05 by chance, so this is only rough for chosen
+    groups (the card says so)."""
+    cis = n_genes * 70 if n_cis is None else n_cis
+    tested = cis * _TESTED_SHARE.get(mode, _TESTED_SHARE["list"]) * min(1.0, cell_share) ** 0.1
+    per_pair = n_peaks * _TESTED_SECONDS_PER_PEAK + nnz / max(1, n_peaks) * _TESTED_SECONDS_PER_VALUE
+    return round(_FIRST_SECONDS + nnz * _BY_PEAK_SECONDS_PER_VALUE + n_peaks * _PER_PEAK_SECONDS + tested * per_pair, 0)
 
 
 def estimate_bytes(nnz: int, n_peaks: int, n_genes: int, n_cells: int) -> int:

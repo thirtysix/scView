@@ -263,3 +263,63 @@ def test_screen_and_de_questions_route_to_the_groups_facet():
               "which pseudobulk method did I use?", "which genes change in only part of the monocytes?"):
         intent = heuristic_intent(q)
         assert "data" in intent.sources and "groups" in intent.data_facets, q
+
+
+class _StoreAdaptor:
+    """What the results store reads from an adaptor: a derived path, adata and cells hash."""
+
+    def __init__(self, root: Path, adata: ad.AnnData) -> None:
+        self.h5ad_path = str(root / "derived" / "dsmx" / "data.h5ad")
+        self.adata = adata
+
+    def cells_fingerprint(self) -> str:
+        return str(self.adata.n_obs)
+
+
+def test_reruns_stale_only_results_that_named_a_changed_column(tmp_path):
+    """v0.79: a guide assignment and a Mixscape run are label steps. A new run stales a DE by
+    ``mixscape_class`` when the classes changed, never a DE by another column; a new
+    guide assignment stales the Mixscape run that read its target column."""
+    from scview.core import crispr, results_store
+
+    a, _ = planted()
+    crispr.assign(a, "column", "perturbation", control="NT")
+    labels = crispr.saved_call(a)["columns"]["perturbation"]
+    assert labels == "perturbation_scview"
+    ad_ = _StoreAdaptor(tmp_path, a)
+    res, cols = mixscape.run(a, mixscape.Params(labels=labels, lda=False))
+    mixscape.save(a, res, cols)
+    mixscape.remember(ad_, res)
+    results_store.keep(ad_, "de", {"v": 1}, params={"groupby": mixscape.CLASS, "group_a": "A KO"}).result()
+    results_store.keep(ad_, "de", {"v": 2}, params={"groupby": "rep", "group_a": "r1"}, key="rep").result()
+
+    def state():
+        return [(e["kind"], e["key"], e["stale"], e.get("stale_reason"))
+                for e in results_store.entries("dsmx", adaptor=ad_) if e["status"] == "primary"]
+
+    assert all(not s for _, _, s, _ in state())
+    # The same run again: the same classes, nothing stale.
+    res2, cols2 = mixscape.run(a, mixscape.Params(labels=labels, lda=False))
+    mixscape.save(a, res2, cols2)
+    assert all(not s for _, _, s, _ in state())
+    hist = [h["step"] for h in provenance.read_provenance(a)["history"]]
+    assert hist.count("mixscape") == 2 and "crispr_assign" in hist
+    # Classes changed (every target NP): the DE by mixscape_class and the earlier run go stale.
+    res3, cols3 = mixscape.run(a, mixscape.Params(labels=labels, lda=False, min_de_genes=1000))
+    mixscape.save(a, res3, cols3)
+    s = {(k, key): (st, why) for k, key, st, why in state()}
+    assert s[("de", "")] == (True, f"labels of '{mixscape.CLASS}' changed after this result")
+    assert s[("de", "rep")] == (False, None)
+    assert s[("mixscape", f"{labels}|NT")][0] is True
+    # Re-run on the new classes, then re-assign the guides with B merged into A: the
+    # Mixscape run read the target column, the DE by replicate did not.
+    mixscape.remember(ad_, res3)
+    results_store.flush()
+    assert s[("de", "rep")] == (False, None)
+    crispr.assign(a, "column", "perturbation", control="NT", mapping={"B": "A"})
+    s = {(k, key): (st, why) for k, key, st, why in state()}
+    assert s[("mixscape", f"{labels}|NT")] == (True, f"labels of '{labels}' changed after this result")
+    assert s[("de", "rep")] == (False, None)
+    # A data step still stales them all.
+    provenance.record_step(a, step="normalization", tool="scanpy")
+    assert all(st for _, _, st, _ in state())

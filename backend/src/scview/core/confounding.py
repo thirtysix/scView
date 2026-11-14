@@ -21,6 +21,11 @@ control nuclei, every DKD library 5'; half the cell-level DKD genes are also 5'-
 genes). Such a column is crossed with the condition, so ``check`` lets it pass.
 Donor columns are not batches here: donors nested in conditions are the normal
 design, handled by the replicate guard and pseudobulk.
+
+``single_sample_clusters``: a cluster whose cells come almost all from one sample, in a
+dataset of several samples (QA on the gastrulation erythroid atlas: a default run gave a
+Leiden cluster that was one sample, with no word of it). Often a batch effect, sometimes
+a population only that sample has: a note, never a flag that changes anything.
 """
 
 from __future__ import annotations
@@ -254,3 +259,47 @@ def one_level_samples(values: Sequence, sample_names: Sequence[str]) -> list[tup
     counts = s.value_counts()
     return [(str(v), str(sample_names[int(np.flatnonzero(s.to_numpy() == v)[0])]))
             for v in counts.index[counts == 1]]
+
+
+SINGLE_SAMPLE_SHARE = 0.9  # a cluster this much from one sample
+SINGLE_SAMPLE_MIN_SAMPLES = 3  # with fewer samples, one-sample clusters are expected
+SINGLE_SAMPLE_MAX_SAMPLE_SHARE = 0.5  # a sample holding this much of the data fills clusters by itself
+SINGLE_SAMPLE_LISTED = 5
+
+
+def single_sample_clusters(obs: pd.DataFrame, cluster_col: str, sample_col: str) -> list[dict]:
+    """Clusters of at least MIN_CELLS cells with SINGLE_SAMPLE_SHARE or more of them from one
+    sample, when ``sample_col`` has SINGLE_SAMPLE_MIN_SAMPLES or more samples and that sample
+    holds under SINGLE_SAMPLE_MAX_SAMPLE_SHARE of the cells. Largest share first."""
+    if cluster_col not in obs.columns or sample_col not in obs.columns:
+        return []
+    clusters = obs[cluster_col].astype(str).where(obs[cluster_col].notna())
+    samples = obs[sample_col].astype(str).where(obs[sample_col].notna())
+    both = clusters.notna() & samples.notna()
+    if samples[both].nunique() < SINGLE_SAMPLE_MIN_SAMPLES:
+        return []
+    overall = samples[both].value_counts(normalize=True)
+    counts = pd.crosstab(clusters[both], samples[both])
+    out = []
+    for cluster, row in counts.iterrows():
+        n = int(row.sum())
+        top = row.idxmax()
+        share = float(row[top]) / n if n else 0.0
+        if n >= MIN_CELLS and share >= SINGLE_SAMPLE_SHARE and overall[top] < SINGLE_SAMPLE_MAX_SAMPLE_SHARE:
+            out.append({"cluster": str(cluster), "n_cells": n, "sample": str(top), "share": round(share, 3),
+                        "sample_share_of_data": round(float(overall[top]), 3)})
+    out.sort(key=lambda r: (-r["share"], -r["n_cells"]))
+    return out
+
+
+def single_sample_note(found: list[dict], cluster_col: str, sample_col: str, n_samples: int) -> str | None:
+    """One sentence naming the clusters ``single_sample_clusters`` found, or None."""
+    if not found:
+        return None
+    named = "; ".join(f"{r['cluster']} ({r['n_cells']:,} cells, {r['share']:.0%} from {r['sample']}, which is "
+                      f"{r['sample_share_of_data']:.0%} of the data)" for r in found[:SINGLE_SAMPLE_LISTED])
+    more = f" and {len(found) - SINGLE_SAMPLE_LISTED} more" if len(found) > SINGLE_SAMPLE_LISTED else ""
+    return (f"{len(found)} {cluster_col} cluster{'s are' if len(found) > 1 else ' is'} almost all one {sample_col} "
+            f"(of {n_samples} in all): {named}{more}. A cluster made of one sample is often a batch effect, not a "
+            f"cell type: check with crosstab({cluster_col} x {sample_col}), or correct for {sample_col} (Harmony) "
+            "before clustering.")

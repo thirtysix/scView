@@ -458,9 +458,10 @@ def clear_processing(adata: ad.AnnData) -> None:
         if col in adata.var.columns:
             del adata.var[col]
 
-    # Clear embeddings, keeping the file's own UMAP (kept first if this is the first run)
+    # Clear embeddings, keeping the file's own UMAP and PCA (kept first if this is the first run)
     keep_original_umap(adata)
-    keys_to_clear = [k for k in list(adata.obsm) if k.startswith("X_") and k != ORIGINAL_UMAP_KEY]
+    keep_original_pca(adata)
+    keys_to_clear = [k for k in list(adata.obsm) if k.startswith("X_") and k not in ORIGINAL_KEYS]
     for k in keys_to_clear:
         del adata.obsm[k]
 
@@ -988,6 +989,7 @@ def _run_pca(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any] | None
     stores it either way."""
     from scview.core.chunked import pca_size_problem
 
+    keep_original_pca(adata)
     mask = scaling.gene_mask(adata)
     problem = pca_size_problem(params.n_comps, adata.n_obs,
                                adata.n_vars if mask is None else int(mask.sum()))
@@ -1150,6 +1152,28 @@ def keep_original_umap(adata: ad.AnnData) -> bool:
         return False
     adata.obsm[ORIGINAL_UMAP_KEY] = np.array(xy[:, :2], dtype=np.float32)
     logger.info("Kept the file's own UMAP (%s) as %s", key, ORIGINAL_UMAP_KEY)
+    return True
+
+
+ORIGINAL_PCA_KEY = "X_pca_original"
+ORIGINAL_KEYS = (ORIGINAL_UMAP_KEY, ORIGINAL_PCA_KEY)
+
+
+def keep_original_pca(adata: ad.AnnData) -> bool:
+    """Copy the file's own ``X_pca`` to ``X_pca_original`` before scView's PCA replaces it
+    (Pijuan-Sala's 50 author PCs were lost), as ``keep_original_umap`` keeps the UMAP. Only
+    when no earlier scView run made that ``X_pca`` (no ``pca`` step in provenance) and
+    nothing is kept yet. Returns True when it copied."""
+    if "X_pca" not in adata.obsm or ORIGINAL_PCA_KEY in adata.obsm:
+        return False
+    history = provenance.read_provenance(adata).get("history") or []
+    if any(h.get("step") == "pca" for h in history):
+        return False
+    pcs = np.asarray(adata.obsm["X_pca"])
+    if pcs.ndim != 2 or pcs.shape[1] < 2:
+        return False
+    adata.obsm[ORIGINAL_PCA_KEY] = np.array(pcs, dtype=np.float32)
+    logger.info("Kept the file's own PCA (%d components) as %s", pcs.shape[1], ORIGINAL_PCA_KEY)
     return True
 
 

@@ -4,6 +4,7 @@ import Plot from "@/components/plots/Plot";
 import { Caption } from "@/components/common/Caption";
 import { Help } from "@/components/common/Help";
 import { HoverTip } from "@/components/common/InfoTip";
+import { MixscapeProteinCheck } from "@/components/unified/MixscapeProteinCheck";
 import { RequestError } from "@/components/common/RequestError";
 import {
   getPerturbation,
@@ -664,6 +665,9 @@ export function PerturbationSubtab() {
                 </>
               )}
             </div>
+          )}
+          {(result ?? saved)?.protein && (
+            <MixscapeProteinCheck check={(result ?? saved)!.protein!} onPickTarget={setShown} />
           )}
           {result?.lda && (
             <div data-testid="mixscape-lda">

@@ -361,11 +361,15 @@ def test_the_replay_script_reproduces_lr_and_wilcoxon_from_the_input(tmp_path):
             mask = atac.standard_mask(store) if test == "wilcoxon" else None
             pair = {"groups": [every[0]], "vs": every[1]} if test == "wilcoxon" else {"groups": None}
             use = atac.group_codes(a, atac.OBS_CLUSTERS, pair["groups"], pair["vs"]) if test == "wilcoxon" else (codes, every, chosen)
-            mine[test] = [i for i in atac.iter_differential(store, rows, *use, test=test, peak_mask=mask)
+            # the fold change: Signac's (v0.79's default) on the Wilcoxon run; the LR step is recorded as before 0.79,
+            # with no fold_change, so the replay takes the old "tfidf" formula
+            fc = "signac" if test == "wilcoxon" else "tfidf"
+            mine[test] = [i for i in atac.iter_differential(store, rows, *use, test=test, peak_mask=mask, fold_change=fc)
                           if i["type"] == "result"][0]["frame"]
             atac.record_differential(a, {"column": atac.OBS_CLUSTERS, **pair, "min_pct": atac.MIN_PCT,
                                          "max_peaks": atac.MAX_PEAKS_PER_GROUP, "test": test,
-                                         **({"lrt_peaks": atac.LRT_PER_GROUP} if test == "lr" else {"standard_only": True})})
+                                         **({"lrt_peaks": atac.LRT_PER_GROUP} if test == "lr"
+                                            else {"standard_only": True, "fold_change": "signac"})})
         assert set(mine["wilcoxon"]["group"]) == {every[0]}
     assert [d["status"] for h, d in zip(atac.provenance_history(a), replay_script.describe(a))
             if h["step"] == "atac_differential"] == ["exact", "exact"]
@@ -386,7 +390,9 @@ def test_the_replay_script_reproduces_lr_and_wilcoxon_from_the_input(tmp_path):
         got = b.uns[f"atac_differential_{test}"]
         assert got["peak"].astype(str).tolist() == names[frame["peak_index"].to_numpy()].tolist()
         np.testing.assert_allclose(got["pval"].to_numpy(dtype=float), frame["pval"].to_numpy(), rtol=1e-9, atol=1e-300)
+        np.testing.assert_allclose(got["log2fc"].to_numpy(dtype=float), frame["log2fc"].to_numpy(), rtol=1e-6, atol=1e-6)
     assert b.uns["atac_differential_lr"]["fit"].astype(str).tolist() == mine["lr"]["fit"].tolist()
+    assert "# log2fc: Signac's FoldChange" in script.read_text() and "# log2fc: mean TF-IDF + 1" in script.read_text()
     gene_annotation.clear_cache()
 
 
