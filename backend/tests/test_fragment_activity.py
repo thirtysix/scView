@@ -198,7 +198,7 @@ async def test_the_run_uses_the_fragments_when_attached_and_says_so(client, data
     assert act["scale_factor"] == pytest.approx(np.median(total))
     expect = np.log1p(np.divide(want * act["scale_factor"], total, out=np.zeros_like(want), where=total > 0))
     np.testing.assert_allclose(body["values"], expect, atol=1e-3)
-    assert "GeneActivity" in body["caption"]
+    assert "GeneActivity" in body["caption"] and body["kind"] == "fragment-based"
     assert np.mean(body["violin"]["A"]) > np.mean(body["violin"]["B"])
     lines, _detail = atac.grounding_lines(adaptor.adata, dataset_manager.data_dir)
     assert any("fragment-based (Signac's GeneActivity" in x for x in lines)

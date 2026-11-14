@@ -467,7 +467,7 @@ async def get_activity(
     def work() -> dict[str, Any]:
         out = atac.activity_gene(adata, dm.data_dir, dataset_id, gene)
         values = out["values"]
-        body: dict[str, Any] = {"gene": gene, "caption": out["caption"], "n_cells": int(values.size),
+        body: dict[str, Any] = {"gene": gene, "caption": out["caption"], "kind": out["kind"], "n_cells": int(values.size),
                                 "n_nonzero": int(np.count_nonzero(out["counts"])),
                                 "values": [round(float(v), 4) for v in values.tolist()], "violin": None,
                                 "column": groupby or None, "rna": None, "r": None}
