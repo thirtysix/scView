@@ -6,12 +6,21 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.78.0] - 2026-11-14
+
 Single-nucleus and multiome data stop losing a quarter of their nuclei to the % mito rule; Cell Ranger ARC outputs
 and .h5mu files import whole; gene activity matches Signac; CRISPR screens and cell hashing are safer to run.
 Found by re-analysing two published studies through scView's MCP: 10x PBMC 10k multiome against Signac's vignette
 (plus a 10x GRCm39-2024-A mouse kidney multiome) and Papalexi et al. 2021 (ECCITE-seq, Mixscape).
 
 ### Added
+- MCP: 16 new tools for CRISPR screens (guide assignment, Mixscape with per-guide and per-replicate knockout
+  shares), cell hashing (per lane, Save anyway), 10x Multiome ATAC (fragment QC, LSI, WNN, gene activity,
+  differential peaks incl. A vs B, peak-gene links, motifs, chromVAR, coverage plots) and getting files in
+  (`upload_instructions`; `import_server_path`, only under folders set in `MCP_IMPORT_DIRS`, off by default and
+  always off in public mode). 65 tools in all.
+- Protein (CITE-seq) differential expression: cell-level tests on CLR or counts (`layer`); per-donor values for a
+  protein, or for the whole dataset as one group.
 - QC: max counts per cell and 10x Multiome cut-offs (ATAC counts, nucleosome signal, TSS enrichment), off by default.
   Signac's vignette cuts are offered as a suggestion with what they would remove (1,004 of 4,886 nuclei on the
   mouse kidney: written for deep PBMC, so check first). They show in the preview, the removal record and the replay.
@@ -49,6 +58,9 @@ Found by re-analysing two published studies through scView's MCP: 10x PBMC 10k m
 - ATAC differential peaks, LR test: about 1.3x faster at 2 CPUs (PBMC 10k, 13 groups: 175 to 136 s), same results.
 - The backend uses two glibc malloc arenas: about 0.5 GB less memory held after three Data Assessment pages open at
   once (3.98 to 3.50 GiB). Peak memory is unchanged.
+
+- MCP: recipe steps carry their measured time and memory; replay script pages hold 40,000 characters (were 7,000);
+  Leiden columns read as categories; the DE overlap separates same-sign from opposite-sign genes.
 
 ### Fixed
 - Uploading the Cell Ranger ARC outs set made a multi-sample merge of the peak files and dropped the ATAC. It now
