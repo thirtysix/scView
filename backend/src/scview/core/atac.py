@@ -47,6 +47,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import shutil
 import tempfile
 import time
@@ -1027,10 +1028,47 @@ def activity_gene(adata, data_dir: str | Path, dataset_id: str, gene: str) -> di
 # ---------------------------------------------------------------------------
 
 
+_MOUSE_UNNAMED = re.compile(r"^(Gm\d+|\d{7}[A-Z]\d{2}Rik)$")  # predicted genes and RIKEN cDNA clones
+
+
+def unnamed_gene(name: str) -> bool:
+    """A gene with an identifier but no name: a clone id (AC012345.1), a bare Ensembl id
+    (``gene_filters.is_unnamed``), or mouse Gm12345 / 4930451G09Rik."""
+    from scview.core import gene_filters
+
+    return gene_filters.is_unnamed(name) or bool(_MOUSE_UNNAMED.match(str(name)))
+
+
+def _nearest_tss(tss, strand, s, e):
+    """Per peak [s, e): the position in ``tss`` (sorted) of the nearest TSS, the bases to it (0
+    inside the peak), and that distance signed (positive downstream on the gene's strand)."""
+    right = np.searchsorted(tss, s, side="left")  # first TSS at or after the peak's start
+    left = np.clip(right - 1, 0, tss.size - 1)
+    right = np.clip(right, 0, tss.size - 1)
+
+    def gap(t_):  # bases from the peak to a TSS; 0 inside
+        return np.maximum(0, np.maximum(s - t_, t_ - (e - 1)))
+
+    d_left, d_right = gap(tss[left]), gap(tss[right])
+    pick = np.where(d_left <= d_right, left, right)
+    d = np.minimum(d_left, d_right).astype(np.float64)
+    return pick, d, d * _strand_sign(strand[pick], (s + e) / 2 - tss[pick])
+
+
+def _strand_sign(strand, offset):
+    sign = np.where(strand == "-", -1.0, 1.0) * np.sign(offset)
+    return np.where(sign == 0, 1.0, sign)
+
+
 def annotate_peaks(chrom: np.ndarray, start: np.ndarray, end: np.ndarray, table: pd.DataFrame) -> pd.DataFrame:
     """Per peak: nearest gene by TSS, distance to that TSS (0 when inside the peak; positive
     downstream of the TSS on the gene's strand), class (promoter within 2 kb of a TSS, gene
-    body, distal). Pseudogenes and small RNAs are left out of "nearest"."""
+    body, distal). Pseudogenes and small RNAs are left out of "nearest". When the nearest is an
+    unnamed gene (AC/AL clone id, Gm12345), a named gene takes its place if one is as near, or if
+    the peak sits in a named gene's body (Signac's ClosestFeature distance 0) and not in the
+    unnamed gene's promoter, the nearest such by TSS; the distance is then to that gene's TSS."""
+    from scview.core.fragment_activity import region_hits
+
     keep = ~table["gene_type"].astype(str).str.contains("pseudogene") & ~table["gene_type"].isin(_SKIP_GENE_TYPES)
     t = table[keep]
     n = chrom.size
@@ -1048,18 +1086,39 @@ def annotate_peaks(chrom: np.ndarray, start: np.ndarray, end: np.ndarray, table:
         gene = group["gene_name"].to_numpy(dtype=object)[order]
         strand = group["strand"].to_numpy(dtype=object)[order]
         s, e = start[idx], end[idx]
-        right = np.searchsorted(tss, s, side="left")  # first TSS at or after the peak's start
-        left = np.clip(right - 1, 0, tss.size - 1)
-        right = np.clip(right, 0, tss.size - 1)
-        def gap(t_):  # bases from the peak to a TSS; 0 inside
-            return np.maximum(0, np.maximum(s - t_, t_ - (e - 1)))
-        d_left, d_right = gap(tss[left]), gap(tss[right])
-        pick = np.where(d_left <= d_right, left, right)
-        d = np.minimum(d_left, d_right).astype(np.float64)
-        centre = (s + e) / 2
-        sign = np.where(strand[pick] == "-", -1.0, 1.0) * np.sign(centre - tss[pick])
+        pick, d, signed = _nearest_tss(tss, strand, s, e)
         near[idx] = gene[pick]
-        dist[idx] = d * np.where(sign == 0, 1.0, sign)
+        dist[idx] = signed
+        named = ~np.fromiter((unnamed_gene(g) for g in gene), dtype=bool, count=gene.size)
+        swap = np.flatnonzero(~named[pick])
+        if swap.size and named.any():
+            ns, ne = s[swap], e[swap]
+            n_pick, n_d, n_signed = _nearest_tss(tss[named], strand[named], ns, ne)
+            same = n_d == d[swap]
+            # named genes whose body holds the peak: the one whose TSS is nearest
+            bodies = group.iloc[order][named]
+            b_order = np.argsort(bodies["start"].to_numpy(), kind="stable")
+            b_start = bodies["start"].to_numpy()[b_order]
+            b_end = bodies["end"].to_numpy()[b_order]
+            hit_peak, hit_gene = region_hits(ns, ne, b_start, b_end, np.maximum.accumulate(b_end))
+            body_gene = np.full(swap.size, -1)
+            body_signed = np.full(swap.size, np.nan)
+            if hit_peak.size:
+                g_tss = bodies["tss"].to_numpy()[b_order][hit_gene]
+                gaps = np.maximum(0, np.maximum(ns[hit_peak] - g_tss, g_tss - (ne[hit_peak] - 1)))
+                first = np.lexsort((gaps, hit_peak))
+                lead = first[np.r_[True, np.diff(hit_peak[first]) != 0]]
+                body_gene[hit_peak[lead]] = b_order[hit_gene[lead]]
+                g_strand = bodies["strand"].to_numpy(dtype=object)[b_order][hit_gene[lead]]
+                body_signed[hit_peak[lead]] = gaps[lead] * _strand_sign(g_strand, (ns[hit_peak[lead]] + ne[hit_peak[lead]]) / 2
+                                                                        - g_tss[lead])
+            names_named = gene[named]
+            use_same = same
+            use_body = ~same & (body_gene >= 0) & (d[swap] > PROMOTER)  # an unnamed gene's own promoter stays
+            near[idx[swap[use_same]]] = names_named[n_pick[use_same]]
+            dist[idx[swap[use_same]]] = n_signed[use_same]
+            near[idx[swap[use_body]]] = names_named[body_gene[use_body]]
+            dist[idx[swap[use_body]]] = body_signed[use_body]
         bodies = group.sort_values("start")
         starts = bodies["start"].to_numpy()
         reach = np.maximum.accumulate(bodies["end"].to_numpy())

@@ -260,6 +260,30 @@ def test_peak_annotation_classes_and_distance():
     assert np.isnan(d[6]) and out["nearest_gene"].iloc[6] == ""  # a contig without genes
 
 
+def test_a_named_gene_replaces_an_unnamed_nearest_when_as_near_or_holding_the_peak():
+    """QA: a peak inside CCDC57 was named AC129510.1, a clone-id lncRNA 26 kb away (Signac: CCDC57)."""
+    t = pd.DataFrame({"gene_id": [f"E{i}" for i in range(6)],
+                      "gene_name": ["CCDC57", "AC129510.1", "Gm12345", "Pck1", "AL000001.1", "Lonely1"],
+                      "chrom": ["chr17"] * 3 + ["chr2", "chr2", "chr3"],
+                      "start": [100_000, 140_000, 300_000, 500_000, 515_000, 10_000],
+                      "end": [200_000, 150_000, 301_000, 520_000, 516_000, 20_000],
+                      "strand": ["-", "+", "+", "+", "+", "+"],
+                      "gene_type": ["protein_coding", "lncRNA", "protein_coding", "protein_coding", "lncRNA", "protein_coding"],
+                      "tss": [199_999, 140_000, 300_000, 500_000, 515_000, 10_000]})
+    chrom = np.array(["chr17", "chr17", "chr2", "chr2", "chr17"], dtype=object)
+    start = np.array([165_000, 302_000, 509_000, 505_000, 139_000])
+    end = np.array([165_500, 302_500, 509_100, 505_100, 141_000])
+    out = atac.annotate_peaks(chrom, start, end, t)
+    assert out["nearest_gene"].tolist() == ["CCDC57", "Gm12345", "Pck1", "Pck1", "AC129510.1"]
+    d = out["distance_to_tss"].to_numpy()
+    assert d[0] == 199_999 - 165_499  # to CCDC57's own TSS, downstream on -
+    assert d[1] == 302_000 - 300_000  # Gm12345 is nearest and no named gene holds the peak: kept
+    assert d[2] == 9_000 and d[3] == 5_000  # inside Pck1: Pck1, not the AL clone 5.9 kb away
+    assert d[4] == 0  # the clone's own promoter (its TSS in the peak) stays the clone's, inside CCDC57 or not
+    assert atac.unnamed_gene("AC129510.1") and atac.unnamed_gene("Gm12345") and atac.unnamed_gene("4930451G09Rik")
+    assert not atac.unnamed_gene("Pck1") and not atac.unnamed_gene("LINC01857")
+
+
 def test_invalid_peak_positions_have_no_context():
     t = pd.DataFrame({"gene_id": ["E1"], "gene_name": ["G"], "chrom": ["chr1"], "start": [100], "end": [200],
                       "strand": ["+"], "gene_type": ["protein_coding"], "tss": [100]})
