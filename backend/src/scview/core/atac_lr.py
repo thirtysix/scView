@@ -38,6 +38,16 @@ FIT_SEPARATED = "separated"
 FIT_NOT_CONVERGED = "not_converged"
 
 
+def vec_mat(v, m):
+    """``v @ m`` for a vector over cells and a cells x peaks block, in numpy's own loop, not
+    BLAS. OpenBLAS's thread count is the whole server's (threadpoolctl cannot limit one request),
+    so two pool workers each calling a two-thread gemv put four busy threads on two CPUs. Measured
+    v0.78 on PBMC 10k multiome, 13 groups, 2 CPUs: the fits 146 s with gemv, 107 s with this,
+    104 s with BLAS at one thread for the whole server. The same sums in another order: p within
+    3e-10 of a log10 unit, the same FDR counts and top 100 in all 13 groups."""
+    return np.einsum("i,ij->j", v, m) if m.ndim == 2 else v @ m
+
+
 def deviance_and_mu(eta, y0):
     """The Bernoulli deviance per column and the fitted probabilities: with e = exp(-eta), each
     cell adds 2 log(1 + e), and 2 eta more when y = 0 (``y0``). One exp and one log per cell, as
@@ -45,7 +55,7 @@ def deviance_and_mu(eta, y0):
     column whose exp overflows (a step far out on a depth outlier) is summed the slow way."""
     with np.errstate(over="ignore", invalid="ignore"):
         e = np.exp(-eta)
-        dev = 2.0 * (np.log(1.0 + e).sum(axis=0) + y0 @ eta)
+        dev = 2.0 * (np.log(1.0 + e).sum(axis=0) + vec_mat(y0, eta))
     bad = ~np.isfinite(dev)
     if np.any(bad):
         sign = 1.0 - 2.0 * y0
@@ -146,9 +156,9 @@ def lrt_fit(x, y, z, null_b, null_dev, max_iter=LR_MAX_ITER, tol=LR_TOL):
         w = mu * (1.0 - mu)
         r = y[:, None] - mu
         wx = w * cur
-        s00, s01, s11 = w.sum(axis=0), z @ w, z2 @ w
-        s02, s12, s22 = wx.sum(axis=0), z @ wx, np.einsum("ij,ij->j", wx, cur)
-        g0, g1, g2 = r.sum(axis=0), z @ r, np.einsum("ij,ij->j", r, cur)
+        s00, s01, s11 = w.sum(axis=0), vec_mat(z, w), vec_mat(z2, w)
+        s02, s12, s22 = wx.sum(axis=0), vec_mat(z, wx), np.einsum("ij,ij->j", wx, cur)
+        g0, g1, g2 = r.sum(axis=0), vec_mat(z, r), np.einsum("ij,ij->j", r, cur)
         del wx, r
         # The 3 x 3 by cofactors, per peak; a det that is not positive cannot be stepped from.
         c00, c01, c02 = s11 * s22 - s12 * s12, s02 * s12 - s01 * s22, s01 * s12 - s02 * s11
@@ -196,4 +206,4 @@ def lrt_fit(x, y, z, null_b, null_dev, max_iter=LR_MAX_ITER, tol=LR_TOL):
 
 
 REPLAY_CONSTANTS = ("LR_MAX_ITER", "LR_TOL", "LR_SEPARATED_ETA", "FIT_OK", "FIT_SEPARATED", "FIT_NOT_CONVERGED")
-REPLAY_CODE = (deviance_and_mu, logistic_null, null_vectors, score_products, score_statistic, signed_root_p, lrt_fit)
+REPLAY_CODE = (vec_mat, deviance_and_mu, logistic_null, null_vectors, score_products, score_statistic, signed_root_p, lrt_fit)
