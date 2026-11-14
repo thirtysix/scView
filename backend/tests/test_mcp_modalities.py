@@ -191,9 +191,10 @@ async def test_the_multiome_path_lsi_wnn_activity_differential_and_results(clien
     assert da["result_id"] and da["counts"]["n_total"] == 2 and set(da["top_peaks"]) == {"A", "B"}
     t = await _call("get_result", {"dataset_id": did, "result_id": da["result_id"], "sort_by": "pval_adj"})
     assert t["kind"] == "atac_differential" and {"peak", "group", "pval_adj"} <= set(t["columns"]) and t["rows"]
+    assert da["fold_change"] == "signac"
     pair = await _done(await _call("atac_differential", {"dataset_id": did, "column": "group", "groups": ["A"],
-                                                          "vs": "B", "test": "wilcoxon"}))
-    assert pair["vs"] == "B" and set(pair["top_peaks"]) == {"A"}
+                                                          "vs": "B", "test": "wilcoxon", "fold_change": "tfidf"}))
+    assert pair["vs"] == "B" and set(pair["top_peaks"]) == {"A"} and pair["fold_change"] == "tfidf"
     text = await _call("atac_differential", {"dataset_id": did, "column": "group", "vs": "B"}, error=True)
     assert "exactly one group" in text
     # Motifs: the scan runs inside the job, then the enrichment; then chromVAR (scanned already).

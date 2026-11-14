@@ -602,7 +602,7 @@ and read as expression layers `protein` (CLR), `protein_counts` and `protein_dsb
 | `GET /datasets/{id}/atac/qc` | `groupby` | the ATAC QC columns per cell |
 | `POST /datasets/{id}/atac/metrics` | multipart `file` (per_barcode_metrics.csv), `sample`, `column` | adds FRiP, TSS and mito fractions |
 | `GET /datasets/{id}/atac/differential-estimate` | `column`, `test`, `group`, `vs` | time and memory of a differential run |
-| `POST /datasets/{id}/atac/differential` | `{"column", "groups", "vs", "test": "wilcoxon"\|"lr", "min_pct": 0.05, "max_peaks", "lrt_peaks", "standard_only": true}` | SSE: each group vs the rest, or `groups: [A]` vs `vs: B`; kept by id |
+| `POST /datasets/{id}/atac/differential` | `{"column", "groups", "vs", "test": "wilcoxon"\|"lr", "min_pct": 0.05, "max_peaks", "lrt_peaks", "standard_only": true, "fold_change": "signac"\|"tfidf"}` | SSE: each group vs the rest, or `groups: [A]` vs `vs: B`; kept by id; `fold_change` = the log2fc formula (Signac's FoldChange, or mean TF-IDF + 1 as before 0.79) |
 | `GET /datasets/{id}/atac/differential[/{rid}[/csv]]` | `group`, `offset`, `limit` | the last result, a page, or the CSV |
 | `GET /datasets/{id}/atac/export` | | an h5ad of the peak counts |
 | `GET /datasets/{id}/atac/fragments` | | the attached fragments file, its QC estimate and saved QC |

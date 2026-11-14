@@ -189,6 +189,16 @@ async def test_differential_stream_kept_by_id_with_csv(client, dataset_manager, 
     row = result["rows"]["A"][0]
     assert {"peak", "nearest_gene", "distance_to_tss", "peak_class", "pct_in", "pct_rest", "log2fc", "pval", "pval_adj"} <= set(row)
     assert "peak_index" not in row
+    # Signac's fold change by default, named in the result, its params and the method; the old one on request
+    assert result["fold_change"] == "signac" and result["params"]["fold_change"] == "signac"
+    assert "Signac's FoldChange for peaks" in result["method"]
+    r = await client.post(f"{API}/datasets/{did}/atac/differential", json={"column": "group", "fold_change": "tfidf"})
+    old = next(d for e, d in _events(r.text) if e == "result")
+    assert old["fold_change"] == "tfidf" and "mean TF-IDF + 1" in old["method"]
+    assert old["rows"]["A"][0]["peak"] == row["peak"] and old["rows"]["A"][0]["pval"] == row["pval"]
+    assert old["rows"]["A"][0]["log2fc"] != row["log2fc"]
+    bad = await client.post(f"{API}/datasets/{did}/atac/differential", json={"column": "group", "fold_change": "v5"})
+    assert bad.status_code == 422
     rid = result["id"]
     page = (await client.get(f"{API}/datasets/{did}/atac/differential/{rid}", params={"group": "B", "limit": 3})).json()
     assert list(page["rows"]) == ["B"] and len(page["rows"]["B"]) == 3

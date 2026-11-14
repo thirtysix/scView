@@ -102,6 +102,8 @@ export const SPATIAL_HELP: Record<string, string> = {
     "Each dot is a cell: the gene's RNA across, its gene activity (open chromatin around the gene) up. Dots along a rising diagonal mean open chromatin and expression go together. Many cells at zero on one axis are normal, as both measures are sparse per cell.",
   "atac.da-groups":
     "The metadata column whose groups are compared: each group's cells against all other cells, giving one table per group, or one group against another.",
+  "atac.da-fold-change":
+    "How log2FC is computed. Signac: as Signac's FindMarkers on peaks, the log2 ratio of the mean log1p(TF-IDF) of each side, so numbers match its vignettes. Mean TF-IDF + 1: scView's formula before v0.79, about 4 times smaller. Only log2FC changes; the peaks and p values stay the same.",
   "atac.da-compare":
     "Each group vs the rest gives one table per group. One group vs another compares two groups directly and leaves every other cell out, as Signac's FindMarkers with ident.1 and ident.2 (the vignette's CD4 naive vs CD14 monocytes). Fold changes are larger than against the rest.",
   "atac.links-genes":

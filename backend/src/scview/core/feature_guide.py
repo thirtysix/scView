@@ -126,7 +126,8 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Unified View > Accessibility > Differential peaks", "LR with depth, or Wilcoxon",
      "peaks per group vs the rest or one group against another (A vs B, as Signac's FindMarkers ident.1 / "
      "ident.2), chrM and unplaced scaffolds left out by default, logistic regression with a depth covariate (Seurat's LR, the default) or Wilcoxon on TF-IDF, with "
-     "nearest gene, distance to TSS, class; CSV"),
+     "nearest gene, distance to TSS, class; CSV. log2FC is Signac's FoldChange (FindMarkers' avg_log2FC) by default; "
+     "the older mean TF-IDF + 1 formula, about 4x smaller, is a choice and names results made before v0.79"),
     ("Unified View > Gene Sets", "AUCell, ssGSEA, GSVA",
      "browse MSigDB sets; score them with AUCell, ssGSEA or GSVA"),
     ("Unified View > Compare", "saved scores",

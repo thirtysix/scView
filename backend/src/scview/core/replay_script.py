@@ -1497,7 +1497,8 @@ def atac_differential(counts, peak_names, labels, settings):
         peak_mask = standard_chromosomes([re.split(r"[:_-]", n[::-1], maxsplit=2)[-1][::-1] for n in peak_names])
     for item in iter_differential(AtacCounts(counts), np.arange(counts.shape[0]), codes, every, chosen,
                                   test=settings["test"], min_pct=settings["min_pct"], max_peaks=settings["max_peaks"],
-                                  lrt_per_group=settings.get("lrt_peaks", LRT_PER_GROUP), peak_mask=peak_mask):
+                                  lrt_per_group=settings.get("lrt_peaks", LRT_PER_GROUP), peak_mask=peak_mask,
+                                  fold_change=settings.get("fold_change", "tfidf")):  # a step before 0.79: "tfidf"
         if item["type"] == "result":
             frame = item["frame"]
             frame.insert(1, "peak", np.asarray(peak_names, dtype=object)[frame["peak_index"].to_numpy()])
@@ -3602,11 +3603,13 @@ def _atac_differential(p: dict, ctx: _Ctx) -> Snippet:
         return Snippet(NOT_REPLAYABLE, ["# Differential peaks: the settings are not recorded. Recorded:", *_param_comment(p)],
                        "settings not recorded")
     _need(ctx, "atac")
-    keys = ("column", "groups", "min_pct", "max_peaks", "test", "lrt_peaks", "standard_only", "vs")
+    keys = ("column", "groups", "min_pct", "max_peaks", "test", "lrt_peaks", "standard_only", "vs", "fold_change")
     settings = {x: p.get(x) for x in keys if p.get(x) is not None}
     return Snippet(EXACT, [
         f"# Differential peaks by {comment_text(p.get('column'), 80)}, {comment_text(p.get('test'), 12)}: each group vs "
         "the rest, a table in uns.",
+        "# log2fc: " + ("Signac's FoldChange for peaks, mean log1p(TF-IDF) + 1e-4." if p.get("fold_change") == "signac"
+                        else "mean TF-IDF + 1 (scView before 0.79; about 4x smaller than Signac's)."),
         f"ATAC_DA = {_lit(settings)}",
         *_block(_ATAC_DIFFERENTIAL_CODE),
     ])

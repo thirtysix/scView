@@ -156,6 +156,8 @@ export interface AtacDaRow {
 }
 
 export type AtacDaTest = "wilcoxon" | "lr";
+/** The log2fc formula: Signac's FoldChange for peaks (default since 0.79), or mean TF-IDF + 1 (before). */
+export type AtacDaFoldChange = "signac" | "tfidf";
 export type AtacDaFit = "score" | "lrt" | "lrt_separated" | "score_no_fit" | "untestable";
 
 export interface AtacDaEstimate {
@@ -181,6 +183,8 @@ export interface AtacDa {
   method: string;
   /** Absent on a result saved before the choice existed: a Wilcoxon. */
   test?: AtacDaTest;
+  /** Absent from an older backend; a result saved before 0.79 reads "tfidf". */
+  fold_change?: AtacDaFoldChange;
   /** One group against this one (groups holds the one), null for each group vs the rest. */
   vs?: string | null;
   n_fit?: Record<string, Record<AtacDaFit, number>> | null;
@@ -198,7 +202,14 @@ export type AtacRunBody = {
   activity_source?: "auto" | "fragments" | "peaks";
 };
 export type AtacWnnBody = { lsi_first?: number; lsi_last?: number; resolution?: number };
-export type AtacDaBody = { column: string; groups?: string[]; min_pct?: number; test?: AtacDaTest; vs?: string };
+export type AtacDaBody = {
+  column: string;
+  groups?: string[];
+  min_pct?: number;
+  test?: AtacDaTest;
+  vs?: string;
+  fold_change?: AtacDaFoldChange;
+};
 
 export function getAtac(datasetId: string, groupby?: string): Promise<AtacState> {
   const q = new URLSearchParams({ allow_empty: "true" });

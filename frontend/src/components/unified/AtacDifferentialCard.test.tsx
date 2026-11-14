@@ -55,7 +55,7 @@ describe("AtacDifferentialCard", () => {
     await waitFor(() => expect(screen.getByTestId("atac-da-estimate").textContent).toContain("for CD4 naive vs CD14 mono (800 cells)"));
     expect(api.getDaEstimate).toHaveBeenLastCalledWith("d", "celltype", "lr", "CD4 naive", "CD14 mono");
     fireEvent.click(screen.getByRole("button", { name: "Find differential peaks" }));
-    expect(runDa).toHaveBeenCalledWith("d", { column: "celltype", test: "lr", groups: ["CD4 naive"], vs: "CD14 mono" });
+    expect(runDa).toHaveBeenCalledWith("d", { column: "celltype", test: "lr", groups: ["CD4 naive"], vs: "CD14 mono", fold_change: "signac" });
   });
 
   it("each group vs the rest sends no pair", async () => {
@@ -64,7 +64,33 @@ describe("AtacDifferentialCard", () => {
     render(<AtacDifferentialCard datasetId="d" state={STATE} columns={["celltype"]} defaultColumn="celltype" />);
     await screen.findByTestId("atac-da-estimate");
     fireEvent.click(screen.getByRole("button", { name: "Find differential peaks" }));
-    expect(runDa).toHaveBeenCalledWith("d", { column: "celltype", test: "lr" });
+    expect(runDa).toHaveBeenCalledWith("d", { column: "celltype", test: "lr", fold_change: "signac" });
+  });
+
+  it("sends the older fold change when chosen", async () => {
+    const runDa = vi.fn(() => Promise.resolve());
+    useAtacRunStore.setState({ runDa });
+    render(<AtacDifferentialCard datasetId="d" state={STATE} columns={["celltype"]} defaultColumn="celltype" />);
+    await screen.findByTestId("atac-da-estimate");
+    fireEvent.change(screen.getByLabelText("Fold change"), { target: { value: "tfidf" } });
+    fireEvent.click(screen.getByRole("button", { name: "Find differential peaks" }));
+    expect(runDa).toHaveBeenCalledWith("d", { column: "celltype", test: "lr", fold_change: "tfidf" });
+  });
+
+  it("a result names its fold change; one saved before v0.79 reads as the older formula", async () => {
+    api.getLatestDa.mockResolvedValue({ ...PAIR, fold_change: "signac" });
+    const { unmount } = render(<AtacDifferentialCard datasetId="d" state={STATE} columns={["celltype"]} defaultColumn="celltype" />);
+    let table = await screen.findByTestId("atac-da");
+    expect(table.textContent).toContain("Signac's log2FC");
+    expect(screen.getByText("log2FC", { selector: "th" }).getAttribute("title")).toContain("Signac's FoldChange for peaks");
+    unmount();
+    useAtacRunStore.setState({ da: null });
+    api.getLatestDa.mockResolvedValue(PAIR);
+    render(<AtacDifferentialCard datasetId="d" state={STATE} columns={["celltype"]} defaultColumn="celltype" />);
+    table = await screen.findByTestId("atac-da");
+    expect(table.textContent).toContain("log2FC of mean TF-IDF + 1");
+    expect(screen.getByText("log2FC", { selector: "th" }).getAttribute("title")).toContain("before v0.79");
+    expect((screen.getByLabelText("Fold change") as HTMLSelectElement).value).toBe("tfidf");
   });
 
   it("a pair's table names the other group, not the rest", async () => {

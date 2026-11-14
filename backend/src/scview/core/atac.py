@@ -135,6 +135,13 @@ LR_MIN_BLOCK, LR_MAX_BLOCK = 8, 256
 # What each tested peak's p came from, per group (``fit`` in the result table).
 FIT_SCORE, FIT_LRT, FIT_LRT_SEPARATED, FIT_SCORE_NO_FIT, FIT_UNTESTABLE = 0, 1, 2, 3, 4
 FIT_NAMES = ("score", "lrt", "lrt_separated", "score_no_fit", "untestable")
+# The log2 fold change of a differential peak. "signac": Signac's FoldChange for a ChromatinAssay (since 1.8.0;
+# 1.17.1 read), which FindMarkers on peaks uses: log2(mean(data) + 1e-4) of each side, data = log1p(TF-IDF).
+# "tfidf": log2(mean(TF-IDF) + 1) of each side, Seurat v4's FoldChange on log data and scView's before 0.79. On
+# PBMC 10k (CD4 naive/Tcm vs classical monocytes) "tfidf" is 4.3x smaller (median), 0.64-0.87 where the vignette's
+# peaks read 3.5-4.0; R (Seurat 6.0.0, Signac 1.17.1) gives "signac" within 1e-7 on 2,005 peaks.
+FOLD_CHANGES = ("signac", "tfidf")
+PEAK_FC_PSEUDOCOUNT = 1e-4
 MAX_GROUPS = 100
 MIN_GROUP_CELLS = 3
 BLOCK_VALUES = 4_000_000  # stored values per block: about 48 MB of data + indices
@@ -1240,8 +1247,16 @@ def group_codes(adata, column: str, groups: list[str] | None = None,
     return codes, every, chosen
 
 
+def peak_log2fc(mean_in, mean_out, fold_change):
+    """log2 fold change from each side's mean: of log1p(TF-IDF) for ``signac`` (Signac's FoldChange
+    for peaks, + 1e-4), of TF-IDF for ``tfidf`` (+ 1; ``FOLD_CHANGES``)."""
+    if fold_change == "signac":
+        return np.log2(mean_in + PEAK_FC_PSEUDOCOUNT) - np.log2(mean_out + PEAK_FC_PSEUDOCOUNT)
+    return np.log2((mean_in + 1) / (mean_out + 1))
+
+
 def _iter_lr(store, rows, codes, tested_codes, tested, detect, idf, cell_total, z, p, fc, fit, *, stop, batch_values,
-             lrt_per_group):
+             lrt_per_group, fold_change="signac"):
     """Seurat's LR test with the cell's total as the latent (``core/atac_lr.py``): one pass of
     sparse products gives every tested peak's score test against its group's one null fit, then
     the true likelihood ratio replaces it for the ``lrt_per_group`` highest of each group,
@@ -1273,14 +1288,15 @@ def _iter_lr(store, rows, codes, tested_codes, tested, detect, idf, cell_total, 
         parts = score_products(values, residual[pos], w[pos], wz[pos])
         for total, part in zip((u, a, b, c), parts):
             total += part
-        # Seurat's FoldChange on the data slot: means of expm1(TF-IDF).
-        sums += np.asarray(sp.csr_matrix((scaled, block.indices, block.indptr), shape=block.shape).T @ in_group[pos])
+        # The fold change's means: of the data layer, log1p(TF-IDF), for Signac's; of TF-IDF for "tfidf".
+        on = values if fold_change == "signac" else sp.csr_matrix((scaled, block.indices, block.indptr), shape=block.shape)
+        sums += np.asarray(on.T @ in_group[pos])
     del residual, w, wz, in_group
     picks = {}
     for i, code in enumerate(tested_codes):
         ok = np.flatnonzero(tested[code])
         n_in = y[:, i].sum()
-        fc[code, ok] = np.log2((sums[ok, i] / max(n_in, 1) + 1) / ((sums[ok, k] - sums[ok, i]) / max(n_labelled - n_in, 1) + 1))
+        fc[code, ok] = peak_log2fc(sums[ok, i] / max(n_in, 1), (sums[ok, k] - sums[ok, i]) / max(n_labelled - n_in, 1), fold_change)
         if i not in inverse:
             fit[code, ok] = FIT_UNTESTABLE
             p[code, ok] = np.nan
@@ -1342,11 +1358,15 @@ def _iter_lr(store, rows, codes, tested_codes, tested, detect, idf, cell_total, 
 
 
 def iter_differential(store, rows, codes, every, chosen, *, test="wilcoxon", min_pct=MIN_PCT, max_peaks=MAX_PEAKS_PER_GROUP,
-                      stop=lambda: False, batch_values=DA_BATCH_VALUES, lrt_per_group=LRT_PER_GROUP, peak_mask=None):
+                      stop=lambda: False, batch_values=DA_BATCH_VALUES, lrt_per_group=LRT_PER_GROUP, peak_mask=None,
+                      fold_change="signac"):
     """Each chosen group vs every other labelled cell, as a generator (``progress`` events, then
     ``{"type": "result", "frame": ..., "n_tested": ...}``): one pass for detection, then, for
     ``wilcoxon``, one per batch of peaks (``batch_values`` stored values); for ``lr``, ``_iter_lr``.
-    ``peak_mask``: the peaks that may be tested (the standard chromosomes), None for all."""
+    ``peak_mask``: the peaks that may be tested (the standard chromosomes), None for all.
+    ``fold_change``: the log2fc column's formula (``FOLD_CHANGES``)."""
+    if fold_change not in FOLD_CHANGES:
+        raise AtacError(f"Unknown fold change '{fold_change}'.", 422)
     n_vars = store.n_vars
     k = len(every)
     labelled = codes >= 0
@@ -1385,7 +1405,7 @@ def iter_differential(store, rows, codes, every, chosen, *, test="wilcoxon", min
     if test == "lr":
         fit = np.zeros((k, n_vars), dtype=np.int8)
         yield from _iter_lr(store, rows, codes, [code_of[g] for g in chosen], tested, detect, idf, cell_total, z, p, fc, fit,
-                            stop=stop, batch_values=batch_values, lrt_per_group=lrt_per_group)
+                            stop=stop, batch_values=batch_values, lrt_per_group=lrt_per_group, fold_change=fold_change)
     else:
         union = np.flatnonzero(tested.any(axis=0))
         sizes = detect.sum(axis=0)[union]
@@ -1418,12 +1438,12 @@ def iter_differential(store, rows, codes, every, chosen, *, test="wilcoxon", min
                 v, c = val[lo:hi], cel[lo:hi]
                 z_j, p_j = wilcoxon_sparse(v, c, codes, n_per_group, n_labelled)
                 z[:, peak], p[:, peak] = z_j, p_j
-                # Seurat's FoldChange on the data slot: means of expm1(TF-IDF), which is what val holds.
+                # val holds TF-IDF; Signac's fold change takes the means of log1p(TF-IDF), the data layer.
                 ok = codes[c] >= 0
-                sums = np.bincount(codes[c[ok]], weights=v[ok], minlength=k)
+                sums = np.bincount(codes[c[ok]], weights=np.log1p(v[ok]) if fold_change == "signac" else v[ok], minlength=k)
                 mean_in = sums / n_groups.clip(min=1)
                 mean_out = (sums.sum() - sums) / (n_labelled - n_per_group).clip(min=1)
-                fc[:, peak] = np.log2((mean_in + 1) / (mean_out + 1))
+                fc[:, peak] = peak_log2fc(mean_in, mean_out, fold_change)
     frames = []
     n_tested: dict[str, int] = {}
     n_significant: dict[str, int] = {}
@@ -1454,9 +1474,9 @@ def iter_differential(store, rows, codes, every, chosen, *, test="wilcoxon", min
 REPLAY_CONSTANTS = ("LANCZOS_BLOCK", "LANCZOS_STEPS", "SEED", "SCALE_FACTOR", "MATRIX", "BLOCK_VALUES", "DA_BATCH_VALUES",
                     "KEEP_PER_GROUP", "MIN_GROUP_CELLS", "MIN_PCT", "MAX_PEAKS_PER_GROUP", "LRT_PER_GROUP", "LR_BLOCK_VALUES",
                     "LR_MIN_BLOCK", "LR_MAX_BLOCK", "LR_THREADS", "FIT_SCORE", "FIT_LRT", "FIT_LRT_SEPARATED", "FIT_SCORE_NO_FIT",
-                    "FIT_UNTESTABLE", "FIT_NAMES")
+                    "FIT_UNTESTABLE", "FIT_NAMES", "FOLD_CHANGES", "PEAK_FC_PSEUDOCOUNT")
 REPLAY_CODE = (top_peaks, block_lanczos_svd, scaled_embedding, depth_correlation, gene_regions, overlap_matrix, _bh,
-               wilcoxon_sparse, _iter_lr, iter_differential, genome_build.standard_chromosomes)
+               wilcoxon_sparse, peak_log2fc, _iter_lr, iter_differential, genome_build.standard_chromosomes)
 
 
 def standard_mask(store: ModalityStore) -> np.ndarray:
@@ -1501,25 +1521,37 @@ def attach_context(frame: pd.DataFrame, store: ModalityStore, genome: str | None
 
 DA_METHOD = ("Wilcoxon rank-sum on TF-IDF, each group vs the rest (no latent covariate), for peaks detected in >= "
              "{min_pct:.0%} of the group or the rest, the {max_peaks:,} most detected at most; BH FDR within each "
-             "group; log2 fold change of mean expm1(TF-IDF) + 1.")
+             "group.")
 DA_METHOD_LR = ("Logistic regression with the cell's total peak counts as covariate (Seurat's LR test: group ~ peak + "
                 "total vs group ~ total, on log1p(TF-IDF)), each group vs the rest, for peaks detected in >= {min_pct:.0%} "
                 "of the group or the rest, the {max_peaks:,} most detected at most: a true likelihood ratio for the "
                 "{lrt_peaks:,} peaks with the highest score test of each group, the score test for the others; BH FDR "
-                "within each group across both; log2 fold change of mean expm1(TF-IDF) + 1.")
+                "within each group across both.")
+FC_METHOD = {
+    "signac": " log2 fold change as Signac's FoldChange for peaks (what FindMarkers reports): mean log1p(TF-IDF) of "
+              "each side + 0.0001, log2 ratio.",
+    "tfidf": " log2 fold change of mean TF-IDF + 1 (Seurat v4's formula, scView's before 0.79): on PBMC 10k about 4 "
+             "times smaller than Signac's, so Signac cut-offs such as |log2FC| > 1 do not carry over.",
+}
 _DA_LAST: dict[str, DaResult] = {}
 
 
-def da_method(test: str, min_pct: float, max_peaks: int, lrt_peaks: int, pair: tuple[str, str] | None = None) -> str:
+def da_method(test: str, min_pct: float, max_peaks: int, lrt_peaks: int, pair: tuple[str, str] | None = None,
+              fold_change: str = "signac") -> str:
     """The method sentence; ``pair`` (A, B) for one group against another, which drops every other cell."""
     text = (DA_METHOD_LR.format(min_pct=min_pct, max_peaks=max_peaks, lrt_peaks=lrt_peaks) if test == "lr"
             else DA_METHOD.format(min_pct=min_pct, max_peaks=max_peaks))
-    if pair is None:
-        return text
-    a, b = pair
-    return (text.replace("each group vs the rest", f"{a} vs {b} (the cells of no other group used)")
-            .replace("of the group or the rest", "of either group").replace("of each group", "")
-            .replace("BH FDR within each group", "BH FDR").replace("within each group across both", "across both"))
+    if pair is not None:
+        a, b = pair
+        text = (text.replace("each group vs the rest", f"{a} vs {b} (the cells of no other group used)")
+                .replace("of the group or the rest", "of either group").replace("of each group", "")
+                .replace("BH FDR within each group", "BH FDR").replace("within each group across both", "across both"))
+    return text + FC_METHOD[fold_change]
+
+
+def da_fold_change(res: DaResult) -> str:
+    """The log2fc formula of a kept result (``FOLD_CHANGES``); one saved before the choice existed (0.79) used "tfidf"."""
+    return str((res.params or {}).get("fold_change") or "tfidf")
 
 
 def da_test(res: DaResult) -> str:
@@ -1539,7 +1571,7 @@ def da_payload(res: DaResult, group: str | None = None, offset: int = 0, limit: 
         pages = {g: json.loads(t[t["group"] == g].iloc[:limit][columns].to_json(orient="records", double_precision=15)) for g in res.groups}
     return {"id": res.result_id, "column": res.column, "groups": list(res.groups), "n_tested": dict(res.n_tested),
             "n_significant": dict(res.n_significant), "rows": pages, "params": dict(res.params), "method": res.method,
-            "test": da_test(res), "vs": (res.params or {}).get("vs"), "n_fit": res.n_fit, "kept_per_group": KEEP_PER_GROUP, "created_at": res.created_at}
+            "test": da_test(res), "fold_change": da_fold_change(res), "vs": (res.params or {}).get("vs"), "n_fit": res.n_fit, "kept_per_group": KEEP_PER_GROUP, "created_at": res.created_at}
 
 
 def record_differential(adata, params: dict[str, Any], resources: dict | None = None) -> None:
