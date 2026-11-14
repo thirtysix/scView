@@ -17,6 +17,20 @@ export interface HashingTagFit {
   /** hashedDrops: the tag's ambient level (mean count of its lower mode). */
   ambient?: number;
   n_singlets?: number;
+  /** A split call: the channel this fit is for */
+  group?: string;
+}
+
+/** One channel of a call split by a lane / channel column. */
+export interface HashingGroup {
+  group: string;
+  n_cells: number;
+  /** Tags with counts in this channel (its panel) and those it lacks */
+  tags: string[];
+  absent: string[];
+  counts: Record<HashClass, number> | null;
+  /** Why the channel was left uncalled, or null */
+  error: string | null;
 }
 
 export interface HashingCall {
@@ -33,6 +47,13 @@ export interface HashingCall {
   /** Cells per hash_call value: each tag's singlets, "Doublet", "Negative". */
   per_call: Record<string, number>;
   n_uncalled: number;
+  /** Called within each value of this column (one tag panel per channel), or null */
+  split_by?: string | null;
+  groups?: HashingGroup[] | null;
+  /** What the checks found (zeros from another panel, an ambient of 0, unused tags) */
+  warnings?: string[];
+  /** Saved with "Save anyway" although a check failed */
+  saved_with_problems?: boolean;
 }
 
 export interface HashingSamples {
@@ -64,6 +85,10 @@ export interface HashingSummary {
   scrublet: Record<HashClass, { scrublet_doublet: number; scrublet_singlet: number }> | null;
   /** The obs column the doublet views read (Scrublet's first, then text calls such as hash_class). */
   doublet_source: string | null;
+  /** The obs column whose groups explain tags with no counts in many cells (a lane), or null */
+  split_suggestion?: { column: string; n_groups: number } | null;
+  /** obs columns that could name each cell's lane or channel */
+  split_columns?: string[];
 }
 
 export interface HashingTagHist {
@@ -107,7 +132,15 @@ export function getHashingPlotData(datasetId: string): Promise<HashingPlotData> 
 /** POST /hashing/demux: call every cell from `tags` (antibodies among them leave the protein modality). */
 export function runHashingDemux(
   datasetId: string,
-  body: { tags: string[]; method: HashingMethod; quantile?: number },
+  body: {
+    tags: string[];
+    method: HashingMethod;
+    quantile?: number;
+    /** Call within each value of this column (a lane / channel) */
+    split_by?: string | null;
+    /** Save even when the checks fail (else a 409 says why) */
+    allow_warnings?: boolean;
+  },
 ): Promise<HashingSummary> {
   return apiFetch(`/datasets/${datasetId}/hashing/demux`, { method: "POST", body: JSON.stringify(body) });
 }

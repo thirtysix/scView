@@ -19,6 +19,7 @@ vi.mock("@/components/plots/Plot", () => ({
 }));
 
 import { Hashing } from "./Hashing";
+import { tagFitText } from "@/lib/hashing";
 
 const BASE: HashingSummary = {
   n_cells: 1000,
@@ -127,6 +128,7 @@ describe("Hashing", () => {
         tags: ["Hashtag1", "Hashtag2"],
         method: "htodemux",
         quantile: 0.99,
+        split_by: null,
       }),
     );
     expect(await screen.findByTestId("hashing-summary")).toBeTruthy();
@@ -151,9 +153,68 @@ describe("Hashing", () => {
     expect(screen.queryByLabelText("Positive quantile")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Demultiplex" }));
     await waitFor(() =>
-      expect(runHashingDemux).toHaveBeenCalledWith("d1", { tags: ["Hashtag1", "Hashtag2"], method: "hashedDrops" }),
+      expect(runHashingDemux).toHaveBeenCalledWith("d1", {
+        tags: ["Hashtag1", "Hashtag2"],
+        method: "hashedDrops",
+        split_by: null,
+      }),
     );
     expect((await screen.findByRole("alert")).textContent).toContain("has no Hashtag2 counts");
+  });
+
+  it("starts from the suggested lane column, and offers Save anyway when the checks refuse a call", async () => {
+    getHashing.mockResolvedValue({
+      ...BASE,
+      split_columns: ["orig.ident", "replicate"],
+      split_suggestion: { column: "orig.ident", n_groups: 8 },
+    });
+    runHashingDemux
+      .mockRejectedValueOnce(
+        new Error('API error 409: {"detail":"Not saved: rep1-tx has an ambient level of 0. To save it as it is, demultiplex again with \'Save anyway\'."}'),
+      )
+      .mockResolvedValueOnce({
+        ...CALLED,
+        call: { ...CALL, warnings: ["rep1-tx has an ambient level of 0"], saved_with_problems: true },
+      });
+    render(<Hashing datasetId="d1" />);
+    await screen.findByText(/look like hashtags/);
+    fireEvent.click(screen.getByRole("button", { name: "Show" }));
+    expect(screen.getByLabelText("Within")).toHaveProperty("value", "orig.ident");
+    expect(screen.getByRole("option", { name: "orig.ident (suggested)" })).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Within"), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Demultiplex" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("Not saved: rep1-tx has an ambient level of 0");
+    expect(screen.getByRole("alert").textContent).not.toContain("Could not demultiplex");
+    fireEvent.click(screen.getByRole("button", { name: "Save anyway" }));
+    await waitFor(() =>
+      expect(runHashingDemux).toHaveBeenLastCalledWith("d1", {
+        tags: ["Hashtag1", "Hashtag2"],
+        method: "htodemux",
+        quantile: 0.99,
+        split_by: null,
+        allow_warnings: true,
+      }),
+    );
+    const warn = await screen.findByTestId("hashing-warnings");
+    expect(warn.textContent).toContain("Saved although the checks failed");
+    expect(warn.textContent).toContain("rep1-tx has an ambient level of 0");
+  });
+
+  it("shows a split call's cutoffs as a range over its channels", () => {
+    const split: HashingCall = {
+      ...CALL,
+      split_by: "lane",
+      per_tag: [
+        { tag: "Hashtag1", cutoff: 80, group: "L1" },
+        { tag: "Hashtag1", cutoff: 95, group: "L2" },
+        { tag: "Hashtag2", cutoff: 121, group: "L1" },
+      ],
+    };
+    expect(tagFitText(split, "Hashtag1")).toEqual({ text: "> 80–95", title: "L1: 80; L2: 95" });
+    expect(tagFitText(split, "Hashtag2")).toEqual({ text: "> 121", title: "L1: 121" });
+    expect(tagFitText(CALL, "Hashtag1")).toEqual({ text: "> 88", title: "" });
+    expect(tagFitText({ ...CALL, method: "hashedDrops", per_tag: [{ tag: "Hashtag1", ambient: 0 }] }, "Hashtag1").text).toBe("0.0");
+    expect(tagFitText(CALL, "nope").text).toBe("—");
   });
 
   it("writes the sample column from the mapping table", async () => {

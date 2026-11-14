@@ -4,6 +4,9 @@ import { streamEvents } from "./clustering";
 /** Where each cell's guide comes from (backend core/crispr.py). */
 export type GuideSource = "cellranger" | "counts" | "column";
 
+/** Which genes Mixscape tests per target (backend mixscape.DE_GENE_CHOICES). */
+export type MixscapeDeGenes = "all" | "variable";
+
 export interface GuideColumnCandidate {
   column: string;
   n_values: number;
@@ -32,6 +35,8 @@ export interface SavedAssignment {
   n_cells_at_call: number;
   counts: AssignmentCounts;
   n_targets: number;
+  /** Targets in the guide mapping that no cell had when the call was saved */
+  targets_without_cells?: string[];
   per_target: { target: string; n_cells: number }[];
 }
 
@@ -54,6 +59,16 @@ export interface MixscapeTarget {
   posterior_hist?: PosteriorHist;
 }
 
+/** One row of a KO-share table: a target's cells with one guide, or in one replicate. */
+export interface KoShareRow {
+  target: string;
+  guide?: string;
+  replicate?: string;
+  n_cells: number;
+  n_ko: number;
+  ko_fraction: number;
+}
+
 export interface MixscapeResult {
   params: Record<string, unknown>;
   labels: string;
@@ -67,7 +82,15 @@ export interface MixscapeResult {
   expression_source: string;
   targets: MixscapeTarget[];
   warnings: string[];
-  lda: { x: number[]; y: number[]; label: string[]; n_cells: number; n_shown: number; dims: number } | null;
+  /** Labels left out as not targets ("Unassigned", "multiple", a second control label) */
+  excluded?: Record<string, { n_cells: number; reason: string }>;
+  /** The obs columns behind per_guide / per_replicate (null: none found or given) */
+  guide_column?: string | null;
+  replicate_column?: string | null;
+  /** KO share per target x guide, and per target x replicate (target cells only) */
+  per_guide?: KoShareRow[];
+  per_replicate?: KoShareRow[];
+  lda:{ x: number[]; y: number[]; label: string[]; n_cells: number; n_shown: number; dims: number } | null;
   seconds: number;
   created: string;
   n_cells_total: number;
@@ -88,7 +111,7 @@ export interface PerturbationSummary {
   mixscape: MixscapeResult | null;
   /** The run saved in the dataset, when its full result is no longer kept */
   mixscape_saved: Omit<MixscapeResult, "lda"> | null;
-  mixscape_defaults: Record<string, number>;
+  mixscape_defaults: Record<string, number | string>;
   running: boolean;
 }
 
@@ -110,7 +133,10 @@ export interface AssignmentPreview {
   mapping: Record<string, string>;
   auto_mapping: Record<string, string>;
   control: string | null;
+  /** Targets at least one cell has (the control left out) */
   targets: string[];
+  /** Targets whose guides no cell carries at these settings (a vector or pilot guide) */
+  targets_without_cells?: { target: string; guides: string[] }[];
   counts: AssignmentCounts;
   per_target: { target: string; n_cells: number; control: boolean; guides: string[] }[];
 }
@@ -120,6 +146,8 @@ export interface MixscapeBody {
   control?: string;
   split_by?: string | null;
   lda?: boolean;
+  /** all: every gene, Seurat RunMixscape's DE rule (default); variable: the variable genes (scView 0.77) */
+  de_genes?: MixscapeDeGenes;
 }
 
 export interface MixscapeProgress {

@@ -4,6 +4,7 @@ import type {
   HashingLfcHist,
   HashingPlotData,
   HashingSummary,
+  HashingTagFit,
   HashingTagHist,
 } from "@/api/hashing";
 
@@ -83,6 +84,30 @@ export function scrubletText(s: HashingSummary["scrublet"]): string | null {
     `(${pct(d.scrublet_doublet, n)}); it calls ${scrSinglets.toLocaleString()} of the hashing singlets doublets ` +
     "(same-sample doublets, which hashing cannot see, or false calls)."
   );
+}
+
+/** The "Within" column to start from: the saved call's, else the column whose groups
+ *  explain tags with no counts in many cells (backend suggest_split), else none. */
+export function initialSplit(s: HashingSummary): string {
+  if (s.call) return s.call.split_by ?? "";
+  return s.split_suggestion?.column ?? "";
+}
+
+/** A tag's fit in the table: HTODemux's count cutoff or hashedDrops' ambient level, and
+ *  for a call split by channel the range over its channels (each channel in the title). */
+export function tagFitText(call: HashingCall, tag: string): { text: string; title: string } {
+  const fits = call.per_tag.filter((p) => p.tag === tag);
+  const value = (p: HashingTagFit): number | undefined => (call.method === "htodemux" ? p.cutoff : p.ambient);
+  const show = (v: number) => (call.method === "htodemux" ? String(v) : v.toFixed(1));
+  const vals = fits.map(value).filter((v): v is number => v != null);
+  if (!vals.length) return { text: "—", title: "" };
+  const lo = Math.min(...vals);
+  const hi = Math.max(...vals);
+  const text = (call.method === "htodemux" ? "> " : "") + (lo === hi ? show(lo) : `${show(lo)}–${show(hi)}`);
+  const title = call.split_by
+    ? fits.map((p) => `${p.group ?? ""}: ${value(p) != null ? show(value(p) as number) : "—"}`).join("; ")
+    : "";
+  return { text, title };
 }
 
 /** Mapping rows start from the saved mapping, else the tag names. */
