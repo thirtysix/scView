@@ -539,7 +539,7 @@ def keep(adaptor, summary: dict[str, Any]) -> None:
     from scview.core import results_store
 
     n = len(summary["motif_ids"])
-    params = {k: summary.get(k) for k in ("seed", "iterations", "w", "bs", "genome", "table", "n_cells", "n_peaks_used",
+    params = {k: summary.get(k) for k in ("seed", "iterations", "w", "bs", "genome", "table", "n_cells", "n_peaks_used", "n_peaks_nonstandard",
                                           "n_peaks_left_out")}
     results_store.keep(adaptor, RESULT_KIND, {"motifs": ranking(summary, n), "method": summary.get("method"), **params},
                        result_id=str(summary["run_id"]), key="chromvar", params=params,
