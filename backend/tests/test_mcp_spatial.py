@@ -180,6 +180,30 @@ async def test_domains_enrichment_and_cooccurrence_per_section(client, dataset_m
     assert "s9" in err
 
 
+def test_cooccurrence_reply_nulls_scores_from_too_few_pairs():
+    """QA (Kuppe 2022): a rare label's score of 89 from a few spots. Below the route's floor a
+    score is null and the note says how many; a run saved without counts comes as it is."""
+    r = {"labels": ["a", "b", "rare"], "sizes": [300, 300, 4], "distances": [10.0, 20.0, 30.0], "distance_unit": "um",
+         "occ": np.ones((3, 3, 3)).tolist(), "count": np.full((3, 3, 3), 500).tolist(), "min_pairs": 100,
+         "too_few": [1, 1, 0]}
+    r["occ"][0][2] = r["occ"][2][0] = [89.0, 40.0, 3.0]
+    r["count"][0][2] = r["count"][2][0] = [12, 60, 150]
+    out = mcp_spatial._cooccurrence_reply(r, "d", 50)
+    assert "too_few" not in out and "min_pairs" not in out
+    rows = {(row[0], row[1]): row for row in out["pairs"]["rows"]}
+    cols = out["pairs"]["columns"]
+    rare = rows[("a", "rare")]
+    assert cols[2:5] == ["at 10.0 um", "at 20.0 um", "at 30.0 um"]
+    assert rare[2] is None and rare[3] is None and rare[4] == 3.0
+    assert rare[cols.index("pairs_at_first")] == 12
+    assert out["pairs"]["rows"][-1][:2] == ["a", "rare"]  # a null first score sorts last
+    assert "null = fewer than 100 pairs" in out["pairs"]["note"] and "(2 of 9 scores here" in out["pairs"]["note"]
+    old = mcp_spatial._cooccurrence_reply({**r, "count": None, "min_pairs": None}, "d", 50)
+    rare = {(row[0], row[1]): row for row in old["pairs"]["rows"]}[("a", "rare")]
+    assert rare[2] == 89.0 and "pairs_at_first" not in old["pairs"]["columns"]
+    assert "saved without its pair counts" in old["pairs"]["note"]
+
+
 async def test_niches_are_refused_on_spots_and_run_on_cells(client, dataset_manager):
     did = _register(dataset_manager, _two_sections(10), "nsp")
     r = await _call("spatial_niches", {"dataset_id": did, "label_column": "stripe"})

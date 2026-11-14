@@ -9,7 +9,20 @@ import Plot from "@/components/plots/Plot";
 import { SpatialRunStatus } from "@/components/unified/SpatialRunStatus";
 import { useCategoryColors } from "@/hooks/useCategoryColors";
 import { rgbCss } from "@/lib/categoryColors";
-import { curvesOf, csvHeaders, csvRows, distanceSource, firstUsable, matrixAt, reachOf, scoreScale, unitText } from "@/lib/cooccurrence";
+import {
+  curvePointsHidden,
+  curvesOf,
+  csvHeaders,
+  csvRows,
+  distanceSource,
+  firstUsable,
+  matrixAt,
+  minPairs,
+  reachOf,
+  scoreScale,
+  tooFewAt,
+  unitText,
+} from "@/lib/cooccurrence";
 import { downloadCsv } from "@/lib/csv";
 import { errorMessage } from "@/lib/errorMessage";
 import { prettyObsLabel } from "@/lib/formatting";
@@ -27,6 +40,8 @@ const OUTLINE =
 const SOLID = "rounded bg-primary px-2.5 py-1 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50";
 const AXIS = { size: 11, color: "#64748b" };
 const TICK = { size: 10, color: "#64748b" };
+/** A heatmap cell whose score is from too few pairs: grey, readable on both themes. */
+const TOO_FEW_GREY = "#94a3b8";
 
 /**
  * Spatial co-occurrence (backend core/spatial_cooccurrence.py, = squidpy's co_occurrence):
@@ -210,7 +225,11 @@ function CoOccurrenceResults({
 
   const curves = useMemo(() => curvesOf(result, own), [result, own]);
   const matrix = useMemo(() => matrixAt(result, t), [result, t]);
+  const thin = useMemo(() => tooFewAt(result, t), [result, t]);
   const scale = useMemo(() => scoreScale(matrix), [matrix]);
+  const floor = minPairs(result);
+  const nThin = thin.reduce((n, row) => n + row.filter((v) => v != null).length, 0);
+  const curvesThin = useMemo(() => curvePointsHidden(result, own), [result, own]);
   const height = Math.min(460, Math.max(220, labels.length * 22 + 110));
   const units = result.unit === "cell" ? "cells" : `${result.unit ?? "cell"}s`;
   const first = distances[0];
@@ -318,6 +337,9 @@ function CoOccurrenceResults({
           {combined
             ? ` ${perSection.length} sections: each scored against its own label shares, then combined, each weighted by the pairs of the two labels it would have at random.`
             : ""}
+          {floor != null && curvesThin > 0
+            ? ` ${curvesThin.toLocaleString()} point${curvesThin === 1 ? "" : "s"} with fewer than ${floor.toLocaleString()} pairs ${curvesThin === 1 ? "is" : "are"} left out of the lines: too few to read.`
+            : ""}
         </Caption>
       </figure>
       <figure className="space-y-1" data-testid="cooccurrence-heatmap">
@@ -346,6 +368,29 @@ function CoOccurrenceResults({
               hovertemplate: "%{x} near %{y}<br>score %{z:.2f}<extra></extra>",
               ...(labels.length <= MAX_LABELLED ? { texttemplate: "%{z:.1f}", textfont: { size: 9 } } : {}),
             },
+            ...(nThin > 0
+              ? [
+                  {
+                    type: "heatmap" as const,
+                    name: "too few pairs",
+                    x: labels,
+                    y: labels,
+                    z: thin.map((row) => row.map((v) => (v == null ? null : 1))),
+                    customdata: thin as unknown as number[][],
+                    zmin: 0,
+                    zmax: 1,
+                    colorscale: [
+                      [0, TOO_FEW_GREY],
+                      [1, TOO_FEW_GREY],
+                    ] as [number, string][],
+                    showscale: false,
+                    xgap: 1,
+                    ygap: 1,
+                    hoverongaps: false,
+                    hovertemplate: "%{x} near %{y}<br>%{customdata:,} pairs, too few to read<extra></extra>",
+                  },
+                ]
+              : []),
           ]}
           layout={{
             height,
@@ -362,6 +407,12 @@ function CoOccurrenceResults({
         <Caption n={{ value: labels.length, unit: "labels" }}>
           Score within {distances[t]?.toLocaleString()} {unit}; blue below 1, red above. A blank cell has no pair of {units} at
           this range. The score is symmetric: a near b equals b near a.
+          {floor != null && nThin > 0
+            ? ` ${nThin.toLocaleString()} of ${(labels.length * labels.length).toLocaleString()} cells are grey: fewer than ${floor.toLocaleString()} pairs at this distance, too few to read.`
+            : ""}
+          {floor == null && result.count == null
+            ? " This run was saved without its pair counts, so scores from very few pairs are not greyed: run it again to have them."
+            : ""}
         </Caption>
       </figure>
       {result.notes?.map((n) => (

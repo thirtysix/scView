@@ -20,29 +20,72 @@ export function distanceSource(r: Pick<CoOccurrenceResult, "distance_unit" | "um
   return `Distances are in microns, converted from full-resolution pixels (1 pixel = ${r.um_per_unit.toPrecision(3)} µm${from}).`;
 }
 
-/** Scores of `label` against every label, one line each, over the distances. */
+/**
+ * The backend's floor (core/spatial_cooccurrence.MIN_PAIRS): a score from fewer pairs of
+ * observations at a distance is too few to read. null: no floor (a run saved without counts).
+ */
+export function minPairs(result: CoOccurrenceResult): number | null {
+  return result.count && result.min_pairs != null ? result.min_pairs : null;
+}
+
+/** Whether a score rests on some pairs, but fewer than the floor. */
+export function tooFew(pairs: number | undefined, floor: number | null): boolean {
+  return floor != null && (pairs ?? 0) > 0 && (pairs ?? 0) < floor;
+}
+
+/** Scores of `label` against every label, one line each, over the distances; null (a gap) where too few pairs. */
 export function curvesOf(
   result: CoOccurrenceResult,
   label: string,
-): { label: string; distances: number[]; scores: number[]; pairs: number[] }[] {
+): { label: string; distances: number[]; scores: (number | null)[]; pairs: number[] }[] {
   const labels = result.labels ?? [];
   const i = labels.indexOf(label);
   if (i < 0) return [];
   const row = result.occ?.[i] ?? [];
   const counts = result.count?.[i] ?? [];
+  const floor = minPairs(result);
   return labels.map((other, j) => ({
     label: other,
     distances: result.distances ?? [],
-    scores: row[j] ?? [],
+    scores: (row[j] ?? []).map((v, t) => (tooFew(counts[j]?.[t], floor) ? null : v)),
     pairs: counts[j] ?? [],
   }));
 }
 
-/** Labels x labels at one distance; null where a pair of labels has no pair of observations (squidpy writes 0). */
+/** How many points the curves of `label` leave out for too few pairs. */
+export function curvePointsHidden(result: CoOccurrenceResult, label: string): number {
+  const i = (result.labels ?? []).indexOf(label);
+  const floor = minPairs(result);
+  if (i < 0 || floor == null) return 0;
+  return (result.count?.[i] ?? []).reduce((n, pairs) => n + pairs.filter((p) => tooFew(p, floor)).length, 0);
+}
+
+/**
+ * Labels x labels at one distance; null where a pair of labels has no pair of observations
+ * (squidpy writes 0) or too few to read (`tooFewAt` greys those).
+ */
 export function matrixAt(result: CoOccurrenceResult, t: number): (number | null)[][] {
   const occ = result.occ ?? [];
+  const count = result.count;
+  const floor = minPairs(result);
+  return occ.map((row, i) =>
+    row.map((scores, j) => {
+      const pairs = count ? (count[i]?.[j]?.[t] ?? 0) : 1; // no counts saved: every score as it is
+      return pairs > 0 && !tooFew(pairs, floor) ? (scores[t] ?? null) : null;
+    }),
+  );
+}
+
+/** The pair counts of the cells too few to read at one distance (null elsewhere): the heatmap's grey layer. */
+export function tooFewAt(result: CoOccurrenceResult, t: number): (number | null)[][] {
   const count = result.count ?? [];
-  return occ.map((row, i) => row.map((scores, j) => ((count[i]?.[j]?.[t] ?? 0) > 0 ? (scores[t] ?? null) : null)));
+  const floor = minPairs(result);
+  return (result.occ ?? []).map((row, i) =>
+    row.map((_s, j) => {
+      const pairs = count[i]?.[j]?.[t];
+      return tooFew(pairs, floor) ? (pairs ?? null) : null;
+    }),
+  );
 }
 
 /**
@@ -66,31 +109,35 @@ export function scoreScale(matrix: (number | null)[][]): { zmin: number; zmax: n
 }
 
 /**
- * The shortest distance where more than the diagonal has at least 30 pairs of observations
- * (backend `_top_pairs`, the co-pilot's fact): at a few cells' range the scores are a few
- * pairs each. The last distance when none has.
+ * The shortest distance where more than the diagonal has at least the floor's pairs of
+ * observations (backend `first_readable`, the co-pilot's fact; 30 for a result that does not
+ * give its floor): at a few cells' range the scores are a few pairs each. The last distance
+ * when none has.
  */
 export function firstUsable(result: CoOccurrenceResult): number {
   const count = result.count ?? [];
   const labels = result.labels?.length ?? 0;
   const n = result.distances?.length ?? 0;
+  const floor = result.min_pairs ?? 30;
   for (let t = 0; t < n; t++) {
     let enough = 0;
-    for (const row of count) for (const cell of row) if ((cell[t] ?? 0) >= 30) enough++;
+    for (const row of count) for (const cell of row) if ((cell[t] ?? 0) >= floor) enough++;
     if (enough > labels) return t;
   }
   return Math.max(0, n - 1);
 }
 
-/** Every score, long: one row per pair of labels and distance. */
+/** Every score, long: one row per pair of labels and distance, with whether it is from too few pairs. */
 export function csvRows(result: CoOccurrenceResult): CsvCell[][] {
   const labels = result.labels ?? [];
   const distances = result.distances ?? [];
+  const floor = minPairs(result);
   const rows: CsvCell[][] = [];
   labels.forEach((a, i) => {
     labels.forEach((b, j) => {
       distances.forEach((d, t) => {
-        rows.push([a, b, d, result.occ?.[i]?.[j]?.[t] ?? null, result.count?.[i]?.[j]?.[t] ?? null]);
+        const pairs = result.count?.[i]?.[j]?.[t];
+        rows.push([a, b, d, result.occ?.[i]?.[j]?.[t] ?? null, pairs ?? null, floor == null ? null : String(tooFew(pairs, floor))]);
       });
     });
   });
@@ -98,7 +145,14 @@ export function csvRows(result: CoOccurrenceResult): CsvCell[][] {
 }
 
 export function csvHeaders(result: CoOccurrenceResult): string[] {
-  return ["label", "other_label", `distance_${result.distance_unit === "um" ? "um" : "units"}`, "score", "ordered_pairs"];
+  return [
+    "label",
+    "other_label",
+    `distance_${result.distance_unit === "um" ? "um" : "units"}`,
+    "score",
+    "ordered_pairs",
+    "too_few_pairs",
+  ];
 }
 
 /** The largest default distance shown, for the "up to" field's hint. */
