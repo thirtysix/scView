@@ -1131,6 +1131,18 @@ def _suggestion(adata) -> dict | None:
         return None
 
 
+def available(adata) -> dict | None:
+    """For the dataset info: hashtag counts kept (obsm hto_counts) or a saved call, else None."""
+    try:
+        m = adata.obsm[HTO_KEY] if HTO_KEY in adata.obsm else None
+        n = int(m.shape[1]) if m is not None else 0
+        called = CALL in adata.obs.columns
+        return {"n_tags": n, "called": called} if n or called else None
+    except Exception as e:  # never break the dataset info
+        logger.debug("hashing.available failed: %s", e)
+        return None
+
+
 def summary(adata) -> dict:
     """Everything the hashing card shows: candidate tags, the saved call (counts
     from the current cells), the sample column and how hashing doublets compare

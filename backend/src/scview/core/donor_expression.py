@@ -56,6 +56,10 @@ VALUE_LABELS = {
     "mean": "mean log-normalised expression per donor",
     "cpm": "log2(CPM + 1) of the donor's summed counts",
 }
+ALL_CELLS = "All cells"  # the one group without a group column
+# The CITE-seq protein layers (core/protein.py), as the adaptor names them: the mean per donor.
+PROTEIN_LAYERS = {"protein": "mean protein CLR per donor",
+                  "protein_counts": "mean log1p protein counts per donor"}
 
 
 class DonorExpressionError(ValueError):
@@ -143,10 +147,25 @@ def _counts_gene(adata, gene: str, for_lognorm: bool = False) -> tuple[np.ndarra
     return _column(M, names.get_loc(gene)), totals, source
 
 
-def detect_sample_key(obs: pd.DataFrame, group_key: str, condition_key: str | None) -> str | None:
+def _protein(adata, name: str, layer: str) -> tuple[np.ndarray, str]:
+    """One protein's per-cell values: CLR (``protein``), or log1p of its counts."""
+    from scview.core import protein
+
+    if not protein.has_protein(adata):
+        raise DonorExpressionError("This dataset has no protein (CITE-seq) values.")
+    try:
+        v = protein.values(adata, name, normalised=layer == "protein")
+    except KeyError:
+        raise DonorExpressionError(f"Protein '{name}' not found in the panel.") from None
+    if layer == "protein":
+        return v.astype(np.float64), "obsm protein_clr"
+    return np.log1p(v.astype(np.float64)), "obsm protein_counts (log1p)"
+
+
+def detect_sample_key(obs: pd.DataFrame, group_key: str | None, condition_key: str | None) -> str | None:
     """The most donor-like column with 2+ donors in every condition (all cells
     without one), as the composition test picks it."""
-    exclude = {group_key} | ({condition_key} if condition_key else set())
+    exclude = ({group_key} if group_key else set()) | ({condition_key} if condition_key else set())
     candidates = donor_candidates(obs, exclude)
     if condition_key:
         cond = _labels(obs[condition_key])
@@ -197,7 +216,7 @@ def _tested_levels(levels: list[str], condition_key: str, conditions: list[str] 
 def per_donor_expression(
     adata,
     gene: str,
-    group_key: str,
+    group_key: str | None,
     *,
     sample_key: str | None = None,
     condition_key: str | None = None,
@@ -205,8 +224,11 @@ def per_donor_expression(
     conditions: list[str] | None = None,
     reference: str | None = None,
     groups: list[str] | None = None,
+    layer: str | None = None,
 ) -> dict:
-    """One point per (donor, condition) sample in each group of ``group_key``.
+    """One point per (donor, condition) sample in each group of ``group_key``
+    (``None``: one group of every cell, ``ALL_CELLS``). ``layer`` protein /
+    protein_counts: one CITE-seq protein's mean per donor instead of a gene's.
 
     ``sample_key`` None detects the donor column; when there is none the result
     has ``sample_key`` None, no points and a message (a dataset without donors is
@@ -219,6 +241,10 @@ def per_donor_expression(
             raise DonorExpressionError(f"Column '{col}' not found.")
     if method not in VALUE_LABELS:
         raise DonorExpressionError(f"Unknown method '{method}' (mean or cpm).")
+    if layer and layer not in PROTEIN_LAYERS:
+        raise DonorExpressionError(f"Unknown layer '{layer}' (protein or protein_counts).")
+    if layer and method != "mean":
+        raise DonorExpressionError("A protein's per-donor value is its mean: use method mean.")
     if condition_key and condition_key in (group_key, sample_key):
         condition_key = None
     if (conditions or reference) and not condition_key:
@@ -227,13 +253,14 @@ def per_donor_expression(
     if not sample_key:
         sample_key = detect_sample_key(obs, group_key, condition_key)
         detected = sample_key is not None
-    if sample_key == group_key:
+    if group_key and sample_key == group_key:
         raise DonorExpressionError("The donor and group columns must be different.")
 
     out: dict = {
         "gene": gene, "group_key": group_key, "sample_key": sample_key,
         "sample_key_detected": detected, "condition_key": condition_key,
-        "method": method, "value_label": VALUE_LABELS[method], "source": None,
+        "method": method, "value_label": PROTEIN_LAYERS[layer] if layer else VALUE_LABELS[method],
+        "source": None, "layer": layer,
         "min_cells": MIN_CELLS, "groups": [], "conditions": [], "points": [],
         "n_donors": {}, "n_dropped": 0, "dropped": [], "warnings": [], "notes": [],
         "message": None, "tested_conditions": None, "reference": None, "difference": None,
@@ -246,13 +273,16 @@ def per_donor_expression(
             "sample), and none was found in this dataset.")
         return out
 
-    if method == "mean":
+    if layer:
+        values, out["source"] = _protein(adata, gene, layer)
+        weights = None
+    elif method == "mean":
         values, out["source"] = lognorm_gene(adata, gene)
         weights = None
     else:
         values, weights, out["source"] = _counts_gene(adata, gene)
 
-    group = _labels(obs[group_key])
+    group = _labels(obs[group_key]) if group_key else pd.Series(ALL_CELLS, index=obs.index)
     donor = _labels(obs[sample_key])
     cond = _labels(obs[condition_key]) if condition_key else pd.Series("", index=obs.index)
     keep = (group.notna() & donor.notna() & cond.notna()).to_numpy()
@@ -270,7 +300,7 @@ def per_donor_expression(
     v = values[keep]
     w = weights[keep] if weights is not None else None
 
-    group_order = _order(obs[group_key], set(g))
+    group_order = _order(obs[group_key], set(g)) if group_key else [ALL_CELLS]
     levels = _order(obs[condition_key], set(c)) if condition_key else [""]
     if len(group_order) > MAX_GROUPS:
         raise DonorExpressionError(

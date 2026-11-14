@@ -28,28 +28,29 @@ from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import ConfigDict
 from starlette.types import Receive, Scope, Send
 
-from scview.mcp import api, params, spatial, tools  # noqa: F401 - spatial registers its tools
+from scview.mcp import api, files, modalities, params, spatial, tools  # noqa: F401 - these register their tools
 
 INSTRUCTIONS = """\
 scView: single-cell RNA-seq analysis running locally; these tools call the same routes as its browser UI.
 - Start with list_datasets, then get_dataset (columns, embeddings, steps done) and assess_dataset.
 - Before run_pipeline on a large dataset call preflight (memory and time) and memory_status.
-- Long work is a job (run_pipeline, annotate_celltypist, milo, import_public_dataset, joint_embedding): job_id
-  at once (spatial runs wait 20 s first); job_status(job_id, wait_seconds=50) until complete; cancel_job stops it.
+- Long work is a job (run_pipeline, annotate_celltypist, milo, import_public_dataset, joint_embedding; spatial,
+  ATAC and Mixscape runs wait 20 s first): job_status(job_id, wait_seconds=50) until complete; cancel_job stops it.
 - Conditions with donors: be donor-aware. Use differential_expression(method="pseudobulk") between
   conditions within a cell type, check a gene with per_donor_expression, test cell-type shares with
   composition_test (donors as replicates), not cell-level p values alone. Read each result's warnings.
 - Name clusters or build a column (e.g. sample = donor AND day) with set_labels and a cell filter.
 - enrichment takes a differential_expression result_id (ORA of up/down genes, or GSEA), a gene list,
-  or a marker group. plot returns a PNG (embedding, violin, dotplot).
-- Spatial (get_dataset lists the sections): plot(embedding="spatial") draws sections side by side, or one
-  (section=); spatial_autocorr (Moran's I), spatial_domains, nhood_enrichment, cooccurrence, spatial_niches,
-  spot_composition. Pool datasets (one file per slide) with joint_embedding_plan, then joint_embedding.
-- Results and saved changes also show in the open browser UI (http://127.0.0.1:3000).
-- The server runs in a container and cannot read host paths. To add a local file, upload it:
-  curl -F "file=@/path/to/data.h5ad" http://127.0.0.1:8080/api/v1/datasets/upload
-  (add -H "Authorization: Bearer <token>" when ACCESS_TOKEN is set), or use the UI's Data panel.
-- Tables come back as the top rows with the total; ask for more with limit (max 200).
+  or a marker group. plot returns a PNG (embedding, violin, dotplot, ATAC coverage).
+- Spatial: plot(embedding="spatial"), spatial_autocorr, spatial_domains, nhood_enrichment, cooccurrence,
+  spatial_niches, spot_composition; pool slides with joint_embedding_plan, then joint_embedding.
+- Multiome (atac_status first): atac_fragment_qc, atac_lsi, wnn, atac_gene_activity, atac_differential, atac_links,
+  atac_motif_enrichment, atac_chromvar. CRISPR: guide_assignment, mixscape. Hashing: hashing_demux, hashing_samples.
+  CITE-seq: differential_expression / per_donor_expression with layer="protein"; wnn(modality="protein").
+- The server cannot read your disk: upload a file (curl -F "file=@data.h5ad" http://127.0.0.1:8080/api/v1/datasets/upload);
+  upload_instructions has folder and side-file recipes; import_server_path reads server paths when allowed.
+- Results also show in the browser UI (http://127.0.0.1:3000). Tables come back as the top rows with the total
+  (limit up to 200).
 """
 
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]", "backend"}  # backend: nginx in compose

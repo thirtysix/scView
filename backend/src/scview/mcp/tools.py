@@ -157,7 +157,7 @@ async def get_dataset(dataset_id: DatasetId) -> str:
         for layer in d.get("expression_layers") or []]
     large = d.get("large")
     out["large_mode"] = bool(large) if not isinstance(large, dict) else bool(large.get("large", True))
-    out["modalities"] = [k for k in ("protein", "atac", "perturbation", "spatial") if d.get(k)]
+    out["modalities"] = [k for k in ("protein", "atac", "perturbation", "hashing", "spatial") if d.get(k)]
     out.update(_spatial_summary(d))
     if d.get("status") == "ready":
         try:
@@ -1053,10 +1053,14 @@ async def differential_expression(
     min_pct: Annotated[float | None, Field(ge=0, le=1, description="Cell-level: test genes detected in at least this share of either side (default 0.01).")] = None,
     padj_max: Annotated[float, Field(gt=0, le=1, description="Count and list genes at adjusted p at most this.")] = 0.05,
     lfc_min: Annotated[float, Field(ge=0, description="And |log2 fold change| at least this.")] = 0.25,
+    layer: Annotated[Literal["protein", "protein_counts"] | None, Field(description=(
+        "Test the CITE-seq proteins instead of the genes (cell-level tests only): protein = their CLR "
+        "values (Seurat's ADT normalisation), protein_counts = their counts log-normalised. Default: genes."))] = None,
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
     """Differential expression: A vs B of one column (optionally within one cell type), one
-    group vs the rest, or filtered cells vs the rest. Returns the result_id (for enrichment and
+    group vs the rest, or filtered cells vs the rest; of the genes, or of the CITE-seq proteins
+    (layer='protein'). Returns the result_id (for enrichment and
     get_result), counts significant at padj_max and |log2FC| >= lfc_min, the top up and down
     genes, and the route's warnings (confounding with batch, cell-type composition shift,
     too few donors, transcriptome size). Across conditions prefer method='pseudobulk'."""
@@ -1068,6 +1072,11 @@ async def differential_expression(
                                 "replicate_key": replicate_key, "method": method, "pb_method": pb_method}
         if min_pct is not None:
             body["min_pct"] = min_pct
+        if layer:
+            if method == "pseudobulk":
+                raise ToolError("Proteins are tested cell-level (wilcoxon, t-test, logreg); per donor: "
+                                "per_donor_expression(layer='protein').")
+            body["layer"] = layer
         if covariates or donor_key or numeric_covariates:
             if method != "pseudobulk":
                 raise ToolError("covariates, numeric_covariates and donor_key are for method='pseudobulk'.")
@@ -1085,6 +1094,8 @@ async def differential_expression(
         body = {"indices": idx.tolist(), "label": group or "selection", "method": method}
         if min_pct is not None:
             body["min_pct"] = min_pct
+        if layer:
+            body["layer"] = layer
         r = await _post(f"{_ds(dataset_id)}/de", body)
     genes = r.get("genes") or []
     has_p = any(g.get("pval_adj") is not None for g in genes)
@@ -1109,7 +1120,7 @@ async def differential_expression(
         "dataset_id": dataset_id, "result_id": r.get("result_id"), "label": r.get("label"),
         "method": r.get("method"), "n_a": r.get("n_selected"), "n_b": r.get("n_rest"),
         **pick(r, "replicate_key", "n_donors_a", "n_donors_b", "n_donors_column", "n_samples_a", "n_samples_b",
-               "design", "pb_method", "counts_source", "min_pct", "n_genes_skipped", "covariates"),
+               "design", "pb_method", "counts_source", "min_pct", "n_genes_skipped", "covariates", "layer"),
         "n_genes_tested": r.get("n_genes_tested") or len(genes),
         "rule": f"padj <= {padj_max} and |log2FC| >= {lfc_min}" if has_p else f"|coef| ranked, |log2FC| >= {lfc_min}",
         "n_up": len(up), "n_down": len(down), "columns": cols,
@@ -1191,8 +1202,9 @@ async def compare_de_results(
 @tool(READ)
 async def per_donor_expression(
     dataset_id: DatasetId,
-    gene: Annotated[str, Field(description="One gene.")],
-    groupby: Annotated[str, Field(description="Obs column of the groups (default: the active clustering).")] = "",
+    gene: Annotated[str, Field(description="One gene (or a protein, with layer).")],
+    groupby: Annotated[str, Field(description=(
+        "Obs column of the groups (default: the active clustering; all_cells for none)."))] = "",
     sample: Annotated[str, Field(description="Donor / sample column (default: detected).")] = "",
     condition: Annotated[str, Field(description="Condition column to split each group by.")] = "",
     method: Annotated[Literal["mean", "cpm"], Field(description=(
@@ -1203,15 +1215,21 @@ async def per_donor_expression(
         "'Unassigned'); other values are still listed, not tested."))] = None,
     reference: Annotated[str | None, Field(description=(
         "Baseline of the two: mean_diff is the other minus this (default: the first in the column's order)."))] = None,
+    all_cells: Annotated[bool, Field(description=(
+        "The whole dataset as one group ('All cells'): no group column needed."))] = False,
+    layer: Annotated[Literal["protein", "protein_counts"] | None, Field(description=(
+        "A CITE-seq protein instead of a gene: its mean CLR (protein) or mean log1p count (protein_counts) "
+        "per donor; method mean."))] = None,
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
-    """One gene's pseudobulk value per donor in each group (and condition), with the design
+    """One gene's (or protein's) pseudobulk value per donor in each group (and condition), with the design
     (paired when donors are in both tested conditions) and the per-group donor-level test
     (paired Wilcoxon signed-rank + paired t, or unpaired) of two conditions; `difference`
     names the sign of mean_diff: the donor-aware check of a DE gene."""
     d = await _get(f"{_ds(dataset_id)}/expression/per-donor", gene=gene, groupby=groupby,
                    sample=sample, condition=condition, method=method, groups=groups or None,
-                   conditions=conditions or None, reference=reference or None)
+                   conditions=conditions or None, reference=reference or None,
+                   all_cells=all_cells or None, layer=layer or None)
     points = d.pop("points", None) or []
     if not d.get("groups_not_found"):
         d.pop("groups_not_found", None)
@@ -1706,10 +1724,11 @@ async def _adaptor(dataset_id: str):
 @tool(READ)
 async def plot(
     dataset_id: DatasetId,
-    kind: Annotated[Literal["embedding", "violin", "dotplot"], Field(description=(
+    kind: Annotated[Literal["embedding", "violin", "dotplot", "coverage"], Field(description=(
         "embedding: cells on a UMAP/tSNE/PCA, or spots on the tissue (embedding 'spatial'), coloured "
         "by color_by or gene; violin: one gene by groupby; dotplot: genes x groupby (size = share "
-        "expressing, colour = mean)."))] = "embedding",
+        "expressing, colour = mean); coverage: ATAC fragment depth per group of groupby over a gene "
+        "(its body +- 5 kb) or a region, with the peaks and genes there (needs the fragments file)."))] = "embedding",
     embedding: Annotated[str, Field(description=(
         "obsm key, e.g. X_umap (default), X_tsne, X_pca, or spatial: the tissue positions (each "
         "section drawn on its own, side by side; see section)."))] = "X_umap",
@@ -1730,11 +1749,18 @@ async def plot(
     section_column: Annotated[str | None, Field(description=(
         "Spatial: the obs column whose values are the sections (default library_id; e.g. the joint "
         "dataset's 'dataset')."))] = None,
+    region: Annotated[str | None, Field(max_length=128, description=(
+        "Coverage: a region like chr1:1000000-1050000 (up to 2 Mb) instead of a gene."))] = None,
+    groups: Annotated[list[str] | None, Field(max_length=16, description=(
+        "Coverage: only these groups of groupby (at most 16 tracks)."))] = None,
 ) -> list:
     """A PNG figure of the dataset (at most 1600 px, under 300 KB): an embedding (UMAP, tSNE,
     PCA, or the tissue: embedding='spatial', sections side by side or one with section), a
-    violin or a dot plot. A dataset over 50,000 cells is drawn from a random 50,000 (said in
-    the caption). The same views are in the browser UI."""
+    violin, a dot plot, or ATAC coverage tracks at a gene or region. A dataset over 50,000
+    cells is drawn from a random 50,000 (said in the caption). The same views are in the
+    browser UI."""
+    if kind == "coverage":
+        return await _coverage_plot(dataset_id, gene, region, groupby, groups)
     if isinstance(within_value, list) and not within_value:
         within_value = None
     if (within_column is None) != (within_value is None):
@@ -1876,6 +1902,31 @@ async def plot(
 
 
 TISSUE_KEYS = ("spatial", "X_spatial")
+
+
+async def _coverage_plot(dataset_id: str, gene: str | None, region: str | None, groupby: str,
+                         groups: list[str] | None) -> list:
+    if not gene and not region:
+        raise ToolError("A coverage plot needs a gene or a region (chr1:1000000-1050000).")
+    if gene and region:
+        raise ToolError("Give a gene or a region, not both.")
+    by = groupby or (await _get(_ds(dataset_id))).get("active_clustering") or None
+    d = await _get(f"{_ds(dataset_id)}/atac/coverage", gene=gene or None, region=region or None, group_by=by,
+                   groups=groups or None)
+    reg = d.get("region") or {}
+    where = f"{gene} " if gene else ""
+    title = f"ATAC coverage {where}{reg.get('chrom')}:{reg.get('start'):,}-{reg.get('end'):,}"
+    tracks = d.get("tracks") or []
+    caption = (f"{len(tracks)} groups of {by}" if by else "all cells") + (
+        f" ({plots.MAX_TRACKS} drawn)" if len(tracks) > plots.MAX_TRACKS else "")
+    caption += f"; {d.get('normalisation') or 'normalised depth'}; {len(d.get('peaks') or [])} peaks"
+    notes = [n for n in (d.get("notes") or []) if isinstance(n, str)]
+    if d.get("genes_note"):
+        notes.append(d["genes_note"])
+    if notes:
+        caption += "; " + " ".join(notes[:3])
+    png = await asyncio.to_thread(plots.coverage, d, title, caption)
+    return [Image(data=png, format="png"), TextContent(type="text", text=f"coverage: {caption}, {len(png):,} bytes")]
 
 
 def _unit(adaptor) -> str:

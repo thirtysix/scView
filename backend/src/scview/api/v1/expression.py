@@ -104,24 +104,28 @@ async def get_expression_per_donor(
     conditions: list[str] = Query(default=[], description="The two condition values to test (repeat)"),
     reference: str = Query(default="", description="The baseline of the two (default: the first)"),
     groups: list[str] = Query(default=[], description="Only these groups (repeat; default: all)"),
+    all_cells: bool = Query(default=False, description="One group of every cell (no group column)"),
+    layer: str = Query(default="", description="protein or protein_counts: a CITE-seq protein, not a gene"),
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """One pseudobulk value per donor (x condition) in each group, for a box +
     strip plot (core/donor_expression.py). No donor column: 200 with a message.
-    ``conditions`` + ``reference`` pick the two levels the donor-level tests compare."""
+    ``conditions`` + ``reference`` pick the two levels the donor-level tests compare.
+    ``all_cells``: the whole dataset as one group."""
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
-    if not groupby:
+    if not groupby and not all_cells:
         groupby = adaptor.active_clustering_column() or ""
-    if not groupby:
+    if not groupby and not all_cells:
         raise HTTPException(status_code=400, detail="No grouping column.")
 
     def _run() -> dict:
         return donor_expression.per_donor_expression(
-            adaptor.adata, gene, groupby, sample_key=sample or None,
+            adaptor.adata, gene, None if all_cells else groupby, sample_key=sample or None,
             condition_key=condition or None, method=method,  # type: ignore[arg-type]
             conditions=conditions or None, reference=reference or None, groups=groups or None,
+            layer=layer or None,
         )
 
     try:

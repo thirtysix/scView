@@ -78,6 +78,9 @@ class Settings(BaseSettings):
     # Browser origins allowed to call /mcp besides localhost / 127.0.0.1 / [::1] on any
     # port (comma-separated, e.g. "http://192.168.1.5:8080"); their hosts are allowed too.
     MCP_ALLOWED_ORIGINS: str = ""
+    # Server folders the MCP's import_server_path may import from (comma-separated absolute
+    # paths, e.g. a mounted /shared). Empty (default): the tool is off. Never in public mode.
+    MCP_IMPORT_DIRS: str = ""
 
     # --- Deployment posture --------------------------------------------------
     # "private" (default): assume a single trusted user on localhost — the only
@@ -182,6 +185,13 @@ class Settings(BaseSettings):
     @property
     def mcp_allowed_origins(self) -> list[str]:
         return [o.strip().rstrip("/") for o in self.MCP_ALLOWED_ORIGINS.split(",") if o.strip()]
+
+    @property
+    def mcp_import_dirs(self) -> list[str]:
+        """The folders import_server_path reads from: none in public mode."""
+        if self.is_public:
+            return []
+        return [d.strip() for d in self.MCP_IMPORT_DIRS.split(",") if d.strip()]
 
     @property
     def is_public(self) -> bool:

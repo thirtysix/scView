@@ -52,11 +52,17 @@ CellMethod = Literal["wilcoxon", "t-test", "logreg"]
 _TopN = Field(default=de_methods.TOP_N, ge=5, le=de_methods.MAX_TOP_N)
 
 
+# A cell-level test of the CITE-seq antibodies instead of the genes (core/protein.py):
+# their CLR values, or their counts log-normalised like genes. None: the genes.
+ProteinLayer = Literal["protein", "protein_counts"]
+
+
 class DERequest(BaseModel):
     indices: list[int]  # cell indices forming the "selection" group
     label: str = "selection"  # display label for the selection group
     min_pct: float = _MinPct
     method: CellMethod = "wilcoxon"
+    layer: ProteinLayer | None = None
 
 
 class DEMethodsRequest(BaseModel):
@@ -120,6 +126,8 @@ class DECompareRequest(_CompareScope):
     # The label column the composition check uses (core/de_composition.py);
     # None: the active clustering. Never changes the test.
     composition_by: str | None = None
+    # Cell-level only: test the proteins (CITE-seq) instead of the genes.
+    layer: ProteinLayer | None = None
 
 
 class DECompareMethodsRequest(_CompareScope):
@@ -258,6 +266,8 @@ class DEResponse(BaseModel):
     # Genes of ``genes`` that follow sex itself (XIST, Y-chromosome genes;
     # core/sex_check.py SEX_LINKED_GENES), filled from ``genes`` on every response.
     sex_linked: list[str] = []
+    # The proteins were tested, not the genes (``protein`` CLR, or ``protein_counts``).
+    layer: str | None = None
 
     @model_validator(mode="after")
     def _flag_sex_linked(self):
@@ -446,11 +456,30 @@ def _uses_raw(adata) -> bool:
     return adata.raw is not None and not looks_like_counts(adata.raw.X)
 
 
-def _prepare(adata, mask_a, mask_b, min_pct: float = 0.0):
+def _protein_matrix(adata, layer: str):
+    """The protein modality's matrix (cells x proteins, float32) and its names, for
+    ``layer`` protein (CLR: log1p of each count over the cell's geometric mean, so the
+    fold change is taken as of log1p values) or protein_counts; 422 without proteins."""
+    import numpy as np
+    import pandas as pd
+
+    from scview.core import protein
+
+    key = protein.CLR_KEY if layer == "protein" else protein.COUNTS_KEY
+    frame = adata.obsm.get(key) if protein.has_protein(adata) else None
+    if not isinstance(frame, pd.DataFrame) or frame.shape[1] == 0:
+        raise HTTPException(status_code=422, detail=(
+            f"This dataset has no {'protein' if layer == 'protein' else 'protein count'} values "
+            "(CITE-seq antibodies): the protein layers test those."))
+    return frame.to_numpy(dtype=np.float32), pd.Index([str(c) for c in frame.columns])
+
+
+def _prepare(adata, mask_a, mask_b, min_pct: float = 0.0, layer: str | None = None):
     """The AnnData a cell-level test runs on: the ``mask_a`` cells (group
     "selection") and the ``mask_b`` cells ("rest") of ``adata``, log-normalised,
     over the genes detected in at least ``min_pct`` of either side's cells (every
-    gene at 0); and that prefilter.
+    gene at 0); and that prefilter. ``layer`` (protein, protein_counts): the
+    CITE-seq proteins instead of the genes (``_protein_matrix``).
 
     ``adata`` is read, never changed, and never copied whole: only the tested
     matrix's rows are taken (and normalised when they are counts), from the file
@@ -464,12 +493,17 @@ def _prepare(adata, mask_a, mask_b, min_pct: float = 0.0):
     from scview.core.pipeline import looks_like_counts
 
     keep = mask_a | mask_b
-    use_raw = _uses_raw(adata)
-    # Every gene of the tested matrix: .raw can hold more genes than X (an HVG
-    # subset), and testing only X's width kept the up-regulated genes alone.
-    M = adata.raw.X if use_raw else adata.X
-    names = adata.raw.var_names if use_raw else adata.var_names
-    log1p = adata.uns["log1p"] if "log1p" in adata.uns else None
+    if layer:
+        use_raw = False
+        M, names = _protein_matrix(adata, layer)
+        log1p = None  # CLR is log1p (natural); counts are normalised below
+    else:
+        use_raw = _uses_raw(adata)
+        # Every gene of the tested matrix: .raw can hold more genes than X (an HVG
+        # subset), and testing only X's width kept the up-regulated genes alone.
+        M = adata.raw.X if use_raw else adata.X
+        names = adata.raw.var_names if use_raw else adata.var_names
+        log1p = adata.uns["log1p"] if "log1p" in adata.uns else None
     if working_copy.on_disk(M):
         rows = working_copy.read_rows(M, keep)
     else:
@@ -535,10 +569,10 @@ def _de_genes(res: de_methods.MethodResult) -> list[DEGene]:
 
 
 def _cell_test(work, mask_a, mask_b, dataset_id: str, min_pct: float = 0.0,
-               method: str = "wilcoxon") -> _CellTest:
+               method: str = "wilcoxon", layer: str | None = None) -> _CellTest:
     """``method`` DE of the ``mask_a`` cells against the ``mask_b`` cells of
     ``work`` over the genes the prefilter keeps (``_prepare``)."""
-    test, pre = _prepare(work, mask_a, mask_b, min_pct)
+    test, pre = _prepare(work, mask_a, mask_b, min_pct, layer)
     return _CellTest(_de_genes(_run_method(test, method, dataset_id)), pre, method)
 
 
@@ -719,22 +753,25 @@ async def differential_expression(
     n_sel = int(mask.sum())
 
     def _run() -> tuple[_CellTest, dict | None]:
-        size = transcriptome_size.check(adata, mask, ~mask)
-        return _cell_test(adata, mask, ~mask, dataset_id, body.min_pct, body.method), size
+        size = None if body.layer else transcriptome_size.check(adata, mask, ~mask)
+        return _cell_test(adata, mask, ~mask, dataset_id, body.min_pct, body.method, body.layer), size
 
     # Seconds on a large dataset: in a worker thread, so the server keeps answering.
-    need = await asyncio.to_thread(_test_bytes, adaptor, mask | ~mask, body.method == "logreg")
+    need = 0 if body.layer else await asyncio.to_thread(_test_bytes, adaptor, mask | ~mask,
+                                                        body.method == "logreg")
     async with working_copy.reading(dm, dataset_id, need, _what(dm, dataset_id, need)) as held:
         res, size = await held.run(_run)
     # "cells" names exactly which cells, so the co-pilot can cite this result for
     # the same selection (core/selection_facts.py).
     compared = {"mode": "selection", "label": body.label, "n_a": n_sel,
                 "n_b": int(adata.n_obs) - n_sel,
-                "cells": selection_facts.selection_hash(mask.nonzero()[0], int(adata.n_obs))}
+                "cells": selection_facts.selection_hash(mask.nonzero()[0], int(adata.n_obs)),
+                **({"layer": body.layer} if body.layer else {})}
     return DEResponse(n_selected=n_sel, n_rest=int(adata.n_obs) - n_sel, label=body.label,
                       genes=res.genes, result_id=_remember(dataset_id, res, compared, adaptor),
-                      transcriptome_size=size, sex_linked=_sex_linked(adata, res.genes),
-                      **res.fields())
+                      transcriptome_size=size,
+                      sex_linked=[] if body.layer else _sex_linked(adata, res.genes),
+                      layer=body.layer, **res.fields())
 
 
 @router.post("/datasets/{dataset_id}/de/methods", response_model=DEMethodsResponse)
@@ -869,6 +906,10 @@ async def differential_expression_compare(
     if sex and body.method == "pseudobulk":
         sex = _sex_adjusted(sex, obs, body)
 
+    if body.method == "pseudobulk" and body.layer:
+        raise HTTPException(status_code=422, detail=(
+            "Pseudobulk sums each donor's gene counts: test the proteins cell-level (Wilcoxon, "
+            "t-test or logreg), or per donor with the per-donor values."))
     if body.method == "pseudobulk":
         resp = await _pseudobulk_compare(adata, body, mask_a, mask_b, dataset_id, adaptor, dm)
         resp.confounding = confounding
@@ -877,11 +918,12 @@ async def differential_expression_compare(
         return resp
 
     def _run() -> tuple[_CellTest, dict | None]:
-        size = transcriptome_size.check(adata, mask_a, mask_b)
-        res = _cell_test(adata, mask_a, mask_b, dataset_id, body.min_pct, body.method)
+        size = None if body.layer else transcriptome_size.check(adata, mask_a, mask_b)
+        res = _cell_test(adata, mask_a, mask_b, dataset_id, body.min_pct, body.method, body.layer)
         return res, size
 
-    need = await asyncio.to_thread(_test_bytes, adaptor, mask_a | mask_b, body.method == "logreg")
+    need = 0 if body.layer else await asyncio.to_thread(_test_bytes, adaptor, mask_a | mask_b,
+                                                        body.method == "logreg")
     async with working_copy.reading(dm, dataset_id, need, _what(dm, dataset_id, need)) as held:
         res, size = await held.run(_run)
     key = body.replicate_key or _detect_replicate_key(
@@ -889,11 +931,13 @@ async def differential_expression_compare(
     )
     guard = _replicate_guard(obs, mask_a, mask_b, key)
     tech = _one_sided(obs, body, mask_a, mask_b, key, extra)
-    result_id = _remember(dataset_id, res, _compared(body, n_a, n_b, key), adaptor)
+    compared = {**_compared(body, n_a, n_b, key), **({"layer": body.layer} if body.layer else {})}
+    result_id = _remember(dataset_id, res, compared, adaptor)
     return DEResponse(n_selected=n_a, n_rest=n_b, label=_compare_label(body), genes=res.genes,
                       result_id=result_id, transcriptome_size=size, confounding=confounding,
-                      composition=composition, sex=sex, sex_linked=_sex_linked(adata, res.genes),
-                      technology_warnings=tech, **guard, **res.fields())
+                      composition=composition, sex=None if body.layer else sex,
+                      sex_linked=[] if body.layer else _sex_linked(adata, res.genes),
+                      technology_warnings=tech, layer=body.layer, **guard, **res.fields())
 
 
 @router.post("/datasets/{dataset_id}/de/compare/methods", response_model=DEMethodsResponse)
