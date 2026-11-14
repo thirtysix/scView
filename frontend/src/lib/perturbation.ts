@@ -66,6 +66,15 @@ export function deHandoff(target: string): Partial<DESettings> {
   };
 }
 
+/** Why the preview's target count leaves some mapped targets out: their guides are in
+ *  the guide list but no cell carries one at these settings (a vector guide, pilot guides). */
+export function unusedTargetsText(unused: { target: string; guides: string[] }[]): string {
+  if (!unused.length) return "";
+  const names = unused.slice(0, 6).map((u) => u.target).join(", ") + (unused.length > 6 ? ", …" : "");
+  const n = unused.length;
+  return ` Not counted: ${n} more target${n > 1 ? "s" : ""} (${names}) whose guides no cell has at these settings.`;
+}
+
 /** Guide -> target entries the user changed from the automatic mapping. */
 export function mappingChanges(mapping: Record<string, string>, auto: Record<string, string>): Record<string, string> {
   const out: Record<string, string> = {};

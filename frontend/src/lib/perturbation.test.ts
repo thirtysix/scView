@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { MixscapeTarget } from "@/api/perturbation";
-import { deHandoff, ldaTraces, mappingChanges, posteriorTraces, sortTargets } from "./perturbation";
+import { deHandoff, ldaTraces, mappingChanges, posteriorTraces, sortTargets, unusedTargetsText } from "./perturbation";
 
 const row = (target: string, n_cells: number, ko_fraction: number, n_de_genes: number): MixscapeTarget => ({
   target, n_cells, ko_fraction, n_de_genes, n_ko: Math.round(n_cells * ko_fraction), n_np: 0, rounds: 1, top_de_genes: [],
@@ -35,5 +35,12 @@ describe("perturbation helpers", () => {
       mode: "groups", splitBy: "mixscape_class", groupA: "STAT1 KO", groupB: "NT", withinCol: "", withinVal: "",
     });
     expect(mappingChanges({ a: "A", b: " B2 ", c: "" }, { a: "A", b: "B", c: "C" })).toEqual({ b: "B2" });
+  });
+
+  it("names the mapped targets no cell has, so the preview count agrees with the saved one", () => {
+    expect(unusedTargetsText([])).toBe("");
+    expect(unusedTargetsText([{ target: "eGFP", guides: ["eGFPg1"] }, { target: "PDL1", guides: ["PDL1g1"] }])).toBe(
+      " Not counted: 2 more targets (eGFP, PDL1) whose guides no cell has at these settings.",
+    );
   });
 });

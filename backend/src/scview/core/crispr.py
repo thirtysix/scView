@@ -371,8 +371,11 @@ def _source_calls(adata, source: str, column: str | None, min_umi: float, min_ra
             raise CrisprError("This dataset has no guide counts (CRISPR Guide Capture features).")
         if min_umi <= 0:
             raise CrisprError("The UMI threshold must be above 0.")
-        if min_ratio < 0:
-            raise CrisprError("The fold rule must be 0 (off) or more.")
+        if min_ratio < 0 or 0 < min_ratio < 1:
+            raise CrisprError(f"The top / second rule must be 0 or at least 1 (got {min_ratio:g}): 0 turns it "
+                              "off (a cell with two or more guides is 'multiple'), 1 always keeps the top guide, "
+                              "2 keeps it when it has at least twice the second's UMIs. "
+                              "A value below 1 would mean the same as 1.", 422)
         guides = [str(c) for c in frame.columns]
         calls = calls_from_counts(frame.to_numpy(), guides, min_umi, min_ratio)
         return calls, guides, {"min_umi": min_umi, "min_ratio": min_ratio}
@@ -442,10 +445,16 @@ def preview(adata, source: str | None = None, column: str | None = None, *, min_
                    "guides": sorted(g for g, t in full.items() if t == k or (control and str(k) == control
                                                                             and is_control(t)))}
                   for k, v in vc.items() if k not in (NONE, MULTIPLE)]
+    # A target whose guides no cell carries (a vector guide, a pilot guide, or the
+    # thresholds) is not a target of this screen: listed apart, with its guides.
+    named = [t for t in targets if t != control and not is_control(t)]
+    with_cells = set(vc.index[vc > 0].astype(str))
     return {
         "source": source, "source_label": SOURCE_LABELS[source], "column": column, "params": params,
         "n_cells": int(len(pert)), "guides": guides, "mapping": full, "auto_mapping": auto,
-        "control": control, "targets": [t for t in targets if t != control and not is_control(t)],
+        "control": control, "targets": [t for t in named if t in with_cells],
+        "targets_without_cells": [{"target": t, "guides": sorted(g for g, v in full.items() if v == t)}
+                                  for t in named if t not in with_cells],
         "counts": {"assigned": int(len(pert) - vc.get(NONE, 0) - vc.get(MULTIPLE, 0)),
                    "control": int(vc.get(control, 0)) if control else 0,
                    "multiple": int(vc.get(MULTIPLE, 0)), "none": int(vc.get(NONE, 0))},
@@ -479,6 +488,7 @@ def assign(adata, source: str | None = None, column: str | None = None, *, min_u
     record = {k: p[k] for k in ("source", "column", "params", "control", "counts")}
     record.update({"mapping": {g: t for g, t in p["mapping"].items() if p["auto_mapping"].get(g) != t},
                    "n_guides": len(p["guides"]), "n_targets": len(p["targets"]), "columns": names,
+                   "targets_without_cells": [t["target"] for t in p["targets_without_cells"]],
                    "n_cells": int(adata.n_obs), "when": _now()})
     state["call"] = record
     _write_state(adata, state)
@@ -509,6 +519,7 @@ def saved_call(adata) -> dict[str, Any] | None:
     control = call.get("control")
     per = [{"target": str(k), "n_cells": int(v)} for k, v in vc.items() if k not in (NONE, MULTIPLE)]
     return {**{k: call.get(k) for k in ("source", "column", "params", "control", "mapping", "columns", "when")},
+            "targets_without_cells": call.get("targets_without_cells") or [],
             "source_label": SOURCE_LABELS.get(call.get("source"), call.get("source")),
             "n_cells_at_call": call.get("n_cells"),
             "counts": {"assigned": int(len(s) - vc.get(NONE, 0) - vc.get(MULTIPLE, 0)),

@@ -32,6 +32,8 @@ export interface SavedAssignment {
   n_cells_at_call: number;
   counts: AssignmentCounts;
   n_targets: number;
+  /** Targets in the guide mapping that no cell had when the call was saved */
+  targets_without_cells?: string[];
   per_target: { target: string; n_cells: number }[];
 }
 
@@ -110,7 +112,10 @@ export interface AssignmentPreview {
   mapping: Record<string, string>;
   auto_mapping: Record<string, string>;
   control: string | null;
+  /** Targets at least one cell has (the control left out) */
   targets: string[];
+  /** Targets whose guides no cell carries at these settings (a vector or pilot guide) */
+  targets_without_cells?: { target: string; guides: string[] }[];
   counts: AssignmentCounts;
   per_target: { target: string; n_cells: number; control: boolean; guides: string[] }[];
 }

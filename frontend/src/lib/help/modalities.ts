@@ -119,7 +119,7 @@ export const MODALITIES_HELP: Record<string, string> = {
   "perturbation.min_umi":
     "A guide counts in a cell only from this many UMIs. Raise it when many cells get a guide from a few stray reads.",
   "perturbation.min_ratio":
-    "With two or more guides in a cell, keep only the top one when it has at least this many times the UMIs of the second; otherwise the cell has several guides. 0 turns this off, so every guide counts.",
+    "With two or more guides in a cell, keep only the top one when it has at least this many times the UMIs of the second; otherwise the cell has several guides. 0 turns this off, so every guide counts. 1 always keeps the top guide; a value between 0 and 1 is refused.",
   "perturbation.control":
     "The target label of the non-targeting guides. Mixscape compares every target's cells with these control cells, so pick the label that marks guides with no target.",
   "perturbation.split_by":

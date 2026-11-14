@@ -27,6 +27,7 @@ import {
   pctText,
   posteriorTraces,
   sortTargets,
+  unusedTargetsText,
   type TargetSortKey,
 } from "@/lib/perturbation";
 import { errorText } from "@/lib/programs";
@@ -335,6 +336,7 @@ export function PerturbationSubtab() {
                 {preview.counts.control.toLocaleString()} {preview.control ?? "control"}),{" "}
                 {preview.counts.multiple.toLocaleString()} with guides for different genes (&quot;multiple&quot;),{" "}
                 {preview.counts.none.toLocaleString()} with none; {preview.targets.length} targets.
+                {unusedTargetsText(preview.targets_without_cells ?? [])}
               </Caption>
               <details>
                 <summary className="cursor-pointer text-[11px] text-slate-600">
