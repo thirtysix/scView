@@ -28,12 +28,11 @@ from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import ConfigDict
 from starlette.types import Receive, Scope, Send
 
-from scview.mcp import api, files, modalities, params, spatial, tools  # noqa: F401 - these register their tools
+from scview.mcp import api, files, modalities, params, spatial, tools, trajectory  # noqa: F401 - these register their tools
 
 INSTRUCTIONS = """\
 scView: single-cell RNA-seq analysis running locally; these tools call the same routes as its browser UI.
-- Start with list_datasets, then get_dataset (columns, embeddings, steps done) and assess_dataset.
-- Before run_pipeline on a large dataset call preflight (memory and time) and memory_status.
+- Start with list_datasets, get_dataset (columns, embeddings, steps done), assess_dataset; preflight before a big run.
 - Long work is a job (run_pipeline, annotate_celltypist, milo, import_public_dataset, joint_embedding; spatial,
   ATAC and Mixscape runs wait 20 s first): job_status(job_id, wait_seconds=50) until complete; cancel_job stops it.
 - Conditions with donors: be donor-aware. Use differential_expression(method="pseudobulk") between
@@ -47,10 +46,11 @@ scView: single-cell RNA-seq analysis running locally; these tools call the same 
 - Multiome (atac_status first): atac_fragment_qc, atac_lsi, wnn, atac_gene_activity, atac_differential, atac_links,
   atac_motif_enrichment, atac_chromvar. CRISPR: guide_assignment, mixscape. Hashing: hashing_demux, hashing_samples.
   CITE-seq: differential_expression / per_donor_expression with layer="protein"; wnn(modality="protein").
+- Trajectory: paga(groupby), pseudotime(root_column, root_value; its warnings flag a wrong root), pseudotime_genes.
+  Velocity: velocity (a job; order/root check the direction), get_velocity, velocity_direction; plot(overlay=...).
 - The server cannot read your disk: upload a file (curl -F "file=@data.h5ad" http://127.0.0.1:8080/api/v1/datasets/upload);
   upload_instructions has folder and side-file recipes; import_server_path reads server paths when allowed.
-- Results also show in the browser UI (http://127.0.0.1:3000). Tables come back as the top rows with the total
-  (limit up to 200).
+- Results show in the browser UI too (http://127.0.0.1:3000). Tables come as the top rows with the total (limit <= 200).
 """
 
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]", "backend"}  # backend: nginx in compose
