@@ -133,8 +133,14 @@ ADDITIVE_STEPS = frozenset({
 # Hand labels (core/user_labels.py) change one user annotation column and nothing else:
 # a result is stale after one only when it named that column (its labels' hash is in the
 # fingerprint's ``columns``), so naming cells no longer marks every DE, Milo and
-# composition result stale.
-LABEL_STEPS = frozenset({"label_cells", "undo_label_cells", "combine_columns"})
+# composition result stale. A cell hashing call and its sample column (core/hashing.py)
+# write their own columns only (hash_*, the sample column): QA 2026-11-14 found one demux
+# marking every DE and Mixscape result stale. A demux that moved antibody features into
+# or out of the protein modality changes that modality's data: it counts as
+# data-changing (``HASHING_PROTEIN``, see ``_history_steps``).
+LABEL_STEPS = frozenset({"label_cells", "undo_label_cells", "combine_columns", "hashing_demux",
+                         "hashing_samples"})
+HASHING_PROTEIN = "hashing_demux_protein"
 
 # Wilson 2022: a neighbours rebuild and a new annotation column marked all 20 DE,
 # composition and GSEA results stale. Two more classes, used only for result kinds that
@@ -155,9 +161,20 @@ NAMED_COLUMN_KINDS = GRAPH_FREE_KINDS | {"milo", "milode"}
 
 
 def _history_steps(adaptor: Any) -> list[str]:
+    """The recipe's step kinds in order; a hashing demux that moved antibody features
+    between the protein modality and the tag counts reads as ``HASHING_PROTEIN``."""
     from scview.core import provenance
 
-    return [str(h.get("step")) for h in provenance.read_provenance(adaptor.adata).get("history") or []]
+    return [_step_kind(h) for h in provenance.read_provenance(adaptor.adata).get("history") or []]
+
+
+def _step_kind(entry: dict[str, Any]) -> str:
+    step = str(entry.get("step"))
+    if step == "hashing_demux":
+        p = entry.get("params") or {}
+        if p.get("moved_from_protein") or p.get("moved_back_to_protein"):
+            return HASHING_PROTEIN
+    return step
 
 
 def fingerprint(adaptor: Any) -> dict[str, Any] | None:
@@ -248,6 +265,7 @@ _STEP_WORDS = {
     "highly_variable_genes": "variable genes rerun", "scaling": "scaling rerun",
     "reset_to_counts": "data reset to counts", "subcluster": "a group sub-clustered",
     "merge_clusters": "clusters merged",
+    HASHING_PROTEIN: "hashtags moved out of the protein data",
 }
 
 
