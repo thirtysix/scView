@@ -515,6 +515,145 @@ Supported formats: `csv`, `xlsx`
 
 ---
 
+## Streaming runs (SSE)
+
+The long runs below answer with `Content-Type: text/event-stream`. Each event is
+`event: <type>` + `data: <json>`: `start` (the plan and its estimate), `progress` or `stage`,
+`watchdog` (memory warnings), `result` (the saved result), then `complete`, or `error`
+(`{"error": "<one sentence>"}`). Lines starting with `:` are keep-alives. Closing the
+connection stops the run and nothing is saved. A refusal before the run starts (no ATAC,
+another run going) is a plain 4xx with `{"detail": ...}`.
+
+---
+
+## Multi-file Import (ingest sessions)
+
+| Route | Body | What |
+|-------|------|------|
+| `POST /ingest/session` | none | `{"session_id"}` |
+| `POST /ingest/session/{sid}/files` | multipart: `files` (repeat), optional `paths` (one per file, its path inside an uploaded folder) | stage files; answers with what was detected (bundle, side files, issues); BAM, Loupe and HTML files are skipped |
+| `GET /ingest/session/{sid}` | | the detection, bundle and validation |
+| `GET /ingest/session/{sid}/merge-plan` | | several samples: genes and cells shared |
+| `POST /ingest/session/{sid}/options` | `{"name", "join", "sample_label", "streamed"}` | |
+| `POST /ingest/session/{sid}/convert` | | convert R objects now (background) |
+| `POST /ingest/session/{sid}/commit` | | `{"dataset_id"}` |
+| `DELETE /ingest/session/{sid}` | | discard |
+
+```bash
+SID=$(curl -s -X POST $BASE/api/v1/ingest/session | python3 -c 'import sys,json;print(json.load(sys.stdin)["session_id"])')
+curl -F "files=@outs/filtered_feature_bc_matrix.h5" -F "files=@outs/atac_fragments.tsv.gz" \
+     -F "files=@outs/atac_fragments.tsv.gz.tbi" -F "files=@outs/per_barcode_metrics.csv" \
+     $BASE/api/v1/ingest/session/$SID/files
+curl -X POST $BASE/api/v1/ingest/session/$SID/commit
+```
+
+---
+
+## Protein (CITE-seq)
+
+The antibodies live beside the genes (obsm `protein_counts`, `protein_clr`, `protein_dsb`)
+and read as expression layers `protein` (CLR), `protein_counts` and `protein_dsb` in
+`GET /expression`, `/expression/by-group` and the violin routes.
+
+| Route | Body / query | What |
+|-------|--------------|------|
+| `POST /datasets/{id}/de` | `{"indices", "label", "method", "min_pct", "layer"}` | `layer`: `protein` (CLR) or `protein_counts` tests the proteins instead of the genes |
+| `POST /datasets/{id}/de/compare` | `{"split_by", "group_a", "group_b", "within_column", "within_value", "method", "layer", ...}` | A vs B; `layer` as above, cell-level methods only (pseudobulk is refused with `layer`) |
+| `GET /datasets/{id}/expression/per-donor` | `gene`, `groupby`, `sample`, `condition`, `method`, `conditions`, `reference`, `groups`, `all_cells`, `layer` | one value per donor; `all_cells=true`: the whole dataset as one group; `layer=protein`: a protein's mean CLR per donor |
+| `GET /datasets/{id}/protein/dsb` / `POST` | `{"mode", "rna_window", "prot_window", "isotypes", "denoise"}` | DSB normalisation (empty droplets or ModelNegativeADTnorm) |
+| `GET /datasets/{id}/wnn` | `groupby` | WNN RNA + protein: what a run would use, the saved result |
+| `POST /datasets/{id}/wnn/run-stream` | `{"protein_pcs", "resolution"}` | SSE; saves `X_umap_wnn`, `wnn_rna_weight`, `wnn_leiden` |
+| `GET /datasets/{id}/wnn/weights` | `groupby` | per-cell RNA weight (and by group) |
+
+---
+
+## Perturbation (CRISPR screens)
+
+| Route | Body | What |
+|-------|------|------|
+| `GET /datasets/{id}/perturbation` | | guide sources, the suggested one, the saved assignment, the last Mixscape run |
+| `POST /datasets/{id}/perturbation/preview` | `{"source": "counts"\|"cellranger"\|"column", "column", "min_umi": 5, "min_ratio": 2, "mapping": {guide: target}, "control"}` | what `assign` would write; nothing changes |
+| `POST /datasets/{id}/perturbation/assign` | same | saves `guide_call`, the perturbation column, `n_guides` |
+| `POST /datasets/{id}/perturbation/mixscape/run-stream` | `{"labels", "control", "split_by", "de_genes": "all"\|"variable", "n_dims": 15, "n_neighbors": 20, "logfc_threshold", "pval_cutoff", "min_de_genes": 5, "iter_num", "lda", "guide_column", "replicate_column"}` | SSE; saves `mixscape_class`, `mixscape_class_global`, `mixscape_p_ko`; the result has `targets`, `per_guide`, `per_replicate` |
+| `GET /datasets/{id}/perturbation/mixscape` | | the last run on the current cells |
+
+---
+
+## Cell Hashing
+
+| Route | Body | What |
+|-------|------|------|
+| `GET /datasets/{id}/hashing` | | tags (obsm `hto_counts`), antibody features that look like hashtags (`suggested`), the saved call, a suggested `split_by` |
+| `POST /datasets/{id}/hashing/demux` | `{"tags", "method": "htodemux"\|"hashedDrops", "quantile": 0.99, "split_by", "allow_warnings": false}` | saves `hash_call`, `hash_class`, `hash_max`, `hash_second`, `hash_margin`; a call the checks find unsafe is a 409 naming why, unless `allow_warnings` |
+| `POST /datasets/{id}/hashing/samples` | `{"mapping": {tag: sample}, "column": "hash_sample"}` | a sample column from the call |
+| `GET /datasets/{id}/hashing/plot-data` | | per-tag CLR histograms with cut-offs, tag x call heatmap |
+
+---
+
+## ATAC (10x Multiome)
+
+| Route | Body / query | What |
+|-------|--------------|------|
+| `GET /datasets/{id}/atac` | `groupby`, `allow_empty` | peaks, genome, LSI / activity / WNN runs, what a run would need |
+| `POST /datasets/{id}/atac/run-stream` | `{"n_lsi": 50, "dims_to", "drop_first": "auto"\|"yes"\|"no", "resolution", "activity": true, "activity_source": "auto"\|"fragments"\|"peaks"}` | SSE: TF-IDF, LSI, graph, `X_umap_atac`, `atac_leiden`, gene activity (fragments = Signac GeneActivity) |
+| `POST /datasets/{id}/atac/wnn/run-stream` | `{"lsi_first": 2, "lsi_last", "resolution"}` | SSE: WNN RNA + ATAC; saves `X_umap_wnn_atac`, `wnn_atac_rna_weight`, `wnn_atac_leiden` |
+| `GET /datasets/{id}/atac/activity` | `gene`, `groupby` | one gene's activity per cell, by group, and against its RNA |
+| `GET /datasets/{id}/atac/peaks` | `offset`, `limit`, `sort`, `descending`, `search`, `selected_only` | every peak's totals, nearest gene, class |
+| `GET /datasets/{id}/atac/qc` | `groupby` | the ATAC QC columns per cell |
+| `POST /datasets/{id}/atac/metrics` | multipart `file` (per_barcode_metrics.csv), `sample`, `column` | adds FRiP, TSS and mito fractions |
+| `GET /datasets/{id}/atac/differential-estimate` | `column`, `test`, `group`, `vs` | time and memory of a differential run |
+| `POST /datasets/{id}/atac/differential` | `{"column", "groups", "vs", "test": "wilcoxon"\|"lr", "min_pct": 0.05, "max_peaks", "lrt_peaks", "standard_only": true}` | SSE: each group vs the rest, or `groups: [A]` vs `vs: B`; kept by id |
+| `GET /datasets/{id}/atac/differential[/{rid}[/csv]]` | `group`, `offset`, `limit` | the last result, a page, or the CSV |
+| `GET /datasets/{id}/atac/export` | | an h5ad of the peak counts |
+| `GET /datasets/{id}/atac/fragments` | | the attached fragments file, its QC estimate and saved QC |
+| `POST /datasets/{id}/atac/fragments?name=` | raw body (`curl --data-binary @atac_fragments.tsv.gz`), then the `.tbi` | attach the fragments file and its index |
+| `DELETE /datasets/{id}/atac/fragments` | | remove them |
+| `POST /datasets/{id}/atac/fragments/qc-stream` | none | SSE: TSS enrichment, nucleosome signal, fragments per cell (obs columns) |
+| `GET /datasets/{id}/atac/fragments/values`, `/lengths` | `group_by` | per-cell QC values and length histograms by group |
+| `GET /datasets/{id}/atac/coverage` | `gene` or `region` (chr1:1000-5000, up to 2 Mb), `group_by`, `groups`, `bins` | depth per group per bin, peaks and genes in the window |
+| `POST /datasets/{id}/atac/links/estimate` | `{"genes": "variable"\|"all"\|"list", "gene_list", "cells_column", "cells_value"}` | what a links run needs (a first genome download) |
+| `POST /datasets/{id}/atac/links` | same | SSE: Signac LinkPeaks; kept by id |
+| `GET /datasets/{id}/atac/links[/{rid}[/csv\|/locus]]` | `gene`, `search`, `sort`, `offset`, `limit` | the last result, a page, the CSV, one gene's arcs |
+| `GET /datasets/{id}/atac/motifs` | | what the scan and chromVAR need, whether each is done |
+| `POST /datasets/{id}/atac/motifs/scan` (+ `/cancel`) | none | SSE: JASPAR 2024 x peaks (motifmatchr); the scan outlives the request |
+| `POST /datasets/{id}/atac/motifs/enrichment` | `{"da_id", "groups", "p_column", "p_max": 0.005, "min_pct": 0.05, "min_log2fc", "background": 40000, "seed"}` | Signac FindMotifs on a differential result; kept by id |
+| `GET /datasets/{id}/atac/motifs/enrichment[/{rid}[/csv\|/export]]` | `group`, `offset`, `limit` | the last result, a page, the CSV, a zip with logos |
+| `GET /datasets/{id}/atac/motifs/logo/{motif_id}` | | a motif's logo (SVG) |
+| `POST /datasets/{id}/atac/motifs/chromvar` | `{"seed"}` | SSE: chromVAR deviations |
+| `GET /datasets/{id}/atac/motifs/chromvar[/groups\|/motif\|/csv]` | `column`; `motif_id`, `groupby`, `save` | the run, groups x motifs, one motif per cell, the ranking |
+
+The differential, links, motif enrichment and chromVAR results are also in the results store:
+`GET /datasets/{id}/results?kind=atac_differential` (`atac_links`, `atac_motif_enrichment`,
+`atac_chromvar`), `GET /datasets/{id}/results/{rid}` (settings) and `.../table.tsv.gz`.
+
+---
+
+## RNA Velocity
+
+| Route | Body / query | What |
+|-------|--------------|------|
+| `GET /datasets/{id}/velocity` | | spliced / unspliced counts attached, what matched, the last run, its estimate |
+| `POST /datasets/{id}/velocity/attach` | multipart `files` (a velocyto .loom, an .h5ad with the layers, or STARsolo Velocyto files; one loom per sample together) | matched to the cells; replaces earlier counts |
+| `POST /datasets/{id}/velocity/run-stream` | `{"method": "stochastic"\|"steady_state", "n_top_genes", "n_neighbors", "group_by"}` | SSE: scVelo 0.3.3's steady-state or stochastic model |
+| `GET /datasets/{id}/velocity/grid` | `embedding`, `density` | arrows on an embedding |
+| `GET /datasets/{id}/velocity/phase` | `gene`, `color_by` | one gene's phase portrait |
+| `GET /datasets/{id}/velocity/genes` | | the fitted genes: gamma, r2, whether each passed |
+
+---
+
+## MCP
+
+An AI agent's tools over these routes at `/mcp` (Streamable HTTP; `MCP_ENABLED`, on in
+private mode). The tools for the routes above: `guide_assignment`, `mixscape`, `get_mixscape`,
+`hashing_demux`, `hashing_samples`, `atac_status`, `atac_fragment_qc`, `atac_lsi`, `wnn`,
+`atac_gene_activity`, `atac_differential`, `atac_links`, `atac_motif_enrichment`, `atac_chromvar`,
+`plot(kind="coverage")`, and `layer="protein"` on `differential_expression` /
+`per_donor_expression`. `upload_instructions` gives the curl recipes above;
+`import_server_path` imports a file or folder on the server under `MCP_IMPORT_DIRS` (off when
+unset, always off with `DEPLOYMENT_MODE=public`).
+
+---
+
 ## Health Check
 
 ```

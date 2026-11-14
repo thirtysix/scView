@@ -51,6 +51,13 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
      "clustering, UMAP, markers, enrichment; optional ambient RNA correction, doublet "
      "detection (Scrublet or scDblFinder-style), regress-out; a note when a file's curated cell_type "
      "seems to have lost the authors' meaning for some labels (cross-tab against the author column)"),
+    ("Data Assessment > Cell/Gene Filtering", "% mito floor, max counts, ATAC cuts",
+     "the filtering step's thresholds, MAD or fixed: under each sample's MAD % mito bound a floor ('Max % mito floor', "
+     "2% by default, since nuclei have almost no mito reads and median + 3 MADs can fall near 0%), with a warning when "
+     "% mito on nuclei removes over 5% of a sample; 'Max counts/cell (0 = off)'; on 10x Multiome data with ATAC QC "
+     "columns, ATAC cut-offs (ATAC counts, nucleosome signal, TSS enrichment), off until set, that the Use Signac's "
+     "cuts button fills with the multiome vignette's values. Reprocess from scratch can start 'from the cells as "
+     "uploaded': every cell an earlier filtering removed comes back"),
     ("Data Assessment > Sequencing QC (Cell Ranger)", "", "Cell Ranger metrics, barcode ranks"),
     ("Data Assessment > Ambient RNA", "", "soup from empty droplets, contamination estimate"),
     ("Data Assessment > Cluster QC", "",
@@ -58,6 +65,10 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
      "stressed or cycling clusters and cautions: mito RNA in nuclei (share of cells with mito reads), a cluster "
      "with another's markers but far less RNA, markers led by non-coding RNAs or by sex genes (XIST, Y genes)"),
     ("Data Assessment > Cell hashing", "", "HTODemux / hashedDrops: singlets, doublets, negatives"),
+    ("Data Assessment > Cell hashing > Within", "per lane",
+     "call each lane or channel on its own (lanes counted against different tag panels); a call the checks find "
+     "unsafe (tags with no counts in whole lanes, a tag with no ambient counts) is refused with the reason, and "
+     "Save anyway saves it with its warnings"),
     ("Data Assessment > QC Distributions", "doublets, sample QC, sex check",
      "per-cell QC plots, per-sample QC, doublet calls, pseudobulk sample QC, sex check"),
     ("Data Assessment > QC Distributions > QC per sample", "",
@@ -111,9 +122,10 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
      "Seurat's weighted nearest neighbours on RNA PCs and LSI 2:50: per-cell RNA weight by group, WNN UMAP, clusters"),
     ("Unified View > Accessibility > Gene activity", "fragments (Signac GeneActivity) or peaks",
      "gene body + 2 kb upstream as an overlay and against RNA: fragments there (Signac's GeneActivity) when a fragments "
-     "file is attached, else peak counts"),
+     "file is attached, else peak counts (a gene with no called peak then has none); the card says which"),
     ("Unified View > Accessibility > Differential peaks", "LR with depth, or Wilcoxon",
-     "peaks per group vs the rest or one group vs another (Compare), logistic regression with a depth covariate (Seurat's LR, the default) or Wilcoxon on TF-IDF, with "
+     "peaks per group vs the rest or one group against another (A vs B, as Signac's FindMarkers ident.1 / "
+     "ident.2), chrM and unplaced scaffolds left out by default, logistic regression with a depth covariate (Seurat's LR, the default) or Wilcoxon on TF-IDF, with "
      "nearest gene, distance to TSS, class; CSV"),
     ("Unified View > Gene Sets", "AUCell, ssGSEA, GSVA",
      "browse MSigDB sets; score them with AUCell, ssGSEA or GSVA"),
@@ -145,6 +157,11 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Unified View > Copy number", "CNV", "inferred copy-number score per cell"),
     ("Unified View > Clonotypes", "TCR/BCR", "TCR/BCR repertoire"),
     ("Unified View > Perturbation", "CRISPR, Mixscape", "CRISPR guide calls, Mixscape"),
+    ("Unified View > Perturbation > Within (replicate / batch)", "",
+     "Mixscape compares each cell with controls of its own replicate, batch or lane"),
+    ("Unified View > Perturbation > DE genes from", "",
+     "Mixscape's DE genes per target from all genes (Seurat RunMixscape's rule, the default) or the variable genes; "
+     "the result has each target's KO share per guide (Per guide) and per replicate"),
     ("Unified View > Spatial genes", "Moran's I",
      "spatially variable genes (Moran's I) on Visium spots, Visium HD bins or imaging cells, one section or all (then "
      "within each section, with each section's own I); click a gene to colour the tissue"),
@@ -155,7 +172,8 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Unified View > Domains > Co-occurrence", "squidpy",
      "how much more often one label is found within each distance of another than among all pairs at that range (score "
      "above 1), with a score-by-distance plot per label and a labels-by-labels heatmap, several sections each scored "
-     "against its own label shares (one section's curves on request); nearby is not interacting"),
+     "against its own label shares (one section's curves on request); grey heatmap cells are scores from fewer than "
+     "100 pairs at that distance, too few to read; nearby is not interacting"),
     ("Unified View > Traits", "GWAS",
      "GWAS Catalog traits linked to each group's markers (leads, not causal genes); one gene's traits"),
     ("Unified View > Velocity", "",
@@ -223,7 +241,8 @@ FULL_ONLY = ("Unified View > Accessibility >", "Unified View > Embedding > Tissu
              "Unified View > Domains > Co-occurrence", "Unified View > Spot composition > Reference labels",
              "Data Assessment > Cell-type annotation", "Data Assessment > Cluster QC", "Unified View > Compare",
              "Data Assessment > Annotation cross-check > Marker database check",
-             "Data Assessment > QC Distributions > QC per sample")
+             "Data Assessment > QC Distributions > QC per sample", "Data Assessment > Cell/Gene Filtering",
+             "Data Assessment > Cell hashing >", "Unified View > Perturbation >")
 
 
 def compact_guide() -> str:
