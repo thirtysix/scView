@@ -28,7 +28,9 @@ from scview.core.trajectory import (
     compute_paga,
     graph_source,
     paga_view,
+    public_params,
     read_params,
+    read_runs,
 )
 from scview.dependencies import get_dataset_manager
 
@@ -36,10 +38,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# RNA velocity needs both (scVelo's names); scView does not compute it yet.
+# RNA velocity needs both (scVelo's names): in the modality store (core/velocity_input.py),
+# or still in layers in a file that kept them.
 VELOCITY_LAYERS = ("spliced", "unspliced")
-
-
 
 
 def _light_or_memory(adaptor):
@@ -69,16 +70,23 @@ async def list_pseudotime_columns(
     if adaptor is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
 
+    from scview.core import velocity_input
+
     columns = adaptor.available_pseudotime_columns()
+    adata = adaptor.adata
+    runs = {c: public_params(adata, p) for c, p in (read_runs(adata) or {}).items() if c in adata.obs.columns}
 
     return {
         "dataset_id": dataset_id,
         "pseudotime_columns": columns,
         "n_columns": len(columns),
-        # How the in-app column was computed (root group, graph), if it was.
-        "computed": read_params(adaptor.adata),
-        # Spliced/unspliced counts are there, so RNA velocity could be run elsewhere.
-        "velocity_layers": all(k in adaptor.adata.layers for k in VELOCITY_LAYERS),
+        # How the in-app column was computed (root group, graph, warnings, stale), if it was.
+        "computed": public_params(adata, read_params(adata)),
+        # Each root's own column (core/trajectory.root_column_name) with the same record.
+        "runs": runs,
+        # Spliced/unspliced counts are attached (Unified View > Velocity runs on them).
+        "velocity_layers": velocity_input.has_store(dm.data_dir, dataset_id)
+        or all(k in adata.layers for k in VELOCITY_LAYERS),
     }
 
 
@@ -208,7 +216,7 @@ async def compute_pseudotime(
     except Exception as exc:
         logger.error("Pseudotime failed for %s: %s", dataset_id, exc, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Pseudotime failed: {exc!s}")
-    return {"dataset_id": dataset_id, **params}
+    return {"dataset_id": dataset_id, **{k: v for k, v in params.items() if k != "fingerprint"}}
 
 
 @router.get("/datasets/{dataset_id}/trajectory/{column}")

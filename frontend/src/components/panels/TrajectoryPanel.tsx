@@ -31,13 +31,23 @@ interface DPTParams {
   root_cell: string;
   graph: string;
   n_unreachable: number;
+  /** The same values under the root's own column, kept when another root runs */
+  root_named_column?: string;
+  /** Weakly linked cells left out of the scale (no pseudotime, grey) */
+  n_detached?: number;
+  /** A weakly linked island left out, a root that looks like the wrong end */
+  warnings?: string[];
+  /** Why the graph it was computed on is gone, else null */
+  stale?: string | null;
 }
 
 interface TrajectoryColumnsResponse {
   pseudotime_columns: string[];
   n_columns: number;
   computed?: DPTParams | null;
-  /** The dataset has spliced + unspliced layers (RNA velocity input) */
+  /** Each root's own column with how it was computed */
+  runs?: Record<string, DPTParams>;
+  /** Spliced + unspliced counts are attached (RNA velocity input) */
   velocity_layers?: boolean;
 }
 
@@ -97,6 +107,7 @@ export function TrajectoryPanel() {
 
   // In-app pseudotime: a root group picked from a categorical column.
   const [computed, setComputed] = useState<DPTParams | null>(null);
+  const [runs, setRuns] = useState<Record<string, DPTParams>>({});
   const [velocityLayers, setVelocityLayers] = useState(false);
   // Bumped after pseudotime is (re)computed, so columns, values and trends refetch.
   const [refreshKey, setRefreshKey] = useState(0);
@@ -141,6 +152,7 @@ export function TrajectoryPanel() {
       .then((data) => {
         setAvailableColumns(data.pseudotime_columns);
         setComputed(data.computed ?? null);
+        setRuns(data.runs ?? {});
         setVelocityLayers(!!data.velocity_layers);
         // Keep the current column if this dataset has it (after a recompute it does).
         setSelectedColumn((prev) =>
@@ -443,11 +455,13 @@ export function TrajectoryPanel() {
 
   const velocityNote = velocityLayers ? (
     <p className="flex-shrink-0 text-xs text-slate-500" data-testid="velocity-note">
-      This dataset has <code>spliced</code> and <code>unspliced</code> layers, the input for RNA
-      velocity. scView does not compute velocity yet: run scVelo on the exported .h5ad, and its{" "}
-      <code>latent_time</code> column, uploaded back, is listed here as a pseudotime.
+      This dataset has <code>spliced</code> and <code>unspliced</code> counts, the input for RNA
+      velocity: run it in Unified View &gt; Velocity. A <code>latent_time</code> column from scVelo,
+      uploaded with the data, is listed here as a pseudotime.
     </p>
   ) : null;
+  // How the shown column was computed: its own run record, or the latest run's for DPT_COLUMN.
+  const shownRun = runs[selectedColumn] ?? (selectedColumn === DPT_COLUMN ? computed : null);
 
   // No dataset
   if (!dataset || !datasetId) {
@@ -548,13 +562,20 @@ export function TrajectoryPanel() {
 
       {computeCard}
 
-      {selectedColumn === DPT_COLUMN && computed && (
-        <p className="-mt-2 flex-shrink-0 text-xs text-slate-500">
-          Current <code>{DPT_COLUMN}</code>: started from {computed.root_value} (
-          {prettyObsLabel(computed.root_column)}), {computed.graph}.
-          {computed.n_unreachable > 0 &&
-            ` ${formatNumber(computed.n_unreachable)} cells are unreachable from it (grey).`}
-        </p>
+      {shownRun && (
+        <div className="-mt-2 flex flex-shrink-0 flex-col gap-1.5" data-testid="dpt-computed">
+          <p className="text-xs text-slate-500">
+            Current <code>{selectedColumn}</code>: started from {shownRun.root_value} (
+            {prettyObsLabel(shownRun.root_column)}), {shownRun.graph}.
+            {shownRun.n_unreachable > 0 &&
+              ` ${formatNumber(shownRun.n_unreachable)} cells are unreachable from it (grey).`}
+          </p>
+          {[...(shownRun.stale ? [`Out of date: ${shownRun.stale}`] : []), ...(shownRun.warnings ?? [])].map((w) => (
+            <p key={w} className="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800">
+              {w}
+            </p>
+          ))}
+        </div>
       )}
 
       <PagaCard

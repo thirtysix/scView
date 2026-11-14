@@ -3085,14 +3085,18 @@ def _pseudotime(p: dict, ctx: _Ctx) -> Snippet:
     if not root:
         return Snippet(NOT_REPLAYABLE, ["# Pseudotime: no root cell recorded. Recorded:",
                                         *_param_comment(p)], "no root cell recorded")
+    named = p.get("root_named_column")
+    also = f'adata.obs[{_lit(str(named))}] = adata.obs["dpt_pseudotime"].to_numpy()\n' if named else ""
+    detached = (f"# scView also left out {int(p['n_detached'])} weakly linked cells (NaN) and diffused again\n"
+                "# without them; this keeps them in.\n") if p.get("n_detached") else ""
     return Snippet(APPROXIMATE, _block(f'''
 # NOTE: scView runs DPT on the cells its graph connects to the root and gives the
 # others an infinite pseudotime; this runs it on every cell of the main graph.
-sc.tl.diffmap(adata, n_comps={_lit(p.get("diffmap_n_comps", DIFFMAP_COMPS))})
+{detached}sc.tl.diffmap(adata, n_comps={_lit(p.get("diffmap_n_comps", DIFFMAP_COMPS))})
 adata.uns["iroot"] = int(adata.obs_names.get_loc({_lit(str(root))}))
 sc.tl.dpt(adata, n_dcs={_lit(p.get("n_dcs", N_DCS))})
 adata.obs[{_lit(str(p.get("column") or DPT_COLUMN))}] = adata.obs["dpt_pseudotime"].to_numpy()
-'''), "DPT on the whole graph, not only the root's component")
+{also}'''), "DPT on the whole graph, not only the root's component")
 
 
 def _paga(p: dict, ctx: _Ctx) -> Snippet:
