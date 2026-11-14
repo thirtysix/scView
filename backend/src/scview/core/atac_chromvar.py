@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import json
 import os
-import resource
 import sys
 import threading
 import time
@@ -44,7 +43,7 @@ import scipy.sparse as sp
 from scipy.special import ndtr
 from scipy.stats import chi2, rankdata
 
-from scview.core import atac_motifs, modality_store, tf_motifs
+from scview.core import atac_motifs, memory_budget, modality_store, tf_motifs
 from scview.core.modality_store import ModalityStore
 
 STORE = "atac_chromvar"
@@ -363,7 +362,7 @@ def _child(argv: list[str]) -> None:
 
     table = atac_motifs.read_table_file(Path(args.table))
     summary = run(Path(args.store), np.load(args.rows), table, Path(args.out), seed=args.seed, say=say)
-    summary["peak_mb"] = round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024)
+    summary["peak_mb"] = memory_budget.own_peak_mb()
     (Path(args.out) / SUMMARY).write_text(json.dumps(summary))
     sys.stdout.write(json.dumps({"type": "done", "seconds": summary["seconds"], "peak_mb": summary["peak_mb"]}) + "\n")
     sys.stdout.flush()

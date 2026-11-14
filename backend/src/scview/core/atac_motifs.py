@@ -47,7 +47,7 @@ from typing import Any
 
 import numpy as np
 
-from scview.core import genome_seq, tf_motifs
+from scview.core import genome_seq, memory_budget, tf_motifs
 
 logger = logging.getLogger(__name__)
 
@@ -585,8 +585,6 @@ def scan_cmd(store: Path, jaspar: Path, two_bit: Path, out: Path, genome: str, k
 
 def _child(argv: list[str]) -> None:
     import argparse
-    import resource
-
     from scview.core.modality_store import ModalityStore
 
     ap = argparse.ArgumentParser()
@@ -607,7 +605,7 @@ def _child(argv: list[str]) -> None:
         chrom, start, end = peak_coordinates(store)
     motifs = tf_motifs.parse_jaspar(Path(args.jaspar).read_text())
     table = build(chrom, start, end, motifs, genome_seq.TwoBit(args.two_bit), args.genome, args.key, progress=emit)
-    table.meta.update(peak_mb=round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024), threads=BUILD_THREADS)
+    table.meta.update(peak_mb=memory_budget.own_peak_mb(), threads=BUILD_THREADS)
     save_table(table, Path(args.out))
     sys.stdout.write(json.dumps({"type": "done", **table.meta}) + "\n")
     sys.stdout.flush()
