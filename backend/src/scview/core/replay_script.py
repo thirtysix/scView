@@ -63,6 +63,8 @@ class _Ctx:
     scaling: dict[str, Any] | None = None
     # True once a step has kept the file's own UMAP as X_umap_original
     kept_umap: bool = False
+    # True once a step has kept the file's own PCA as X_pca_original
+    kept_pca: bool = False
     # Whether the script recomputes the latest gene programs ("gene_programs") and
     # chromVAR ("atac_chromvar", its run id): a saved program or motif score reads them.
     runs: dict[str, Any] = field(default_factory=dict)
@@ -2019,8 +2021,23 @@ def _keep_umap(ctx: _Ctx) -> str:
     return _KEEP_UMAP.strip("\n") + "\n"
 
 
+_KEEP_PCA = '''
+if "X_pca" in adata.obsm and "X_pca_original" not in adata.obsm:  # the file's own PCA
+    adata.obsm["X_pca_original"] = np.asarray(adata.obsm["X_pca"]).astype(np.float32)
+'''
+
+
+def _keep_pca(ctx: _Ctx) -> str:
+    """The line keeping the file's own PCA (as pipeline.keep_original_pca), only in the
+    first step that would clear or overwrite it: later, X_pca is scView's."""
+    if ctx.kept_pca:
+        return ""
+    ctx.kept_pca = True
+    return _KEEP_PCA.strip("\n") + "\n"
+
+
 def _reset_to_counts(p: dict, ctx: _Ctx) -> Snippet:
-    keep = _keep_umap(ctx)
+    keep = _keep_umap(ctx) + _keep_pca(ctx)
     return Snippet(EXACT, _block(keep + '''
 if "counts_uncorrected" in adata.layers:  # the counts before an ambient RNA correction
     adata.layers["counts"] = adata.layers["counts_uncorrected"]
@@ -2035,7 +2052,7 @@ if "counts" in adata.layers or adata.raw is not None:
         "highly_variable", "means", "dispersions", "dispersions_norm", "variances",
         "residual_variances", "highly_variable_rank", "highly_variable_nbatches",
         "highly_variable_intersection") if c in adata.var.columns], inplace=True)
-    for k in [k for k in list(adata.obsm.keys()) if k.startswith("X_") and k != "X_umap_original"]:
+    for k in [k for k in list(adata.obsm.keys()) if k.startswith("X_") and k not in ("X_umap_original", "X_pca_original")]:
         del adata.obsm[k]
     for k in list(adata.obsp.keys()):
         del adata.obsp[k]
@@ -2503,6 +2520,12 @@ def _regress_covariates(keys: list[str], ctx: _Ctx) -> list[str]:
 
 
 def _pca(p: dict, ctx: _Ctx) -> Snippet:
+    snippet = _pca_code(p, ctx)
+    keep = _keep_pca(ctx)
+    return Snippet(snippet.status, [*_block(keep), *snippet.code], snippet.note) if keep else snippet
+
+
+def _pca_code(p: dict, ctx: _Ctx) -> Snippet:
     n = p.get("n_comps", 50)
     plan = ctx.scaling if p.get("pca_input") else None
     if plan is None:  # scaling skipped, or an older scView's scaled X
