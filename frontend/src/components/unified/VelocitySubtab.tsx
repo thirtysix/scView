@@ -51,7 +51,9 @@ function sampleLines(s: VelocitySource): string[] {
     const other = s.cells_other_sample ?? 0;
     out.push(
       `${unmatched.toLocaleString()} of the file's ${s.cells_in_file.toLocaleString()} cells are not in this dataset` +
-        (other > 0 ? ` (${other.toLocaleString()} of them from a sample the dataset does not have)` : " (filtered out, or another sample's)") +
+        (other > 0
+          ? ` (filtered out; ${other.toLocaleString()} of them share a barcode with another sample's cell there, and were not paired with it)`
+          : " (filtered out, or another sample's)") +
         ".",
     );
   }

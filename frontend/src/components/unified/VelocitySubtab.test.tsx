@@ -140,6 +140,13 @@ describe("VelocitySubtab", () => {
     expect(screen.getByText("Samples matched by column batch: cellsorted day0 UIB5X = day0 (3,054 of 9,099 cells).")).toBeTruthy();
     const missing = screen.getByText(/No counts for day2 \(836 cells\), day4 \(789 cells\): attach every sample's file together/);
     expect(missing.className).toContain("text-amber-700");
+    cleanup();
+    api.getVelocity.mockResolvedValue({
+      ...base, attached: true, run: null, estimate: null,
+      source: { file: "day2.loom", cells_in_file: 1631, cells_matched: 836, cells_in_dataset: 4679, cells_in_file_unmatched: 795, cells_other_sample: 16 },
+    });
+    render(<VelocitySubtab />);
+    await screen.findByText(/795 of the file's 1,631 cells are not in this dataset \(filtered out; 16 of them share a barcode with another sample's cell there, and were not paired with it\)/);
     const input = screen.getByLabelText("Velocity .loom or .h5ad files") as HTMLInputElement;
     expect(input.multiple).toBe(true);
     api.attachVelocity.mockResolvedValue({ attached: true, source: {} });
