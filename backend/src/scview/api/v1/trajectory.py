@@ -269,7 +269,8 @@ async def get_expression_along_pseudotime(
         default=100,
         ge=10,
         le=500,
-        description="Number of bins for smoothing",
+        description="Most bins for the trend line: equal cell counts per bin (quantile bins), "
+                    "at least 10 cells each",
     ),
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
@@ -277,7 +278,8 @@ async def get_expression_along_pseudotime(
 
     For each gene the response includes:
     - raw (pseudotime, expression) pairs
-    - binned/smoothed expression values for line-plot rendering
+    - binned mean expression for line-plot rendering, in bins of equal cell counts
+      (as ``trend-genes`` bins), each at its median pseudotime
 
     Large datasets are sub-sampled to at most 5 000 points per gene for the
     raw scatter, while the binned values always cover the full dataset.
@@ -309,6 +311,7 @@ async def get_expression_along_pseudotime(
     if not finite.any():
         raise HTTPException(status_code=422, detail=f"Column '{column}' has no finite values.")
     pseudotime = pseudotime[finite]
+    bin_of, bin_pt, bin_counts = ptg.equal_count_bins(pseudotime, n_bins)
 
     # The same expression layer as every other expression view (log-normalised
     # .raw when present), not X, which the pipeline leaves scaled.
@@ -323,22 +326,9 @@ async def get_expression_along_pseudotime(
 
         expr = adaptor.get_expression([gene], layer=layer)[:, 0].astype(float)[finite]
 
-        # ---- Binned / smoothed values ----
-        pt_min, pt_max = float(np.min(pseudotime)), float(np.max(pseudotime))
-        if pt_max <= pt_min:
-            pt_max = pt_min + 1.0
-
-        bin_edges = np.linspace(pt_min, pt_max, n_bins + 1)
-        bin_centres = (bin_edges[:-1] + bin_edges[1:]) / 2
-        bin_indices = np.digitize(pseudotime, bin_edges) - 1
-        bin_indices = np.clip(bin_indices, 0, n_bins - 1)
-
-        bin_counts = np.bincount(bin_indices, minlength=n_bins)
-        bin_sums = np.bincount(bin_indices, weights=expr, minlength=n_bins)
-        # A bin no cell falls in (DPT's sparse tail) is a gap, not a mean of 0.
-        bin_means = [
-            float(s / c) if c > 0 else None for s, c in zip(bin_sums, bin_counts)
-        ]
+        # ---- Binned values: equal cell counts per bin, as the trend-genes ranking bins ----
+        bin_sums = np.bincount(bin_of, weights=expr, minlength=len(bin_pt))
+        bin_means = [float(v) for v in bin_sums / bin_counts]
 
         # ---- Sub-sampled raw scatter ----
         max_scatter = 5000
@@ -356,7 +346,7 @@ async def get_expression_along_pseudotime(
             "found": True,
             "scatter_pseudotime": scatter_pt,
             "scatter_expression": scatter_expr,
-            "binned_pseudotime": bin_centres.tolist(),
+            "binned_pseudotime": bin_pt.tolist(),
             "binned_expression": bin_means,
             "binned_counts": bin_counts.astype(int).tolist(),
         }
@@ -364,6 +354,8 @@ async def get_expression_along_pseudotime(
     return {
         "dataset_id": dataset_id,
         "pseudotime_column": column,
+        "n_bins": int(len(bin_pt)),
+        "binning": ptg.BINNING,
         "genes": results,
     }
 
