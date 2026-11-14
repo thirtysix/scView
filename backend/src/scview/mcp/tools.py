@@ -1973,6 +1973,8 @@ async def plot(
                 return plots.sections(xy, values, panel, order, title, label, note, focus), note
             if panel is not None:
                 title += f", section {order[0]}"
+            if arrows is None and graph is None:
+                return plots.embedding(xy, values, title, label, note, focus, tissue=tissue), note
             note += _overlay_note(arrows, graph)
             label_nodes = not (graph is not None and color_by == (graph.get("paga") or {}).get("groupby"))
             return plots.embedding(xy, values, title, label, note, focus, tissue=tissue, arrows=arrows,
