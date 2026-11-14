@@ -388,8 +388,9 @@ _SPOOL_SECONDS_PER_VALUE = 1.0e-7
 _PRODUCT_SECONDS_PER_VALUE_DIM = 0.9e-9
 _ACTIVITY_SECONDS_PER_VALUE = 3.0e-7
 # Fragment-based activity: one pass over the fragments file, as the QC pass (47 s per GB at 2 CPUs)
-# with the overlaps on top. Measured at 2 CPUs on the 5k mouse kidney (1.35 GB): see FRAGMENT_SECONDS_PER_GB.
-FRAGMENT_SECONDS_PER_GB = 60.0
+# with the overlaps on top. At 2 CPUs (v0.78): 5k mouse kidney 1.35 GB 72.8 s (57.8 s/GB), PBMC 10k
+# 2.40 GB 107.8 s (44.9 s/GB); peak +0.8 / +1.0 GB of container memory over the whole run.
+FRAGMENT_SECONDS_PER_GB = 52.0
 FRAGMENT_PASS_BYTES = 600 * 1024**2  # text blocks, parsed arrays, the open genes' pairs, a write's rows
 _DA_SECONDS_PER_VALUE = 3.5e-7
 _DA_SECONDS_PER_VALUE_GROUP = 1.4e-8
