@@ -87,7 +87,7 @@ export function AtacDifferentialCard({
     setEstimate(null);
     if (!column) return;
     const ready = pair && groupA && groupB && groupA !== groupB;
-    getDaEstimate(datasetId, column, test, ready ? groupA : "", ready ? groupB : "")
+    (ready ? getDaEstimate(datasetId, column, test, groupA, groupB) : getDaEstimate(datasetId, column, test))
       .then((e) => {
         if (cancelled) return;
         setEstimate(e);
