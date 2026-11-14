@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Loader2, Play, Tag } from "lucide-react";
 import Plot from "@/components/plots/Plot";
 import { Panel } from "@/components/common/Panel";
+import { Help } from "@/components/common/Help";
 import { HoverTip } from "@/components/common/InfoTip";
 import { Caption } from "@/components/common/Caption";
 import {
@@ -24,14 +25,17 @@ import {
   heatmapTrace,
   initialMapping,
   initialSelection,
+  initialSplit,
   lfcFigure,
   MAX_TAG_PLOTS,
   negativeMeaning,
   orderedSelection,
   scrubletText,
+  tagFitText,
   tagHistFigure,
   validColumnName,
 } from "@/lib/hashing";
+import { errorStatus } from "@/lib/errorMessage";
 import { errorText } from "@/lib/qcStates";
 import { plotConfig } from "@/lib/plotConfig";
 import { useObsRevisionStore } from "@/stores/obsRevisionStore";
@@ -78,6 +82,9 @@ export function Hashing({
   const [quantile, setQuantile] = useState("0.99");
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [splitBy, setSplitBy] = useState("");
+  /** The last demux was refused by the checks (409): "Save anyway" is offered. */
+  const [refused, setRefused] = useState(false);
   const [plot, setPlot] = useState<HashingPlotData | null>(null);
   const [plotError, setPlotError] = useState<string | null>(null);
   const [mapping, setMapping] = useState<Record<string, string>>({});
@@ -91,6 +98,7 @@ export function Hashing({
   const adopt = (s: HashingSummary) => {
     setSummary(s);
     setPicked(initialSelection(s));
+    setSplitBy(initialSplit(s));
     if (s.call) {
       setMethod(s.call.method);
       setMapping(initialMapping(s.call, s.samples?.mapping));
@@ -160,15 +168,18 @@ export function Hashing({
       return next;
     });
 
-  const run = async () => {
+  const run = async (allowWarnings = false) => {
     setRunning(true);
     setError(null);
     setSaved(null);
+    setRefused(false);
     try {
       const s = await runHashingDemux(datasetId, {
         tags: selection,
         method,
         ...(method === "htodemux" ? { quantile: q } : {}),
+        split_by: splitBy || null,
+        ...(allowWarnings ? { allow_warnings: true } : {}),
       });
       await refresh(datasetId, "hash_call"); // the columns show in colour-by straight away
       for (const c of HASH_COLUMNS.slice(1)) useObsRevisionStore.getState().bump(datasetId, c);
@@ -176,7 +187,9 @@ export function Hashing({
       adopt(s);
       onSaved?.();
     } catch (e) {
-      setError(`Could not demultiplex: ${errorText(e)}`);
+      const checks = errorStatus(e) === 409;
+      setRefused(checks);
+      setError(checks ? errorText(e) : `Could not demultiplex: ${errorText(e)}`);
     } finally {
       setRunning(false);
     }
@@ -252,9 +265,20 @@ export function Hashing({
         </p>
       )}
       {error && (
-        <p role="alert" className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">
-          {error}
-        </p>
+        <div role="alert" className="space-y-1 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          <p>{error}</p>
+          {refused && (
+            <button
+              type="button"
+              onClick={() => run(true)}
+              disabled={running}
+              title="Save this call although the checks failed. It becomes the doublet source; its warnings stay with it."
+              className="rounded border border-amber-300 bg-white px-2 py-0.5 text-[11px] font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-40"
+            >
+              Save anyway
+            </button>
+          )}
+        </div>
       )}
       {open && (
         <div className="space-y-2 text-[11px] text-slate-600">
@@ -331,9 +355,27 @@ export function Hashing({
                 />
               </>
             )}
+            <label htmlFor="hashing-split">
+              <Help id="hashing.split_by">Within</Help>
+            </label>
+            <select
+              id="hashing-split"
+              value={splitBy}
+              onChange={(e) => setSplitBy(e.target.value)}
+              disabled={running}
+              className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-xs text-slate-600"
+            >
+              <option value="">All cells</option>
+              {(summary.split_columns ?? []).map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                  {summary.split_suggestion?.column === c ? " (suggested)" : ""}
+                </option>
+              ))}
+            </select>
             <button
               type="button"
-              onClick={run}
+              onClick={() => run()}
               disabled={running || !nOk || !qOk}
               title={
                 nOk
@@ -353,7 +395,25 @@ export function Hashing({
                 {classSentence(call.counts)}.
                 {call.n_cells_at_call !== summary.n_cells &&
                   ` Called on ${call.n_cells_at_call.toLocaleString()} cells; the counts are of the cells kept since.`}
+                {call.split_by &&
+                  ` Called within each value of ${call.split_by} (${call.groups?.length ?? 0} channels, each on its own tags)` +
+                    (call.n_uncalled ? `; ${call.n_uncalled.toLocaleString()} cells left uncalled.` : ".")}
               </p>
+              {(call.warnings ?? []).length > 0 && (
+                <div
+                  className={`rounded-md px-2 py-1.5 ${call.saved_with_problems ? "bg-amber-50 text-amber-800" : "bg-slate-50 text-slate-600"}`}
+                  data-testid="hashing-warnings"
+                >
+                  {call.saved_with_problems && (
+                    <p className="font-medium">Saved although the checks failed; the doublet views use it.</p>
+                  )}
+                  <ul className="list-disc pl-4">
+                    {(call.warnings ?? []).map((w) => (
+                      <li key={w}>{w}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               <Caption>
                 {negativeMeaning(call)} {doubletSourceText(summary.doublet_source)}
               </Caption>
@@ -388,7 +448,7 @@ export function Hashing({
                   </thead>
                   <tbody>
                     {call.tags.map((t) => {
-                      const fit = call.per_tag.find((p) => p.tag === t);
+                      const fit = tagFitText(call, t);
                       return (
                         <tr key={t} className="border-b border-slate-100">
                           <td className="px-1.5 py-1 font-medium text-slate-700">
@@ -398,8 +458,8 @@ export function Hashing({
                             />
                             {t}
                           </td>
-                          <td className={NUM}>
-                            {call.method === "htodemux" ? `> ${fit?.cutoff ?? "—"}` : (fit?.ambient?.toFixed(1) ?? "—")}
+                          <td className={NUM} title={fit.title || undefined}>
+                            {fit.text}
                           </td>
                           <td className={NUM}>{(call.per_call[t] ?? 0).toLocaleString()}</td>
                           <td className="px-1.5 py-0.5">

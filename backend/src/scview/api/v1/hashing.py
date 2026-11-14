@@ -34,6 +34,8 @@ class DemuxRequest(BaseModel):
     tags: list[str] = Field(default_factory=list)
     method: str = hashing.HTODEMUX
     quantile: float = hashing.POSITIVE_QUANTILE
+    split_by: str | None = None  # call within each value (a lane or channel column)
+    allow_warnings: bool = False  # save a call the checks find unsafe (else 409)
 
 
 class SamplesRequest(BaseModel):
@@ -104,7 +106,9 @@ async def post_demux(dataset_id: str, body: DemuxRequest, dm: DatasetManager = D
     which are then moved out of the protein modality) and save ``hash_call``,
     ``hash_class``, ``hash_max``, ``hash_second``, ``hash_margin``."""
     return await _save(dm, dataset_id,
-                       lambda work: hashing.demux(work, body.tags, body.method, body.quantile),
+                       lambda work: hashing.demux(work, body.tags, body.method, body.quantile,
+                                                  split_by=body.split_by or None,
+                                                  allow_warnings=body.allow_warnings),
                        "hashing call")
 
 

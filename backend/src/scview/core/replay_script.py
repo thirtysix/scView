@@ -3752,9 +3752,14 @@ def _hashing_demux(p: dict, ctx: _Ctx) -> Snippet:
     _need(ctx, "hashing", "read_hashtags")
     feats = {t: features[t] for t in tags}
     srcs = {t: str(sources.get(t) or "") for t in tags}
-    if method == hashing.HTODEMUX:
-        q = p.get("positive_quantile", hashing.POSITIVE_QUANTILE)
-        run = [f"call = htodemux(counts, tags, {_lit(float(q))})  # = Seurat 5.1.0 HTODemux"]
+    q = float(p.get("positive_quantile", hashing.POSITIVE_QUANTILE))
+    split = p.get("split_by")
+    if isinstance(split, str) and split:
+        run = [f"channel = adata.obs[{_lit(split)}]",
+               "channel = channel.astype(object).where(channel.notna(), \"\").astype(str).to_numpy(dtype=object)",
+               f"call, _ = split_call(counts, tags, channel, {_lit(method)}, {_lit(q)})  # within each channel"]
+    elif method == hashing.HTODEMUX:
+        run = [f"call = htodemux(counts, tags, {_lit(q)})  # = Seurat 5.1.0 HTODemux"]
     else:
         run = ["call = hashed_drops(counts, tags)  # = DropletUtils 1.24 hashedDrops, defaults"]
     code = [

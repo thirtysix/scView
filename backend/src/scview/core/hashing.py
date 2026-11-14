@@ -51,6 +51,16 @@ Checked against R on GSE108313 (8-HTO PBMC, 20,238 cells; 12-HTO cell lines,
 8,410 cells): the same class and tag for every cell as Seurat 5.1.0 and
 DropletUtils 1.24 (tests/fixtures/hashing has a 1,000-cell reference).
 
+Checks before saving (``check_call``): a tag at 0 in more than a quarter of the cells
+(those cells were counted against another tag panel: Papalexi 2021's lanes 1-4 and 5-8),
+a tag hashedDrops leaves out for an ambient level of 0 (DropletUtils does too, with a
+warning: no cell can be called to it), and a tag under 1 count per cell block the save
+(409, naming a channel column that explains the zeros, ``suggest_split``) unless the
+caller allows it; then the warnings are kept with the call. ``split_by`` calls the
+cells within each channel on that channel's own tags (``split_call``): on Papalexi,
+HTODemux per lane called 5,970 of 6,001 rep3 and 5,222 of 5,300 rep2 cells where a call
+over all cells refused or called no rep1 cell at all.
+
 Outputs (obs): ``hash_call`` (tag / "Doublet" / "Negative"), ``hash_class``
 (Singlet / Doublet / Negative), ``hash_max`` and ``hash_second`` (top and
 second tag), ``hash_margin`` (the top tag's lead: CLR difference, or LogFC for
@@ -105,6 +115,18 @@ MAX_TAGS = 50  # more is not a hashing panel
 MIN_CELLS = 50
 HIST_BINS = 40
 TAG = "result:hashing"
+# Checks before a call is saved (QA 2026-11-14, Papalexi 2021: lanes 1-4 and 5-8 were counted
+# against different tag panels, so each tag was 0 in about half the cells; hashedDrops then
+# found no ambient level for rep1-tx and called none of its 9,428 cells). Ambient tag counts
+# put a few reads on every tag in nearly every droplet: in Stoeckius 2018's 8-HTO PBMC no tag
+# is 0 in more than 7% of cells.
+ZERO_SHARE_FLAG = 0.25  # a tag at 0 in more cells than this: counted against another tag panel
+SPLIT_ABSENT_SHARE = 0.95  # within one channel, a tag at 0 in this share of its cells was not in its panel
+SPLIT_MIN_CELLS = MIN_CELLS
+MAX_SPLIT_GROUPS = 64
+# A tag under 1 count per cell on average was not used (Papalexi's ctrl and PDL1 tags: 0.05-0.65;
+# its four used tags 4.3-59; the 8-HTO PBMC's tags 13-53 at the median).
+MIN_TAG_MEAN = 1.0
 
 # TotalSeq-A/B/C hashtag antibodies are A0251-A0265, B0251-..., C0251-...;
 # CellPlex CMOs are CMO301-CMO312; MULTI-seq and custom panels say HTO / Hashtag.
@@ -600,13 +622,59 @@ def call_columns(call: Call) -> dict[str, Any]:
     ``hash_second`` (categoricals, tags in the call's order) and ``hash_margin``."""
     names = np.asarray(call.tags, dtype=object)
     tags = list(dict.fromkeys(call.tags))
+    called = np.array([c is not None for c in call.cls], dtype=bool)  # a split call leaves some uncalled
     return {
         CALL: pd.Categorical(call.call, categories=list(dict.fromkeys(tags + [DOUBLET, NEGATIVE]))),
         CLASS: pd.Categorical(call.cls, categories=list(CLASSES)),
-        MAX: pd.Categorical(names[call.best], categories=tags),
-        SECOND: pd.Categorical(names[call.second], categories=tags),
+        MAX: pd.Categorical(np.where(called, names[call.best], None), categories=tags),
+        SECOND: pd.Categorical(np.where(called, names[call.second], None), categories=tags),
         MARGIN: np.asarray(call.margin, dtype=np.float32),
     }
+
+
+def split_call(counts: np.ndarray, tags: list[str], groups: np.ndarray, method: str = HTODEMUX,
+               quantile: float = POSITIVE_QUANTILE) -> tuple[Call, list[dict]]:
+    """The call within each value of ``groups`` (a channel: a 10x lane, a capture), on
+    the tags present there (0 in under ``SPLIT_ABSENT_SHARE`` of its cells): channels
+    counted against different tag panels are each called on their own panel. A channel
+    with fewer than ``SPLIT_MIN_CELLS`` cells or two tags, or one the method refuses, is
+    left uncalled (class None) with its reason. Returns the joined call and, per channel,
+    ``{"group", "n_cells", "tags", "absent", "counts", "per_tag", "thresholds", "error"}``."""
+    counts = np.asarray(counts, dtype=np.float64)
+    n = counts.shape[0]
+    groups = np.asarray(groups, dtype=object)
+    best, second = np.zeros(n, dtype=np.int64), np.zeros(n, dtype=np.int64)
+    margin = np.full(n, np.nan)
+    cls = np.full(n, None, dtype=object)
+    per_tag, info, thresholds, params = [], [], {}, {}
+    for g in pd.unique(groups):
+        rows = np.flatnonzero(groups == g)
+        zero = (counts[rows] == 0).mean(axis=0) if rows.size else np.ones(len(tags))
+        present = [j for j in range(len(tags)) if zero[j] < SPLIT_ABSENT_SHARE]
+        entry = {"group": str(g), "n_cells": int(rows.size), "tags": [tags[j] for j in present],
+                 "absent": [tags[j] for j in range(len(tags)) if j not in present], "counts": None,
+                 "per_tag": [], "thresholds": {}, "error": None}
+        info.append(entry)
+        if rows.size < SPLIT_MIN_CELLS or len(present) < 2:
+            entry["error"] = (f"{rows.size:,} cells, too few to call" if rows.size < SPLIT_MIN_CELLS else
+                              "no tag has counts there" if not present else
+                              f"only {tags[present[0]]} has counts there: no second tag to tell it from")
+            continue
+        sub = counts[np.ix_(rows, present)]
+        names = [tags[j] for j in present]
+        try:
+            c = htodemux(sub, names, quantile) if method == HTODEMUX else hashed_drops(sub, names)
+        except HashingError as e:
+            entry["error"] = str(e)
+            continue
+        idx = np.asarray(present)
+        best[rows], second[rows], margin[rows], cls[rows] = idx[c.best], idx[c.second], c.margin, c.cls
+        entry["counts"] = {k: int((c.cls == k).sum()) for k in CLASSES}
+        entry["per_tag"], entry["thresholds"] = c.per_tag, c.thresholds
+        per_tag += [{**p, "group": str(g)} for p in c.per_tag]
+        thresholds[str(g)] = c.thresholds
+        params = c.params
+    return Call(method, list(tags), best, second, margin, cls, per_tag, thresholds, params), info
 
 
 def run(counts: np.ndarray, tags: list[str], method: str = HTODEMUX, quantile: float = POSITIVE_QUANTILE) -> Call:
@@ -732,17 +800,172 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def demux(adata, tags: list[str], method: str = HTODEMUX, quantile: float = POSITIVE_QUANTILE) -> dict:
+def _split_columns(obs: pd.DataFrame) -> list[str]:
+    """obs columns that could name each cell's channel: text or categorical, 2 to
+    ``MAX_SPLIT_GROUPS`` values, none of the hashing call's own."""
+    out = []
+    for c in obs.columns:
+        s = obs[c]
+        if str(c) in OBS_COLUMNS or not (isinstance(s.dtype, pd.CategoricalDtype) or s.dtype == object):
+            continue
+        try:
+            n = s.nunique(dropna=True)
+        except TypeError:
+            continue
+        if 2 <= n <= MAX_SPLIT_GROUPS:
+            out.append(str(c))
+    return out
+
+
+def _group_values(obs: pd.DataFrame, column: str) -> np.ndarray:
+    return obs[column].astype(object).where(obs[column].notna(), "").astype(str).to_numpy(dtype=object)
+
+
+def suggest_split(obs: pd.DataFrame, counts: np.ndarray, tags: list[str]) -> dict | None:
+    """When some tag is 0 in more than ``ZERO_SHARE_FLAG`` of the cells: the obs column
+    whose values explain it (in each of its groups of at least ``SPLIT_MIN_CELLS`` cells,
+    every tag is either present or absent: 0 in under ``ZERO_SHARE_FLAG`` or in at least
+    ``SPLIT_ABSENT_SHARE`` of the group), the one with the most groups (a 10x lane is the
+    channel hashing is made in). Tags under ``MIN_TAG_MEAN`` counts per cell are left out
+    of it (not used). ``{"column", "n_groups"}`` or None."""
+    counts = np.asarray(counts, dtype=np.float64)
+    if counts.size:
+        counts = counts[:, counts.mean(axis=0) >= MIN_TAG_MEAN]
+    zero = counts == 0
+    if zero.size == 0 or (zero.mean(axis=0) <= ZERO_SHARE_FLAG).all():
+        return None
+    best = None
+    for c in _split_columns(obs):
+        codes, uniques = pd.factorize(_group_values(obs, c))
+        sizes = np.bincount(codes, minlength=len(uniques))
+        if sizes.min() < SPLIT_MIN_CELLS:
+            continue
+        ok = True
+        for k in range(len(uniques)):
+            z = zero[codes == k].mean(axis=0)
+            if ((z > ZERO_SHARE_FLAG) & (z < SPLIT_ABSENT_SHARE)).any():
+                ok = False
+                break
+        if ok and (best is None or len(uniques) > best["n_groups"]):
+            best = {"column": c, "n_groups": int(len(uniques))}
+    return best
+
+
+def check_call(call: Call, counts: np.ndarray, tags: list[str], groups: list[dict] | None = None) -> list[dict]:
+    """What makes a call unsafe to save as the doublet source (``blocking``) or worth a
+    word: tags at 0 in more than ``ZERO_SHARE_FLAG`` of the cells (within each channel
+    of a split call, its own tags), a tag hashedDrops left out for an ambient level of 0
+    (no cell can be called to it; DropletUtils drops such a tag too, with a warning),
+    and tags no cell is a singlet of. ``[{"kind", "tag", "blocking", "text"}]``."""
+    out: list[dict] = []
+    counts = np.asarray(counts, dtype=np.float64)
+    mean = counts.mean(axis=0) if counts.size else np.zeros(len(tags))
+    empty = [(t, m) for t, m in zip(tags, mean) if m < MIN_TAG_MEAN]
+    if empty:
+        out.append({"kind": "empty", "tag": [t for t, _ in empty], "blocking": True,
+                    "text": _names([t for t, _ in empty]) + f" {'has' if len(empty) == 1 else 'have'} almost no "
+                            f"counts (under {MIN_TAG_MEAN:g} per cell on average): tags that were not used"})
+    used = {t for t, m in zip(tags, mean) if m >= MIN_TAG_MEAN}
+    if groups is None:
+        zeros = [(t, z) for t, z in zip(tags, (counts == 0).mean(axis=0)) if z > ZERO_SHARE_FLAG and t in used]
+        if zeros:
+            shares = [z for _, z in zeros]
+            span = f"{min(shares):.0%}" if max(shares) - min(shares) < 0.01 else f"{min(shares):.0%} to {max(shares):.0%}"
+            out.append({"kind": "zeros", "tag": [t for t, _ in zeros], "blocking": True,
+                        "text": f"{_names([t for t, _ in zeros])} {'has' if len(zeros) == 1 else 'have'} no counts "
+                                f"at all in {span} of the cells: those cells were probably counted against another "
+                                "tag panel (another lane or channel)"})
+    else:
+        for g in groups:
+            zeros = [p["tag"] for p in g["per_tag"]
+                     if (p.get("zero_share") or 0) > ZERO_SHARE_FLAG and p["tag"] in used]
+            if zeros:
+                out.append({"kind": "zeros", "tag": zeros, "blocking": True,
+                            "text": f"{_names(zeros)} {'has' if len(zeros) == 1 else 'have'} no counts in more than "
+                                    f"{ZERO_SHARE_FLAG:.0%} of the cells of {g['group']}"})
+    fits = call.per_tag if groups is None else [{**p, "where": f" in {p['group']}"} for p in call.per_tag]
+    for p in fits:
+        if call.method == HASHEDDROPS and p.get("ambient") == 0:
+            out.append({"kind": "ambient", "tag": p["tag"], "blocking": True,
+                        "text": f"{p['tag']} has an ambient level of 0{p.get('where', '')} (its lower mode is all "
+                                "zeros), so hashedDrops leaves it out and no cell can be called to it"})
+    called = pd.Series(call.call).value_counts()
+    named = {x for d in out for x in (d["tag"] if isinstance(d["tag"], list) else [d["tag"]])}
+    for t in tags:
+        if int(called.get(t, 0)) == 0 and t not in named:
+            out.append({"kind": "unused", "tag": t, "blocking": False,
+                        "text": f"no cell is a singlet of {t}: if it was not used, leave it out (an unused tag "
+                                "changes the other tags' calls)"})
+    if groups is not None:
+        for g in groups:
+            if g["error"]:
+                out.append({"kind": "uncalled", "tag": None, "blocking": False,
+                            "text": f"{g['group']} ({g['n_cells']:,} cells) left uncalled: {g['error']}"})
+    return out
+
+
+def _names(tags: list[str]) -> str:
+    return tags[0] if len(tags) == 1 else ", ".join(tags[:-1]) + " and " + tags[-1]
+
+
+def _refusal(problems: list[dict], suggestion: dict | None, split_by: str | None) -> str:
+    parts = "; ".join(p["text"] for p in problems if p["blocking"])
+    if suggestion and not split_by:
+        hint = (f" Demultiplex within each channel: split by '{suggestion['column']}' (its "
+                f"{suggestion['n_groups']} groups each hold one tag panel), or leave out tags that were not used.")
+    else:
+        hint = " Leave out tags that were not used, or split by the column that names each cell's lane or channel."
+    return (f"Not saved: {parts}.{hint} To save it as it is (it would become the doublet source), "
+            "demultiplex again with 'Save anyway'.")
+
+
+def call_cells(adata, counts: np.ndarray, tags: list[str], method: str, quantile: float,
+               split_by: str | None) -> tuple[Call, list[dict] | None, list[dict]]:
+    """The call (validated as ``run`` does), its channels when split, and ``check_call``."""
+    if split_by is None:
+        call = run(counts, tags, method, quantile)
+        return call, None, check_call(call, counts, tags)
+    if split_by not in adata.obs.columns:
+        raise HashingError(f"Column '{split_by}' not found.")
+    if method not in METHODS:
+        raise HashingError(f"Unknown method '{method}' (htodemux or hashedDrops).")
+    if not MIN_TAGS <= len(tags) <= MAX_TAGS:
+        raise HashingError(f"Pick {MIN_TAGS} to {MAX_TAGS} tags (got {len(tags)}).")
+    if not np.isfinite(counts).all() or counts.min() < 0:
+        raise HashingError("Tag counts must be finite and not negative.")
+    if not 0.5 < quantile < 1:
+        raise HashingError("The positive quantile must be between 0.5 and 1.")
+    values = _group_values(adata.obs, split_by)
+    if pd.unique(values).size > MAX_SPLIT_GROUPS:
+        raise HashingError(f"'{split_by}' has more than {MAX_SPLIT_GROUPS} values: not a channel column.")
+    call, groups = split_call(counts, tags, values, method, quantile)
+    if all(g["error"] for g in groups):
+        raise HashingError("No channel could be called: " + "; ".join(f"{g['group']}: {g['error']}"
+                                                                     for g in groups[:5]))
+    for g in groups:  # each present tag's zeros within its channel, for check_call
+        rows = values == g["group"]
+        zero = (counts[rows] == 0).mean(axis=0)
+        for p in g["per_tag"]:
+            p["zero_share"] = round(float(zero[tags.index(p["tag"])]), 4)
+    return call, groups, check_call(call, counts, tags, groups)
+
+
+def demux(adata, tags: list[str], method: str = HTODEMUX, quantile: float = POSITIVE_QUANTILE,
+          split_by: str | None = None, allow_warnings: bool = False) -> dict:
     """Call every cell's tag and save it: the ``hash_*`` obs columns, the record
     in ``uns`` and provenance. Antibody features among ``tags`` are moved into
     the tag counts; features moved earlier but no longer listed go back to the
-    protein modality. Everything is checked (and the call computed) before the
-    dataset changes, so a HashingError leaves it as it was. Returns ``summary``."""
+    protein modality. ``split_by``: called within each value (``split_call``).
+    Everything is checked (and the call computed) before the dataset changes, so a
+    HashingError leaves it as it was; a call ``check_call`` finds unsafe is refused
+    (409) unless ``allow_warnings``, and then saved with its warnings. Returns ``summary``."""
     from scview.core import provenance
     from scview.core.obs_writes import forget_column_results
 
     counts, where = gather(adata, tags)
-    call = run(counts, tags, method, quantile)  # raises before any change
+    call, groups, problems = call_cells(adata, counts, tags, method, quantile, split_by or None)
+    if any(p["blocking"] for p in problems) and not allow_warnings:  # raises before any change
+        raise HashingError(_refusal(problems, suggest_split(adata.obs, counts, tags), split_by), status=409)
 
     key = _tag_key(adata)
     if key not in (None, HTO_KEY):  # another tool's table: copied under scView's key
@@ -767,6 +990,10 @@ def demux(adata, tags: list[str], method: str = HTODEMUX, quantile: float = POSI
         "method": call.method, "label": METHOD_LABELS[call.method], "tags": list(tags),
         "params": call.params, "thresholds": call.thresholds, "per_tag": call.per_tag,
         "n_cells": int(adata.n_obs), "counts": n_cls, "when": _now(),
+        "split_by": split_by or None, "warnings": [p["text"] for p in problems],
+        "saved_with_problems": any(p["blocking"] for p in problems),
+        "groups": None if groups is None else [{k: g[k] for k in ("group", "n_cells", "tags", "absent", "counts",
+                                                                   "error")} for g in groups],
     }
     state["call"] = record
     _write_state(adata, state)
@@ -787,9 +1014,11 @@ def demux(adata, tags: list[str], method: str = HTODEMUX, quantile: float = POSI
                                    "sources": {t: sources.get(t, "") for t in tags},
                                    "moved_from_protein": moved, "moved_back_to_protein": back,
                                    **call.params,
-                                   "cutoffs": {p["tag"]: p["cutoff"] for p in call.per_tag if "cutoff" in p},
+                                   "cutoffs": {(f"{p['tag']} ({p['group']})" if "group" in p else p["tag"]): p["cutoff"]
+                                               for p in call.per_tag if "cutoff" in p},
                                    "thresholds": call.thresholds, "counts": n_cls,
-                                   "sample_column": redone,
+                                   "sample_column": redone, "split_by": split_by or None,
+                                   "warnings": [p["text"] for p in problems],
                                })
     except Exception as e:  # provenance must never block the result
         logger.warning("Could not record the hashing call in provenance: %s", e)
@@ -884,6 +1113,18 @@ def _doublet_source(obs: pd.DataFrame) -> str | None:
     return None if used is None else used.columns[0]
 
 
+def _suggestion(adata) -> dict | None:
+    """``suggest_split`` on all the tag counts (the card's default channel column)."""
+    try:
+        frame = tag_counts_frame(adata)
+        if frame is None:
+            return None
+        return suggest_split(adata.obs, frame.to_numpy(dtype=np.float64), [str(c) for c in frame.columns])
+    except Exception as e:  # never break the card
+        logger.debug("hashing split suggestion failed: %s", e)
+        return None
+
+
 def summary(adata) -> dict:
     """Everything the hashing card shows: candidate tags, the saved call (counts
     from the current cells), the sample column and how hashing doublets compare
@@ -903,6 +1144,8 @@ def summary(adata) -> dict:
         "samples": None,
         "scrublet": None,
         "doublet_source": _doublet_source(obs),
+        "split_suggestion": _suggestion(adata),
+        "split_columns": _split_columns(obs),
     }
     call = state.get("call")
     if isinstance(call, dict) and CALL in obs.columns and CLASS in obs.columns:
@@ -910,6 +1153,8 @@ def summary(adata) -> dict:
         per_call = obs[CALL].astype(object).value_counts()
         out["call"] = {
             **{k: call.get(k) for k in ("method", "label", "tags", "params", "thresholds", "per_tag", "when")},
+            **{k: call.get(k) for k in ("split_by", "groups")}, "warnings": call.get("warnings") or [],
+            "saved_with_problems": bool(call.get("saved_with_problems")),
             "n_cells_at_call": call.get("n_cells"),
             "counts": {c: int((cls == c).sum()) for c in CLASSES},
             "per_call": {str(k): int(v) for k, v in per_call.items()},
@@ -956,7 +1201,8 @@ def plot_data(adata) -> dict:
     data = clr_tags(counts)
     called = adata.obs[CALL].astype(object).to_numpy() if call else np.full(adata.n_obs, None, dtype=object)
     doublet = called == DOUBLET
-    cutoffs = {p["tag"]: p.get("cutoff") for p in (call or {}).get("per_tag", [])}
+    # A split call has a cutoff per channel: none is drawn on the pooled histograms.
+    cutoffs = {} if (call or {}).get("split_by") else {p["tag"]: p.get("cutoff") for p in (call or {}).get("per_tag", [])}
     per_tag = []
     for j, t in enumerate(tags):
         top = float(data[:, j].max()) if data.shape[0] else 1.0
@@ -981,7 +1227,7 @@ def plot_data(adata) -> dict:
             "n": [int((called == c).sum()) for c in cols],
             "mean_clr": [[round(float(data[called == c, j].mean()), 4) for c in cols] for j in range(len(tags))],
         }
-        if call.get("method") == HASHEDDROPS:
+        if call.get("method") == HASHEDDROPS and not call.get("split_by"):  # one set of thresholds
             out["lfc"] = _lfc_hists(counts, call.get("thresholds") or {})
     return out
 
@@ -1007,10 +1253,11 @@ def _lfc_hists(counts: np.ndarray, thresholds: dict) -> dict:
 # calls themselves, so the script computes exactly what scView did.
 REPLAY_CONSTANTS = ("CALL", "CLASS", "MAX", "SECOND", "MARGIN", "SINGLET", "DOUBLET", "NEGATIVE", "CLASSES",
                     "HTODEMUX", "HASHEDDROPS", "POSITIVE_QUANTILE", "CLARA_SAMPLES", "MIN_PROP",
-                    "PSEUDO_COUNT", "DOUBLET_NMADS", "DOUBLET_MIN", "CONFIDENT_NMADS", "CONFIDENT_MIN")
+                    "PSEUDO_COUNT", "DOUBLET_NMADS", "DOUBLET_MIN", "CONFIDENT_NMADS", "CONFIDENT_MIN",
+                    "SPLIT_ABSENT_SHARE", "SPLIT_MIN_CELLS")
 REPLAY_CODE = (HashingError, clr_denominators, clr_tags, _randm, _sq_dist, _seqsum, _bswap2, clara, nb_fit,
                nb_quantile, Call, htodemux, _lower_mode, ambient_profile, _mad, hashed_drops_stats,
-               hashed_drops, call_columns)
+               hashed_drops, call_columns, split_call)
 
 
 def grounding_lines(adata) -> tuple[list[str], str]:
@@ -1039,7 +1286,8 @@ def grounding_lines(adata) -> tuple[list[str], str]:
         per = ", ".join(f"{t} {call['per_call'].get(t, 0):,}" for t in tags)
         per_text = f"singlets per tag: {per}"
     if call.get("method") == HTODEMUX:
-        cuts = ", ".join(f"{p['tag']} {p['cutoff']}" for p in call.get("per_tag") or [] if "cutoff" in p)
+        cuts = ", ".join(f"{p['tag']}{' in ' + p['group'] if 'group' in p else ''} {p['cutoff']}"
+                         for p in call.get("per_tag") or [] if "cutoff" in p)
         rule = f"positive above the background fit's {call['params'].get('positive_quantile', 0.99)} quantile; " \
                f"count cutoffs: {cuts}"
     else:
@@ -1054,6 +1302,11 @@ def grounding_lines(adata) -> tuple[list[str], str]:
         views += (f"; Scrublet, the second opinion, also calls {scr[DOUBLET]['scrublet_doublet']:,} of the "
                   f"hashing doublets and {scr[SINGLET]['scrublet_doublet']:,} hashing singlets "
                   "(same-sample doublets hashing cannot see, or false calls)")
+    if call.get("split_by"):
+        rule += f"; called within each value of '{call['split_by']}' (one tag panel per channel)"
+    if call.get("warnings"):
+        rule += ("; saved despite failed checks: " if call.get("saved_with_problems") else "; notes: ") + \
+            "; ".join(call["warnings"][:4])
     line = (f"- Cell hashing ({call.get('label')}, {len(tags)} tags): of {n:,} cells, {c[SINGLET]:,} singlets "
             f"({pct(SINGLET)}), {c[DOUBLET]:,} doublets ({pct(DOUBLET)}), {c[NEGATIVE]:,} negatives "
             f"({pct(NEGATIVE)}); {per_text}; {rule}" + (f"; {views}" if views else "") + f" [{TAG}]")
