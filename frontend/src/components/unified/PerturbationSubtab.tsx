@@ -12,12 +12,14 @@ import {
   saveAssignment,
   type AssignmentPreview,
   type GuideSource,
+  type MixscapeDeGenes,
   type MixscapeProgress,
   type MixscapeTarget,
   type PerturbationSummary,
 } from "@/api/perturbation";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
 import {
+  deGenesOf,
   deHandoff,
   ldaTraces,
   mappingChanges,
@@ -65,6 +67,7 @@ export function PerturbationSubtab() {
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [splitBy, setSplitBy] = useState("");
+  const [deGenes, setDeGenes] = useState<MixscapeDeGenes>("all");
   const [progress, setProgress] = useState<MixscapeProgress | null>(null);
   const [running, setRunning] = useState(false);
   const abort = useRef<AbortController | null>(null);
@@ -86,6 +89,7 @@ export function PerturbationSubtab() {
       setMinRatio(Number(s.call?.params?.min_ratio ?? s.defaults.min_ratio));
       // The control matches the result on show: a saved run's "Within" choice.
       setSplitBy((s.mixscape ?? s.mixscape_saved)?.split_by ?? "");
+      setDeGenes(deGenesOf((s.mixscape ?? s.mixscape_saved)?.params));
       setMapping({});
     } catch (e) {
       setError(errorText(e));
@@ -154,7 +158,11 @@ export function PerturbationSubtab() {
     setError(null);
     setProgress(null);
     try {
-      await runMixscape(datasetId, { split_by: splitBy || null }, { onProgress: setProgress, signal: ctl.signal });
+      await runMixscape(
+        datasetId,
+        { split_by: splitBy || null, de_genes: deGenes },
+        { onProgress: setProgress, signal: ctl.signal },
+      );
       await refresh(datasetId, MIXSCAPE_CLASS);
       useSettingsStore.getState().setColorBy(MIXSCAPE_CLASS);
       await load();
@@ -407,12 +415,12 @@ export function PerturbationSubtab() {
             <HoverTip
               width={320}
               tip={<>
-                Per target: a Wilcoxon test of its cells against the controls on the variable genes (|log2FC| ≥ 0.25,
-                adjusted p &lt; 0.05). Each cell&apos;s perturbation signature (its expression minus the mean of its 20
-                nearest control cells in PCA) is projected on the target&apos;s mean change, and a two-part Gaussian
-                mixture, the control part fixed, gives each cell a probability of being perturbed (P(KO)); above 0.5 is
-                KO. A target with fewer than 5 such genes is all NP. Checked against pertpy 1.0.3 (same class for 99.6% of
-                Papalexi 2021&apos;s 20,729 cells).
+                Per target: a Wilcoxon test of its cells against the controls on every gene, as Seurat&apos;s RunMixscape
+                does (detected in ≥ 10% of either group, |log2FC| ≥ 0.25, Bonferroni p &lt; 0.05). Each cell&apos;s
+                perturbation signature (its expression minus the mean of its 20 nearest control cells in PCA) is
+                projected on the target&apos;s mean change, and a two-part Gaussian mixture, the control part fixed,
+                gives each cell a probability of being perturbed (P(KO)); above 0.5 is KO. A target with fewer than 5
+                such genes is all NP.
               </>}
             >
               2. Mixscape: perturbed or not
@@ -435,6 +443,20 @@ export function PerturbationSubtab() {
                     {c.name} ({c.n_unique})
                   </option>
                 ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-0.5">
+              <span className="text-[11px] text-slate-500">
+                <Help id="perturbation.de_genes">DE genes from</Help>
+              </span>
+              <select
+                aria-label="DE genes from"
+                value={deGenes}
+                onChange={(e) => setDeGenes(e.target.value as MixscapeDeGenes)}
+                className="rounded border border-slate-300 bg-white px-1.5 py-1"
+              >
+                <option value="all">All genes (Seurat)</option>
+                <option value="variable">Variable genes (scView 0.77)</option>
               </select>
             </label>
             {running ? (

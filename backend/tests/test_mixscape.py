@@ -127,6 +127,59 @@ def test_plan_refusals():
     assert pl.skipped == {"tiny": 2} and pl.targets == ["A", "B"]
 
 
+def test_de_genes_all_finds_a_target_whose_genes_are_not_variable():
+    """Papalexi MYC (QA 2026-11-14): 12 DE genes among the 2,000 variable genes and no KO
+    cells; Seurat tests every gene (de.assay RNA) and gives 34 and KO cells. Here A's
+    knocked-down genes (0-9) are left out of the variable genes."""
+    a, ko = planted()
+    a.var["highly_variable"] = np.arange(a.n_vars) >= 10
+    res_v, cols_v = mixscape.run(a, mixscape.Params(de_genes="variable", lda=False))
+    res_a, cols_a = mixscape.run(a, mixscape.Params(lda=False))  # default: all
+    by_v = {t["target"]: t for t in res_v.targets}
+    by_a = {t["target"]: t for t in res_a.targets}
+    assert res_v.n_genes == 50 and res_a.n_genes == 60 and res_a.params["de_genes"] == "all"
+    assert by_v["A"]["n_ko"] < by_a["A"]["n_ko"]
+    top = [g["gene"] for g in by_a["A"]["top_de_genes"]]
+    assert sum(g in {f"G{i}" for i in range(10)} for g in top) >= 8  # the knocked-down genes lead
+    glob = np.full(a.n_obs, "", dtype=object)
+    glob[cols_a["rows"]] = cols_a[mixscape.GLOBAL]
+    assert (glob[ko] == "KO").all() and "Seurat" in res_a.gene_source
+    with pytest.raises(mixscape.MixscapeError, match="de_genes") as e:
+        mixscape.plan(a, mixscape.Params(de_genes="hvg"))
+    assert e.value.status == 422
+
+
+def test_seurat_rule_min_pct_fold_change_and_bonferroni():
+    """TopDEGenesMixscape: FindMarkers(min.pct = 0.1, logfc.threshold) and p_val_adj =
+    Bonferroni over every gene of the assay."""
+    rng = np.random.default_rng(3)
+    n_c, n_t = 200, 100
+    labels = np.array(["NT"] * n_c + ["A"] * n_t)
+    X = np.zeros((n_c + n_t, 4))
+    X[:, 0] = rng.poisson(5, n_c + n_t)  # up in A, detected everywhere
+    X[n_c:, 0] += 10
+    X[n_c:n_c + 8, 1] = 50  # up in 8% of A only: under min.pct
+    X[:, 2] = rng.poisson(5, n_c + n_t)  # no change
+    X[n_c:, 3] = rng.poisson(1.2, n_t)  # A only, low level
+    L = np.log1p(X)
+    pct, lmean = mixscape.group_stats(sp.csr_matrix(L), labels, ["NT", "A"])
+    assert pct[1, 1] == pytest.approx(0.08) and pct[0, 3] == 0
+    assert lmean[1, 0] == pytest.approx(np.log2(X[n_c:, 0].mean() + 1))
+    names = np.array(["G0", "G1", "G2", "G3"])
+    de = mixscape.de_genes(sp.csr_matrix(L, dtype=np.float32), labels, ["A"], "NT", names, 0.25, 0.05, 1,
+                           rule=mixscape.DE_ALL, n_genes_total=4)["A"]
+    assert set(de["gene"]) == {"G0", "G3"}  # G1: under min.pct; G2: no fold change
+    assert de.set_index("gene").loc["G0", "logfc"] == pytest.approx(lmean[1, 0] - lmean[0, 0])
+    dense = mixscape.de_genes(L.astype(np.float32), labels, ["A"], "NT", names, 0.25, 0.05, 1,
+                              rule=mixscape.DE_ALL, n_genes_total=4)["A"]
+    assert list(dense["gene"]) == list(de["gene"])
+    # Bonferroni over every gene of the dataset (n_genes_total), not only those tested.
+    more = mixscape.de_genes(sp.csr_matrix(L, dtype=np.float32), labels, ["A"], "NT", names, 0.25, 0.05, 1,
+                             rule=mixscape.DE_ALL, n_genes_total=8)["A"].set_index("gene")
+    for g, p in de.set_index("gene")["pval_adj"].items():
+        assert more.loc[g, "pval_adj"] == pytest.approx(min(2 * p, 1.0))
+
+
 def test_filler_and_control_labels_are_not_targets():
     """set_labels' "Unassigned" filler (18,430 Papalexi cells) ran as a target (QA 2026-11-14)."""
     a, _ = planted()

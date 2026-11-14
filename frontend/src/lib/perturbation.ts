@@ -1,6 +1,6 @@
 import type { Data } from "plotly.js";
 import type { DESettings } from "@/stores/deSettingsStore";
-import type { MixscapeResult, MixscapeTarget, PosteriorHist } from "@/api/perturbation";
+import type { MixscapeDeGenes, MixscapeResult, MixscapeTarget, PosteriorHist } from "@/api/perturbation";
 
 /** obs columns Mixscape writes (backend core/mixscape.py). */
 export const MIXSCAPE_CLASS = "mixscape_class";
@@ -64,6 +64,13 @@ export function deHandoff(target: string): Partial<DESettings> {
     withinCol: "",
     withinVal: "",
   };
+}
+
+/** A run's DE gene choice: "all" (Seurat's rule) unless it ran on the variable genes;
+ *  runs before 0.78 have no choice recorded and used the variable genes. */
+export function deGenesOf(params: Record<string, unknown> | undefined): MixscapeDeGenes {
+  if (!params) return "all";
+  return params.de_genes === "all" ? "all" : "variable";
 }
 
 /** Why the preview's target count leaves some mapped targets out: their guides are in

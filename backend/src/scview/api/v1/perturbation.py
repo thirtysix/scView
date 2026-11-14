@@ -59,6 +59,8 @@ class MixscapeRequest(BaseModel):
     min_de_genes: int = mixscape.MIN_DE_GENES
     iter_num: int = mixscape.ITER_NUM
     lda: bool = True
+    # all: every gene, Seurat RunMixscape's DE rule (default); variable: the variable genes (scView 0.77)
+    de_genes: str = mixscape.DE_ALL
 
 
 def _sse(event: str, data: dict[str, Any]) -> str:
@@ -86,7 +88,8 @@ def _overview(adaptor) -> dict[str, Any]:
     out["mixscape_saved"] = mixscape.saved_record(adaptor.adata) if r is None else None
     out["mixscape_defaults"] = {"n_neighbors": mixscape.N_NEIGHBORS, "n_dims": mixscape.N_DIMS,
                                 "logfc_threshold": mixscape.LOGFC, "pval_cutoff": mixscape.PVAL,
-                                "min_de_genes": mixscape.MIN_DE_GENES, "iter_num": mixscape.ITER_NUM}
+                                "min_de_genes": mixscape.MIN_DE_GENES, "iter_num": mixscape.ITER_NUM,
+                                "de_genes": mixscape.DE_ALL}
     return out
 
 
@@ -154,7 +157,7 @@ def _params(adata, body: MixscapeRequest) -> mixscape.Params:
     return mixscape.Params(labels=labels, control=control, split_by=body.split_by or None,
                            n_neighbors=body.n_neighbors, n_dims=body.n_dims, logfc_threshold=body.logfc_threshold,
                            pval_cutoff=body.pval_cutoff, min_de_genes=body.min_de_genes,
-                           iter_num=body.iter_num, lda=body.lda)
+                           iter_num=body.iter_num, lda=body.lda, de_genes=body.de_genes)
 
 
 async def _save(dm: DatasetManager, dataset_id: str, result: mixscape.MixscapeResult, columns: dict,

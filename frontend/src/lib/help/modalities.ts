@@ -124,6 +124,8 @@ export const MODALITIES_HELP: Record<string, string> = {
     "The target label of the non-targeting guides. Mixscape compares every target's cells with these control cells, so pick the label that marks guides with no target.",
   "perturbation.split_by":
     "Find each cell's control neighbours only within its own replicate or batch. Use it when replicates or batches differ, so a batch difference is not read as a perturbation.",
+  "perturbation.de_genes":
+    "Which genes each target is tested on against the controls. All genes is Seurat's RunMixscape rule: detected in at least 10% of either group, Bonferroni over every gene. Variable genes is scView 0.77's rule and the pertpy tutorial's; on Papalexi 2021 it found no MYC knockout cells.",
   "perturbation.colour_by":
     "class: each cell as its target's KO or NP, or NT for the controls. KO / NP / NT: the same without the target names. P(KO): each cell's probability of being perturbed, from 0 to 1.",
   "perturbation.result":

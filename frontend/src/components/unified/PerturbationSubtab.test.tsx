@@ -121,6 +121,7 @@ describe("PerturbationSubtab", () => {
     api.getPerturbation.mockResolvedValue({ ...BASE, call: CALL, mixscape_saved: saved });
     render(<PerturbationSubtab />);
     await waitFor(() => expect(screen.getByLabelText("Split by")).toHaveValue("rep"));
+    expect(screen.getByLabelText("DE genes from")).toHaveValue("variable"); // a run before 0.78
   });
 
   it("runs Mixscape, shows the per-target table, the posterior and hands a target to DE", async () => {
@@ -128,9 +129,10 @@ describe("PerturbationSubtab", () => {
     api.runMixscape.mockResolvedValue(RESULT);
     render(<PerturbationSubtab />);
     fireEvent.change(await screen.findByLabelText("Split by"), { target: { value: "rep" } });
+    expect(screen.getByLabelText("DE genes from")).toHaveValue("all");
     fireEvent.click(screen.getByRole("button", { name: "Run Mixscape" }));
     await waitFor(() => expect(api.runMixscape).toHaveBeenCalled());
-    expect(api.runMixscape.mock.calls[0]?.[1]).toEqual({ split_by: "rep" });
+    expect(api.runMixscape.mock.calls[0]?.[1]).toEqual({ split_by: "rep", de_genes: "all" });
     const row = await screen.findByTestId("mixscape-row-A");
     expect(within(row).getByText("70%")).toBeInTheDocument();
     expect(screen.getByTestId("mixscape-row-B")).toHaveTextContent("fewer than 5 DE genes");

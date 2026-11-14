@@ -4,6 +4,9 @@ import { streamEvents } from "./clustering";
 /** Where each cell's guide comes from (backend core/crispr.py). */
 export type GuideSource = "cellranger" | "counts" | "column";
 
+/** Which genes Mixscape tests per target (backend mixscape.DE_GENE_CHOICES). */
+export type MixscapeDeGenes = "all" | "variable";
+
 export interface GuideColumnCandidate {
   column: string;
   n_values: number;
@@ -92,7 +95,7 @@ export interface PerturbationSummary {
   mixscape: MixscapeResult | null;
   /** The run saved in the dataset, when its full result is no longer kept */
   mixscape_saved: Omit<MixscapeResult, "lda"> | null;
-  mixscape_defaults: Record<string, number>;
+  mixscape_defaults: Record<string, number | string>;
   running: boolean;
 }
 
@@ -127,6 +130,8 @@ export interface MixscapeBody {
   control?: string;
   split_by?: string | null;
   lda?: boolean;
+  /** all: every gene, Seurat RunMixscape's DE rule (default); variable: the variable genes (scView 0.77) */
+  de_genes?: MixscapeDeGenes;
 }
 
 export interface MixscapeProgress {

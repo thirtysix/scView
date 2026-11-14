@@ -13,10 +13,20 @@ perturbed ("NP"):
    ``split_by`` (a replicate or batch column) when given. The neighbours are
    exact (pertpy uses approximate ones, NNDescent).
 2. Per target, a Wilcoxon test of its cells against the controls on the
-   log-normalised expression of the variable genes (scanpy's
-   ``rank_genes_groups`` with ``reference``, Benjamini-Hochberg; Seurat's and
-   pertpy's default ``de.assay``); genes with |log2 FC| >= 0.25 and adjusted
-   p < 0.05. Fewer than ``min_de_genes`` (5): the whole target is "NP".
+   log-normalised expression. ``de_genes="all"`` (the default since 0.78) is
+   Seurat's ``RunMixscape`` rule (``TopDEGenesMixscape``: ``FindMarkers`` on every
+   gene of ``de.assay = "RNA"``, ``min.pct = 0.1``): a gene detected in at least
+   10% of the target's or the controls' cells, with |log2 FC| >= 0.25 on Seurat's
+   fold change (``log2(mean(expm1(x)) + 1)`` per group), Bonferroni over all the
+   dataset's genes, < 0.05; the signature of a DE gene outside the variable
+   genes is computed as Seurat's ``GetMissingPerturb`` does. ``de_genes =
+   "variable"`` is scView 0.77's rule: the variable genes only, scanpy's fold
+   change, Benjamini-Hochberg (on Papalexi 2021 it gave MYC 12 DE genes and no
+   KO cells where Seurat's rule gives 34 and KO cells). pertpy 1.0.3 tests every
+   gene of the matrix it is given but keeps only the top 100 per target
+   (``rank_genes_groups``' default ``n_genes``). The p values here have no tie or
+   continuity correction (scanpy's), slightly larger than R's for genes with
+   many zeros. Fewer than ``min_de_genes`` (5): the whole target is "NP".
 3. The signature of those genes, scaled per gene over the target's and the
    controls' cells, is projected on the difference of the target's and the
    controls' mean signature. A two-component Gaussian mixture is fitted to the
@@ -66,6 +76,9 @@ PVAL = 0.05
 MIN_DE_GENES = 5
 ITER_NUM = 10
 N_HVG = 2000  # variable genes when the dataset has none marked
+DE_ALL, DE_VARIABLE = "all", "variable"  # Params.de_genes: Seurat's rule, or scView 0.77's
+DE_GENE_CHOICES = (DE_ALL, DE_VARIABLE)
+MIN_PCT = 0.1  # Seurat TopDEGenesMixscape's FindMarkers(min.pct)
 MIN_TARGET_CELLS = 5
 MAX_SIGNATURE_VALUES = 300_000_000  # cells x DE genes kept as float32 (1.2 GB)
 MAX_LDA_POINTS = 5000
@@ -107,6 +120,7 @@ class Params:
     iter_num: int = ITER_NUM
     scale: bool = True
     lda: bool = True
+    de_genes: str = DE_ALL
 
 
 @dataclass
@@ -236,6 +250,9 @@ def plan(adata, params: Params) -> Plan:
         raise MixscapeError("The fold-change threshold must be 0-10 and the p cut-off in (0, 1].")
     if not 1 <= p.min_de_genes <= 1000 or not 1 <= p.iter_num <= 100:
         raise MixscapeError("Minimum DE genes must be 1-1000 and rounds 1-100.")
+    if p.de_genes not in DE_GENE_CHOICES:
+        raise MixscapeError(f"de_genes must be '{DE_ALL}' (every gene, Seurat's rule) or '{DE_VARIABLE}' "
+                            "(the variable genes, scView 0.77's rule).", 422)
     pca = adata.obsm.get("X_pca") if hasattr(adata, "obsm") else None
     if pca is None:
         raise MixscapeError("No PCA: run the pipeline (PCA) first.", 422)
@@ -277,7 +294,12 @@ def plan(adata, params: Params) -> Plan:
             raise MixscapeError(f"Only {n_ctrl} control cells{where}: the signature needs at least "
                                 f"{p.n_neighbors} (lower the neighbours, or drop the split).")
     expr = _expression(adata)
-    gene_idx, gene_source = _variable_genes(adata, expr, expr.names)
+    if p.de_genes == DE_VARIABLE:
+        gene_idx, gene_source = _variable_genes(adata, expr, expr.names)
+    else:
+        gene_idx = np.arange(len(expr.names))
+        gene_source = (f"all {gene_idx.size:,} genes (Seurat's rule: detected in >= {MIN_PCT:.0%} of either "
+                       "group, Bonferroni)")
     return Plan(params=p, rows=rows, labels=labels, targets=sorted(targets), skipped=skipped, excluded=excluded,
                 splits=splits,
                 gene_idx=gene_idx, gene_names=np.asarray(expr.names).astype(str)[gene_idx],
@@ -326,23 +348,71 @@ def neighbours(pca: np.ndarray, labels: np.ndarray, control: str, splits, k: int
     return out
 
 
+def group_stats(E, labels: np.ndarray, groups: list[str]) -> tuple[np.ndarray, np.ndarray]:
+    """Per group (rows) and gene (columns of ``E``, log values): the share of cells with
+    a value above 0 and ``log2(mean(expm1(x)) + 1)``, Seurat's per-group value of its
+    fold change (``FoldChange``, data slot, pseudocount 1, base 2)."""
+    idx = {g: i for i, g in enumerate(groups)}
+    rows = np.array([idx.get(str(v), -1) for v in labels])
+    keep = np.flatnonzero(rows >= 0)
+    G = sp.csr_matrix((np.ones(keep.size), (rows[keep], keep)), shape=(len(groups), len(labels)))
+    n = np.asarray(G.sum(axis=1)).ravel()[:, None]
+    if sp.issparse(E):
+        Ec = sp.csr_matrix(E, dtype=np.float64, copy=True)
+        Ec.data = np.expm1(Ec.data)
+        detected = sp.csr_matrix((np.ones_like(Ec.data), Ec.indices, Ec.indptr), shape=Ec.shape)
+        detected.data[Ec.data <= 0] = 0
+        pct = np.asarray((G @ detected).todense()) / n
+        mean = np.asarray((G @ Ec).todense()) / n
+    else:
+        A = np.asarray(E, dtype=np.float64)
+        pct = (G @ (A > 0).astype(np.float64)) / n
+        mean = (G @ np.expm1(A)) / n
+    return pct, np.log2(mean + 1)
+
+
 def de_genes(E, labels: np.ndarray, targets: list[str], control: str, gene_names: np.ndarray,
-             logfc: float, pval: float, min_de: int) -> dict[str, pd.DataFrame]:
-    """Per target: its DE genes against the controls (Wilcoxon, BH), columns gene /
-    pos (column of E) / logfc / pval_adj / score, rank order; empty when fewer than
-    ``min_de``."""
+             logfc: float, pval: float, min_de: int, rule: str = DE_VARIABLE,
+             n_genes_total: int | None = None) -> dict[str, pd.DataFrame]:
+    """Per target: its DE genes against the controls (Wilcoxon), columns gene / pos
+    (column of E) / logfc / pval_adj / score, rank order; empty when fewer than
+    ``min_de``. ``rule`` ``DE_VARIABLE``: scanpy's fold change, Benjamini-Hochberg;
+    ``DE_ALL``: Seurat's (``min.pct``, its fold change as a filter before the test,
+    Bonferroni over ``n_genes_total``)."""
     import anndata as ad
 
     from scview.core import rank_genes
 
+    mask = None
+    if rule == DE_ALL:
+        pct, lmean = group_stats(E, labels, [control, *targets])
+        passes = {t: (np.maximum(pct[i + 1], pct[0]) >= MIN_PCT) & (np.abs(lmean[i + 1] - lmean[0]) >= logfc)
+                  for i, t in enumerate(targets)}
+        mask = np.logical_or.reduce(list(passes.values())) if passes else np.zeros(E.shape[1], dtype=bool)
+        if not mask.any():
+            return {t: pd.DataFrame({"gene": [], "pos": [], "logfc": [], "pval_adj": [], "score": []})
+                    for t in targets}
     test = ad.AnnData(X=E, obs=pd.DataFrame({"g": pd.Categorical(labels)},
                                             index=[str(i) for i in range(len(labels))]),
                       var=pd.DataFrame(index=pd.Index(gene_names).astype(str)))
     rank_genes.rank_genes_groups(test, "g", method="wilcoxon", groups=targets, reference=control,
-                                 use_raw=False, n_genes=int(E.shape[1]))
+                                 use_raw=False, n_genes=int(E.shape[1] if mask is None else mask.sum()),
+                                 mask_var=mask)
     rgg = test.uns.pop("rank_genes_groups")
     pos = pd.Index(gene_names.astype(str))
     out = {}
+    if rule == DE_ALL:
+        n_all = int(n_genes_total or E.shape[1])
+        for i, t in enumerate(targets):
+            names = np.asarray(rgg["names"][t]).astype(str)
+            at = pos.get_indexer(names)
+            padj = np.minimum(np.asarray(rgg["pvals"][t], dtype=np.float64) * n_all, 1.0)
+            keep = passes[t][at] & (padj < pval)
+            df = pd.DataFrame({"gene": names[keep], "pos": at[keep],
+                               "logfc": (lmean[i + 1] - lmean[0])[at][keep], "pval_adj": padj[keep],
+                               "score": np.asarray(rgg["scores"][t], dtype=np.float64)[keep]})
+            out[t] = (df if len(df) >= min_de else df.iloc[0:0]).reset_index(drop=True)
+        return out
     for t in targets:
         df = pd.DataFrame({"gene": np.asarray(rgg["names"][t]).astype(str),
                            "logfc": np.asarray(rgg["logfoldchanges"][t], dtype=np.float64),
@@ -501,10 +571,11 @@ def iter_mixscape(adata, pl: Plan, *, stop: Callable[[], bool] | None = None) ->
     nbrs = neighbours(pca, pl.labels, p.control, pl.splits, p.n_neighbors)
     check()
     yield {"type": "progress", "step": "de", "done": 1, "total": n_steps,
-           "message": f"Testing {len(pl.targets)} targets against the controls (Wilcoxon)"}
+           "message": f"Testing {len(pl.targets)} targets against the controls on "
+                      f"{pl.gene_idx.size:,} genes (Wilcoxon)"}
     E = _subset(adata, pl)
     de = de_genes(E, pl.labels, pl.targets, p.control, pl.gene_names, p.logfc_threshold, p.pval_cutoff,
-                  p.min_de_genes)
+                  p.min_de_genes, rule=p.de_genes, n_genes_total=int(pl.gene_idx.size))
     check()
     union = np.unique(np.concatenate([d["pos"].to_numpy() for d in de.values()] + [np.zeros(0, int)]))
     if union.size * pl.rows.size > MAX_SIGNATURE_VALUES:
@@ -692,7 +763,8 @@ def grounding_lines(adaptor) -> tuple[list[str], str | None]:
                f"{s['n_targets_with_ko']} targets with any KO cells")
     out = ["\n## CRISPR screen (guide assignment and Mixscape)", *lines,
            f"- Mixscape (Papalexi 2021; signature vs {r.params.get('n_neighbors')} nearest control cells, "
-           f"DE |log2FC| >= {r.params.get('logfc_threshold')}, adj p < {r.params.get('pval_cutoff')}): {mdetail}; "
+           f"DE |log2FC| >= {r.params.get('logfc_threshold')}, adj p < {r.params.get('pval_cutoff')} "
+           f"on {r.gene_source}): {mdetail}; "
            f"KO fraction per target: {per}" + (f"; no KO cells (all NP): {', '.join(none[:15])}" if none else "")
            + f" [{TAG}]"]
     return out, mdetail
