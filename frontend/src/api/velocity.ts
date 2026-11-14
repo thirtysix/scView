@@ -22,6 +22,16 @@ export interface VelocitySource {
   /** Cells of the dataset as it is now, with and without velocity counts */
   cells_now?: number;
   cells_without_now?: number;
+  /** The file's cells not in the dataset (filtered out, or another sample's) */
+  cells_in_file_unmatched?: number;
+  /** The file's cells whose barcode is in the dataset under another sample */
+  cells_other_sample?: number;
+  /** Each sample of the file and the dataset's sample it was found to be (null: not in the dataset) */
+  samples?: { file_sample: string; dataset_sample: string | null; cells_in_file: number; cells_matched: number }[];
+  /** Where the dataset's samples were read: "cell names" or an obs column */
+  sample_key?: string | null;
+  /** The dataset's samples that no file sample matched */
+  samples_without?: { dataset_sample: string; cells: number }[];
 }
 
 export interface VelocityGroup {

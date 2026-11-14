@@ -43,6 +43,34 @@ function matchLine(s: VelocitySource): string {
   return [cells, genes].filter(Boolean).join("; ");
 }
 
+/** Where the file's other cells went, and which of the dataset's samples have no counts. */
+function sampleLines(s: VelocitySource): string[] {
+  const out: string[] = [];
+  const unmatched = s.cells_in_file_unmatched ?? 0;
+  if (unmatched > 0 && s.cells_in_file != null) {
+    const other = s.cells_other_sample ?? 0;
+    out.push(
+      `${unmatched.toLocaleString()} of the file's ${s.cells_in_file.toLocaleString()} cells are not in this dataset` +
+        (other > 0 ? ` (${other.toLocaleString()} of them from a sample the dataset does not have)` : " (filtered out, or another sample's)") +
+        ".",
+    );
+  }
+  const by = s.sample_key === "cell names" ? "the cell names" : s.sample_key ? `column ${s.sample_key}` : null;
+  if (s.samples?.length && by) {
+    const placed = s.samples.map((x) =>
+      x.dataset_sample != null
+        ? `${x.file_sample} = ${x.dataset_sample} (${x.cells_matched.toLocaleString()} of ${x.cells_in_file.toLocaleString()} cells)`
+        : `${x.file_sample}: not in this dataset`,
+    );
+    out.push(`Samples matched by ${by}: ${placed.join("; ")}.`);
+  }
+  if (s.samples_without?.length) {
+    const missing = s.samples_without.map((x) => `${x.dataset_sample} (${x.cells.toLocaleString()} cells)`).join(", ");
+    out.push(`No counts for ${missing}: attach every sample's file together, in one go.`);
+  }
+  return out;
+}
+
 function phaseTraces(p: VelocityPhase, palette: Parameters<typeof mapCategoryToColor>[1]): Data[] {
   const marker = { size: 4, opacity: 0.7 };
   const traces: Data[] = [];
@@ -271,6 +299,11 @@ export function VelocitySubtab() {
             {status.source.matrices ? ` (${status.source.matrices.join(", ")})` : ""}.
           </p>
           {matchLine(status.source) && <p className="text-slate-600">{matchLine(status.source)}.</p>}
+          {sampleLines(status.source).map((line) => (
+            <p key={line} className={line.startsWith("No counts") ? "text-amber-700" : "text-slate-600"}>
+              {line}
+            </p>
+          ))}
           {!!status.source.cells_without_now && (
             <p className="text-amber-700">
               {status.source.cells_without_now.toLocaleString()} of this dataset's cells have no velocity counts and get no arrow.
@@ -282,11 +315,13 @@ export function VelocitySubtab() {
       <div className="flex flex-wrap items-center gap-2">
         <label className="cursor-pointer rounded-md border border-slate-300 bg-white px-2 py-1 hover:bg-slate-50">
           <Help id="velocity.attach">
-            {status.attached ? "Attach other counts" : "Attach a file"} (.loom, .h5ad)
+            {status.attached ? "Attach other counts" : "Attach files"} (.loom, .h5ad; one per sample)
           </Help>
           <input
             type="file"
+            multiple
             accept=".loom,.h5ad"
+            aria-label="Velocity .loom or .h5ad files"
             className="hidden"
             disabled={attaching || running}
             onChange={(e) => {
