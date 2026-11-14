@@ -446,8 +446,9 @@ export function TrajectoryPanel() {
       )}
       <p className="mt-1.5 text-xs text-slate-500">
         Diffusion pseudotime (scanpy DPT) on the neighbour graph, measured from the start
-        group&apos;s most central cell. Saved to the dataset as <code>{DPT_COLUMN}</code>; cells the
-        start group cannot reach are left grey.
+        group&apos;s most central cell. Saved to the dataset as <code>{DPT_COLUMN}</code> (the latest)
+        and <code>scview_dpt_</code> plus the start group (kept when you start from another one);
+        cells the start group cannot reach, or that hang on the rest by weak links, are left grey.
       </p>
       {computeError && <p className="mt-1.5 text-xs text-red-600">{computeError}</p>}
     </div>

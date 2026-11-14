@@ -33,6 +33,7 @@ def test_a_graph_step_stales_paga_and_pseudotime_a_clustering_does_not():
     assert "fingerprint" not in public_params(a, read_params(a))
 
     provenance.record_step(a, step="clustering", tool="leiden", params={})  # labels only
+    provenance.record_step(a, step="marker_genes", tool="scanpy", params={})  # reads no graph
     provenance.record_step(a, step="velocity", tool="scview", params={})  # additive
     assert paga_view(a)["stale"] is None and public_params(a, read_params(a))["stale"] is None
 
@@ -42,7 +43,7 @@ def test_a_graph_step_stales_paga_and_pseudotime_a_clustering_does_not():
     assert public_params(a, read_params(a))["stale"] == "Batch correction rerun, neighbours rebuilt after this result."
 
     # The recipe's own pseudotime entry carries no fingerprint.
-    assert "fingerprint" not in provenance.read_provenance(a)["history"][-5]["params"]
+    assert "fingerprint" not in provenance.read_provenance(a)["history"][-6]["params"]
 
 
 def test_a_record_from_before_fingerprints_compares_the_graph():
