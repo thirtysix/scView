@@ -2,6 +2,9 @@
 
 from typing import Literal
 
+import numpy as np
+import pandas as pd
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel
@@ -112,8 +115,12 @@ async def get_metadata_column(
         raise HTTPException(status_code=404, detail=f"Column '{column}' not found.")
 
     if format == "json":
-        # Missing values as null: NaN is not valid JSON and made this a 500.
-        values = series.astype(object).where(series.notna(), None).tolist()
+        # Missing values as null: NaN is not valid JSON and made this a 500. Infinities
+        # too (a pseudotime's unreachable cells are inf: describe_column on it was a 500).
+        present = series.notna()
+        if pd.api.types.is_float_dtype(series):
+            present &= np.isfinite(series.to_numpy(dtype=np.float64, na_value=np.nan))
+        values = series.astype(object).where(present, None).tolist()
         return {"column": column, "values": values, "dtype": str(series.dtype)}
 
     ipc_bytes = series_to_arrow_ipc(series, name=column)
@@ -131,8 +138,6 @@ def _marker_keys(adata, column: str) -> list[str]:
 def _follow_rename(adata, column: str, old: str, new: str, merge: bool) -> None:
     """Carry a category rename into the column's markers and cached enrichment,
     which are keyed by group name and otherwise keep the old label."""
-    import pandas as pd
-
     from scview.core import marker_matrix
     from scview.core.ora_background import meta_key
     from scview.core.pipeline import drop_enrichment_cache

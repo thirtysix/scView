@@ -138,7 +138,8 @@ async def get_dataset(dataset_id: DatasetId) -> str:
     """One dataset: cells, genes, processing steps done, embeddings, every obs column (name,
     type and number of values, always all of them), the values of the small categorical
     columns (30 or fewer values, as many as fit; describe_column gives the rest), expression
-    layers, active clustering, large-dataset mode, and other modalities present."""
+    layers, active clustering, large-dataset mode, other modalities present, and whether RNA
+    velocity counts (spliced and unspliced) are attached."""
     d = await _get(_ds(dataset_id))
     cols, values = [], {}
     for c in d.get("obs_columns") or []:
@@ -158,6 +159,11 @@ async def get_dataset(dataset_id: DatasetId) -> str:
     large = d.get("large")
     out["large_mode"] = bool(large) if not isinstance(large, dict) else bool(large.get("large", True))
     out["modalities"] = [k for k in ("protein", "atac", "perturbation", "hashing", "spatial") if d.get(k)]
+    if await asyncio.to_thread(_velocity_attached, dataset_id):
+        out["modalities"].append("velocity")
+        out["velocity"] = "spliced and unspliced counts attached: get_velocity, then velocity runs it"
+    else:
+        out["velocity"] = "no spliced/unspliced counts: upload_instructions shows how to attach them"
     out.update(_spatial_summary(d))
     if d.get("status") == "ready":
         try:
@@ -181,6 +187,13 @@ async def get_dataset(dataset_id: DatasetId) -> str:
     if left:
         out["column_values_left_out"] = f"{', '.join(left)}: describe_column lists them"
     return dumps(out, 10**9)
+
+
+def _velocity_attached(dataset_id: str) -> bool:
+    """Spliced and unspliced counts in the dataset's store (a file check: nothing is loaded)."""
+    from scview.core import velocity_input
+
+    return bool(velocity_input.has_store(api.dataset_manager().data_dir, dataset_id))
 
 
 MAX_SECTIONS_LISTED = 40
@@ -735,8 +748,34 @@ def _pipeline_result(job: jobs.Job) -> dict[str, Any]:
     return out
 
 
+def _single_sample_note(adaptor) -> str | None:
+    """The clusters of the active clustering that are almost all one sample (confounding.py)."""
+    from scview.core import confounding, qc_groups
+
+    adata = adaptor.adata
+    cluster_col = adaptor.active_clustering_column()
+    sample_col, _why = qc_groups.sample_grouping(adata)
+    if not cluster_col or not sample_col:
+        return None
+    found = confounding.single_sample_clusters(adata.obs, cluster_col, sample_col)
+    return confounding.single_sample_note(found, cluster_col, sample_col, int(adata.obs[sample_col].nunique()))
+
+
+async def _run_result(job: jobs.Job) -> dict[str, Any]:
+    """The run's summary; after a clustering, a note on clusters that are one sample."""
+    out = _pipeline_result(job)
+    if "clustering" in (out.get("steps_run") or []) and out.get("status") not in ("cancelled", "stopped"):
+        try:
+            note = await asyncio.to_thread(_single_sample_note, await _adaptor(job.dataset_id))
+        except Exception:  # noqa: BLE001 - a note only: the run's own summary stands
+            note = None
+        if note:
+            out["clusters_one_sample"] = note
+    return out
+
+
 async def _start_run(dataset_id: str, steps: list[str], p: dict[str, Any], kind: str,
-                     finish: Callable = _pipeline_result, allow_large_mode: bool = True) -> jobs.Job:
+                     finish: Callable = _run_result, allow_large_mode: bool = True) -> jobs.Job:
     if any(j.dataset_id == dataset_id for j in jobs.running()):
         busy = next(j for j in jobs.running() if j.dataset_id == dataset_id)
         raise ToolError(f"Job {busy.id} ({busy.kind}) is still running on this dataset; "
@@ -1757,16 +1796,20 @@ async def _adaptor(dataset_id: str):
 @tool(READ)
 async def plot(
     dataset_id: DatasetId,
-    kind: Annotated[Literal["embedding", "violin", "dotplot", "coverage"], Field(description=(
+    kind: Annotated[Literal["embedding", "violin", "dotplot", "coverage", "phase"], Field(description=(
         "embedding: cells on a UMAP/tSNE/PCA, or spots on the tissue (embedding 'spatial'), coloured "
-        "by color_by or gene; violin: one gene by groupby; dotplot: genes x groupby (size = share "
+        "by color_by or gene; violin: one gene, or a numeric obs column (value_column, e.g. a pseudotime), by "
+        "groupby; dotplot: genes x groupby (size = share "
         "expressing, colour = mean); coverage: ATAC fragment depth per group of groupby over a gene "
-        "(its body +- 5 kb) or a region, with the peaks and genes there (needs the fragments file)."))] = "embedding",
+        "(its body +- 5 kb) or a region, with the peaks and genes there (needs the fragments file); phase: "
+        "one gene's RNA velocity phase portrait (unspliced vs spliced, the fitted line), coloured by "
+        "color_by."))] = "embedding",
     embedding: Annotated[str, Field(description=(
         "obsm key, e.g. X_umap (default), X_tsne, X_pca, or spatial: the tissue positions (each "
         "section drawn on its own, side by side; see section)."))] = "X_umap",
-    color_by: Annotated[str | None, Field(description="Obs column to colour by (embedding).")] = None,
-    gene: Annotated[str | None, Field(description="Gene to colour by (embedding) or to plot (violin).")] = None,
+    color_by: Annotated[str | None, Field(description="Obs column to colour by (embedding, phase).")] = None,
+    gene: Annotated[str | None, Field(description=(
+        "Gene to colour by (embedding) or to plot (violin, phase: one of the velocity run's fitted genes)."))] = None,
     groupby: Annotated[str, Field(description="Groups (violin, dotplot; default: the active clustering).")] = "",
     genes: Annotated[list[str] | None, Field(max_length=60, description="Genes (dotplot).")] = None,
     layer: Annotated[str, Field(description="Expression layer (default: the dataset's).")] = "",
@@ -1786,14 +1829,29 @@ async def plot(
         "Coverage: a region like chr1:1000000-1050000 (up to 2 Mb) instead of a gene."))] = None,
     groups: Annotated[list[str] | None, Field(max_length=16, description=(
         "Coverage: only these groups of groupby (at most 16 tracks)."))] = None,
+    value_column: Annotated[str | None, Field(max_length=256, description=(
+        "Violin: a numeric obs column to plot by groupby instead of a gene (a pseudotime, a score, depth); "
+        "cells without a finite value are left out and counted in the caption."))] = None,
+    overlay: Annotated[list[Literal["velocity", "paga"]] | None, Field(max_length=2, description=(
+        "Embedding: velocity = the saved velocity run's arrows on this embedding (on a grid); paga = the saved "
+        "PAGA graph (groups at their median position, tree edges solid, others with connectivity >= 0.1 "
+        "dashed)."))] = None,
 ) -> list:
     """A PNG figure of the dataset (at most 1600 px, under 300 KB): an embedding (UMAP, tSNE,
-    PCA, or the tissue: embedding='spatial', sections side by side or one with section), a
-    violin, a dot plot, or ATAC coverage tracks at a gene or region. A dataset over 50,000
-    cells is drawn from a random 50,000 (said in the caption). The same views are in the
-    browser UI."""
+    PCA, or the tissue: embedding='spatial', sections side by side or one with section), with
+    velocity arrows or the PAGA graph over it (overlay), a violin of a gene or a numeric column
+    (a pseudotime by group), a dot plot, ATAC coverage tracks at a gene or region, or a velocity
+    phase portrait. A dataset over 50,000 cells is drawn from a random 50,000 (said in the
+    caption). The same views are in the browser UI."""
     if kind == "coverage":
         return await _coverage_plot(dataset_id, gene, region, groupby, groups)
+    if kind == "phase":
+        return await _phase_plot(dataset_id, gene, color_by)
+    if overlay and kind != "embedding":
+        raise ToolError("overlay is drawn on an embedding (kind='embedding').")
+    if value_column and kind != "violin":
+        raise ToolError("value_column is for kind='violin'; colour an embedding by a column with color_by.")
+    arrows, graph = await _overlays(dataset_id, embedding, overlay or [])
     if isinstance(within_value, list) and not within_value:
         within_value = None
     if (within_column is None) != (within_value is None):
@@ -1832,6 +1890,16 @@ async def plot(
         if g not in set(adaptor._var_names_for_layer(lay or adaptor.default_expression_layer())):
             raise ToolError(f"Gene '{g}' is not in the expression layer.")
         return adaptor.get_expression([g], layer=lay)[:, 0]
+
+    def _values_of_column(name: str) -> np.ndarray:
+        try:
+            col = adaptor.get_obs_column(name)
+        except KeyError:
+            raise ToolError(column_message(name, list(adaptor.adata.obs.columns)))
+        if isinstance(col.dtype, pd.CategoricalDtype) or not pd.api.types.is_numeric_dtype(col) \
+                or pd.api.types.is_bool_dtype(col):
+            raise ToolError(f"'{name}' is not numeric: a violin plots numbers (a pseudotime, a score).")
+        return pd.to_numeric(col, errors="coerce").to_numpy(dtype=np.float64)
 
     def _layer_words() -> str:
         # What the values are ("Log-normalized (raw)", "Counts (raw)"), not the bare key.
@@ -1905,9 +1973,16 @@ async def plot(
                 return plots.sections(xy, values, panel, order, title, label, note, focus), note
             if panel is not None:
                 title += f", section {order[0]}"
-            return plots.embedding(xy, values, title, label, note, focus, tissue=tissue), note
-        if not gene:
-            raise ToolError("A violin plot needs a gene.")
+            if arrows is None and graph is None:
+                return plots.embedding(xy, values, title, label, note, focus, tissue=tissue), note
+            note += _overlay_note(arrows, graph)
+            label_nodes = not (graph is not None and color_by == (graph.get("paga") or {}).get("groupby"))
+            return plots.embedding(xy, values, title, label, note, focus, tissue=tissue, arrows=arrows,
+                                   graph=graph, label_nodes=label_nodes), note
+        if not gene and not value_column:
+            raise ToolError("A violin plot needs a gene or a value_column.")
+        if gene and value_column:
+            raise ToolError("Plot a gene or a value_column, not both.")
         by = groupby or adaptor.active_clustering_column() or ""
         if not by:
             raise ToolError("No grouping column: give groupby.")
@@ -1915,7 +1990,10 @@ async def plot(
             groups = adaptor.get_obs_column(by)
         except KeyError:
             raise ToolError(column_message(by, list(adaptor.adata.obs.columns)))
-        values = _values_of_gene(gene)
+        if value_column:
+            values, ylabel = _values_of_column(value_column), value_column
+        else:
+            values, ylabel = _values_of_gene(gene), f"{gene}, {_layer_words()}"
         if focus is not None:  # the subgroup's cells only, sampled among themselves
             values, groups = values[focus], groups[focus]
             rows_ = plots.sample(len(values))
@@ -1923,7 +2001,13 @@ async def plot(
                 f" (random {len(rows_):,} drawn)" if rows_ is not None else "")
         if rows_ is not None:
             values, groups = values[rows_], groups.iloc[rows_]
-        return plots.violin(values, groups, f"{gene} by {by}{scope}", f"{gene}, {_layer_words()}", note), note
+        finite = np.isfinite(values)
+        if not finite.all():
+            if not finite.any():
+                raise ToolError(f"No cell has a finite value of '{value_column}'.")
+            note += f"; {int((~finite).sum()):,} without a finite value left out"
+            values, groups = values[finite], groups.iloc[np.flatnonzero(finite)]
+        return plots.violin(values, groups, f"{gene or value_column} by {by}{scope}", ylabel, note), note
 
     try:
         png, note = await asyncio.to_thread(_draw)
@@ -1935,6 +2019,49 @@ async def plot(
 
 
 TISSUE_KEYS = ("spatial", "X_spatial")
+
+
+async def _overlays(dataset_id: str, embedding: str, overlay: list[str]) -> tuple[dict | None, dict | None]:
+    """The velocity grid and the placed PAGA graph for an embedding, as the routes give them."""
+    if overlay and embedding in TISSUE_KEYS:
+        raise ToolError("Overlays are drawn on a UMAP, tSNE or PCA, not on the tissue.")
+    arrows = graph = None
+    if "velocity" in overlay:
+        arrows = await _get(f"{_ds(dataset_id)}/velocity/grid", embedding=embedding)
+    if "paga" in overlay:
+        graph = await _get(f"{_ds(dataset_id)}/trajectory/paga", embedding=embedding)
+        if not graph.get("paga"):
+            raise ToolError("No PAGA graph saved: paga(dataset_id, groupby) computes one.")
+    return arrows, graph
+
+
+def _overlay_note(arrows: dict | None, graph: dict | None) -> str:
+    out = ""
+    if arrows is not None:
+        out += (f"; velocity arrows on a {arrows.get('n'):,}-point grid"
+                + (" (projected now onto this embedding)" if arrows.get("reprojected") else ""))
+    if graph is not None:
+        rec = graph.get("paga") or {}
+        out += f"; PAGA of {rec.get('groupby')} (solid: tree)"
+        if graph.get("stale"):
+            out += f"; PAGA is stale: {graph['stale']}"
+    return out
+
+
+async def _phase_plot(dataset_id: str, gene: str | None, color_by: str | None) -> list:
+    if not gene:
+        raise ToolError("A phase portrait needs a gene (one of the velocity run's fitted genes).")
+    d = await _get(f"{_ds(dataset_id)}/velocity/phase", gene=gene, color_by=color_by or None)
+    if color_by and d.get("color") is None:
+        raise await _column_error(dataset_id, color_by)
+    caption = (f"{d.get('n_points'):,} cells" + (f" (a random {d.get('max_points'):,} of {d.get('n_cells'):,})"
+                                                  if d.get("capped") else "")
+               + f"; gamma {num(d.get('gamma'))}, r2 {num(d.get('r2'))}, "
+               + ("a velocity gene" if d.get("velocity_gene") else "not a velocity gene (too weak a fit)")
+               + f"; {d.get('method')} model; cells above the line are inducing, below repressing")
+    title = f"{gene} phase portrait" + (f", by {color_by}" if color_by else "")
+    png = await asyncio.to_thread(plots.phase, d, title, caption)
+    return [Image(data=png, format="png"), TextContent(type="text", text=f"phase: {caption}, {len(png):,} bytes")]
 
 
 async def _coverage_plot(dataset_id: str, gene: str | None, region: str | None, groupby: str,

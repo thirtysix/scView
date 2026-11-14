@@ -105,11 +105,15 @@ def _label_spots(xy: np.ndarray, codes: np.ndarray, names: list[str]) -> list[tu
 
 
 def embedding(xy: np.ndarray, values: pd.Series | np.ndarray | None, title: str,
-              color_label: str, caption: str, focus: np.ndarray | None = None, tissue: bool = False) -> bytes:
+              color_label: str, caption: str, focus: np.ndarray | None = None, tissue: bool = False,
+              arrows: dict[str, Any] | None = None, graph: dict[str, Any] | None = None,
+              label_nodes: bool = True) -> bytes:
     """Cells on two embedding dimensions, coloured by a category (legend, and labels on
     the groups) or a number (colour bar). ``focus`` (a mask): only those cells are
     coloured, the others drawn grey beneath them. ``tissue``: positions on a section,
-    y downwards as in its image."""
+    y downwards as in its image. ``arrows``: velocity on a grid (``GET /velocity/grid``)
+    drawn over the cells; ``graph``: a PAGA graph placed on this embedding (``GET
+    /trajectory/paga``), its nodes named unless ``label_nodes`` is False."""
     fig = _figure(8.5, 7)
     ax = fig.add_subplot(1, 1, 1)
     size = max(0.5, min(12.0, 30000.0 / max(len(xy), 1)))
@@ -155,6 +159,10 @@ def embedding(xy: np.ndarray, values: pd.Series | np.ndarray | None, title: str,
         sc = ax.scatter(xy[order, 0], xy[order, 1], s=size, c=v[order], cmap="viridis",
                         linewidths=0, rasterized=True)
         fig.colorbar(sc, ax=ax, shrink=0.6, label=color_label)
+    if arrows is not None:
+        _arrows(ax, arrows)
+    if graph is not None:
+        _paga(ax, graph, label_nodes)
     ax.set_title(title, fontsize=11)
     ax.set_xticks([])
     ax.set_yticks([])
@@ -164,6 +172,94 @@ def embedding(xy: np.ndarray, values: pd.Series | np.ndarray | None, title: str,
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
     fig.text(0.01, 0.005, caption, fontsize=8, color="#555555")
+    return _png(fig)
+
+
+ARROW_STEPS = 1.6  # the 95th-percentile arrow is drawn this many grid steps long
+PAGA_MIN_EDGE = 0.1  # connectivity below which an edge outside the tree is not drawn
+
+
+def _arrows(ax, grid: dict[str, Any]) -> None:
+    """Velocity arrows on a grid, scaled so the 95th-percentile arrow spans ARROW_STEPS grid steps."""
+    x, y = np.asarray(grid.get("x") or [], float), np.asarray(grid.get("y") or [], float)
+    u, v = np.asarray(grid.get("u") or [], float), np.asarray(grid.get("v") or [], float)
+    if not x.size:
+        return
+    p95 = float(grid.get("length_p95") or np.percentile(np.hypot(u, v), 95) or 1.0)
+    step = float(grid.get("step") or 1.0)
+    ax.quiver(x, y, u, v, angles="xy", scale_units="xy", scale=max(p95, 1e-12) / (ARROW_STEPS * step),
+              width=0.0022, headwidth=4, headlength=4.5, headaxislength=4, color="#111111", alpha=0.85, zorder=3)
+
+
+def _paga(ax, view: dict[str, Any], label_nodes: bool) -> None:
+    """PAGA's groups at their median position (size by cells), tree edges solid, other edges
+    with connectivity >= PAGA_MIN_EDGE dashed; line width by connectivity."""
+    rec, pos = view.get("paga") or {}, view.get("positions") or []
+    groups, sizes = rec.get("groups") or [], rec.get("sizes") or []
+    tree = {(int(i), int(j)) for i, j in rec.get("tree") or []}
+    for i, j, w in rec.get("edges") or []:
+        i, j = int(i), int(j)
+        if i >= len(pos) or j >= len(pos) or pos[i] is None or pos[j] is None:
+            continue
+        in_tree = (min(i, j), max(i, j)) in tree
+        if not in_tree and w < PAGA_MIN_EDGE:
+            continue
+        ax.plot([pos[i][0], pos[j][0]], [pos[i][1], pos[j][1]], color="#111111" if in_tree else "#555555",
+                lw=0.6 + 4.0 * float(w), ls="-" if in_tree else "--", alpha=0.9 if in_tree else 0.55, zorder=4)
+    top = max(sizes or [1]) or 1
+    for k, g in enumerate(groups):
+        if k >= len(pos) or pos[k] is None:
+            continue
+        ax.scatter([pos[k][0]], [pos[k][1]], s=40 + 360 * np.sqrt((sizes[k] if k < len(sizes) else 0) / top),
+                   c="white", edgecolors="#111111", linewidths=1.2, zorder=5)
+        if label_nodes:  # beside the node, not over it
+            ax.annotate(str(g), (pos[k][0], pos[k][1]), xytext=(9, 9), textcoords="offset points", fontsize=8,
+                        weight="bold", zorder=6,
+                        bbox={"boxstyle": "round,pad=0.15", "fc": "white", "ec": "none", "alpha": 0.75})
+
+
+def phase(result: dict[str, Any], title: str, caption: str) -> bytes:
+    """A gene's phase portrait (``GET /velocity/phase``): unspliced against spliced moments per
+    cell, coloured by a column when given, with the fitted steady-state line u = gamma s."""
+    s = np.asarray(result.get("spliced") or [], dtype=float)
+    u = np.asarray(result.get("unspliced") or [], dtype=float)
+    fig = _figure(7.5, 6)
+    ax = fig.add_subplot(1, 1, 1)
+    size = max(1.0, min(14.0, 20000.0 / max(len(s), 1)))
+    color = result.get("color")
+    if not color:
+        ax.scatter(s, u, s=size, c="#4a6fa5", linewidths=0, rasterized=True)
+    elif color.get("kind") == "numeric":
+        v = np.asarray([np.nan if x is None else x for x in color.get("values") or []], dtype=float)
+        sc = ax.scatter(s, u, s=size, c=v, cmap="viridis", linewidths=0, rasterized=True)
+        fig.colorbar(sc, ax=ax, shrink=0.6, label=color.get("column"))
+    else:
+        names = [str(c) for c in color.get("categories") or []]
+        codes = np.asarray(color.get("codes") or [], dtype=int)
+        colours = _palette(len(names))
+        order = np.random.default_rng(SEED).permutation(len(s))
+        rgba = np.array([colours[c] for c in codes[order]], dtype=float).reshape(-1, 3)
+        ax.scatter(s[order], u[order], s=size, c=rgba, linewidths=0, rasterized=True)
+        if len(names) <= MAX_LEGEND:
+            from matplotlib.lines import Line2D
+
+            present = set(codes.tolist())
+            handles = [Line2D([], [], marker="o", ls="", color=colours[i], label=n)
+                       for i, n in enumerate(names) if i in present]
+            ax.legend(handles=handles, title=color.get("column"), loc="center left", bbox_to_anchor=(1.0, 0.5),
+                      fontsize=8, title_fontsize=9, frameon=False, markerscale=1.2)
+    gamma = result.get("gamma")
+    if gamma is not None and s.size:
+        top = float(np.nanmax(s)) if np.isfinite(s).any() else 1.0
+        ax.plot([0, top], [0, gamma * top], color="#c0392b", lw=1.5, label=f"steady state, gamma {gamma:.3g}")
+        if not color or color.get("kind") == "numeric":
+            ax.legend(loc="upper left", fontsize=8, frameon=False)
+    ax.set_xlabel("spliced (neighbour mean)")
+    ax.set_ylabel("unspliced (neighbour mean)")
+    ax.set_title(title, fontsize=11)
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    fig.text(0.01, -0.02, caption, fontsize=8, color="#555555")
     return _png(fig)
 
 
