@@ -791,7 +791,10 @@ def _unit_key(unit: IngestUnit) -> str:
 
 
 def _side_key(bf: BundleFile) -> str:
-    return f"{_sample_root(bf.rel_path)}|{sample_key(bf.name)}"
+    key = sample_key(bf.name)
+    if bf.kind == FileKind.tenx_metrics and (key == "summary" or key.endswith(("_summary", "-summary"))):
+        key = key.removesuffix("summary").rstrip(" _-.")  # Cell Ranger ARC: <sample>_summary.csv
+    return f"{_sample_root(bf.rel_path)}|{key}"
 
 
 def _only_in_root(units: list[IngestUnit], key: str) -> IngestUnit | None:

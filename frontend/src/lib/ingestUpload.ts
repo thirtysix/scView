@@ -41,6 +41,10 @@ const HD_ANALYSIS = "Space Ranger's own analysis (clustering, PCA, UMAP, DE): sc
 const HD_OTHER = "a Space Ranger output scView does not read";
 const SEG_RAW = "the raw matrix, with the cells the run filtered out: the filtered one is read";
 const SEG_COPY = "the same matrix as filtered_feature_cell_matrix.h5, which is read";
+// Cell Ranger ARC writes these beside its matrix, each name led by the sample (backend ingestion/paths.py).
+const ARC_PEAKS = "Cell Ranger ARC's peak list: the same peaks are in the matrix (.h5), which is read";
+const ARC_PEAK_ANNOTATION = "Cell Ranger ARC's peak-to-gene table: scView places peaks against GENCODE itself";
+const COVERAGE = "a coverage track, not read";
 const SEG_BINS = "the run's bins: a run with a cell segmentation reads as cells; for bins upload binned_outputs or one square_NNNum folder alone";
 
 const JUNK_NAMES: Record<string, string> = {
@@ -76,6 +80,13 @@ const JUNK_SUFFIXES: [string, string][] = [
   [".cloupe", LOUPE],
   [".vloupe", LOUPE],
   [".zarr.zip", XENIUM_EXTRA],
+  // Sample-prefixed Cell Ranger names (ARC: <sample>_web_summary.html, <sample>_gex_molecule_info.h5).
+  ["_web_summary.html", REPORT],
+  ["molecule_info.h5", MOLECULES],
+  ["atac_peaks.bed", ARC_PEAKS],
+  ["peak_annotation.tsv", ARC_PEAK_ANNOTATION],
+  [".bigwig", COVERAGE],
+  [".bw", COVERAGE],
 ];
 
 const HD_DIR = /^square_(\d{3})um$/i;
