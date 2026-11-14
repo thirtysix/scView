@@ -511,7 +511,7 @@ def _da_reply(r: dict[str, Any], dataset_id: str, n: int) -> dict[str, Any]:
     counts = [{"group": g, "n_tested": (r.get("n_tested") or {}).get(g),
                "n_significant": (r.get("n_significant") or {}).get(g)} for g in groups]
     out: dict[str, Any] = {"dataset_id": dataset_id, "result_id": r.get("id"),
-                           **pick(r, "column", "vs", "test", "method", "note", "n_fit"),
+                           **pick(r, "column", "vs", "test", "fold_change", "method", "note", "n_fit"),
                            "params": pick(r.get("params") or {}, "min_pct", "max_peaks", "on", "latent", "lrt_peaks",
                                           "standard_only", "n_peaks_left_out", "n_cells_vs"),
                            "counts": table(counts, ["group", "n_tested", "n_significant"], n),
@@ -540,6 +540,9 @@ async def atac_differential(
         "lr: true likelihood-ratio fits per group (the rest from the score test)."))] = None,
     standard_only: Annotated[bool | None, Field(description=(
         "Leave out chrM, unplaced scaffolds and alt contigs (default true, Signac's keepStandardChromosomes)."))] = None,
+    fold_change: Annotated[Literal["signac", "tfidf"] | None, Field(description=(
+        "log2fc formula. signac (default): Signac's FoldChange for peaks, mean log1p(TF-IDF) + 1e-4, the numbers "
+        "FindMarkers prints. tfidf: mean TF-IDF + 1, scView's before 0.79, about 4x smaller."))] = None,
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
     """Differential accessibility: each group's peaks vs the rest, or one group vs another
@@ -549,7 +552,7 @@ async def atac_differential(
     if vs is not None and (not groups or len(groups) != 1):
         raise ToolError("A vs B needs exactly one group in groups (A) and vs (B).")
     body = _body(column=column, groups=groups, vs=vs, test=test, min_pct=min_pct, max_peaks=max_peaks,
-                 lrt_peaks=lrt_peaks, standard_only=standard_only)
+                 lrt_peaks=lrt_peaks, standard_only=standard_only, fold_change=fold_change)
     return await _atac_job(dataset_id, "atac_differential", "/atac/differential", body, limit, _da_reply)
 
 

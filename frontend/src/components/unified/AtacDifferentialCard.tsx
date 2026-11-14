@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { daCsvUrl, getDaEstimate, getDaPage, getLatestDa, type AtacDaEstimate, type AtacDaRow, type AtacDaTest, type AtacState } from "@/api/atac";
+import { daCsvUrl, getDaEstimate, getDaPage, getLatestDa, type AtacDaEstimate, type AtacDaFoldChange, type AtacDaRow, type AtacDaTest,
+  type AtacState } from "@/api/atac";
 import { CapNote, Caption } from "@/components/common/Caption";
 import { Help } from "@/components/common/Help";
 import { HoverTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
-import { daFitLabel, daFitText, daMostPass, daTestName, formatDistance, formatP } from "@/lib/atac";
+import { daFitLabel, daFitText, daFoldChangeText, daMostPass, daTestName, formatDistance, formatP } from "@/lib/atac";
 import { formatDuration } from "@/lib/hvgSensitivity";
 import { errorMessage } from "@/lib/errorMessage";
 import { prettyObsLabel } from "@/lib/formatting";
@@ -34,6 +35,7 @@ export function AtacDifferentialCard({
   const elsewhere = !live && !!state.running;
   const [column, setColumn] = useState(defaultColumn);
   const [test, setTest] = useState<AtacDaTest>("lr");
+  const [foldChange, setFoldChange] = useState<AtacDaFoldChange>("signac");
   const [pair, setPair] = useState(false);
   const [groupA, setGroupA] = useState("");
   const [groupB, setGroupB] = useState("");
@@ -48,6 +50,7 @@ export function AtacDifferentialCard({
   const daId = da?.id;
   const daColumn = da?.column;
   const daTest = da?.test;
+  const daFold = da ? da.fold_change ?? "tfidf" : null;
   const daVs = da?.vs ?? null;
   const daFirst = da?.groups[0] ?? "";
   const daColumnListed = daColumn != null && columns.includes(daColumn);
@@ -58,6 +61,9 @@ export function AtacDifferentialCard({
   useEffect(() => {
     setTest(daId ? daTest ?? "wilcoxon" : "lr");
   }, [daId, daTest]);
+  useEffect(() => {
+    setFoldChange(daFold ?? "signac");
+  }, [daId, daFold]);
   useEffect(() => {
     setPair(daVs != null);
     if (daVs != null) {
@@ -108,7 +114,9 @@ export function AtacDifferentialCard({
     setGroupB((b) => (groups.includes(b) ? b : groups[1] ?? ""));
   }, [groups]);
   const pairReady = pair && !!groupA && !!groupB && groupA !== groupB;
-  const body = pairReady ? { column, test, groups: [groupA], vs: groupB } : { column, test };
+  const body = pairReady
+    ? { column, test, groups: [groupA], vs: groupB, fold_change: foldChange }
+    : { column, test, fold_change: foldChange };
 
   const shownGroup = da && da.groups.includes(group) ? group : da?.groups[0] ?? "";
   const first = useMemo(() => da?.rows[shownGroup] ?? [], [da, shownGroup]);
@@ -165,6 +173,14 @@ export function AtacDifferentialCard({
           </select>
         </label>
         <label className="flex items-center gap-1.5 text-[11px] text-slate-600">
+          <Help id="atac.da-fold-change">Fold change</Help>
+          <select value={foldChange} onChange={(e) => setFoldChange(e.target.value as AtacDaFoldChange)} aria-label="Fold change"
+                  className="rounded border border-slate-300 bg-white px-1 py-0.5 text-[11px] text-slate-700">
+            <option value="signac">Signac (as FindMarkers)</option>
+            <option value="tfidf">Mean TF-IDF + 1 (before v0.79)</option>
+          </select>
+        </label>
+        <label className="flex items-center gap-1.5 text-[11px] text-slate-600">
           <Help id="atac.da-compare">Compare</Help>
           <select value={pair ? "pair" : "rest"} onChange={(e) => setPair(e.target.value === "pair")} aria-label="Compare"
                   className="rounded border border-slate-300 bg-white px-1 py-0.5 text-[11px] text-slate-700">
@@ -216,7 +232,9 @@ export function AtacDifferentialCard({
               </select>
             </label>
             <a href={daCsvUrl(datasetId, da.id)} download className="text-[11px] text-primary hover:underline">CSV</a>
-            <span className="text-[11px] text-slate-500">{daTestName(da.test)}</span>
+            <span className="text-[11px] text-slate-500">
+              {daTestName(da.test)}; {da.fold_change === "signac" ? "Signac's log2FC" : "log2FC of mean TF-IDF + 1"}
+            </span>
           </div>
           {da.note && <p className="text-[11px] leading-snug text-amber-700">{da.note}</p>}
           <div className="max-h-80 overflow-auto">
@@ -227,7 +245,7 @@ export function AtacDifferentialCard({
                   <th className="font-medium" title="The gene whose TSS is nearest; pseudogenes and small RNAs left out">Nearest gene</th>
                   <th className="text-right font-medium" title="To that gene's TSS: + downstream, - upstream on its strand">To TSS</th>
                   <th className="pl-2 font-medium" title="Promoter: within 2 kb of a TSS; gene body; distal">Class</th>
-                  <th className="text-right font-medium" title="log2 fold change of mean TF-IDF (expm1) + 1">log2FC</th>
+                  <th className="text-right font-medium" title={daFoldChangeText(da.fold_change)}>log2FC</th>
                   <th className="text-right font-medium" title="Share of the group's cells with the peak">% in</th>
                   <th className="text-right font-medium" title={against ? `Share of the ${against} cells with the peak` : "Share of the other cells with the peak"}>
                     {against ? `% ${against.length > 10 ? "other" : against}` : "% rest"}

@@ -2,7 +2,7 @@
  * 10x Multiome ATAC (backend core/atac.py): the Accessibility tab's text and the small
  * calculations behind its plots.
  */
-import type { AtacDaFit, AtacDaTest, AtacLsi, AtacPlan, AtacStage, AtacWnnPlan } from "@/api/atac";
+import type { AtacDaFit, AtacDaFoldChange, AtacDaTest, AtacLsi, AtacPlan, AtacStage, AtacWnnPlan } from "@/api/atac";
 import { formatDuration } from "@/lib/hvgSensitivity";
 
 export const ATAC_CLUSTERS = "atac_leiden";
@@ -90,6 +90,13 @@ export function formatP(p: number | null | undefined): string {
 }
 
 /** The test a result names; one saved before the choice existed was a Wilcoxon. */
+/** The log2FC column's formula, as the header tip and the result line say it. An older backend sends none: "tfidf". */
+export function daFoldChangeText(fc: AtacDaFoldChange | undefined): string {
+  return fc === "signac"
+    ? "log2FC as Signac's FoldChange for peaks (FindMarkers' avg_log2FC): mean log1p(TF-IDF) of each side + 0.0001, log2 ratio"
+    : "log2FC of mean TF-IDF + 1 (the formula before v0.79): about 4 times smaller than Signac's, so Signac cut-offs do not carry over";
+}
+
 export function daTestName(test: AtacDaTest | undefined): string {
   return test === "lr" ? "Logistic regression with the cell's total counts as covariate" : "Wilcoxon on TF-IDF, no covariate";
 }
