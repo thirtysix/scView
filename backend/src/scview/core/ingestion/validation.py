@@ -60,6 +60,7 @@ def validate_bundle(bundle: Bundle, converted: Collection[str] = ()) -> Validati
         if unit.format == UnitFormat.seurat:
             issues.append(_r_object_note(unit, unit.label in converted, others))
     issues.extend(_validate_atac(bundle))
+    issues.extend(_validate_h5mu(bundle))
     ok = not any(i.severity == IssueSeverity.error for i in issues)
     return ValidationReport(issues=issues, ok=ok)
 
@@ -109,6 +110,29 @@ def _validate_atac(bundle: Bundle) -> list[IngestIssue]:
         sentence = atac_import.merge_sentence(loadable)
         if sentence:
             issues.append(IngestIssue(severity=IssueSeverity.warn, code="atac_merge_left_out", message=sentence))
+    return issues
+
+
+def _validate_h5mu(bundle: Bundle) -> list[IngestIssue]:
+    """What an .h5mu's modalities beside RNA become, and which are not read (``h5mu_mods``):
+    a modality never disappears without a word. Reads shapes only."""
+    from scview.core.ingestion import h5mu_mods
+
+    issues: list[IngestIssue] = []
+    for unit in bundle.units:
+        if unit.format != UnitFormat.h5mu or not unit.files:
+            continue
+        try:
+            kept, left = h5mu_mods.sentences(unit.files[0].path)
+        except (OSError, KeyError, ValueError) as e:
+            logger.warning("h5mu modalities of %s not listed: %s", unit.label, e)
+            continue
+        if kept:
+            issues.append(IngestIssue(severity=IssueSeverity.info, code="h5mu_modalities", message=kept,
+                                      unit_label=unit.label))
+        if left:
+            issues.append(IngestIssue(severity=IssueSeverity.warn, code="h5mu_modality_left_out", message=left,
+                                      unit_label=unit.label))
     return issues
 
 
