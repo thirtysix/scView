@@ -6,6 +6,10 @@ import {
   ldaTraces,
   mappingChanges,
   posteriorTraces,
+  proteinRowsFor,
+  proteinShiftTraces,
+  replicateText,
+  shiftText,
   sortTargets,
   unusedTargetsText,
 } from "./perturbation";
@@ -57,5 +61,25 @@ describe("perturbation helpers", () => {
     expect(unusedTargetsText([{ target: "eGFP", guides: ["eGFPg1"] }, { target: "PDL1", guides: ["PDL1g1"] }])).toBe(
       " Not counted: 2 more targets (eGFP, PDL1) whose guides no cell has at these settings.",
     );
+  });
+
+  it("orders a protein's rows by shift and draws the flagged dot amber", () => {
+    const r = (target: string, diff: number | null, flag = false) => ({
+      target, protein: "P", ko_fraction: 0, unit: "cell" as const, significant: flag, flag,
+      all: diff == null ? null : { n: 10, diff, p: 0.01, padj: 0.02 }, ko: null, np: null,
+    });
+    const check = { rows: [r("A", 0.3), r("B", -0.2, true), r("C", null), { ...r("A", 9), protein: "Q" }] };
+    const rows = proteinRowsFor(check as never, "P");
+    expect(rows.map((x) => x.target)).toEqual(["B", "A", "C"]);
+    const traces = proteinShiftTraces(rows, "P") as { name: string; x: string[]; marker: { color: unknown } }[];
+    // no replicates; one trace per kind of all-cells dot, so the legend explains the colours
+    expect(traces.map((t) => t.name)).toEqual(["KO cells", "NP cells", "All cells: no RNA KO class", "All cells: does not count"]);
+    expect(traces[2]?.marker.color).toBe("#d97706");
+    expect(traces[2]?.x).toEqual(["B"]);
+    expect(traces[3]?.x).toEqual(["A", "C"]);
+    expect(shiftText(-0.123)).toBe("-0.12");
+    expect(shiftText(0.2)).toBe("+0.20");
+    expect(shiftText(null)).toBe("–");
+    expect(replicateText({ ...r("A", 1), n_replicates: 3, same_sign: 2 })).toBe("2/3");
   });
 });

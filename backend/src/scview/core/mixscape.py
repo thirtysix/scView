@@ -47,7 +47,9 @@ Outputs (obs): ``mixscape_class`` ("<target> KO", "<target> NP", "NT"),
 target cells only). Cells with no single target ("multiple", "none") are left
 out (empty). Per target: cells, KO fraction, DE genes, the posterior histogram.
 An optional linear discriminant projection (sklearn) of the KO and control
-cells on the signature of the DE genes gives a 2-D view.
+cells on the signature of the DE genes gives a 2-D view. With a protein modality,
+each protein's shift per target in all / KO / NP cells and the targets that move a
+protein with no RNA KO class (``protein``, core/perturbation_protein.py).
 """
 
 from __future__ import annotations
@@ -152,6 +154,9 @@ class MixscapeResult:
     replicate_column: str | None = None
     per_guide: list[dict] = field(default_factory=list)
     per_replicate: list[dict] = field(default_factory=list)
+    # Per target x protein: shift vs the controls in all / KO / NP cells, protein-only flags
+    # (core/perturbation_protein.py); None without a protein modality.
+    protein: dict | None = None
 
     def summary(self) -> dict:
         n_target_cells = sum(t["n_cells"] for t in self.targets)
@@ -620,7 +625,10 @@ def iter_mixscape(adata, pl: Plan, *, stop: Callable[[], bool] | None = None) ->
         if stop is not None and stop():
             raise MixscapeCancelled()
 
-    n_steps = 3 + len(pl.targets) + (1 if p.lda else 0)
+    from scview.core import perturbation_protein
+
+    has_protein = perturbation_protein.has_values(adata)
+    n_steps = 3 + len(pl.targets) + (1 if p.lda else 0) + (1 if has_protein else 0)
     yield {"type": "progress", "step": "neighbours", "done": 0, "total": n_steps,
            "message": f"Finding each cell's {p.n_neighbors} nearest control cells"}
     pca = np.asarray(adata.obsm["X_pca"])[pl.rows]
@@ -682,6 +690,13 @@ def iter_mixscape(adata, pl: Plan, *, stop: Callable[[], bool] | None = None) ->
                                        "ko": np.histogram(post[ko], bins=edges)[0].tolist(),
                                        "np": np.histogram(post[~ko], bins=edges)[0].tolist()}})
         rows_out.append(row)
+    prot = None
+    if has_protein:
+        check()
+        yield {"type": "progress", "step": "protein", "done": 3 + len(pl.targets), "total": n_steps,
+               "message": "Protein shift per target against the controls"}
+        prot = perturbation_protein.run(adata, pl.rows, pl.labels, glob.astype(str), p.control, rows_out,
+                                        pl.replicates, pl.replicate_column)
     lda = None
     if p.lda:
         check()
@@ -705,7 +720,7 @@ def iter_mixscape(adata, pl: Plan, *, stop: Callable[[], bool] | None = None) ->
         created=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), n_cells_total=pl.n_cells_total,
         excluded=pl.excluded, guide_column=pl.guide_column, replicate_column=pl.replicate_column,
         per_guide=ko_table(pl.labels, pl.guides, glob, p.control, "guide"),
-        per_replicate=ko_table(pl.labels, pl.replicates, glob, p.control, "replicate"))
+        per_replicate=ko_table(pl.labels, pl.replicates, glob, p.control, "replicate"), protein=prot)
     yield {"type": "result", "result": result,
            "columns": {"rows": pl.rows, CLASS: cls, GLOBAL: glob, P_KO: pko}}
 
@@ -796,9 +811,11 @@ def remember(adaptor, result: MixscapeResult) -> None:
             _last[adaptor] = result
     except TypeError:  # not weak-referenceable (a test double)
         return
+    # ``writes`` names the run's own class columns: a later run that changed them (or a new
+    # guide assignment, through ``labels``) makes this one stale (results_store.LABEL_STEPS).
     results_store.keep(adaptor, "mixscape", result, key=f"{result.labels}|{result.control}",
                        label=f"Mixscape: {result.n_targets} targets vs {result.control}",
-                       params=result.params)
+                       params={**result.params, "writes": [CLASS, GLOBAL]})
 
 
 def last_result(adaptor) -> MixscapeResult | None:
@@ -837,8 +854,19 @@ def grounding_lines(adaptor) -> tuple[list[str], str | None]:
            f"DE |log2FC| >= {r.params.get('logfc_threshold')}, adj p < {r.params.get('pval_cutoff')} "
            f"on {r.gene_source}): {mdetail}; "
            f"KO fraction per target: {per}" + (f"; no KO cells (all NP): {', '.join(none[:15])}" if none else "")
-           + f" [{TAG}]"]
+           + _protein_words(r) + f" [{TAG}]"]
     return out, mdetail
+
+
+def _protein_words(r: MixscapeResult) -> str:
+    """The protein check's flags for the co-pilot line ("" without any)."""
+    flags = (r.protein or {}).get("flags") or []
+    if not flags:
+        return ""
+    unit = "replicates" if any(f.get("unit") == "replicate" for f in flags) else "cells"
+    return ("; protein effect without an RNA KO class (all guide cells vs the controls, CLR, judged on "
+            f"{unit}): " + ", ".join(f"{f['target']} {f['protein']} {f['diff']:+.2f} ({f['ko_fraction']:.0%} KO)"
+                                     for f in flags[:8]))
 
 
 def _np_reason(t: dict, min_de_genes: int) -> str:

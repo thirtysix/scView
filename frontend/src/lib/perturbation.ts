@@ -1,6 +1,14 @@
 import type { Data } from "plotly.js";
 import type { DESettings } from "@/stores/deSettingsStore";
-import type { KoShareRow, MixscapeDeGenes, MixscapeResult, MixscapeTarget, PosteriorHist } from "@/api/perturbation";
+import type {
+  KoShareRow,
+  MixscapeDeGenes,
+  MixscapeResult,
+  MixscapeTarget,
+  PosteriorHist,
+  ProteinCheck,
+  ProteinCheckRow,
+} from "@/api/perturbation";
 
 /** obs columns Mixscape writes (backend core/mixscape.py). */
 export const MIXSCAPE_CLASS = "mixscape_class";
@@ -95,4 +103,78 @@ export function mappingChanges(mapping: Record<string, string>, auto: Record<str
     if (v && auto[g] !== v) out[g] = v;
   }
   return out;
+}
+
+/** One protein's rows of the protein check, by its shift in all guide cells (most negative
+ *  first; targets with too few cells last). */
+export function proteinRowsFor(check: ProteinCheck | null | undefined, protein: string): ProteinCheckRow[] {
+  const rows = (check?.rows ?? []).filter((r) => r.protein === protein);
+  return rows.sort((a, b) => (a.all?.diff ?? Infinity) - (b.all?.diff ?? Infinity) || a.target.localeCompare(b.target));
+}
+
+/** A signed shift as text: "+0.21", "-0.19" ("–" without one). */
+export const shiftText = (v: number | null | undefined): string =>
+  v == null || !Number.isFinite(v) ? "–" : `${v > 0 ? "+" : ""}${v.toFixed(2)}`;
+
+/** The replicate agreement in words: "3/3" (empty without replicates). */
+export const replicateText = (r: ProteinCheckRow): string =>
+  r.n_replicates ? `${r.same_sign ?? 0}/${r.n_replicates}` : "";
+
+const FLAG = "#d97706";
+const SIG = "#2563eb"; // not a neutral: the dark theme flips only one-colour markers (lib/theme.ts)
+const NOT_SIG = "#94a3b8";
+
+/** The dot plot of one protein's shift per target: all guide cells (blue when the shift
+ *  counts, amber when it has no RNA KO class, open when it does not count), KO and NP
+ *  cells, and each replicate's shift. Targets in the order of ``rows`` (layout
+ *  ``categoryarray``). */
+export function proteinShiftTraces(rows: ProteinCheckRow[], protein: string): Data[] {
+  const x = rows.map((r) => r.target);
+  const group = (key: "ko" | "np", name: string, color: string): Data => ({
+    type: "scatter",
+    mode: "markers",
+    name,
+    x,
+    y: rows.map((r) => r[key]?.diff ?? null),
+    marker: { color, size: 6, symbol: key === "ko" ? "triangle-up" : "diamond" },
+    customdata: rows.map((r) => [r[key]?.n ?? 0]),
+    hovertemplate: `%{x} ${name}: ${protein} %{y:+.2f} (%{customdata[0]} cells)<extra></extra>`,
+  });
+  const reps = rows.flatMap((r) => (r.replicates ?? []).map((p) => ({ t: r.target, ...p })));
+  const traces: Data[] = [
+    group("ko", "KO cells", "#dc2626"),
+    group("np", "NP cells", "#64748b"),
+  ];
+  if (reps.length)
+    traces.push({
+      type: "scatter",
+      mode: "markers",
+      name: "Each replicate (all cells)",
+      x: reps.map((p) => p.t),
+      y: reps.map((p) => p.diff),
+      marker: { color: "#64748b", size: 4, symbol: "circle-open" },
+      customdata: reps.map((p) => [p.replicate, p.n]),
+      hovertemplate: `%{x}, replicate %{customdata[0]}: %{y:+.2f} (%{customdata[1]} cells)<extra></extra>`,
+    });
+  // All guide cells, one trace per kind so the legend says what each colour means.
+  const kinds: [string, (r: ProteinCheckRow) => boolean, string, string][] = [
+    ["All cells: shift counts", (r) => r.significant && !r.flag, SIG, "circle"],
+    ["All cells: no RNA KO class", (r) => r.flag, FLAG, "circle"],
+    ["All cells: does not count", (r) => !r.significant, NOT_SIG, "circle-open"],
+  ];
+  for (const [name, pick, color, symbol] of kinds) {
+    const sel = rows.filter(pick);
+    if (!sel.length) continue;
+    traces.push({
+      type: "scatter",
+      mode: "markers",
+      name,
+      x: sel.map((r) => r.target),
+      y: sel.map((r) => r.all?.diff ?? null),
+      marker: { size: 9, color, symbol, line: { width: 1.5, color } },
+      customdata: sel.map((r) => [r.all?.n ?? 0, pctText(r.ko_fraction)]),
+      hovertemplate: `%{x}: ${protein} %{y:+.2f} in all %{customdata[0]} guide cells, %{customdata[1]} KO<extra>${name}</extra>`,
+    });
+  }
+  return traces;
 }
