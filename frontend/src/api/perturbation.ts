@@ -69,7 +69,9 @@ export interface MixscapeResult {
   expression_source: string;
   targets: MixscapeTarget[];
   warnings: string[];
-  lda: { x: number[]; y: number[]; label: string[]; n_cells: number; n_shown: number; dims: number } | null;
+  /** Labels left out as not targets ("Unassigned", "multiple", a second control label) */
+  excluded?: Record<string, { n_cells: number; reason: string }>;
+  lda:{ x: number[]; y: number[]; label: string[]; n_cells: number; n_shown: number; dims: number } | null;
   seconds: number;
   created: string;
   n_cells_total: number;

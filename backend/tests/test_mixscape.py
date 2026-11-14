@@ -127,6 +127,26 @@ def test_plan_refusals():
     assert pl.skipped == {"tiny": 2} and pl.targets == ["A", "B"]
 
 
+def test_filler_and_control_labels_are_not_targets():
+    """set_labels' "Unassigned" filler (18,430 Papalexi cells) ran as a target (QA 2026-11-14)."""
+    a, _ = planted()
+    lab = a.obs["perturbation"].astype(str).to_numpy().copy()
+    lab[:20] = "NT"
+    lab[150:180] = "Unassigned"
+    lab[180:190] = "non-targeting"
+    lab[190:196] = "Doublet"
+    a.obs["perturbation"] = pd.Categorical(lab)
+    pl = mixscape.plan(a, mixscape.Params())
+    assert pl.targets == ["A", "B"]
+    assert pl.excluded == {"Unassigned": {"n_cells": 30, "reason": "no guide"},
+                           "non-targeting": {"n_cells": 10, "reason": "a control label, not 'NT'"},
+                           "Doublet": {"n_cells": 6, "reason": "several guides"}}
+    assert "Unassigned" not in set(pl.labels) and pl.to_dict()["excluded"] == pl.excluded
+    res, _ = mixscape.run(a, mixscape.Params(lda=False))
+    assert [t["target"] for t in res.targets] == ["A", "B"] and res.excluded == pl.excluded
+    assert any(w.startswith("Not targets, left out: Unassigned (30 cells, no guide)") for w in res.warnings)
+
+
 def test_cancel_stops_between_steps():
     a, _ = planted()
     pl = mixscape.plan(a, mixscape.Params())

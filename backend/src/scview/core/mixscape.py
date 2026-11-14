@@ -127,6 +127,7 @@ class MixscapeResult:
     seconds: float = 0.0
     created: str = ""
     n_cells_total: int = 0
+    excluded: dict = field(default_factory=dict)  # labels left out as not targets -> n_cells, reason
 
     def summary(self) -> dict:
         n_target_cells = sum(t["n_cells"] for t in self.targets)
@@ -148,6 +149,7 @@ class Plan:
     labels: np.ndarray  # their labels (str)
     targets: list[str]
     skipped: dict[str, int]  # targets with too few cells -> their count
+    excluded: dict[str, dict]  # labels that are not targets ("Unassigned", "multiple") -> n_cells, reason
     splits: list[tuple[str, np.ndarray]]  # (name, mask over rows)
     gene_idx: np.ndarray  # columns of the expression matrix tested
     gene_names: np.ndarray
@@ -159,6 +161,7 @@ class Plan:
         return {"labels": self.params.labels, "control": self.params.control, "split_by": self.params.split_by,
                 "n_cells": int(self.rows.size), "n_control": int((self.labels == self.params.control).sum()),
                 "n_targets": len(self.targets), "targets": self.targets, "skipped": self.skipped,
+                "excluded": self.excluded,
                 "n_genes": int(self.gene_idx.size), "gene_source": self.gene_source,
                 "expression_source": self.expression_source, "n_splits": len(self.splits),
                 "params": asdict(self.params)}
@@ -242,13 +245,15 @@ def plan(adata, params: Params) -> Plan:
     lab = lab.map(lambda v: None if v is None else str(v))
     if not (lab == p.control).any():
         raise MixscapeError(f"No cells labelled '{p.control}' (the control) in '{p.labels}'.")
-    left_out = {crispr.NONE, crispr.MULTIPLE, "", "nan"}
-    counts = lab[~lab.isin(left_out) & lab.notna()].value_counts()
-    targets, skipped = [], {}
+    counts = lab[lab.notna()].value_counts()
+    targets, skipped, excluded = [], {}, {}
     for t, n in counts.items():
         if t == p.control:
             continue
-        if n < MIN_TARGET_CELLS:
+        why = crispr.not_a_target(t, p.control)
+        if why:  # "Unassigned" from a label tool ran as a target (QA 2026-11-14: 18,430 cells)
+            excluded[str(t)] = {"n_cells": int(n), "reason": why}
+        elif n < MIN_TARGET_CELLS:
             skipped[str(t)] = int(n)
         else:
             targets.append(str(t))
@@ -273,7 +278,8 @@ def plan(adata, params: Params) -> Plan:
                                 f"{p.n_neighbors} (lower the neighbours, or drop the split).")
     expr = _expression(adata)
     gene_idx, gene_source = _variable_genes(adata, expr, expr.names)
-    return Plan(params=p, rows=rows, labels=labels, targets=sorted(targets), skipped=skipped, splits=splits,
+    return Plan(params=p, rows=rows, labels=labels, targets=sorted(targets), skipped=skipped, excluded=excluded,
+                splits=splits,
                 gene_idx=gene_idx, gene_names=np.asarray(expr.names).astype(str)[gene_idx],
                 gene_source=gene_source, expression_source=expr.source, n_cells_total=int(adata.n_obs))
 
@@ -560,12 +566,16 @@ def iter_mixscape(adata, pl: Plan, *, stop: Callable[[], bool] | None = None) ->
     if pl.skipped:
         warnings.append(f"{len(pl.skipped)} target(s) with fewer than {MIN_TARGET_CELLS} cells left out: "
                         + ", ".join(f"{k} ({v})" for k, v in list(pl.skipped.items())[:10]))
+    if pl.excluded:
+        warnings.append("Not targets, left out: " + "; ".join(
+            f"{k} ({v['n_cells']:,} cells, {v['reason']})" for k, v in list(pl.excluded.items())[:10]) + ".")
     result = MixscapeResult(
         params=asdict(p), labels=p.labels, control=p.control, split_by=p.split_by, n_cells=int(pl.rows.size),
         n_control=int(is_ctrl.sum()), n_targets=len(pl.targets), n_genes=int(pl.gene_idx.size),
         gene_source=pl.gene_source, expression_source=pl.expression_source, targets=rows_out,
         warnings=warnings, lda=lda, seconds=round(time.perf_counter() - t0, 2),
-        created=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), n_cells_total=pl.n_cells_total)
+        created=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), n_cells_total=pl.n_cells_total,
+        excluded=pl.excluded)
     yield {"type": "result", "result": result,
            "columns": {"rows": pl.rows, CLASS: cls, GLOBAL: glob, P_KO: pko}}
 

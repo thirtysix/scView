@@ -245,6 +245,22 @@ def is_control(label: str) -> bool:
     return bool(_CONTROL.match(str(label).strip()))
 
 
+def not_a_target(label: str, control: str | None = None) -> str | None:
+    """Why a label of a target column is not a perturbation target, or None when it is
+    one: no guide ("none", "Unassigned", the filler a label tool leaves), several guides
+    ("multiple", "doublet") or another control label than ``control``."""
+    s = str(label).strip()
+    if s == control:
+        return None
+    if _NONE_VALUE.match(s):
+        return "no guide"
+    if _MULTI_VALUE.search(s):
+        return "several guides"
+    if is_control(s):
+        return f"a control label, not '{control}'" if control else "a control label"
+    return None
+
+
 def default_mapping(guides: list[str], genes: set[str] | None = None) -> dict[str, str]:
     return {g: strip_guide(g, genes) for g in guides}
 
