@@ -24,6 +24,8 @@ export type WatchdogEvent =
        *  missing when the run had no estimate (an older backend, or no plan). */
       expected_s?: [number, number];
       expected_text?: string;
+      /** The step's point estimate in seconds; the first note comes at 1.5 times it. */
+      estimate_s?: number;
     }
   | {
       type: "watchdog";

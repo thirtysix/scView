@@ -67,7 +67,7 @@ export function RunWatchNotes({
           title={
             slow.kind === "waiting"
               ? "The next step fits only once other work has finished: the run waits for it, checking every 2 s."
-              : "Sent every minute one step keeps running."
+              : "Sent when a step runs past 1.5 times its estimate (after a minute when it has none), then every minute."
           }
         >
           <Clock className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />

@@ -150,11 +150,15 @@ def _stream(events) -> StreamingResponse:
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
+STEP = "atac"  # the watchdog's step: a whole run
+
+
 def _events(dm: DatasetManager, dataset_id: str, kind: str, start: dict, need: int, open_gen: Callable[[Any], Iterator],
             on_result: Callable, label: str, closers: list[Callable[[], None]] | None = None):
     """The stream every run shares. ``open_gen(stop)`` in a worker thread gives the run's
     generator; each of its items comes from a worker thread; ``on_result(item, resources)``
-    saves the last one and returns the ``result`` event's body. A client going away stops it."""
+    saves the last one and returns the ``result`` event's body. A client going away stops it.
+    The watchdog times the whole run as one step, ``STEP``, against ``start["estimate_seconds"]``."""
 
     async def events():
         if dataset_id in _running:  # another request started between the check and here
@@ -163,6 +167,7 @@ def _events(dm: DatasetManager, dataset_id: str, kind: str, start: dict, need: i
         _running[dataset_id] = kind
         stop = threading.Event()
         watchdog = RunWatchdog()
+        watchdog.expect(STEP, start.get("estimate_seconds"))
         control = RunControl(watchdog=watchdog, before_step=None)
         reservation = dm.reserve_run(dataset_id, need)
         sent = 0
@@ -171,7 +176,7 @@ def _events(dm: DatasetManager, dataset_id: str, kind: str, start: dict, need: i
 
         def step_next():
             # The Leiden child registers with the control, so Cancel ends it.
-            with control.step("atac"):
+            with control.step(STEP, timed=False):
                 return next(gen, _DONE)  # type: ignore[arg-type]
 
         def finish(fut: asyncio.Future | None = None) -> None:
@@ -181,6 +186,7 @@ def _events(dm: DatasetManager, dataset_id: str, kind: str, start: dict, need: i
                 gen.close()
             for close in closers or []:
                 close()
+            watchdog.step_finished(STEP)
             watchdog.stop()
             if reservation is not None:
                 dm.release_run(dataset_id)
@@ -188,6 +194,7 @@ def _events(dm: DatasetManager, dataset_id: str, kind: str, start: dict, need: i
 
         try:
             watchdog.start()
+            watchdog.step_started(STEP)
             yield _sse("start", start)
             pending = asyncio.ensure_future(asyncio.to_thread(open_gen, stop.is_set))
             gen = await asyncio.shield(pending)
@@ -204,6 +211,7 @@ def _events(dm: DatasetManager, dataset_id: str, kind: str, start: dict, need: i
                 if item is _DONE:
                     break
                 if item["type"] == "result":
+                    watchdog.step_finished(STEP)
                     yield _sse("result", await on_result(item, watchdog.summary()))
                 else:
                     yield _sse(item["type"], {k: v for k, v in item.items() if k != "type"})
