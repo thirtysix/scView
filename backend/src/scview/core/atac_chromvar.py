@@ -43,7 +43,7 @@ import scipy.sparse as sp
 from scipy.special import ndtr
 from scipy.stats import chi2, rankdata
 
-from scview.core import atac_motifs, memory_budget, modality_store, tf_motifs
+from scview.core import atac_motifs, genome_build, memory_budget, modality_store, tf_motifs
 from scview.core.modality_store import ModalityStore
 
 STORE = "atac_chromvar"
@@ -244,7 +244,11 @@ def run(store_path: Path, rows: np.ndarray, table: atac_motifs.PeakMotifTable, o
     with ModalityStore(store_path) as store:
         say({"stage": "totals", "message": "Adding up each peak's counts"})
         total, _ = peak_totals(store, rows, stop)
-        kept = np.flatnonzero((total > 0) & table.known)
+        try:  # no chrM, scaffolds, alt contigs
+            standard = genome_build.standard_chromosomes(store.feature_attr("chrom"))
+        except modality_store.ModalityStoreError:  # a store without positions: nothing to tell
+            standard = np.ones(store.n_vars, dtype=bool)
+        kept = np.flatnonzero((total > 0) & table.known & standard)
         if kept.size < 2:
             raise ChromVarError("Fewer than 2 peaks have both counts and known bases, so nothing can be matched.", 422)
         where = np.full(store.n_vars, -1, dtype=np.int32)
@@ -291,7 +295,8 @@ def run(store_path: Path, rows: np.ndarray, table: atac_motifs.PeakMotifTable, o
         padj[tested] = tf_motifs.bh(p[tested])
     return {
         "run_id": uuid.uuid4().hex[:12], "n_cells": int(rows.size), "n_peaks_used": int(kept.size),
-        "n_peaks_no_counts": int(((total <= 0) & table.known).sum()), "n_peaks_left_out": int((~table.known).sum()),
+        "n_peaks_no_counts": int(((total <= 0) & table.known & standard).sum()),
+        "n_peaks_left_out": int((~table.known & standard).sum()), "n_peaks_nonstandard": int((~standard).sum()), "standard_only": True,
         "seed": seed, "iterations": iterations, "w": w, "bs": bs, "genome": table.genome, "table": table.key,
         "motif_ids": table.motif_ids.tolist(), "motif_names": table.motif_names.tolist(),
         "variability": [None if not np.isfinite(x) else round(float(x), 5) for x in sd],
@@ -546,7 +551,8 @@ def record(adata, summary: dict[str, Any], resources: dict | None = None) -> Non
 
     provenance.record_step(adata, step=STEP, tool="scview.atac_chromvar (chromVAR computeDeviations)",
                            params={k: summary.get(k) for k in ("seed", "iterations", "w", "bs", "genome", "table", "run_id",
-                                                               "n_cells", "n_peaks_used")}, resources=resources)
+                                                               "n_cells", "n_peaks_used", "standard_only",
+                                                               "n_peaks_nonstandard")}, resources=resources)
 
 
 def grounding_lines(data_dir: str | Path, dataset_id: str, fingerprint: str | None) -> tuple[list[str], str]:

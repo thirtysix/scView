@@ -78,6 +78,7 @@ class DifferentialRequest(BaseModel):
     max_peaks: int = Field(default=atac.MAX_PEAKS_PER_GROUP, ge=10, le=500_000)
     test: Literal["wilcoxon", "lr"] = "wilcoxon"
     lrt_peaks: int = Field(default=atac.LRT_PER_GROUP, ge=1, le=500_000)  # lr: true likelihood ratios per group
+    standard_only: bool = True  # leave out chrM, unplaced scaffolds and alt contigs (Signac's keepStandardChromosomes)
 
 
 def _sse(event: str, data: dict[str, Any]) -> str:
@@ -530,6 +531,7 @@ async def run_differential(dataset_id: str, body: DifferentialRequest, dm: Datas
         codes, every, chosen = await asyncio.to_thread(atac.group_codes, adata, body.column, body.groups)
         store = await asyncio.to_thread(atac.open_store, adata, dm.data_dir, dataset_id)
         rows = await asyncio.to_thread(atac.cell_rows, store, adata)
+        peak_mask = await asyncio.to_thread(atac.standard_mask, store) if body.standard_only else None
     except atac.AtacError as e:
         raise _http(e)
     cells = await asyncio.to_thread(results_store.cells_hash, adata)
@@ -542,7 +544,8 @@ async def run_differential(dataset_id: str, body: DifferentialRequest, dm: Datas
     async def on_result(item, res):
         params: dict[str, Any] = {"column": body.column, "groups": body.groups, "min_pct": body.min_pct,
                                   "max_peaks": body.max_peaks, "test": body.test,
-                                  "on": "log1p(TF-IDF)" if body.test == "lr" else "TF-IDF"}
+                                  "on": "log1p(TF-IDF)" if body.test == "lr" else "TF-IDF",
+                                  "standard_only": body.standard_only, "n_peaks_left_out": int(item.get("n_left_out", 0))}
         if body.test == "lr":
             params |= {"latent": "total peak counts per cell", "lrt_peaks": lrt_peaks}
 
@@ -550,6 +553,7 @@ async def run_differential(dataset_id: str, body: DifferentialRequest, dm: Datas
             table, note = atac.attach_context(item["frame"], store, genome, dm.data_dir, _auto_download())
             method = (atac.DA_METHOD_LR.format(min_pct=body.min_pct, max_peaks=body.max_peaks, lrt_peaks=lrt_peaks)
                       if body.test == "lr" else atac.DA_METHOD.format(min_pct=body.min_pct, max_peaks=body.max_peaks))
+            method += atac.left_out_text(params["n_peaks_left_out"])
             kept = atac.DaResult(result_id=uuid.uuid4().hex[:12], column=body.column, groups=chosen, table=table,
                                  n_tested=item["n_tested"], n_significant=item["n_significant"], params=params,
                                  method=method, cells=cells, created_at=datetime.now(timezone.utc).isoformat(),
@@ -570,7 +574,7 @@ async def run_differential(dataset_id: str, body: DifferentialRequest, dm: Datas
     return _stream(_events(
         dm, dataset_id, "differential", start, need,
         lambda stop: atac.iter_differential(store, rows, codes, every, chosen, test=body.test, min_pct=body.min_pct,
-                                            max_peaks=body.max_peaks, stop=stop, lrt_per_group=lrt_peaks),
+                                            max_peaks=body.max_peaks, stop=stop, lrt_per_group=lrt_peaks, peak_mask=peak_mask),
         on_result, "Differential accessibility", closers=[store.close]))
 
 

@@ -52,6 +52,9 @@ describe("peak-gene links text", () => {
     expect(text).toContain("10 links at p < 0.05 from 100 pairs");
     expect(text).toContain("3 genes not tested");
     expect(text).toContain("51 peaks left out");
+    expect(text).not.toContain("unplaced scaffolds");
+    const scaffolds = countsText({ ...r, counts: { ...r.counts, n_peaks_nonstandard: 29 } } as LinksPage);
+    expect(scaffolds).toContain("29 peaks on chrM, unplaced scaffolds or alt contigs left out.");
     expect(cellsText(r)).toBe("celltype: B, T");
     expect(cellsText({ ...r, params: { genes: "variable" } } as LinksPage)).toBe("all cells");
   });

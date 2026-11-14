@@ -806,11 +806,14 @@ def query_peaks(frame, group: str, p_column: str, p_max: float, min_pct: float, 
 
 def enrich_groups(table: PeakMotifTable, frame, groups: list[str], *, p_column: str = "pval", p_max: float = QUERY_P,
                   min_pct: float = QUERY_PCT, min_log2fc: float = QUERY_LOG2FC, n_background: int = BACKGROUND_PEAKS,
-                  seed: int = SEED, kept_per_group: int | None = None, stop: Callable[[], bool] = lambda: False):
-    """Each group's query peaks against a GC-matched background: (one long table, per group counts)."""
+                  seed: int = SEED, kept_per_group: int | None = None, stop: Callable[[], bool] = lambda: False,
+                  standard: np.ndarray | None = None):
+    """Each group's query peaks against a GC-matched background: (one long table, per group counts).
+    ``standard``: the peaks that may be query or background (the standard chromosomes), None for all."""
     import pandas as pd
 
-    known = table.known
+    gc = table.gc if standard is None else np.where(standard, table.gc, np.nan)
+    known = np.isfinite(gc)
     frames, summary = [], {}
     for g in groups:
         if stop():
@@ -827,7 +830,7 @@ def enrich_groups(table: PeakMotifTable, frame, groups: list[str], *, p_column: 
             summary[g] = info
             continue
         rng = np.random.default_rng(group_seed(seed, g))
-        background = match_background(table.gc, query, n_background, rng)
+        background = match_background(gc, query, n_background, rng)
         if background.size < query.size:
             info["note"] = (f"{g} has {query.size:,} query peaks and only {background.size:,} other peaks to match them "
                             "against: tighten the thresholds.")

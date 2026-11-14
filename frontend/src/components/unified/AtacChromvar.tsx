@@ -217,6 +217,8 @@ export function AtacChromvar({
               {chromvar.method}
               {chromvar.n_peaks_no_counts > 0 && ` ${chromvar.n_peaks_no_counts.toLocaleString()} peaks with no count in these cells left out.`}
               {chromvar.n_peaks_left_out > 0 && ` ${chromvar.n_peaks_left_out.toLocaleString()} peaks without known bases left out.`}
+              {(chromvar.n_peaks_nonstandard ?? 0) > 0 &&
+                ` ${(chromvar.n_peaks_nonstandard ?? 0).toLocaleString()} peaks on chrM, unplaced scaffolds or alt contigs left out.`}
             </Caption>
           </div>
         </div>

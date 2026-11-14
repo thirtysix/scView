@@ -61,6 +61,7 @@ from scipy.special import ndtr
 
 from scview.core import atac, gene_annotation, genome_seq, results_store
 from scview.core.atac import MATRIX, AtacCancelled, AtacError, _bh
+from scview.core.genome_build import standard_chromosomes
 
 logger = logging.getLogger(__name__)
 
@@ -332,13 +333,17 @@ def signed_distance(start, end, tss, strand):
 
 def iter_links(store, rows, cell_mask, read_genes, genes, peak_names, chrom, start, end, gc, folder, *, seed=SEED,
                distance=DISTANCE, min_cells=MIN_CELLS, score_cutoff=SCORE_CUTOFF, n_sample=N_SAMPLE, p_cutoff=P_CUTOFF,
-               stop=lambda: False):
+               stop=lambda: False, standard_only=True):
     """The links, as a generator of ``progress`` events and one ``result``. ``rows``: the store rows
     of the cells used; ``cell_mask``: those cells among what ``read_genes(names)`` returns (cells x
     genes, dense), or None for all; ``genes``: name, chrom, tss (0-based), strand; ``peak_names``,
-    ``chrom``, ``start``, ``end``, ``gc``: per store peak; ``folder``: where the by-peak copy goes."""
+    ``chrom``, ``start``, ``end``, ``gc``: per store peak; ``folder``: where the by-peak copy goes.
+    ``standard_only``: peaks on chrM, unplaced scaffolds and alt contigs are no candidates."""
+    standard = standard_chromosomes(chrom) if standard_only else np.ones(gc.size, dtype=bool)
     known = np.isfinite(gc)
-    n_unknown = int((~known).sum())
+    n_unknown = int((~known & standard).sum())
+    n_nonstandard = int((~standard).sum())
+    known &= standard
     yield {"type": "progress", "step": "by_peak", "message": "Turning the peak matrix by peak", "done": 0, "total": 1}
     by = ByPeak(store, rows, known, folder, min_cells=min_cells, stop=stop)
     kept = by.kept
@@ -445,7 +450,7 @@ def iter_links(store, rows, cell_mask, read_genes, genes, peak_names, chrom, sta
         "n_genes_asked": total, "n_genes_tested": n_tested_genes, "n_genes_few_cells": n_few_cells,
         "n_genes_few_peaks": n_few_peaks, "n_pairs_cis": n_pairs_cis, "n_pairs_tested": int(z.size),
         "n_pairs_no_background": int((~usable).sum()), "n_links": int(keep.size), "n_links_padj": int((padj[keep] < 0.05).sum()),
-        "n_peaks_kept": int(kept.size), "n_peaks_unknown": n_unknown, "n_cells": int(n)}}
+        "n_peaks_kept": int(kept.size), "n_peaks_unknown": n_unknown, "n_peaks_nonstandard": n_nonstandard, "n_cells": int(n)}}
 
 
 REPLAY_CONSTANTS = ("DISTANCE", "MIN_CELLS", "SCORE_CUTOFF", "N_SAMPLE", "P_CUTOFF", "SEED", "OUTSIDE", "DENSITY_N",
@@ -813,7 +818,7 @@ def iter_run(adaptor, store, p: LinkPlan, *, data_dir: str | Path, auto_download
 def run_params(p: LinkPlan, gene_list: list[str] | None) -> dict[str, Any]:
     params: dict[str, Any] = {"genes": p.mode, "cells_column": p.cells_column, "cells_value": p.cells_value, "distance": DISTANCE,
                               "min_cells": MIN_CELLS, "score_cutoff": SCORE_CUTOFF, "n_sample": N_SAMPLE, "p_cutoff": P_CUTOFF,
-                              "seed": SEED, "genome": p.genome, "selection": p.selection,
+                              "seed": SEED, "genome": p.genome, "selection": p.selection, "standard_only": True,
                               "genome_url": genome_seq.RELEASES[gene_annotation.canonical_genome(p.genome)].url,
                               "gene_positions_url": gene_annotation.RELEASES[gene_annotation.canonical_genome(p.genome)].url}
     if p.mode == "list":

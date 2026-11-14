@@ -121,7 +121,7 @@ def _events(text: str) -> list[tuple[str, dict]]:
     return out
 
 
-def _core(tmp_path, seed=atac_links.SEED, names=None, mask=None, gc=None, n_sample=atac_links.N_SAMPLE):
+def _core(tmp_path, seed=atac_links.SEED, names=None, mask=None, gc=None, n_sample=atac_links.N_SAMPLE, standard_only=True):
     """iter_links on the world directly, GC from the feature's position hash so no genome is needed."""
     a, p, table, x = _world()
     store_file = tmp_path / "peaks.h5"
@@ -145,7 +145,7 @@ def _core(tmp_path, seed=atac_links.SEED, names=None, mask=None, gc=None, n_samp
     rows = np.arange(N_CELLS) if mask is None else np.flatnonzero(mask)
     with ModalityStore(store_file) as store:
         items = list(atac_links.iter_links(store, rows, mask, read, gene_table, store.features, chrom, start, end, gc, folder, seed=seed,
-                                               n_sample=n_sample))
+                                               n_sample=n_sample, standard_only=standard_only))
     return items[-1], a, p, table, x
 
 
@@ -232,9 +232,21 @@ def test_scores_are_pearson_with_signacs_defaults(tmp_path):
     assert c_top["peak"] == "chr2:52000-52330" and c_top["distance_to_tss"] == 2000.0
     assert c["n_genes_asked"] == 5 and c["n_genes_few_cells"] == 1  # RARE: in 4 cells, not more than 10
     assert c["n_genes_few_peaks"] == 1  # LONELY: one peak within 500 kb
-    assert c["n_peaks_unknown"] == 3
+    assert c["n_peaks_unknown"] == 0 and c["n_peaks_nonstandard"] == 3  # KI270728.1: an unplaced scaffold
     assert c["n_pairs_tested"] >= c["n_links"] > 0 and c["n_pairs_cis"] >= c["n_pairs_tested"]
     assert not t["peak"].str.startswith("KI270728").any()
+
+
+def test_a_scaffold_the_genome_file_names_is_still_no_candidate(tmp_path):
+    """With bases for the scaffold (a 2bit that names it), standard_only still leaves it out."""
+    a, p, table, x = _world()
+    gc = 30.0 + (table["start"].to_numpy() % 37) * 0.7
+    kept = _core(tmp_path / "a", gc=gc)[0]["counts"]
+    every = _core(tmp_path / "b", gc=gc, standard_only=False)[0]["counts"]
+    assert kept["n_peaks_nonstandard"] == 3 and every["n_peaks_nonstandard"] == 0
+    assert kept["n_peaks_unknown"] == every["n_peaks_unknown"] == 0
+    detected = int(((p[:, -3:] > 0).sum(axis=0) > atac_links.MIN_CELLS).sum())
+    assert every["n_peaks_kept"] - kept["n_peaks_kept"] == detected > 0
 
 
 def test_z_is_the_backgrounds_mean_and_sd_and_bh_covers_every_tested_pair(tmp_path):
@@ -379,7 +391,7 @@ async def test_run_kept_paged_by_gene_csv_locus_and_a_replay_step(client, seeded
     assert any(e == "progress" and d.get("step") == "links" for e, d in events)
     result = next(d for e, d in events if e == "result")
     rid = result["id"]
-    assert result["counts"]["n_links"] > 0 and result["counts"]["n_peaks_unknown"] == 3 and result["stale"] is False
+    assert result["counts"]["n_links"] > 0 and result["counts"]["n_peaks_nonstandard"] == 3 and result["stale"] is False
     assert "never proof" in result["caption"] and "cell types" in result["caption"]
     assert result["seconds"] >= 0 and result["params"]["seed"] == atac_links.SEED
 

@@ -327,6 +327,45 @@ async def test_a_differential_result_comes_back_from_the_results_store(client, d
     assert table["peak"].iloc[0] == result["rows"]["A"][0]["peak"]
 
 
+def test_standard_chromosomes_in_either_naming_and_none_for_another_species():
+    from scview.core import genome_build as gb
+
+    got = gb.standard_chromosomes(["chr1", "1", "chrX", "Y", "chr22", "chrM", "MT", "JH584304.1", "KI270728.1",
+                                   "chrUn_KI270728v1", "chr1_KI270706v1_random", "GL456211.1", "", None])
+    assert got.tolist() == [True] * 5 + [False] * 7 + [True, True]
+    assert gb.standard_chromosomes(["chr23", "chr1", "scaffold_9"]).all()  # numbered past 22: not human or mouse
+    assert gb.standard_chromosomes(["chrI", "chrII", "chrM"]).all()  # worm / yeast
+    assert gb.standard_chromosomes(["scaffold_1", "scaffold_2"]).all()  # no placed name at all
+    assert gb.standard_chromosomes([]).size == 0
+
+
+async def test_differential_leaves_out_peaks_off_the_standard_chromosomes(client, dataset_manager):
+    a, p, table = _dataset()
+    background = np.flatnonzero(table["kind"].to_numpy() == "background")[:2]
+    table = table.copy()
+    table.loc[background[0], "name"] = "JH584304.1:100000-100500"  # the mouse kidney's top PT "peak"
+    table.loc[background[1], "name"] = "chrM:200-700"
+    _register(dataset_manager, a, "nc")
+    _seed(dataset_manager.data_dir, "nc", p, list(a.obs_names), table)
+    out = {}
+    for standard in (True, False):
+        r = await client.post(f"{API}/datasets/nc/atac/differential",
+                              json={"column": "group", "min_pct": 0, "standard_only": standard})
+        out[standard] = next(d for e, d in _events(r.text) if e == "result")
+    kept, every = out[True], out[False]
+    assert kept["params"]["n_peaks_left_out"] == 2 and every["params"]["n_peaks_left_out"] == 0
+    assert kept["n_tested"]["A"] == every["n_tested"]["A"] - 2
+    assert "2 peaks on chrM, unplaced scaffolds or alt contigs left out" in kept["method"]
+    assert "left out" not in every["method"]
+    results_store.flush()
+    t = await client.get(f"{API}/datasets/nc/atac/differential/{kept['id']}/csv")
+    peaks = set(pd.read_csv(io.StringIO(t.text))["peak"])
+    assert not peaks & {"JH584304.1:100000-100500", "chrM:200-700"}
+    steps = [h for h in provenance.read_provenance(dataset_manager._datasets["nc"].adata)["history"]
+             if h["step"] == "atac_differential"]
+    assert steps[0]["params"]["standard_only"] is True and steps[1]["params"]["standard_only"] is False
+
+
 async def test_one_run_at_a_time(client, dataset_manager):
     did, *_ = _register_multiome(dataset_manager)
     atac_api._running[did] = "wnn"

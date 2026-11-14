@@ -341,11 +341,13 @@ def test_the_replay_script_reproduces_lr_and_wilcoxon_from_the_input(tmp_path):
         codes, every, chosen = atac.group_codes(a, atac.OBS_CLUSTERS)
         mine = {}
         for test in ("wilcoxon", "lr"):
-            mine[test] = [i for i in atac.iter_differential(store, rows, codes, every, chosen, test=test)
+            # the Wilcoxon run with the standard-chromosome mask (v0.78 default): the replay draws it from the names
+            mask = atac.standard_mask(store) if test == "wilcoxon" else None
+            mine[test] = [i for i in atac.iter_differential(store, rows, codes, every, chosen, test=test, peak_mask=mask)
                           if i["type"] == "result"][0]["frame"]
             atac.record_differential(a, {"column": atac.OBS_CLUSTERS, "groups": None, "min_pct": atac.MIN_PCT,
                                          "max_peaks": atac.MAX_PEAKS_PER_GROUP, "test": test,
-                                         **({"lrt_peaks": atac.LRT_PER_GROUP} if test == "lr" else {})})
+                                         **({"lrt_peaks": atac.LRT_PER_GROUP} if test == "lr" else {"standard_only": True})})
     assert [d["status"] for h, d in zip(atac.provenance_history(a), replay_script.describe(a))
             if h["step"] == "atac_differential"] == ["exact", "exact"]
     src = tmp_path / "input" / h5.name

@@ -1173,10 +1173,11 @@ def _iter_lr(store, rows, codes, tested_codes, tested, detect, idf, cell_total, 
 
 
 def iter_differential(store, rows, codes, every, chosen, *, test="wilcoxon", min_pct=MIN_PCT, max_peaks=MAX_PEAKS_PER_GROUP,
-                      stop=lambda: False, batch_values=DA_BATCH_VALUES, lrt_per_group=LRT_PER_GROUP):
+                      stop=lambda: False, batch_values=DA_BATCH_VALUES, lrt_per_group=LRT_PER_GROUP, peak_mask=None):
     """Each chosen group vs every other labelled cell, as a generator (``progress`` events, then
     ``{"type": "result", "frame": ..., "n_tested": ...}``): one pass for detection, then, for
-    ``wilcoxon``, one per batch of peaks (``batch_values`` stored values); for ``lr``, ``_iter_lr``."""
+    ``wilcoxon``, one per batch of peaks (``batch_values`` stored values); for ``lr``, ``_iter_lr``.
+    ``peak_mask``: the peaks that may be tested (the standard chromosomes), None for all."""
     n_vars = store.n_vars
     k = len(every)
     labelled = codes >= 0
@@ -1202,7 +1203,7 @@ def iter_differential(store, rows, codes, every, chosen, *, test="wilcoxon", min
     code_of = {g: i for i, g in enumerate(every)}
     for g in chosen:
         i = code_of[g]
-        ok = np.flatnonzero((pct_in[i] >= min_pct) | (pct_out[i] >= min_pct))
+        ok = np.flatnonzero(((pct_in[i] >= min_pct) | (pct_out[i] >= min_pct)) & (True if peak_mask is None else peak_mask))
         if ok.size > max_peaks:
             ok = ok[np.argsort(-np.maximum(pct_in[i][ok], pct_out[i][ok]), kind="stable")[:max_peaks]]
         tested[i, ok] = True
@@ -1277,6 +1278,7 @@ def iter_differential(store, rows, codes, every, chosen, *, test="wilcoxon", min
         frames.append(pd.DataFrame(columns))
     frame = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     yield {"type": "result", "frame": frame, "n_tested": n_tested, "n_significant": n_significant,
+           "n_left_out": 0 if peak_mask is None else int(n_vars - np.count_nonzero(peak_mask)),
            **({"n_fit": n_fit} if fit is not None else {})}
 
 
@@ -1285,7 +1287,24 @@ REPLAY_CONSTANTS = ("LANCZOS_BLOCK", "LANCZOS_STEPS", "SEED", "SCALE_FACTOR", "M
                     "LR_MIN_BLOCK", "LR_MAX_BLOCK", "LR_THREADS", "FIT_SCORE", "FIT_LRT", "FIT_LRT_SEPARATED", "FIT_SCORE_NO_FIT",
                     "FIT_UNTESTABLE", "FIT_NAMES")
 REPLAY_CODE = (top_peaks, block_lanczos_svd, scaled_embedding, depth_correlation, gene_regions, overlap_matrix, _bh,
-               wilcoxon_sparse, _iter_lr, iter_differential)
+               wilcoxon_sparse, _iter_lr, iter_differential, genome_build.standard_chromosomes)
+
+
+def standard_mask(store: ModalityStore) -> np.ndarray:
+    """Each peak of the store: on a standard chromosome (``genome_build.standard_chromosomes``);
+    all of them when the store names no positions."""
+    try:
+        return genome_build.standard_chromosomes(store.feature_attr("chrom"))
+    except modality_store.ModalityStoreError:
+        return np.ones(store.n_vars, dtype=bool)
+
+
+def left_out_text(n: int) -> str:
+    """The method's sentence on the peaks off the standard chromosomes ('' when none)."""
+    if not n:
+        return ""
+    return (f" {n:,} peak{'s' if n != 1 else ''} on chrM, unplaced scaffolds or alt contigs left out "
+            f"(standard chromosomes only: {genome_build.STANDARD_TEXT}).")
 
 
 def attach_context(frame: pd.DataFrame, store: ModalityStore, genome: str | None, data_dir: str | Path,

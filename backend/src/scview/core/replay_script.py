@@ -1468,9 +1468,12 @@ def atac_differential(counts, peak_names, labels, settings):
     code = {g: i for i, g in enumerate(every)}
     codes = np.array([-1 if m else code[str(x)] for x, m in zip(labels, missing)], dtype=np.int32)
     chosen = settings.get("groups") or every
+    peak_mask = None
+    if settings.get("standard_only"):  # chrM, unplaced scaffolds and alt contigs left out
+        peak_mask = standard_chromosomes([re.split(r"[:_-]", n[::-1], maxsplit=2)[-1][::-1] for n in peak_names])
     for item in iter_differential(AtacCounts(counts), np.arange(counts.shape[0]), codes, every, chosen,
                                   test=settings["test"], min_pct=settings["min_pct"], max_peaks=settings["max_peaks"],
-                                  lrt_per_group=settings.get("lrt_peaks", LRT_PER_GROUP)):
+                                  lrt_per_group=settings.get("lrt_peaks", LRT_PER_GROUP), peak_mask=peak_mask):
         if item["type"] == "result":
             frame = item["frame"]
             frame.insert(1, "peak", np.asarray(peak_names, dtype=object)[frame["peak_index"].to_numpy()])
@@ -1602,7 +1605,7 @@ def _atac_links_helper() -> str:
     script computes the links as scView did."""
     import inspect
 
-    from scview.core import atac_links, genome_seq
+    from scview.core import atac_links, genome_build, genome_seq
 
     lines = ["import hashlib", "import mmap", "import shutil", "import struct", "import tempfile", "import threading", "from pathlib import Path",
              "from types import SimpleNamespace", "from typing import Iterable", ""]
@@ -1610,7 +1613,8 @@ def _atac_links_helper() -> str:
     lines += [f"{name} = {_lit(getattr(genome_seq, name))}" for name in ("UNKNOWN", "_SIGNATURE")]
     lines += ["_FROM_2BIT = np.array([3, 1, 0, 2], dtype=np.uint8)",
               "_BYTE_TO_CODES = np.array([[_FROM_2BIT[(b >> s) & 3] for s in (6, 4, 2, 0)] for b in range(256)], dtype=np.uint8)"]
-    for obj in (genome_seq.TwoBit, genome_seq.sequences, genome_seq.base_counts, genome_seq.gc_percent):
+    for obj in (genome_seq.TwoBit, genome_seq.sequences, genome_seq.base_counts, genome_seq.gc_percent,
+                genome_build.standard_chromosomes):
         lines += ["", "", inspect.getsource(obj).rstrip("\n")]
     lines += ["", "", "genome_seq = SimpleNamespace(sequences=sequences, base_counts=base_counts, gc_percent=gc_percent)"]
     for obj in atac_links.REPLAY_CODE:
@@ -1665,7 +1669,7 @@ def atac_links_table(adata, counts, peak_names, settings):
     folder = tempfile.mkdtemp(prefix="links-")
     try:
         for item in iter_links(AtacCounts(counts), rows, mask, read_genes, genes, peak_names, chrom, start, end, gc, folder,
-                               seed=settings.get("seed", SEED)):
+                               seed=settings.get("seed", SEED), standard_only=settings.get("standard_only", False)):
             if item["type"] == "result":
                 print("Peak-gene links:", item["counts"])
                 return item["frame"].drop(columns="peak_index")
@@ -1685,7 +1689,7 @@ def _atac_motifs_helper() -> str:
     (scanpy needs it anyway)."""
     import inspect
 
-    from scview.core import atac_chromvar, atac_motifs, genome_seq, tf_motifs
+    from scview.core import atac_chromvar, atac_motifs, genome_build, genome_seq, tf_motifs
 
     lines = ["import hashlib", "import mmap", "import os", "import re", "import struct", "import threading",
              "from collections.abc import Iterable", "from concurrent.futures import ThreadPoolExecutor",
@@ -1697,7 +1701,7 @@ def _atac_motifs_helper() -> str:
               "_BYTE_TO_CODES = np.array([[_FROM_2BIT[(b >> s) & 3] for s in (6, 4, 2, 0)] for b in range(256)], dtype=np.uint8)",
               'MOTIF_ROW = re.compile(r"^([ACGT])\\s*\\[([^\\]]*)\\]$")', "_ROW = MOTIF_ROW"]
     for obj in (genome_seq.TwoBit, genome_seq.sequences, genome_seq.base_counts, genome_seq.gc_percent, tf_motifs.Motif,
-                tf_motifs.parse_jaspar, *atac_motifs.REPLAY_CODE, *atac_chromvar.REPLAY_CODE):
+                tf_motifs.parse_jaspar, genome_build.standard_chromosomes, *atac_motifs.REPLAY_CODE, *atac_chromvar.REPLAY_CODE):
         lines += ["", "", inspect.getsource(getattr(obj, "py_func", obj)).rstrip("\n")]
     lines += ["", "", _ATAC_MOTIF_READERS.strip("\n")]
     return "\n".join(lines) + "\n"
@@ -1764,7 +1768,8 @@ def atac_motif_table(peak_names, inputs):
             codes, offsets = sequences(genome, chrom[idx], start[idx], end[idx])
             joined, starts = join_regions(codes, offsets)
             hits[idx] = scan_block(joined, starts, strands, len(motifs), threads=BUILD_THREADS)
-    out = {"hits": hits, "gc": gc, "ids": [m.id for m in motifs], "names": [m.name for m in motifs]}
+    out = {"hits": hits, "gc": gc, "ids": [m.id for m in motifs], "names": [m.name for m in motifs],
+           "standard": standard_chromosomes(chrom)}
     _motif_tables[key] = out
     return out
 
@@ -1772,6 +1777,8 @@ def atac_motif_table(peak_names, inputs):
 def atac_motif_enrichment(table, peak_names, da_table, settings):
     """FindMotifs on each group's peaks of a differential table: one long table, lowest p first."""
     hits, gc = table["hits"], table["gc"]
+    if settings.get("standard_only"):  # chrM, unplaced scaffolds and alt contigs: neither query nor background
+        gc = np.where(table["standard"], gc, np.nan)
     index = pd.Index(peak_names)
     frames = []
     for g in settings.get("groups") or list(dict.fromkeys(da_table["group"].astype(str))):
@@ -1794,7 +1801,7 @@ def atac_motif_enrichment(table, peak_names, da_table, settings):
 def atac_chromvar_run(counts, table, settings):
     """chromVAR z and deviations, cells x motifs, a block of cells at a time."""
     total = np.asarray(counts.sum(axis=0), dtype=np.float64).ravel()
-    kept = np.flatnonzero((total > 0) & np.isfinite(table["gc"]))
+    kept = np.flatnonzero((total > 0) & np.isfinite(table["gc"]) & (table["standard"] if settings.get("standard_only") else True))
     bg = background_peaks(total[kept], table["gc"][kept] / 100.0, iterations=settings["iterations"], w=settings["w"], bs=settings["bs"],
                           seed=settings["seed"])
     rows, cols = np.nonzero(table["hits"][kept])
@@ -3505,7 +3512,7 @@ def _atac_differential(p: dict, ctx: _Ctx) -> Snippet:
         return Snippet(NOT_REPLAYABLE, ["# Differential peaks: the settings are not recorded. Recorded:", *_param_comment(p)],
                        "settings not recorded")
     _need(ctx, "atac")
-    keys = ("column", "groups", "min_pct", "max_peaks", "test", "lrt_peaks")
+    keys = ("column", "groups", "min_pct", "max_peaks", "test", "lrt_peaks", "standard_only")
     settings = {x: p.get(x) for x in keys if p.get(x) is not None}
     return Snippet(EXACT, [
         f"# Differential peaks by {comment_text(p.get('column'), 80)}, {comment_text(p.get('test'), 12)}: each group vs "
@@ -3529,7 +3536,8 @@ def _atac_links(p: dict, ctx: _Ctx) -> Snippet:
         return Snippet(NOT_REPLAYABLE, ["# Peak-gene links: the settings are not recorded. Recorded:", *_param_comment(p)],
                        "settings not recorded")
     _need(ctx, "atac_links")
-    keys = ("genes", "gene_list", "cells_column", "cells_value", "seed", "genome_url", "gene_positions_url", "selection")
+    keys = ("genes", "gene_list", "cells_column", "cells_value", "seed", "genome_url", "gene_positions_url", "selection",
+            "standard_only")
     settings = {x: p.get(x) for x in keys if p.get(x) is not None}
     settings["key"] = str(p.get("result_id") or p.get("genes"))  # a run of its own: several can be recorded
     return Snippet(EXACT, [
@@ -3574,7 +3582,7 @@ def _atac_motif_enrichment(p: dict, ctx: _Ctx) -> Snippet:
         return Snippet(NOT_REPLAYABLE, ["# Motifs in differential peaks: the settings are not recorded. Recorded:", *_param_comment(p)],
                        "settings not recorded")
     _need(ctx, "atac_motifs")
-    settings = {k: p[k] for k in keys} | {"groups": p.get("groups")}
+    settings = {k: p[k] for k in keys} | {"groups": p.get("groups"), "standard_only": bool(p.get("standard_only"))}
     return Snippet(EXACT, [
         f"# Motifs in differential peaks by {comment_text(p.get('column'), 80)} ({comment_text(p.get('genome'), 12)}): "
         "the hits as motifmatchr gives them, FindMotifs per group, a table in uns.",
@@ -3599,7 +3607,7 @@ def _atac_chromvar(p: dict, ctx: _Ctx) -> Snippet:
     return Snippet(EXACT, [
         f"# chromVAR per-cell motif activity ({comment_text(p.get('genome'), 12)}): z and deviations, cells x motifs, in obsm.",
         f"ATAC_MOTIF_INPUTS = {_lit(_motif_inputs(p['genome']))}",
-        f"CHROMVAR = {_lit({k: p[k] for k in keys})}",
+        f"CHROMVAR = {_lit({k: p[k] for k in keys} | {'standard_only': bool(p.get('standard_only'))})}",
         *_block(_ATAC_MOTIF_TABLE_CODE),
         *_block(_ATAC_CHROMVAR_CODE),
     ])

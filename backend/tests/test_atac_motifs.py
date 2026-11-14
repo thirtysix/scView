@@ -329,6 +329,18 @@ def test_enrich_groups_says_when_nothing_passes_and_drops_peaks_without_bases():
     assert s["A"]["n_query"] == 39 and s["A"]["n_left_out"] == 1
 
 
+def test_peaks_off_the_standard_chromosomes_are_neither_query_nor_background():
+    t = _table()
+    standard = np.ones(t.n_peaks, dtype=bool)
+    standard[[3, 7]] = False  # two query peaks on a scaffold
+    standard[40:] = False
+    standard[40:340] = True  # 300 background candidates left, all drawn
+    _f, s = am.enrich_groups(t, _da_frame(), ["A"], n_background=1_000, standard=standard)
+    assert s["A"]["n_query"] == 38 and s["A"]["n_left_out"] == 2 and s["A"]["n_background"] == 300
+    _f, every = am.enrich_groups(t, _da_frame(), ["A"], n_background=1_000)
+    assert every["A"]["n_background"] > 300
+
+
 def test_a_query_at_the_stored_rows_limit_is_capped():
     t = _table()
     _f, s = am.enrich_groups(t, _da_frame(), ["A"], n_background=300, kept_per_group=43, p_max=0.5)
