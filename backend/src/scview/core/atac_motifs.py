@@ -703,7 +703,13 @@ def start_build(data_dir: str | Path, genome: str, key: str, store_path: Path, *
 
 BACKGROUND_PEAKS = 40_000  # FindMotifs' background
 QUERY_P = 0.005  # Signac's motif vignette: p_val < 0.005 & pct.1 > 0.2, from only.pos = TRUE
-QUERY_PCT = 0.2
+# Open in more than 5% of the group (FindMarkers' min.pct), not the vignette's 20%: on nuclei at ~15k
+# fragments a cell (5k mouse kidney, v0.78) 20% kept 79-189 peaks for the minor types, 57-89% of them
+# promoters, and GC-rich KLF/SP motifs topped every type but PT; at 5% the lineage TF is first for PT
+# (HNF4A), TAL (ESRRA/B/G), DCT/CNT and IC (TFCP2L1) and podocytes (WT1). PBMC 10k (17k fragments a
+# cell) loses nothing: CEBPA, SPIB, POU2F, BCL11B/RUNX stay first and NK's TBX21 moves from 2nd to 1st.
+QUERY_PCT = 0.05
+PROMOTER_HEAVY = 0.6  # a query with more promoters than this gets a note
 QUERY_LOG2FC = 0.0
 MIN_QUERY = 10  # FindMotifs warns under this
 SEED = 0
@@ -836,6 +842,13 @@ def enrich_groups(table: PeakMotifTable, frame, groups: list[str], *, p_column: 
                             "against: tighten the thresholds.")
             summary[g] = info
             continue
+        if "peak_class" in frame.columns:
+            classes = frame.loc[frame["group"] == g].set_index("peak_index")["peak_class"]
+            share = float((classes.reindex(query).to_numpy() == "promoter").mean())
+            info["promoter_share"] = round(share, 3)
+            if share > PROMOTER_HEAVY:
+                info["note"] = (f"{share:.0%} of {g}'s query peaks are promoters, where GC-rich KLF and SP motifs top the "
+                                "list whatever the cell type: lower 'open in over' to take in distal peaks.")
         numbers = find_motifs(table, query, background)
         info["n_background"] = int(background.size)
         info["n_significant"] = int((numbers["pval_adj"] < 0.05).sum())

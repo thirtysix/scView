@@ -72,7 +72,7 @@ async def test_state_says_what_a_scan_needs_before_it_runs(client, dataset_manag
     assert s["files"]["genome"]["downloaded"] is False and s["files"]["genome"]["size"] > 8e8
     assert s["scan"]["estimate_seconds"] > 0 and s["scan"]["estimate_bytes"] > 1e8
     assert s["chromvar"] is None and s["chromvar_estimate"]["estimate_bytes"] > 1e8
-    assert s["enrichment_defaults"]["p_max"] == 0.005 and s["enrichment_defaults"]["min_pct"] == 0.2
+    assert s["enrichment_defaults"]["p_max"] == 0.005 and s["enrichment_defaults"]["min_pct"] == 0.05
     assert not list(Path(dataset_manager.data_dir).glob("genome/*.2bit"))
 
 

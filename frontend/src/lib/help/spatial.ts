@@ -110,7 +110,7 @@ export const SPATIAL_HELP: Record<string, string> = {
     "All cells, or only the groups you tick from a column. Across all cells a link mostly reflects which cell types open the peak and express the gene; within related groups it asks whether the two vary together there.",
   "atac.links-runs": "Earlier link runs kept for this dataset, for example with other genes or cells. Choose one to see its table again.",
   "atac.motif-query":
-    "These cut-offs choose the query: peaks more open in the group than in the rest, below this p (or FDR) and open in more than this share of the group's cells. Looser cut-offs give a larger query with weaker peaks in it.",
+    "These cut-offs choose the query: peaks more open in the group than in the rest, below this p (or FDR) and open in more than this share of the group's cells. 5% by default, as FindMarkers' min.pct; the Signac vignette's 20% leaves mostly promoters on sparse nuclei, where GC-rich motifs win.",
   "atac.chromvar-heatmap":
     "Rows are the most variable motifs, columns the groups. Red: that motif's peaks are more accessible than expected in the group's cells; blue: less; white: as expected. Click a motif to colour the plot by its activity.",
   "atac.chromvar-vs-rest":
