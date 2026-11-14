@@ -85,3 +85,26 @@ def test_run_marker_recognises_a_killed_backend(tmp_path):
     assert mark_running(marker, boot) is None  # clean shutdown before
     boot.write_text("boot-b\n")
     assert mark_running(marker, boot) is None  # the computer restarted, not the backend
+
+
+def test_own_peak_is_the_child_s_not_the_forking_parent_s(tmp_path):
+    """A child's peak_mb (motif scan, chromVAR) is its own VmHWM: ru_maxrss carries the
+    server's high-water mark across fork + exec (every child reported the server's 9,122 MB)."""
+    import resource
+    import subprocess
+    import sys
+
+    from scview.core.memory_budget import own_peak_mb
+
+    status = tmp_path / "status"
+    status.write_text("Name:\tpython\nVmPeak:\t 900000 kB\nVmHWM:\t  204800 kB\nVmRSS:\t 1000 kB\n")
+    assert own_peak_mb(status) == 200
+    assert own_peak_mb(tmp_path / "missing") == 0
+
+    block = bytearray(300 * 1024**2)  # the parent's high-water mark rises by 300 MB
+    block[::4096] = b"x" * len(block[::4096])
+    code = "from scview.core.memory_budget import own_peak_mb; print(own_peak_mb())"
+    own = int(subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout)
+    parent = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+    del block
+    assert 0 < own < 250 <= parent

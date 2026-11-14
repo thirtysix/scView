@@ -12,13 +12,17 @@ import {
   saveAssignment,
   type AssignmentPreview,
   type GuideSource,
+  type KoShareRow,
+  type MixscapeDeGenes,
   type MixscapeProgress,
   type MixscapeTarget,
   type PerturbationSummary,
 } from "@/api/perturbation";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
 import {
+  deGenesOf,
   deHandoff,
+  koRowsFor,
   ldaTraces,
   mappingChanges,
   MIXSCAPE_CLASS,
@@ -27,6 +31,7 @@ import {
   pctText,
   posteriorTraces,
   sortTargets,
+  unusedTargetsText,
   type TargetSortKey,
 } from "@/lib/perturbation";
 import { errorText } from "@/lib/programs";
@@ -40,6 +45,53 @@ const MAX_MAPPING_ROWS = 300;
 const btn = "rounded border px-1.5 py-0.5 text-[11px]";
 const chip = (on: boolean) =>
   `${btn} ${on ? "border-slate-600 bg-slate-600 text-white" : "border-slate-300 text-slate-600 hover:bg-slate-50"}`;
+
+/** A target's KO share by guide or by replicate (hidden when the run has no such rows). */
+function KoShareTable({
+  title,
+  kind,
+  rows,
+  testId,
+}: {
+  title: string;
+  kind: "guide" | "replicate";
+  rows: [string, KoShareRow][];
+  testId: string;
+}) {
+  if (!rows.length) return null;
+  return (
+    <table className="text-[11px]" data-testid={testId}>
+      <thead className="text-slate-500">
+        <tr>
+          <th className="px-1.5 py-0.5 text-left font-medium">
+            {kind === "guide" ? (
+              <Help id="perturbation.per_guide">{title}</Help>
+            ) : (
+              <Help id="perturbation.per_replicate">{title}</Help>
+            )}
+          </th>
+          <th className="px-1.5 py-0.5 text-right font-medium" title="This target's cells with this value">
+            Cells
+          </th>
+          <th className="px-1.5 py-0.5 text-right font-medium" title="Share of them called KO">
+            KO
+          </th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map(([value, r]) => (
+          <tr key={value} className="border-t border-slate-100">
+            <td className="px-1.5 py-0.5 font-mono text-[10px] text-slate-700">{value || "(none)"}</td>
+            <td className="px-1.5 py-0.5 text-right tabular-nums text-slate-600">{r.n_cells.toLocaleString()}</td>
+            <td className="px-1.5 py-0.5 text-right tabular-nums text-slate-600" title={`${r.n_ko} of ${r.n_cells} cells`}>
+              {pctText(r.ko_fraction)}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
 
 /**
  * A pooled CRISPR screen (backend core/crispr.py, core/mixscape.py): each cell's guide
@@ -64,6 +116,7 @@ export function PerturbationSubtab() {
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [splitBy, setSplitBy] = useState("");
+  const [deGenes, setDeGenes] = useState<MixscapeDeGenes>("all");
   const [progress, setProgress] = useState<MixscapeProgress | null>(null);
   const [running, setRunning] = useState(false);
   const abort = useRef<AbortController | null>(null);
@@ -85,6 +138,7 @@ export function PerturbationSubtab() {
       setMinRatio(Number(s.call?.params?.min_ratio ?? s.defaults.min_ratio));
       // The control matches the result on show: a saved run's "Within" choice.
       setSplitBy((s.mixscape ?? s.mixscape_saved)?.split_by ?? "");
+      setDeGenes(deGenesOf((s.mixscape ?? s.mixscape_saved)?.params));
       setMapping({});
     } catch (e) {
       setError(errorText(e));
@@ -153,7 +207,11 @@ export function PerturbationSubtab() {
     setError(null);
     setProgress(null);
     try {
-      await runMixscape(datasetId, { split_by: splitBy || null }, { onProgress: setProgress, signal: ctl.signal });
+      await runMixscape(
+        datasetId,
+        { split_by: splitBy || null, de_genes: deGenes },
+        { onProgress: setProgress, signal: ctl.signal },
+      );
       await refresh(datasetId, MIXSCAPE_CLASS);
       useSettingsStore.getState().setColorBy(MIXSCAPE_CLASS);
       await load();
@@ -335,6 +393,7 @@ export function PerturbationSubtab() {
                 {preview.counts.control.toLocaleString()} {preview.control ?? "control"}),{" "}
                 {preview.counts.multiple.toLocaleString()} with guides for different genes (&quot;multiple&quot;),{" "}
                 {preview.counts.none.toLocaleString()} with none; {preview.targets.length} targets.
+                {unusedTargetsText(preview.targets_without_cells ?? [])}
               </Caption>
               <details>
                 <summary className="cursor-pointer text-[11px] text-slate-600">
@@ -405,12 +464,12 @@ export function PerturbationSubtab() {
             <HoverTip
               width={320}
               tip={<>
-                Per target: a Wilcoxon test of its cells against the controls on the variable genes (|log2FC| ≥ 0.25,
-                adjusted p &lt; 0.05). Each cell&apos;s perturbation signature (its expression minus the mean of its 20
-                nearest control cells in PCA) is projected on the target&apos;s mean change, and a two-part Gaussian
-                mixture, the control part fixed, gives each cell a probability of being perturbed (P(KO)); above 0.5 is
-                KO. A target with fewer than 5 such genes is all NP. Checked against pertpy 1.0.3 (same class for 99.6% of
-                Papalexi 2021&apos;s 20,729 cells).
+                Per target: a Wilcoxon test of its cells against the controls on every gene, as Seurat&apos;s RunMixscape
+                does (detected in ≥ 10% of either group, |log2FC| ≥ 0.25, Bonferroni p &lt; 0.05). Each cell&apos;s
+                perturbation signature (its expression minus the mean of its 20 nearest control cells in PCA) is
+                projected on the target&apos;s mean change, and a two-part Gaussian mixture, the control part fixed,
+                gives each cell a probability of being perturbed (P(KO)); above 0.5 is KO. A target with fewer than 5
+                such genes is all NP.
               </>}
             >
               2. Mixscape: perturbed or not
@@ -433,6 +492,20 @@ export function PerturbationSubtab() {
                     {c.name} ({c.n_unique})
                   </option>
                 ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-0.5">
+              <span className="text-[11px] text-slate-500">
+                <Help id="perturbation.de_genes">DE genes from</Help>
+              </span>
+              <select
+                aria-label="DE genes from"
+                value={deGenes}
+                onChange={(e) => setDeGenes(e.target.value as MixscapeDeGenes)}
+                className="rounded border border-slate-300 bg-white px-1.5 py-1"
+              >
+                <option value="all">All genes (Seurat)</option>
+                <option value="variable">Variable genes (scView 0.77)</option>
               </select>
             </label>
             {running ? (
@@ -550,6 +623,20 @@ export function PerturbationSubtab() {
                   {shownRow.top_de_genes.map((g) => `${g.gene} (${g.logfc > 0 ? "+" : ""}${g.logfc.toFixed(2)})`).join(", ")}
                 </p>
               )}
+              <div className="mt-1 flex flex-wrap items-start gap-3">
+                <KoShareTable
+                  title={`Per guide (${(result ?? saved)?.guide_column ?? ""})`}
+                  kind="guide"
+                  rows={koRowsFor((result ?? saved)?.per_guide, shownRow.target, "guide")}
+                  testId="mixscape-per-guide"
+                />
+                <KoShareTable
+                  title={`Per ${(result ?? saved)?.replicate_column ?? "replicate"}`}
+                  kind="replicate"
+                  rows={koRowsFor((result ?? saved)?.per_replicate, shownRow.target, "replicate")}
+                  testId="mixscape-per-replicate"
+                />
+              </div>
               {shownRow.posterior_hist && (
                 <>
                   <div style={{ height: 160 }}>

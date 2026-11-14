@@ -121,6 +121,7 @@ describe("PerturbationSubtab", () => {
     api.getPerturbation.mockResolvedValue({ ...BASE, call: CALL, mixscape_saved: saved });
     render(<PerturbationSubtab />);
     await waitFor(() => expect(screen.getByLabelText("Split by")).toHaveValue("rep"));
+    expect(screen.getByLabelText("DE genes from")).toHaveValue("variable"); // a run before 0.78
   });
 
   it("runs Mixscape, shows the per-target table, the posterior and hands a target to DE", async () => {
@@ -128,9 +129,10 @@ describe("PerturbationSubtab", () => {
     api.runMixscape.mockResolvedValue(RESULT);
     render(<PerturbationSubtab />);
     fireEvent.change(await screen.findByLabelText("Split by"), { target: { value: "rep" } });
+    expect(screen.getByLabelText("DE genes from")).toHaveValue("all");
     fireEvent.click(screen.getByRole("button", { name: "Run Mixscape" }));
     await waitFor(() => expect(api.runMixscape).toHaveBeenCalled());
-    expect(api.runMixscape.mock.calls[0]?.[1]).toEqual({ split_by: "rep" });
+    expect(api.runMixscape.mock.calls[0]?.[1]).toEqual({ split_by: "rep", de_genes: "all" });
     const row = await screen.findByTestId("mixscape-row-A");
     expect(within(row).getByText("70%")).toBeInTheDocument();
     expect(screen.getByTestId("mixscape-row-B")).toHaveTextContent("fewer than 5 DE genes");
@@ -142,6 +144,34 @@ describe("PerturbationSubtab", () => {
     fireEvent.click(within(row).getByRole("button", { name: "DE" }));
     expect(useDESettingsStore.getState()).toMatchObject({ mode: "groups", splitBy: "mixscape_class", groupA: "A KO", groupB: "NT" });
     expect(useUnifiedViewStore.getState().activeSubtab).toBe("de");
+  });
+
+  it("shows a target's KO share per guide and per replicate", async () => {
+    const withTables: MixscapeResult = {
+      ...RESULT,
+      guide_column: "guide_ID",
+      replicate_column: "rep",
+      per_guide: [
+        { target: "A", guide: "Ag1", n_cells: 70, n_ko: 63, ko_fraction: 0.9 },
+        { target: "A", guide: "Ag2", n_cells: 70, n_ko: 35, ko_fraction: 0.5 },
+        { target: "B", guide: "Bg1", n_cells: 100, n_ko: 0, ko_fraction: 0 },
+      ],
+      per_replicate: [
+        { target: "A", replicate: "r1", n_cells: 70, n_ko: 49, ko_fraction: 0.7 },
+        { target: "A", replicate: "r2", n_cells: 70, n_ko: 49, ko_fraction: 0.7 },
+      ],
+    };
+    api.getPerturbation.mockResolvedValue({ ...BASE, call: CALL, mixscape: withTables });
+    render(<PerturbationSubtab />);
+    fireEvent.click(await screen.findByTestId("mixscape-row-A"));
+    const guides = screen.getByTestId("mixscape-per-guide");
+    expect(guides).toHaveTextContent("Per guide (guide_ID)");
+    expect(guides).toHaveTextContent(/Ag1\s*70\s*90%/);
+    expect(guides).toHaveTextContent(/Ag2\s*70\s*50%/);
+    expect(guides).not.toHaveTextContent("Bg1");
+    expect(screen.getByTestId("mixscape-per-replicate")).toHaveTextContent(/Per rep.*r1\s*70\s*70%/);
+    fireEvent.click(screen.getByTestId("mixscape-row-B"));
+    expect(screen.queryByTestId("mixscape-per-replicate")).toBeNull(); // no rows for B
   });
 
   it("says how to get guides when there are none", async () => {

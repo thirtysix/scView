@@ -315,6 +315,105 @@ def test_a_failed_call_changes_nothing():
     assert hashing.UNS_KEY not in a.uns and protein.protein_names(a)[-1] == "HTO-4"
 
 
+def _two_panels(seed: int = 5, n: int = 1200) -> ad.AnnData:
+    """Two lanes counted against different tag panels (Papalexi 2021): lane L1 has tags T1,
+    T2 and no T3/T4 counts at all, lane L2 the reverse; plus two near-empty tags."""
+    rng = np.random.default_rng(seed)
+    xa, _, kind_a, first_a = _simulate(rng, n=n // 2, n_tags=2)
+    xb, _, kind_b, first_b = _simulate(rng, n=n // 2, n_tags=2)
+    x = np.zeros((n, 6))
+    x[: n // 2, :2] = xa
+    x[n // 2:, 2:4] = xb
+    x[:, 4:] = rng.poisson(0.3, (n, 2))  # pilot / control tags: hardly any counts
+    a = ad.AnnData(np.ones((n, 2), dtype=np.float32))
+    a.obs["lane"] = pd.Categorical(np.repeat(["L1", "L2"], n // 2))
+    a.obs["phase"] = pd.Categorical(rng.choice(["G1", "S", "G2M"], n))
+    a.obsm["HTO"] = pd.DataFrame(x, index=a.obs_names, columns=["T1", "T2", "T3", "T4", "c1", "c2"])
+    truth = np.concatenate([np.where(kind_a == "S", np.array(["T1", "T2"])[first_a], "x"),
+                            np.where(kind_b == "S", np.array(["T3", "T4"])[first_b], "x")])
+    a.uns["truth"] = json.dumps(truth.tolist())
+    return a
+
+
+def test_tags_counted_against_another_panel_are_refused_then_called_per_channel():
+    """Papalexi 2021 (QA 2026-11-14): hashedDrops on four tags called none of rep1's 9,428 cells
+    (rep1-tx ambient 0: half the cells were counted against the other panel) and the call
+    became the doublet source silently."""
+    a = _two_panels()
+    tags = ["T1", "T2", "T3", "T4"]
+    assert hashing.suggest_split(a.obs, a.obsm["HTO"].to_numpy(), list(a.obsm["HTO"].columns)) == {
+        "column": "lane", "n_groups": 2}  # the near-empty c1/c2 do not get in the way
+    assert hashing.summary(a)["split_suggestion"]["column"] == "lane"
+    before = set(a.obs.columns)
+    with pytest.raises(hashing.HashingError) as e:
+        hashing.demux(a, tags, hashing.HASHEDDROPS)
+    assert e.value.status == 409 and "split by 'lane'" in str(e.value)
+    assert "T1, T2, T3 and T4 have no counts at all in 50% of the cells" in str(e.value)
+    assert set(a.obs.columns) == before and hashing.UNS_KEY not in a.uns  # nothing saved
+    truth = np.array(json.loads(a.uns["truth"]))
+    for method in hashing.METHODS:
+        s = hashing.demux(a, tags, method, split_by="lane")
+        call = a.obs[hashing.CALL].astype(str).to_numpy()
+        single = truth != "x"
+        assert (call[single] == truth[single]).mean() > 0.85, method
+        assert s["call"]["split_by"] == "lane" and not s["call"]["saved_with_problems"]
+        assert [g["tags"] for g in s["call"]["groups"]] == [["T1", "T2"], ["T3", "T4"]]
+        assert s["call"]["n_uncalled"] == 0 and s["doublet_source"] == hashing.CLASS
+        step = provenance.read_provenance(a)["history"][-1]["params"]
+        assert step["split_by"] == "lane"
+        if method == hashing.HTODEMUX:
+            assert {"T1 (L1)", "T4 (L2)"} <= set(step["cutoffs"])
+
+
+def test_a_call_saved_anyway_keeps_its_warnings_and_near_empty_tags_are_named():
+    a = _two_panels()
+    with pytest.raises(hashing.HashingError, match="almost no counts") as e:
+        hashing.demux(a, ["T1", "T2", "c1"], split_by="lane")
+    assert "c1 has almost no counts" in str(e.value)
+    s = hashing.demux(a, ["T1", "T2", "T3", "T4"], hashing.HASHEDDROPS, allow_warnings=True)
+    call = s["call"]
+    assert call["saved_with_problems"] and any("no counts at all" in w for w in call["warnings"])
+    lines, _ = hashing.grounding_lines(a)
+    assert "saved despite failed checks" in lines[0]
+
+
+def test_a_tag_hasheddrops_drops_for_a_zero_ambient_is_blocking():
+    x, tags, _, _ = _simulate(np.random.default_rng(2), n=400, n_tags=3)
+    call = hashing.hashed_drops(x, tags, ambient=np.array([0.0, 10.0, 12.0]))  # as DropletUtils: A left out
+    problems = hashing.check_call(call, x, tags)
+    amb = [p for p in problems if p["kind"] == "ambient"]
+    assert len(amb) == 1 and amb[0]["tag"] == ["HTO-1"] and amb[0]["blocking"]
+    assert amb[0]["text"].startswith("HTO-1 has an ambient level of 0")
+    assert not any(p["kind"] == "unused" and p["tag"] == "HTO-1" for p in problems)  # named once
+    assert hashing.check_call(hashing.hashed_drops(x, tags), x, tags) == []  # a clean panel: nothing
+
+
+def test_a_channel_with_one_tag_is_left_uncalled_and_an_unused_tag_is_named():
+    a = _two_panels()
+    s = hashing.demux(a, ["T1", "T3", "T4"], split_by="lane")
+    c = s["call"]
+    assert c["n_uncalled"] == a.n_obs // 2
+    assert any("L1 (600 cells) left uncalled: only T1 has counts there" in w for w in c["warnings"])
+    assert any(w.startswith("no cell is a singlet of T1") for w in c["warnings"])
+    assert a.obs[hashing.CLASS].isna().sum() == a.n_obs // 2 and a.obs[hashing.MAX].isna().sum() == a.n_obs // 2
+    with pytest.raises(hashing.HashingError, match="No channel could be called"):
+        hashing.demux(a, ["T1", "T3"], split_by="lane")
+    with pytest.raises(hashing.HashingError, match="not found"):
+        hashing.demux(a, ["T1", "T2"], split_by="nope")
+    p = hashing.plot_data(a)
+    assert all(t["cutoff"] is None for t in p["per_tag"]) and p["lfc"] is None  # one cutoff per channel
+
+
+def test_the_replay_script_repeats_a_call_per_channel(tmp_path):
+    a = _two_panels(n=400)
+    a.obsm["hto_counts"] = a.obsm.pop("HTO").astype(np.float32)
+    src = tmp_path / "input.h5ad"
+    a.write_h5ad(src)
+    hashing.demux(a, ["T1", "T2", "T3", "T4"], split_by="lane")
+    assert [d["status"] for d in replay_script.describe(a)] == ["exact"]
+    _same_call(a, _replay(tmp_path, src, a))
+
+
 def test_the_sample_column_names_singlets_and_leaves_doublets_empty():
     a, _ = protein.split_features(_cite_hashed())
     with pytest.raises(hashing.HashingError) as e:
@@ -563,3 +662,18 @@ async def test_demux_saves_the_call_and_moves_the_hashtags_on_disk(client, datas
     assert r.status_code == 400
     r = await client.post(f"{API}/datasets/{did}/hashing/demux", json={"tags": tags, "method": "hashedDrops"})
     assert r.status_code == 200 and r.json()["call"]["method"] == "hashedDrops"
+
+
+async def test_demux_refuses_a_two_panel_call_then_splits_or_saves_anyway(client, dataset_manager):
+    did = _register(dataset_manager, _two_panels(), "panels")
+    r = await client.get(f"{API}/datasets/{did}/hashing")
+    assert r.json()["split_suggestion"] == {"column": "lane", "n_groups": 2}
+    body = {"tags": ["T1", "T2", "T3", "T4"], "method": "hashedDrops"}
+    r = await client.post(f"{API}/datasets/{did}/hashing/demux", json=body)
+    assert r.status_code == 409 and "split by 'lane'" in r.json()["detail"]
+    assert (await client.get(f"{API}/datasets/{did}/hashing")).json()["call"] is None  # nothing saved
+    r = await client.post(f"{API}/datasets/{did}/hashing/demux", json={**body, "split_by": "lane"})
+    assert r.status_code == 200, r.text
+    assert r.json()["call"]["split_by"] == "lane" and r.json()["call"]["warnings"] == []
+    r = await client.post(f"{API}/datasets/{did}/hashing/demux", json={**body, "allow_warnings": True})
+    assert r.status_code == 200 and r.json()["call"]["saved_with_problems"] is True

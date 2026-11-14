@@ -114,7 +114,7 @@ async def get_metadata_column(
     if format == "json":
         # Missing values as null: NaN is not valid JSON and made this a 500.
         values = series.astype(object).where(series.notna(), None).tolist()
-        return {"column": column, "values": values}
+        return {"column": column, "values": values, "dtype": str(series.dtype)}
 
     ipc_bytes = series_to_arrow_ipc(series, name=column)
     return Response(content=ipc_bytes, media_type=ARROW_CONTENT_TYPE)

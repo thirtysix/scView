@@ -102,6 +102,28 @@ def test_assign_from_counts_writes_columns_record_and_provenance():
     assert "2 targets" in detail and "[result:mixscape]" in lines[0]
 
 
+def test_a_fold_rule_below_one_is_refused():
+    a = _screen()
+    for bad in (0.5, -1):
+        with pytest.raises(crispr.CrisprError, match="0 or at least 1") as e:
+            crispr.preview(a, min_ratio=bad)
+        assert e.value.status == 422
+    assert crispr.preview(a, min_ratio=0)["counts"]["multiple"] == 10  # off
+    assert crispr.preview(a, min_ratio=1)["counts"]["multiple"] == 0  # always the top guide
+
+
+def test_targets_no_cell_carries_are_listed_apart():
+    """Papalexi: eGFPg1 at ~1 UMI everywhere and pilot guides with no cells gave
+    '27 targets' beside 'Saved: 25 targets' (QA 2026-11-14)."""
+    a = _screen({"CD86g1": 30, "IFNGR1_1": 40, "NTg1": 25, "eGFPg1": 0, "PDL1g1": 0, "PDL1g2": 0})
+    p = crispr.preview(a)
+    assert p["targets"] == ["CD86", "IFNGR1"]
+    assert p["targets_without_cells"] == [{"target": "PDL1", "guides": ["PDL1g1", "PDL1g2"]},
+                                          {"target": "eGFP", "guides": ["eGFPg1"]}]
+    out = crispr.assign(a)["call"]
+    assert out["n_targets"] == 2 and out["targets_without_cells"] == ["PDL1", "eGFP"]
+
+
 def test_mapping_override_and_explicit_control():
     a = _screen()
     p = crispr.preview(a, mapping={"IFNGR1_1": "IFNG-R1"}, control="NT")

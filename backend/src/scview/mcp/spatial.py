@@ -365,22 +365,26 @@ CoSection = Annotated[str | None, Field(max_length=256, description=(
     "Reply with this section's own scores (a library_id; the run covers every section either way). "
     "Default: the sections combined."))]
 CO_DISTANCES = 5  # distances shown per pair: the first usable one to the last, evenly
-MIN_PAIRS = 30  # as core/spatial_cooccurrence.MIN_PAIRS: fewer pairs at a distance say little
 
 
 def _cooccurrence_reply(r: dict[str, Any], dataset_id: str, n: int, label: str | None = None) -> dict[str, Any]:
     labels = [str(x) for x in r.get("labels") or []]
     out = {"dataset_id": dataset_id,
            **_rest(r, ("occ", "count", "labels", "sizes", "distances", "cells_fingerprint", "labels_fingerprint",
-                       "version"), n)}
+                       "version", "too_few", "min_pairs"), n)}
     out["labels"] = table([{"label": lab, "n": s} for lab, s in zip(labels, r.get("sizes") or [], strict=False)],
                           ["label", "n"], n)
     occ = np.asarray(r.get("occ") or [], dtype=float)
     dist = list(r.get("distances") or [])
     if occ.ndim != 3 or not dist:
         return out
-    count = np.asarray(r.get("count") or np.zeros_like(occ), dtype=float)
-    usable = [t for t in range(occ.shape[2]) if (count[:, :, t] >= MIN_PAIRS).sum() > len(labels)]
+    # The route's floor (core/spatial_cooccurrence.MIN_PAIRS): a score from fewer pairs at a distance is
+    # given as null. A run saved without counts has none: its scores come as they are.
+    floor = r.get("min_pairs")
+    counted = r.get("count") is not None and floor is not None
+    count = np.asarray(r["count"], dtype=float) if counted else np.full(occ.shape, np.inf)
+    floor = int(floor) if counted else 0
+    usable = [t for t in range(occ.shape[2]) if (count[:, :, t] >= floor).sum() > len(labels)]
     first = usable[0] if usable else 0
     picks = sorted({int(round(x)) for x in np.linspace(first, occ.shape[2] - 1, CO_DISTANCES)})
     unit = r.get("distance_unit") or ""
@@ -393,16 +397,26 @@ def _cooccurrence_reply(r: dict[str, Any], dataset_id: str, n: int, label: str |
         pairs = [(i, j) if labels[i] == label else (j, i) for i, j in pairs if label in (labels[i], labels[j])
                  and (symmetric or labels[i] == label)]
     recs = []
+    hidden = 0
     for i, j in pairs:
-        recs.append({"label": labels[i], "with": labels[j], **{nm: occ[i, j, t] for nm, t in zip(names, picks)},
-                     "pairs_at_first": int(count[i, j, picks[0]])})
-    recs.sort(key=lambda x: -(x[names[0]] if np.isfinite(x[names[0]]) else -1))
+        few = [0 < count[i, j, t] < floor for t in picks]
+        hidden += sum(few)
+        recs.append({"label": labels[i], "with": labels[j],
+                     **{nm: None if f else occ[i, j, t] for nm, t, f in zip(names, picks, few, strict=True)},
+                     **({"pairs_at_first": int(count[i, j, picks[0]])} if counted else {})})
+    first = names[0]
+    recs.sort(key=lambda x: -(x[first] if x[first] is not None and np.isfinite(x[first]) else -1))
     if label is not None and not recs:
         raise ToolError(f"No label '{label}' in this run; its labels: {', '.join(labels[:40])}.")
     out["pairs"] = table(recs, ["label", "with", *names, "pairs_at_first"], n)
-    out["pairs"]["note"] = (f"score = how much more often 'with' is found within that distance of 'label' than "
-                            f"among all pairs at that range (> 1 together, < 1 apart); {len(dist)} distances, "
-                            f"{len(picks)} shown; pairs_at_first: pairs counted at the first one shown.")
+    note = (f"score = how much more often 'with' is found within that distance of 'label' than among all pairs at "
+            f"that range (> 1 together, < 1 apart); {len(dist)} distances, {len(picks)} shown")
+    if counted:
+        note += (f"; pairs_at_first: pairs counted at the first one shown; null = fewer than {floor} pairs at that "
+                 f"distance, too few to read ({hidden} of {len(recs) * len(picks)} scores here; the saved result keeps them)")
+    else:
+        note += "; this run was saved without its pair counts, so a score from very few pairs cannot be told apart"
+    out["pairs"]["note"] = note + "."
     return out
 
 

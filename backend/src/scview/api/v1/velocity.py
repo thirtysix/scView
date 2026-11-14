@@ -172,7 +172,7 @@ async def _attach(dm: DatasetManager, dataset_id: str, files: list[UploadFile]) 
             before = uns_snapshot(data)
             old_keys = [k for k in data.obsm.keys() if str(k).startswith("velocity_")]
             record = vi.attach(data, dataset_id, dm.data_dir, paths, stored_as=[p.name for p in paths],
-                               label=stored[0][1] if len(stored) == 1 else None)
+                               label=stored[0][1] if len(stored) == 1 else None, labels=[n for _p, n, _new in stored])
             save_edit(adaptor, data, output_path, before, obsm_keys=old_keys, var=True)
             return record
 

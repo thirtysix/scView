@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from scview.api.v1.export import file_stem
 from scview.config import Settings
 from scview.dependencies import get_settings_dep, get_dataset_manager
-from scview.core import cell_outlines, conversion, crispr, provenance, replay_script, run_manifest, spatial, transcripts, xenium
+from scview.core import cell_outlines, conversion, crispr, hashing, provenance, replay_script, run_manifest, spatial, transcripts, xenium
 from scview.core.atac_import import dataset_state as atac_state
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import is_locked
@@ -371,6 +371,7 @@ async def get_dataset_info(
         info["protein"] = adaptor.protein_info()
         info["atac"] = atac_state(adaptor.adata, dm.data_dir, dataset_id)  # 10x Multiome peaks
         info["perturbation"] = crispr.available(adaptor.adata)  # a CRISPR screen's guides
+        info["hashing"] = hashing.available(adaptor.adata)  # hashtag counts or a saved call
         # Spatial data: libraries, image sizes, bounds (obsm + uns: small, also when large).
         info["spatial"] = spatial.info(adaptor.adata)
         if info["spatial"]:  # kept beside the dataset (core/cell_outlines.py, core/transcripts.py)

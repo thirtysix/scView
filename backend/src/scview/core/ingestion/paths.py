@@ -78,6 +78,10 @@ HD_COPY = "the same matrix as filtered_feature_bc_matrix.h5, which is read"
 HD_ANALYSIS = "Space Ranger's own analysis (clustering, PCA, UMAP, DE): scView computes these itself"
 HD_OTHER = "a Space Ranger output scView does not read"
 SEG_RAW = "the raw matrix, with the cells the run filtered out: the filtered one is read"
+# Cell Ranger ARC writes these beside its matrix, each name led by the sample (5k_Mouse_Kidney_MO_gemx_...).
+ARC_PEAKS = "Cell Ranger ARC's peak list: the same peaks are in the matrix (.h5), which is read"
+ARC_PEAK_ANNOTATION = "Cell Ranger ARC's peak-to-gene table: scView places peaks against GENCODE itself"
+COVERAGE = "a coverage track, not read"
 
 _JUNK_NAMES = {
     ".ds_store": SYSTEM, "thumbs.db": SYSTEM, "desktop.ini": SYSTEM,
@@ -97,6 +101,10 @@ _JUNK_SUFFIXES = (
     (".bam", ALIGNMENTS), (".bai", ALIGNMENTS), (".bam.bai", ALIGNMENTS), (".csi", ALIGNMENTS),
     (".cram", ALIGNMENTS), (".crai", ALIGNMENTS), (".cloupe", LOUPE), (".vloupe", LOUPE),
     (".zarr.zip", XENIUM_EXTRA),
+    # Sample-prefixed Cell Ranger names (ARC: <sample>_web_summary.html, <sample>_gex_molecule_info.h5).
+    ("_web_summary.html", REPORT), ("molecule_info.h5", MOLECULES),
+    ("atac_peaks.bed", ARC_PEAKS), ("peak_annotation.tsv", ARC_PEAK_ANNOTATION),
+    (".bigwig", COVERAGE), (".bw", COVERAGE),
 )
 
 

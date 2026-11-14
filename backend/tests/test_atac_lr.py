@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gzip
+import inspect
 import subprocess
 import sys
 from pathlib import Path
@@ -75,6 +76,20 @@ def test_a_covariate_that_alone_separates_the_group_leaves_no_null():
     assert atac_lr.logistic_null(1.0 - y, z)[2] is False
     y[3], y[20] = 0.0, 1.0
     assert atac_lr.logistic_null(y, (z - z.mean()) / z.std())[2] is True
+
+
+def test_the_fits_vector_products_use_no_blas_and_equal_it():
+    """OpenBLAS threads are the whole server's: the pool's fits take their vector x block
+    products in numpy's own loop (v0.78: PBMC 10k fits 146 s -> 107 s at 2 CPUs)."""
+    rng = np.random.default_rng(0)
+    v, m = rng.normal(size=500), rng.normal(size=(500, 40))
+    np.testing.assert_allclose(atac_lr.vec_mat(v, m), v @ m, rtol=1e-12, atol=1e-12)
+    assert atac_lr.vec_mat(v, m[:, 0]) == pytest.approx(v @ m[:, 0])
+    assert atac_lr.vec_mat in atac_lr.REPLAY_CODE
+    # The pool's code takes no matrix product (gemv / gemm would start BLAS threads).
+    for fn in (atac_lr.lrt_fit, atac_lr.deviance_and_mu):
+        body = inspect.getsource(fn).split('"""')[-1]
+        assert " @ " not in body and "np.dot" not in body and "matmul" not in body, fn.__name__
 
 
 def test_a_block_of_fits_equals_each_fit_alone_and_a_direct_optimiser():
@@ -341,11 +356,17 @@ def test_the_replay_script_reproduces_lr_and_wilcoxon_from_the_input(tmp_path):
         codes, every, chosen = atac.group_codes(a, atac.OBS_CLUSTERS)
         mine = {}
         for test in ("wilcoxon", "lr"):
-            mine[test] = [i for i in atac.iter_differential(store, rows, codes, every, chosen, test=test)
+            # the Wilcoxon run: one cluster against another, with the standard-chromosome mask (v0.78 defaults);
+            # the replay draws the pair from the labels and the mask from the peak names
+            mask = atac.standard_mask(store) if test == "wilcoxon" else None
+            pair = {"groups": [every[0]], "vs": every[1]} if test == "wilcoxon" else {"groups": None}
+            use = atac.group_codes(a, atac.OBS_CLUSTERS, pair["groups"], pair["vs"]) if test == "wilcoxon" else (codes, every, chosen)
+            mine[test] = [i for i in atac.iter_differential(store, rows, *use, test=test, peak_mask=mask)
                           if i["type"] == "result"][0]["frame"]
-            atac.record_differential(a, {"column": atac.OBS_CLUSTERS, "groups": None, "min_pct": atac.MIN_PCT,
+            atac.record_differential(a, {"column": atac.OBS_CLUSTERS, **pair, "min_pct": atac.MIN_PCT,
                                          "max_peaks": atac.MAX_PEAKS_PER_GROUP, "test": test,
-                                         **({"lrt_peaks": atac.LRT_PER_GROUP} if test == "lr" else {})})
+                                         **({"lrt_peaks": atac.LRT_PER_GROUP} if test == "lr" else {"standard_only": True})})
+        assert set(mine["wilcoxon"]["group"]) == {every[0]}
     assert [d["status"] for h, d in zip(atac.provenance_history(a), replay_script.describe(a))
             if h["step"] == "atac_differential"] == ["exact", "exact"]
     src = tmp_path / "input" / h5.name

@@ -28,6 +28,10 @@ export const CRITERION_LABELS: Record<FilterCriterion, string> = {
   max_pct_mt: "Max % mito",
   doublets: "Predicted doublets",
   hash_negatives: "Hashing negatives",
+  min_atac_counts: "Min ATAC counts",
+  max_atac_counts: "Max ATAC counts",
+  max_nucleosome_signal: "Max nucleosome signal",
+  min_tss_enrichment: "Min TSS enrichment",
 };
 
 /** A chi-square p for a table cell: "2e-21", "0.034"; "–" when there is none. */

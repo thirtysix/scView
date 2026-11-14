@@ -6,6 +6,75 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.78.0] - 2026-11-14
+
+Single-nucleus and multiome data stop losing a quarter of their nuclei to the % mito rule; Cell Ranger ARC outputs
+and .h5mu files import whole; gene activity matches Signac; CRISPR screens and cell hashing are safer to run.
+Found by re-analysing two published studies through scView's MCP: 10x PBMC 10k multiome against Signac's vignette
+(plus a 10x GRCm39-2024-A mouse kidney multiome) and Papalexi et al. 2021 (ECCITE-seq, Mixscape).
+
+### Added
+- MCP: 16 new tools for CRISPR screens (guide assignment, Mixscape with per-guide and per-replicate knockout
+  shares), cell hashing (per lane, Save anyway), 10x Multiome ATAC (fragment QC, LSI, WNN, gene activity,
+  differential peaks incl. A vs B, peak-gene links, motifs, chromVAR, coverage plots) and getting files in
+  (`upload_instructions`; `import_server_path`, only under folders set in `MCP_IMPORT_DIRS`, off by default and
+  always off in public mode). 65 tools in all.
+- Protein (CITE-seq) differential expression: cell-level tests on CLR or counts (`layer`); per-donor values for a
+  protein, or for the whole dataset as one group.
+- QC: max counts per cell and 10x Multiome cut-offs (ATAC counts, nucleosome signal, TSS enrichment), off by default.
+  Signac's vignette cuts are offered as a suggestion with what they would remove (1,004 of 4,886 nuclei on the
+  mouse kidney: written for deep PBMC, so check first). They show in the preview, the removal record and the replay.
+- Reprocess from Scratch can start from the cells as uploaded, so cells an earlier filtering removed come back.
+- Differential peaks can compare one group against another (Compare), as Signac's FindMarkers(ident.1, ident.2).
+- Cell hashing can call each lane on its own tags ("Within").
+- Mixscape shows each target's knockout share per guide and per replicate.
+- RNA velocity: attach one loom per sample together; cells are matched within their own sample, and the panel says
+  which file sample is which dataset sample, which cells were left out and which samples have no counts.
+
+### Changed
+- QC: in MAD mode a sample's % mito bound is never below 2% (settable, 0 = off). Nuclei have almost no mito reads,
+  so the MAD bound collapsed: on the 10x mouse kidney multiome it was 0.14% and removed 1,257 of 5,287 nuclei (half
+  of the thick ascending limb); now 94. Whole-cell datasets measured are unchanged. Nuclei data get a warning when
+  % mito alone removes over 5% of a sample.
+- Gene activity counts fragments, as Signac's GeneActivity does, when a fragments file is attached (peak-based
+  otherwise). It matches Signac 1.17.1 exactly on the mouse kidney (27.9 M entries). Emcn and Upk1b, 0 everywhere
+  before because no peak was called there, now mark endothelium and urothelium.
+- Motif enrichment takes peaks open in over 5% of a group (was 20%). Minor kidney types now show their lineage TFs
+  (ESRRA, TFCP2L1, WT1) instead of GC-rich KLF/SP motifs; a promoter-heavy query gets a note.
+- Differential peaks, links, motifs and chromVAR leave out chrM, unplaced scaffolds and alt contigs, and say how
+  many (29 mouse, 51 PBMC). The nearest gene names a named gene instead of a clone id or Gm##### where one holds
+  the peak (differential peaks named after unnamed genes: PBMC 33% to 16%).
+- Mixscape finds each target's DE genes on every gene with Seurat's rule (was the 2,000 variable genes). On
+  Papalexi 2021, MYC goes from 0 to 7 of 109 knockout cells and 15 targets have none, as in the paper. The old rule
+  stays as "Variable genes". Runs take longer (about 43 s instead of 12 s there).
+- Mixscape leaves out "Unassigned", "multiple" and a second control label, and lists them.
+- Cell hashing refuses a call whose tags have no counts in whole lanes (two tag panels), a tag hashedDrops drops for
+  an ambient level of 0, or a near-empty tag, and names the lane column; "Save anyway" keeps it with its warnings.
+  On Papalexi 2021 the old pooled hashedDrops call called no rep1 cell; HTODemux per lane calls 5,970 of 6,001 rep3.
+- A cell hashing call no longer marks DE and Mixscape results stale.
+- Co-occurrence: scores from fewer than 100 pairs at a distance are greyed in the heatmap (hover gives the pair
+  count), left out of the curves, and skipped by the co-pilot and the MCP; the heatmap opens at the first distance
+  where most label pairs are readable. Under 100 pairs, more than 1 score in 20 was off by over 2x.
+- ATAC differential peaks, LR test: about 1.3x faster at 2 CPUs (PBMC 10k, 13 groups: 175 to 136 s), same results.
+- The backend uses two glibc malloc arenas: about 0.5 GB less memory held after three Data Assessment pages open at
+  once (3.98 to 3.50 GiB). Peak memory is unchanged.
+
+- MCP: recipe steps carry their measured time and memory; replay script pages hold 40,000 characters (were 7,000);
+  Leiden columns read as categories; the DE overlap separates same-sign from opposite-sign genes.
+
+### Fixed
+- Uploading the Cell Ranger ARC outs set made a multi-sample merge of the peak files and dropped the ATAC. It now
+  lands as one multiome dataset with fragments attached; the peak files and report are skipped with a reason, and
+  the ARC summary fills the Sequencing QC table.
+- An .h5mu kept only its RNA, silently. Protein (adt), hashtags (hto) and guides (gdo) now come along; any other
+  modality is named at import.
+- RNA velocity: a loom attached to a dataset built separately could give 58 cells another sample's counts, or be
+  refused although its cells matched.
+- Motif scan and chromVAR reported the server's peak memory (9,122 MB) as their own.
+- ATAC results (differential peaks, links, motifs, chromVAR) open and export through the results routes and the
+  MCP's get_result (it said "no table").
+- Guide assignment refuses a top/second ratio between 0 and 1; the target count leaves out targets no cell has.
+
 ## [0.77.0] - 2026-11-14
 
 Spatial statistics over several sections compare each section with itself; joint embeddings filter unfiltered

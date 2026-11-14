@@ -38,6 +38,8 @@ export interface ChromVarState {
   n_peaks_used: number;
   n_peaks_no_counts: number;
   n_peaks_left_out: number;
+  /** On chrM, unplaced scaffolds or alt contigs (absent on a run from before v0.78). */
+  n_peaks_nonstandard?: number;
   seed: number;
   iterations: number;
   w: number;

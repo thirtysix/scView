@@ -308,6 +308,8 @@ def plan_params(adata) -> tuple[list[str], Any, list[str]]:
     filtering = [h for h in history if h.get("step") == "filtering"]
     if filtering and "qc_genes_floor" not in (filtering[-1].get("params") or {}):
         params.qc_genes_floor = 0.0  # filtered before the genes floor existed: replayed without it
+    if filtering and "qc_pct_mt_floor" not in (filtering[-1].get("params") or {}):
+        params.qc_pct_mt_floor = 0.0  # likewise the % mito floor (v0.78)
     steps = [s for s in ALL_STEPS if s in ran and s not in SKIP_STEPS]
     if "filtering" not in steps:
         steps.insert(len([s for s in steps if ALL_STEPS.index(s) < ALL_STEPS.index("filtering")]),
@@ -419,6 +421,9 @@ def prepare(dm, dataset_id: str, adaptor, column: str | None, mito_mode: str = "
     if not cur.obs_names.isin(orig.obs_names).all():
         raise RefilterError("Some of this dataset's cells are not in its original upload, so it can't be "
                             "re-filtered from it.", status=409)
+    from scview.core import reset_original
+
+    reset_original.carry_columns(cur, orig)  # fragment QC values, for an ATAC cut-off in the filtering
     if reset:
         orig = _run_reset_to_counts(orig, params)
     kept = np.asarray(orig.obs_names.isin(cur.obs_names))

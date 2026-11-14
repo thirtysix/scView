@@ -122,7 +122,7 @@ METRICS: tuple[Metric, ...] = (
     Metric("estimated_cells", "Estimated cells", "int", ("estimated number of cells",),
            (("cells", "cells"), ("library", "estimated number of cells"), ("library", "cells")),
            "Barcodes Cell Ranger called as cells (the filtered matrix)."),
-    Metric("mean_reads_per_cell", "Mean reads per cell", "int", ("mean reads per cell",),
+    Metric("mean_reads_per_cell", "Mean reads per cell", "int", ("mean reads per cell", "mean raw reads per cell"),
            (("cells", "mean reads per cell"), ("library", "mean reads per cell")),
            "All sequenced reads divided by the estimated cells, reads outside cells included."),
     Metric("median_genes_per_cell", "Median genes per cell", "int", ("median genes per cell",),
@@ -134,7 +134,7 @@ METRICS: tuple[Metric, ...] = (
     Metric("total_genes_detected", "Total genes detected", "int", ("total genes detected",),
            (("cells", "total genes detected"),),
            "Genes with at least one UMI in any cell."),
-    Metric("n_reads", "Number of reads", "int", ("number of reads",),
+    Metric("n_reads", "Number of reads", "int", ("number of reads", "sequenced read pairs"),
            (("library", "number of reads"), ("library", "number of reads in the library")),
            "Read pairs sequenced for the library."),
     Metric("valid_barcodes", "Valid barcodes", "frac", ("valid barcodes",),
@@ -150,7 +150,7 @@ METRICS: tuple[Metric, ...] = (
     Metric("q30_barcode", "Q30 barcode", "frac", ("q30 bases in barcode",),
            (("library", "q30 barcodes"), ("library", "q30 gem barcodes")),
            "Share of cell-barcode bases with a Phred quality of 30 or more."),
-    Metric("q30_rna_read", "Q30 RNA read", "frac", ("q30 bases in rna read",),
+    Metric("q30_rna_read", "Q30 RNA read", "frac", ("q30 bases in rna read", "q30 bases in read 2"),
            (("library", "q30 rna read"),),
            "Share of RNA-read bases with a Phred quality of 30 or more."),
     Metric("q30_umi", "Q30 UMI", "frac", ("q30 bases in umi",),
@@ -342,6 +342,10 @@ def _parse_count(header: list[str], rows: list[list[str]]) -> dict:
     row = rows[0]
     raw = [[h, row[i].strip() if i < len(row) else ""] for i, h in enumerate(header)]
     by_name = {h.lower(): v for h, v in raw}
+    # Cell Ranger ARC's summary.csv names its RNA metrics "GEX <metric>" ("GEX Median genes per cell").
+    for h, v in raw:
+        if h.lower().startswith("gex "):
+            by_name.setdefault(h.lower()[4:], v)
     values: dict[str, Any] = {}
     scope: dict[str, str] = {}
     for m in METRICS:

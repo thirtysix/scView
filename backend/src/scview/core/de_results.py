@@ -104,6 +104,8 @@ def describe(comparison: dict[str, Any]) -> str:
         method = f"pseudobulk {pb}" + (f" + RUV k={comparison['ruv_k']}" if comparison.get("ruv_k") else "")
         if comparison.get("covariates"):
             method += " + " + ", ".join(comparison["covariates"])
+    if comparison.get("layer"):  # the CITE-seq proteins were tested (api/v1/de.py)
+        method += ", " + ("protein CLR" if comparison["layer"] == "protein" else "protein counts")
     if comparison.get("mode") == "selection":
         n = comparison.get("n_a")
         size = f" ({n:,} cells)" if isinstance(n, int) else ""

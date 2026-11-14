@@ -72,7 +72,7 @@ async def test_state_says_what_a_scan_needs_before_it_runs(client, dataset_manag
     assert s["files"]["genome"]["downloaded"] is False and s["files"]["genome"]["size"] > 8e8
     assert s["scan"]["estimate_seconds"] > 0 and s["scan"]["estimate_bytes"] > 1e8
     assert s["chromvar"] is None and s["chromvar_estimate"]["estimate_bytes"] > 1e8
-    assert s["enrichment_defaults"]["p_max"] == 0.005 and s["enrichment_defaults"]["min_pct"] == 0.2
+    assert s["enrichment_defaults"]["p_max"] == 0.005 and s["enrichment_defaults"]["min_pct"] == 0.05
     assert not list(Path(dataset_manager.data_dir).glob("genome/*.2bit"))
 
 
@@ -221,6 +221,11 @@ async def test_enrichment_uses_a_stored_result_of_either_test(client, dataset_ma
     assert z.status_code == 200 and "zip" in z.headers["content-type"]
     with zipfile.ZipFile(io.BytesIO(z.content)) as f:
         assert {"motif_enrichment.csv", "README.txt"} <= set(f.namelist())
+    entry = (await client.get(f"{API}/datasets/{did}/results/{rid}")).json()
+    assert entry["kind"] == "atac_motif_enrichment" and entry["params"]["da_test"] == test
+    t = await client.get(f"{API}/datasets/{did}/results/{rid}/table.tsv.gz")
+    assert t.status_code == 200, t.text
+    assert len(pd.read_csv(io.BytesIO(t.content), sep="\t", compression="gzip")) == len(csv)
     assert (await client.get(f"{API}/datasets/{did}/atac/motifs/enrichment/nope")).status_code == 404
     assert (await client.post(f"{API}/datasets/{did}/atac/motifs/enrichment", json={"groups": ["Z"]})).status_code == 404
     # a provenance step, additive: the differential result stays current
@@ -270,6 +275,16 @@ async def test_chromvar_runs_in_a_child_keeps_by_barcode_and_reads_back(client, 
     assert (await client.get(f"{API}/datasets/{did}/atac/motifs/chromvar/groups", params={"column": "nope"})).status_code == 404
     steps = [h for h in provenance.read_provenance(dataset_manager._datasets[did].adata).get("history", []) if h["step"] == "atac_chromvar"]
     assert steps and steps[-1]["params"]["seed"] == 3
+    # in the results store: listed, read with its settings, exported as a table (the MCP's get_result reads this)
+    results_store.flush()
+    listed = (await client.get(f"{API}/datasets/{did}/results", params={"kind": "atac_chromvar"})).json()["results"]
+    assert [e["id"] for e in listed] == [result["run_id"]]
+    entry = (await client.get(f"{API}/datasets/{did}/results/{result['run_id']}")).json()
+    assert entry["params"]["seed"] == 3 and entry["params"]["n_cells"] == a.n_obs
+    t = await client.get(f"{API}/datasets/{did}/results/{result['run_id']}/table.tsv.gz")
+    assert t.status_code == 200, t.text
+    table = pd.read_csv(io.BytesIO(t.content), sep="\t", compression="gzip")
+    assert {"motif_id", "motif", "variability", "p", "padj"} <= set(table.columns) and len(table) >= 1
 
 
 async def test_chromvar_stale_after_the_cells_change(client, dataset_manager, annotated, inputs):

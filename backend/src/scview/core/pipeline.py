@@ -87,6 +87,15 @@ class PipelineParams:
     min_genes: int = 200  # fixed mode only, as are max_genes and min_counts
     max_genes: int = 0
     min_counts: int = 0
+    # Keep cells with at most this many counts (0 = off), in both modes (an absolute ceiling).
+    max_counts: float = 0
+    # 10x Multiome ATAC QC (core/qc_filter.py ATAC_CRITERIA), 0 = off, in both modes: ATAC counts
+    # in peaks (atac_total_counts), and fragment QC's nucleosome signal and TSS enrichment.
+    # The preview suggests Signac's vignette cuts (1,800-100,000, < 2, > 1); none is a default.
+    qc_min_atac_counts: float = 0.0
+    qc_max_atac_counts: float = 0.0
+    qc_max_nucleosome_signal: float = 0.0
+    qc_min_tss_enrichment: float = 0.0
     min_cells: int = 3
     # Keep cells with at least this many counts in both modes (a targeted panel's default
     # is 10, core/targeted_panel.py; 0 = none).
@@ -95,6 +104,13 @@ class PipelineParams:
     # near-empty cells has a wide MAD). None: 200 for cells, 100 for spots and Visium HD cells,
     # none on bins and targeted panels (core/qc_filter.py); 0 = no floor.
     qc_genes_floor: float | None = None
+    # MAD mode: a sample's % mito bound never below this (nuclei: median + 3 MADs collapses to
+    # a fraction of a percent). None: 2% (core/qc_filter.py MITO_FLOOR); 0 = no floor.
+    qc_pct_mt_floor: float | None = None
+    # reset_to_counts starts from the cells as uploaded (the stored original), not the cells the
+    # dataset has now: a dataset filtered once gets its cells back (core/reset_original.py; the
+    # run endpoints swap the data in, so a run without them ignores it).
+    reset_from_original: bool = False
     # Used only when % mito can be measured (MT- genes); a ceiling in MAD mode.
     max_pct_mt: float = 20.0
     # Spots and bins: % mito rules are off, they cut tissue out (qc_filter.grid_rules); opt-in.
@@ -262,6 +278,8 @@ class PipelineResult:
     cleared: dict[str, list[str]] = field(default_factory=dict)
     # Steps that ran but had nothing to do, and why (not errors; see StepSkipped).
     notes: dict[str, str] = field(default_factory=dict)
+    # Steps that ran and found something to check (the filtering step's nuclei % mito note).
+    cautions: dict[str, str] = field(default_factory=dict)
     elapsed_seconds: float = 0.0
     output_path: str | None = None
     # "complete" (every step ran) | "finished_with_errors" (a step failed: the steps that
@@ -397,8 +415,18 @@ ALL_STEPS = [
 def _run_reset_to_counts(adata: ad.AnnData, params: PipelineParams) -> ad.AnnData:
     """Reset adata.X to raw counts, clearing all preprocessing artifacts.
 
-    Returns a fresh AnnData ready for reprocessing from scratch.
+    Returns a fresh AnnData ready for reprocessing from scratch; started from the original
+    upload (``core/reset_original.py``), with what to record: the cells before and as uploaded.
     """
+    from scview.core import reset_original
+
+    mark = reset_original.take_mark(adata)
+    adata = _reset_counts(adata)
+    return (adata, mark) if mark is not None else adata
+
+
+def _reset_counts(adata: ad.AnnData) -> ad.AnnData:
+    """``_run_reset_to_counts`` without the record."""
     # Restore counts from layers or raw; counts an ambient RNA correction replaced come
     # back first (core/ambient.py), so a new run starts from the uncorrected counts.
     if ambient.restore_original(adata):
@@ -609,6 +637,14 @@ def filter_judgement(adata: ad.AnnData, params: PipelineParams):
     found: dict[str, Any] = {k: getattr(params, k) for k in used}
     if t.mode == "mad":  # recorded by every run since the floor existed (0: none); older runs had none
         found["qc_genes_floor"] = t.genes_floor or 0.0
+        found["qc_pct_mt_floor"] = t.pct_mt_floor or 0.0  # likewise, since v0.78
+    if t.max_counts > 0:  # absent: off (before v0.78 there was none)
+        found["max_counts"] = t.max_counts
+    for c in qc_filter.atac_on(t):
+        found[f"qc_{c}"] = getattr(t, c)
+    nuclei = qc_filter.nuclei_mito_warnings(adata, cells, removed, samples)
+    if nuclei:
+        found["qc_nuclei_note"] = nuclei[0]["message"]
     if t.counts_floor > 0:  # within each sample's bound in MAD mode, min_counts in fixed
         found["qc_counts_floor"] = t.counts_floor
         if t.mode == "fixed":
@@ -2358,6 +2394,17 @@ _PEARSON_TOOLS = {
 }
 
 
+def _note_caution(result: PipelineResult, step: str, ret: Any) -> None:
+    """A step's recorded note the run's result shows beside it (``PipelineResult.cautions``)."""
+    if isinstance(ret, dict) and (ret.get("qc_nuclei_note") or ret.get("from_original")):
+        if ret.get("from_original"):  # reset from the original upload: the cells it brought back
+            text = (f"Started from the {ret.get('n_original', 0):,} cells as uploaded "
+                    f"({ret.get('n_before', 0):,} before). " + str(ret.get("note") or "")).strip()
+        else:
+            text = str(ret["qc_nuclei_note"])
+        result.cautions[step] = text
+
+
 def _record_pipeline_step(
     adata: ad.AnnData, step_name: str, params: PipelineParams, ret: Any = None,
     resources: dict[str, Any] | None = None,
@@ -2690,6 +2737,7 @@ def run_pipeline(
                 adata = new
             result.steps_run.append(step_name)
             outcome.succeeded.append(step_name)
+            _note_caution(result, step_name, ret)
             _record_pipeline_step(adata, step_name, params, ret,
                                   _step_resources(control, step_name))
         except StepSkipped as e:
@@ -2808,6 +2856,7 @@ def run_pipeline_streamed(
                 adata = new
             result.steps_run.append(step_name)
             outcome.succeeded.append(step_name)
+            _note_caution(result, step_name, ret)
             _record_pipeline_step(adata, step_name, params, ret,
                                   _step_resources(control, step_name))
             elapsed = round(time.time() - step_t0, 2)

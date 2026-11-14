@@ -32,7 +32,7 @@ DATA_CHANGING = {
     "ingest", "integrate", *ALL_STEPS, "run_errors",
     "subcluster", "merge_clusters", "keep_resolution", "keep_hvg_setting", "keep_layout",
     "doublet_threshold", "mito_refilter",
-    "protein_dsb", "hashing_demux", "hashing_samples",
+    "protein_dsb",
     "vdj_attach", "vdj_clonotypes", "vdj_remove", "crispr_assign", "mixscape",
 }
 
@@ -114,3 +114,35 @@ def test_an_additive_step_leaves_stored_results_current():
     for kind in sorted(results_store.ADDITIVE_STEPS):
         assert not results_store._is_stale(stored, results_store.fingerprint(Adaptor([*base, kind]))), kind
     assert results_store._is_stale(stored, results_store.fingerprint(Adaptor([*base, "filtering"])))
+
+
+def test_a_hashing_call_leaves_de_and_mixscape_results_current():
+    """A demux writes the hash_* columns only (QA 2026-11-14: one marked every DE and Mixscape
+    result stale); one that moved antibody features out of the protein modality changed
+    that modality's data, so it counts."""
+    import anndata as ad
+    import numpy as np
+
+    from scview.core import provenance
+
+    class Adaptor:
+        def __init__(self, extra=None):
+            self.adata = ad.AnnData(np.zeros((3, 2), dtype=np.float32))
+            for s in ("ingest", "qc_metrics", "clustering"):
+                provenance.record_step(self.adata, step=s, tool="test")
+            if extra:
+                provenance.record_step(self.adata, step="hashing_demux", tool="test", params=extra)
+                provenance.record_step(self.adata, step="hashing_samples", tool="test", params={"column": "s"})
+
+        def cells_fingerprint(self):
+            return "cells"
+
+    stored = results_store.fingerprint(Adaptor())
+    plain = {"method": "htodemux", "tags": ["A", "B"], "moved_from_protein": [], "moved_back_to_protein": []}
+    for kind in ("mixscape", "de", "milo", None):
+        assert not results_store._is_stale(stored, results_store.fingerprint(Adaptor(plain)), kind=kind), kind
+    moved = Adaptor({**plain, "moved_from_protein": ["Hashtag1"]})
+    now = results_store.fingerprint(moved)
+    assert results_store._is_stale(stored, now, kind="mixscape")
+    reason = results_store.stale_reason(stored, now, results_store._history_steps(moved), kind="mixscape")
+    assert "hashtags moved out of the protein data" in reason

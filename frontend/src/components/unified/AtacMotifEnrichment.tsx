@@ -28,7 +28,7 @@ export function AtacMotifEnrichment({ datasetId }: { datasetId: string }) {
   const da = useAtacRunStore((s) => s.da);
   const [pColumn, setPColumn] = useState<"pval" | "pval_adj">("pval");
   const [pMax, setPMax] = useState("0.005");
-  const [minPct, setMinPct] = useState("20");
+  const [minPct, setMinPct] = useState("5");
   const [result, setResult] = useState<MotifEnrichment | null>(null);
   const [group, setGroup] = useState("");
   const [rows, setRows] = useState<EnrichmentRow[] | null>(null);

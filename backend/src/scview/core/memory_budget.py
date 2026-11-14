@@ -91,6 +91,14 @@ def _process_rss() -> int | None:
         return None
 
 
+def own_peak_mb(status: Path = Path("/proc/self/status")) -> int:
+    """This process's own memory high-water mark in MB (``VmHWM``), for a child process to
+    report: ``VmHWM`` restarts at exec, while ``ru_maxrss`` keeps what the server held when it
+    forked the child (every motif scan and chromVAR run reported the server's 9,122 MB)."""
+    kb = _meminfo_kb("VmHWM", status)
+    return round(kb / 1024) if kb is not None else 0
+
+
 def _inactive_file(stat: Path, field: str) -> int:
     """A cgroup's inactive file cache (bytes), which the kernel reclaims first; 0 if unreadable."""
     try:

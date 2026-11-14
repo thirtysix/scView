@@ -33,6 +33,10 @@ class Job:
     progress_line: Callable[[str, Any], str | None]
     finish: Callable[[Job], Awaitable[dict[str, Any]] | dict[str, Any]]
     cancel_route: Callable[[Job], Awaitable[None]] | None = None
+    # In place of the one stream: a coroutine that drives the job itself (several streams in
+    # turn, or plain calls), handing each event to ``on_event`` as a stream's would be.
+    runner: Callable[[Job, api.EventFn], Awaitable[None]] | None = None
+    stage: str = ""  # which part a runner is in (for its cancel)
     status: str = "running"  # running | complete | stopped | error | cancelled
     started: float = field(default_factory=time.monotonic)
     ended: float | None = None
@@ -81,7 +85,10 @@ async def _drive(job: Job) -> None:
             job.progress = line
 
     try:
-        await api.stream(job.path, job.body, on_event, job.disconnect)
+        if job.runner is not None:
+            await job.runner(job, on_event)
+        else:
+            await api.stream(job.path, job.body, on_event, job.disconnect)
         if job.error is None and job.cancel_requested:
             job.status = "cancelled"
         elif job.error is None and "cancelled" in job.events:

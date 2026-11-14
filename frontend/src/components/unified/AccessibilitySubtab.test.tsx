@@ -186,6 +186,21 @@ describe("AccessibilitySubtab", () => {
     const panel = await screen.findByTestId("atac-activity-vs-rna");
     expect(panel.textContent).toContain("r = 0.61");
     expect(panel.textContent).toContain("scattergl");
+    expect(panel.textContent).toContain("RNA against peak-based activity");
+  });
+
+  it("says when the activity is fragment-based (Signac's GeneActivity)", async () => {
+    api.getAtac.mockResolvedValue({ ...BASE, lsi: LSI, activity: { available: true, kind: "fragment-based", n_genes: 16762,
+                                                                     n_genes_with_fragments: 16738, source: "GENCODE vM33 basic",
+                                                                     caption: "Fragment-based gene activity (Signac's GeneActivity)." } });
+    const activity = { gene: "Emcn", kind: "fragment-based", caption: "c", n_cells: 3, n_nonzero: 2, values: [0, 1, 2], violin: null,
+                       column: null, r: 0.37, rna: { rna: [0, 1, 2], activity: [0, 1, 2], n_shown: 3 } };
+    api.getAtacActivity.mockResolvedValue(activity);
+    renderTab();
+    expect(await screen.findByText(/16,738 of 16,762 protein-coding genes have fragments in their region/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "pick CD3D" }));
+    const panel = await screen.findByTestId("atac-activity-vs-rna");
+    expect(panel.textContent).toContain("RNA against fragment-based activity");
   });
 
   it("finds differential peaks and lists nearest gene, distance and class", async () => {

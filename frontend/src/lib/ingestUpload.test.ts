@@ -80,6 +80,19 @@ describe("Xenium output folders", () => {
     expect(splitJunk(itemsFromFiles(paths.map((p) => picked(p)))).keep).toHaveLength(2);
   });
 
+  it("leaves out Cell Ranger ARC's peak files and sample-prefixed reports, keeping its data and side files", () => {
+    const arc = "5k_Mouse_Kidney_MO_gemx_";
+    for (const p of [`${arc}atac_peaks.bed`, `${arc}atac_peak_annotation.tsv`, `${arc}web_summary.html`,
+      `${arc}gex_molecule_info.h5`, `${arc}atac_cut_sites.bigwig`]) {
+      expect(junkReason(p), p).not.toBeNull();
+    }
+    expect(junkReason(`${arc}atac_peaks.bed`)).toContain("same peaks are in the matrix");
+    for (const p of [`${arc}filtered_feature_bc_matrix.h5`, `${arc}atac_fragments.tsv.gz`,
+      `${arc}atac_fragments.tsv.gz.tbi`, `${arc}per_barcode_metrics.csv`, `${arc}summary.csv`]) {
+      expect(junkReason(p), p).toBeNull();
+    }
+  });
+
   it("never sends a zipped run", () => {
     expect(junkReason("Xenium_FFPE_Human_Breast_Cancer_Rep1_outs.zip")).toContain("drop the folder");
     expect(junkReason("samples.zip")).toBeNull();

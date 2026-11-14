@@ -47,7 +47,7 @@ from typing import Any
 
 import numpy as np
 
-from scview.core import genome_seq, tf_motifs
+from scview.core import genome_seq, memory_budget, tf_motifs
 
 logger = logging.getLogger(__name__)
 
@@ -585,8 +585,6 @@ def scan_cmd(store: Path, jaspar: Path, two_bit: Path, out: Path, genome: str, k
 
 def _child(argv: list[str]) -> None:
     import argparse
-    import resource
-
     from scview.core.modality_store import ModalityStore
 
     ap = argparse.ArgumentParser()
@@ -607,7 +605,7 @@ def _child(argv: list[str]) -> None:
         chrom, start, end = peak_coordinates(store)
     motifs = tf_motifs.parse_jaspar(Path(args.jaspar).read_text())
     table = build(chrom, start, end, motifs, genome_seq.TwoBit(args.two_bit), args.genome, args.key, progress=emit)
-    table.meta.update(peak_mb=round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024), threads=BUILD_THREADS)
+    table.meta.update(peak_mb=memory_budget.own_peak_mb(), threads=BUILD_THREADS)
     save_table(table, Path(args.out))
     sys.stdout.write(json.dumps({"type": "done", **table.meta}) + "\n")
     sys.stdout.flush()
@@ -705,7 +703,13 @@ def start_build(data_dir: str | Path, genome: str, key: str, store_path: Path, *
 
 BACKGROUND_PEAKS = 40_000  # FindMotifs' background
 QUERY_P = 0.005  # Signac's motif vignette: p_val < 0.005 & pct.1 > 0.2, from only.pos = TRUE
-QUERY_PCT = 0.2
+# Open in more than 5% of the group (FindMarkers' min.pct), not the vignette's 20%: on nuclei at ~15k
+# fragments a cell (5k mouse kidney, v0.78) 20% kept 79-189 peaks for the minor types, 57-89% of them
+# promoters, and GC-rich KLF/SP motifs topped every type but PT; at 5% the lineage TF is first for PT
+# (HNF4A), TAL (ESRRA/B/G), DCT/CNT and IC (TFCP2L1) and podocytes (WT1). PBMC 10k (17k fragments a
+# cell) loses nothing: CEBPA, SPIB, POU2F, BCL11B/RUNX stay first and NK's TBX21 moves from 2nd to 1st.
+QUERY_PCT = 0.05
+PROMOTER_HEAVY = 0.6  # a query with more promoters than this gets a note
 QUERY_LOG2FC = 0.0
 MIN_QUERY = 10  # FindMotifs warns under this
 SEED = 0
@@ -808,11 +812,14 @@ def query_peaks(frame, group: str, p_column: str, p_max: float, min_pct: float, 
 
 def enrich_groups(table: PeakMotifTable, frame, groups: list[str], *, p_column: str = "pval", p_max: float = QUERY_P,
                   min_pct: float = QUERY_PCT, min_log2fc: float = QUERY_LOG2FC, n_background: int = BACKGROUND_PEAKS,
-                  seed: int = SEED, kept_per_group: int | None = None, stop: Callable[[], bool] = lambda: False):
-    """Each group's query peaks against a GC-matched background: (one long table, per group counts)."""
+                  seed: int = SEED, kept_per_group: int | None = None, stop: Callable[[], bool] = lambda: False,
+                  standard: np.ndarray | None = None):
+    """Each group's query peaks against a GC-matched background: (one long table, per group counts).
+    ``standard``: the peaks that may be query or background (the standard chromosomes), None for all."""
     import pandas as pd
 
-    known = table.known
+    gc = table.gc if standard is None else np.where(standard, table.gc, np.nan)
+    known = np.isfinite(gc)
     frames, summary = [], {}
     for g in groups:
         if stop():
@@ -829,12 +836,19 @@ def enrich_groups(table: PeakMotifTable, frame, groups: list[str], *, p_column: 
             summary[g] = info
             continue
         rng = np.random.default_rng(group_seed(seed, g))
-        background = match_background(table.gc, query, n_background, rng)
+        background = match_background(gc, query, n_background, rng)
         if background.size < query.size:
             info["note"] = (f"{g} has {query.size:,} query peaks and only {background.size:,} other peaks to match them "
                             "against: tighten the thresholds.")
             summary[g] = info
             continue
+        if "peak_class" in frame.columns:
+            classes = frame.loc[frame["group"] == g].set_index("peak_index")["peak_class"]
+            share = float((classes.reindex(query).to_numpy() == "promoter").mean())
+            info["promoter_share"] = round(share, 3)
+            if share > PROMOTER_HEAVY:
+                info["note"] = (f"{share:.0%} of {g}'s query peaks are promoters, where GC-rich KLF and SP motifs top the "
+                                "list whatever the cell type: lower 'open in over' to take in distal peaks.")
         numbers = find_motifs(table, query, background)
         info["n_background"] = int(background.size)
         info["n_significant"] = int((numbers["pval_adj"] < 0.05).sum())
@@ -918,7 +932,7 @@ def remember(adaptor, dataset_id: str, res: MotifEnrichment) -> None:
     _LAST[f"{dataset_id}:{res.result_id}"] = res
     while len(_LAST) > KEEP_RESULTS:
         _LAST.pop(next(iter(_LAST)))
-    results_store.keep(adaptor, RESULT_KIND, res, result_id=res.result_id, key=res.column,
+    results_store.keep(adaptor, RESULT_KIND, res, result_id=res.result_id, key=res.column, params=dict(res.params),
                        label=f"Motifs in differential peaks by {res.column} ({len(res.groups)} groups)")
 
 

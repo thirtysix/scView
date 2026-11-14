@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import json
 import os
-import resource
 import sys
 import threading
 import time
@@ -44,7 +43,7 @@ import scipy.sparse as sp
 from scipy.special import ndtr
 from scipy.stats import chi2, rankdata
 
-from scview.core import atac_motifs, modality_store, tf_motifs
+from scview.core import atac_motifs, genome_build, memory_budget, modality_store, tf_motifs
 from scview.core.modality_store import ModalityStore
 
 STORE = "atac_chromvar"
@@ -245,7 +244,11 @@ def run(store_path: Path, rows: np.ndarray, table: atac_motifs.PeakMotifTable, o
     with ModalityStore(store_path) as store:
         say({"stage": "totals", "message": "Adding up each peak's counts"})
         total, _ = peak_totals(store, rows, stop)
-        kept = np.flatnonzero((total > 0) & table.known)
+        try:  # no chrM, scaffolds, alt contigs
+            standard = genome_build.standard_chromosomes(store.feature_attr("chrom"))
+        except modality_store.ModalityStoreError:  # a store without positions: nothing to tell
+            standard = np.ones(store.n_vars, dtype=bool)
+        kept = np.flatnonzero((total > 0) & table.known & standard)
         if kept.size < 2:
             raise ChromVarError("Fewer than 2 peaks have both counts and known bases, so nothing can be matched.", 422)
         where = np.full(store.n_vars, -1, dtype=np.int32)
@@ -292,7 +295,8 @@ def run(store_path: Path, rows: np.ndarray, table: atac_motifs.PeakMotifTable, o
         padj[tested] = tf_motifs.bh(p[tested])
     return {
         "run_id": uuid.uuid4().hex[:12], "n_cells": int(rows.size), "n_peaks_used": int(kept.size),
-        "n_peaks_no_counts": int(((total <= 0) & table.known).sum()), "n_peaks_left_out": int((~table.known).sum()),
+        "n_peaks_no_counts": int(((total <= 0) & table.known & standard).sum()),
+        "n_peaks_left_out": int((~table.known & standard).sum()), "n_peaks_nonstandard": int((~standard).sum()), "standard_only": True,
         "seed": seed, "iterations": iterations, "w": w, "bs": bs, "genome": table.genome, "table": table.key,
         "motif_ids": table.motif_ids.tolist(), "motif_names": table.motif_names.tolist(),
         "variability": [None if not np.isfinite(x) else round(float(x), 5) for x in sd],
@@ -363,7 +367,7 @@ def _child(argv: list[str]) -> None:
 
     table = atac_motifs.read_table_file(Path(args.table))
     summary = run(Path(args.store), np.load(args.rows), table, Path(args.out), seed=args.seed, say=say)
-    summary["peak_mb"] = round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024)
+    summary["peak_mb"] = memory_budget.own_peak_mb()
     (Path(args.out) / SUMMARY).write_text(json.dumps(summary))
     sys.stdout.write(json.dumps({"type": "done", "seconds": summary["seconds"], "peak_mb": summary["peak_mb"]}) + "\n")
     sys.stdout.flush()
@@ -526,12 +530,29 @@ def ranking(summary: dict[str, Any], n: int = 100) -> list[dict[str, Any]]:
              "gc_rich": bool((summary.get("gc_rich") or [False] * len(sd))[j])} for j in order]
 
 
+RESULT_KIND = "atac_chromvar"
+
+
+def keep(adaptor, summary: dict[str, Any]) -> None:
+    """The run's motif ranking in the results store, so it lists, reads and exports as a table
+    like the other results (the per-cell z stay beside the peak store)."""
+    from scview.core import results_store
+
+    n = len(summary["motif_ids"])
+    params = {k: summary.get(k) for k in ("seed", "iterations", "w", "bs", "genome", "table", "n_cells", "n_peaks_used", "n_peaks_nonstandard",
+                                          "n_peaks_left_out")}
+    results_store.keep(adaptor, RESULT_KIND, {"motifs": ranking(summary, n), "method": summary.get("method"), **params},
+                       result_id=str(summary["run_id"]), key="chromvar", params=params,
+                       label=f"chromVAR motif variability ({summary['n_cells']:,} cells, {n:,} motifs)")
+
+
 def record(adata, summary: dict[str, Any], resources: dict | None = None) -> None:
     from scview.core import provenance
 
     provenance.record_step(adata, step=STEP, tool="scview.atac_chromvar (chromVAR computeDeviations)",
                            params={k: summary.get(k) for k in ("seed", "iterations", "w", "bs", "genome", "table", "run_id",
-                                                               "n_cells", "n_peaks_used")}, resources=resources)
+                                                               "n_cells", "n_peaks_used", "standard_only",
+                                                               "n_peaks_nonstandard")}, resources=resources)
 
 
 def grounding_lines(data_dir: str | Path, dataset_id: str, fingerprint: str | None) -> tuple[list[str], str]:

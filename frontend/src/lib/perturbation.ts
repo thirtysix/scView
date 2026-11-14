@@ -1,6 +1,6 @@
 import type { Data } from "plotly.js";
 import type { DESettings } from "@/stores/deSettingsStore";
-import type { MixscapeResult, MixscapeTarget, PosteriorHist } from "@/api/perturbation";
+import type { KoShareRow, MixscapeDeGenes, MixscapeResult, MixscapeTarget, PosteriorHist } from "@/api/perturbation";
 
 /** obs columns Mixscape writes (backend core/mixscape.py). */
 export const MIXSCAPE_CLASS = "mixscape_class";
@@ -64,6 +64,27 @@ export function deHandoff(target: string): Partial<DESettings> {
     withinCol: "",
     withinVal: "",
   };
+}
+
+/** One target's rows of a KO-share table (per guide or per replicate), as [value, row]. */
+export function koRowsFor(rows: KoShareRow[] | undefined, target: string, key: "guide" | "replicate"): [string, KoShareRow][] {
+  return (rows ?? []).filter((r) => r.target === target).map((r) => [String(r[key] ?? ""), r]);
+}
+
+/** A run's DE gene choice: "all" (Seurat's rule) unless it ran on the variable genes;
+ *  runs before 0.78 have no choice recorded and used the variable genes. */
+export function deGenesOf(params: Record<string, unknown> | undefined): MixscapeDeGenes {
+  if (!params) return "all";
+  return params.de_genes === "all" ? "all" : "variable";
+}
+
+/** Why the preview's target count leaves some mapped targets out: their guides are in
+ *  the guide list but no cell carries one at these settings (a vector guide, pilot guides). */
+export function unusedTargetsText(unused: { target: string; guides: string[] }[]): string {
+  if (!unused.length) return "";
+  const names = unused.slice(0, 6).map((u) => u.target).join(", ") + (unused.length > 6 ? ", …" : "");
+  const n = unused.length;
+  return ` Not counted: ${n} more target${n > 1 ? "s" : ""} (${names}) whose guides no cell has at these settings.`;
 }
 
 /** Guide -> target entries the user changed from the automatic mapping. */

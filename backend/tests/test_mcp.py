@@ -452,8 +452,10 @@ async def test_compare_de_results(client, dataset_manager):
                                            "result_b": pb["result_id"], "limit": 5})
     assert r["a"]["method"] == "wilcoxon" and r["b"]["method"] == "pseudobulk"
     assert r["a"]["n"] == cell["n_up"] + cell["n_down"] and r["b"]["n"] == pb["n_up"] + pb["n_down"]
-    assert r["both"] + r["only_a"]["n"] == r["a"]["n"] and r["both"] + r["only_b"]["n"] == r["b"]["n"]
-    assert r["both"] >= 8 and r["sign_agreement"] == 1.0
+    both = r["both_same_sign"] + r["both_opposite_sign"]
+    assert both == r["both_any_sign"] and "same direction" in r["both_note"]
+    assert both + r["only_a"]["n"] == r["a"]["n"] and both + r["only_b"]["n"] == r["b"]["n"]
+    assert r["both_same_sign"] >= 8 and r["both_opposite_sign"] == 0 and r["sign_agreement"] == 1.0
     assert r["only_a"]["columns"] == ["gene", "lfc_a", "lfc_b"] and len(r["only_a"]["rows"]) <= 5
     text = await _call("compare_de_results", {"dataset_id": did, "result_a": cell["result_id"],
                                               "result_b": "gone"}, error=True)

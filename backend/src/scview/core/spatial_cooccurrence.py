@@ -91,7 +91,14 @@ SPLITS_ABOVE_OBS = 22_897  # squidpy's automatic n_splits starts above this (n *
 SEED = 0
 MAX_THREADS = 4
 VISIUM_SPOT_SPACING_UM = 100.0  # 10x: spot centres on the capture grid
-MIN_PAIRS = 30  # pairs at a distance for the co-pilot to quote the score
+# A score from fewer pairs of observations at a distance is too few to read: the heatmap greys it,
+# the curves leave it out, the co-pilot and the MCP skip it. The stored result keeps every score.
+# Measured (v0.78): k random cells of a common label relabelled as a rare one, 40 draws per k
+# (3-160 cells), on DLPFC 151673 layers and lymph node clusters, the rare label's score against
+# the whole label's at the same distance: at 100-199 pairs 5% are off by more than 2x (9 in 10
+# within 1.7x); at 50-99, 12.5% (within 2.1x); at 30-49, 15.5%; at 20-29, 29% (within 2.8x).
+# The pair count, not the label's cells, carries it: at a given count, 3 cells or 160 differ little.
+MIN_PAIRS = 100
 SECTIONS_COMBINED = "within_sections"  # each section against its own shares, weighted by its expected pairs
 
 # Measured on the 0.53.0 image at 2 CPUs (Xenium breast, Visium HD 8 um; see the tests).
@@ -469,7 +476,7 @@ def cooccurrence_summary(adata, column: str | None = None, cells_fingerprint: st
     info = runs[want]
     libraries = [str(x) for x in info.get("libraries") or []]
     reason = sd._labels_changed(adata, info, cells_fingerprint)
-    occ, count = stored["occ"], stored["count"]
+    occ, count = stored["occ"], stored.get("count")  # an older or squidpy-made result may lack the counts
     shown = None
     if section is not None and "occ_by_section" in stored:
         if section not in libraries:
@@ -477,30 +484,62 @@ def cooccurrence_summary(adata, column: str | None = None, cells_fingerprint: st
         k = libraries.index(section)
         occ, count, shown = stored["occ_by_section"][k], stored["count_by_section"][k], section
     occ = np.asarray(occ, dtype=np.float64)
+    counted = count is not None
     return {"available": True, **info, "occ": np.round(occ, 4).tolist(),
-            "count": np.asarray(count).astype(np.int64).tolist(), "section": shown,
+            "count": np.asarray(count).astype(np.int64).tolist() if counted else None,
+            "min_pairs": MIN_PAIRS if counted else None,
+            "too_few": too_few_by_distance(count) if counted else None, "section": shown,
             "sections": section_pairs(stored, libraries),
             "distances": distances_shown(stored["interval"], info.get("um_per_unit")),
             "stale": reason is not None, "stale_reason": reason, "columns": list(runs)}
 
 
-def _top_pairs(s: dict[str, Any], n: int = 3) -> tuple[list[str], list[str], int]:
+def too_few(count) -> np.ndarray:
+    """Where a score rests on fewer than ``MIN_PAIRS`` pairs (but some): too few to read."""
+    count = np.asarray(count, dtype=np.int64)
+    return (count > 0) & (count < MIN_PAIRS)
+
+
+def too_few_by_distance(count) -> list[int]:
+    """At each distance, how many pairs of labels (each two once, a label with itself included)
+    have a score from too few pairs."""
+    thin = too_few(count)
+    upper = np.triu(np.ones(thin.shape[:2], dtype=bool))
+    return [int((thin[:, :, t] & upper).sum()) for t in range(thin.shape[2])]
+
+
+def first_readable(count, n_labels: int) -> int:
+    """The heatmap's first view and the co-pilot's fact: the shortest distance where most pairs
+    of labels reach ``MIN_PAIRS`` (on Visium at 28 labels the old rule opened at 183 um with 660
+    of 784 cells grey); else the shortest where more than the diagonal does; else the last."""
+    count = np.asarray(count, dtype=np.int64)
+    readable = [int((count[:, :, t] >= MIN_PAIRS).sum()) for t in range(count.shape[2])]
+    most = [t for t, n in enumerate(readable) if 2 * n > n_labels * n_labels]
+    usable = [t for t, n in enumerate(readable) if n > n_labels]
+    return most[0] if most else usable[0] if usable else count.shape[2] - 1
+
+
+def _top_pairs(s: dict[str, Any], n: int = 3) -> tuple[list[str], list[str], int, int]:
     """The highest and lowest pairs of different labels at the shortest distance with at least
-    ``MIN_PAIRS`` pairs for each: as text, with the index of that distance."""
+    ``MIN_PAIRS`` pairs for each: as text, with the index of that distance and how many pairs of
+    different labels were left out there for too few pairs."""
     occ = np.asarray(s["occ"], dtype=np.float64)
-    count = np.asarray(s["count"], dtype=np.int64)
     labels = s["labels"]
-    usable = [t for t in range(occ.shape[2]) if (count[:, :, t] >= MIN_PAIRS).sum() > len(labels)]
-    t = usable[0] if usable else occ.shape[2] - 1
-    pairs = [(float(occ[i, j, t]), labels[i], labels[j]) for i in range(len(labels)) for j in range(i + 1, len(labels))
-             if count[i, j, t] >= MIN_PAIRS]
+    if s.get("count") is None:  # saved without counts: every score as it is
+        count = np.full(occ.shape, MIN_PAIRS, dtype=np.int64)
+    else:
+        count = np.asarray(s["count"], dtype=np.int64)
+    t = first_readable(count, len(labels))
+    off = [(i, j) for i in range(len(labels)) for j in range(i + 1, len(labels))]
+    pairs = [(float(occ[i, j, t]), labels[i], labels[j]) for i, j in off if count[i, j, t] >= MIN_PAIRS]
+    left_out = sum(1 for i, j in off if 0 < count[i, j, t] < MIN_PAIRS)
     high = sorted((x for x in pairs if x[0] > 1), key=lambda x: -x[0])[:n]
     low = sorted((x for x in pairs if x[0] < 1), key=lambda x: x[0])[:n]
 
     def text(rows: list) -> list[str]:
         return [f"{a} with {b} (score {v:.2f})" for v, a, b in rows]
 
-    return text(high), text(low), t
+    return text(high), text(low), t, left_out
 
 
 def grounding_lines(adata, cells_fingerprint: str | None = None) -> tuple[list[str], str]:
@@ -509,7 +548,7 @@ def grounding_lines(adata, cells_fingerprint: str | None = None) -> tuple[list[s
     s = cooccurrence_summary(adata, None, cells_fingerprint)
     if not s.get("available") or s.get("stale"):
         return [], ""
-    high, low, t = _top_pairs(s)
+    high, low, t, left_out = _top_pairs(s)
     at = f"{s['distances'][t]:g} {s['distance_unit']}"
     detail = f"Co-occurrence of '{s['column']}' on {s['n_used']:,} {s['unit']}s, within {at}"
     sampled = f" (a sample of {s['n_used']:,} of {s['n_labelled']:,})" if s["n_used"] < s["n_labelled"] else ""
@@ -524,6 +563,11 @@ def grounding_lines(adata, cells_fingerprint: str | None = None) -> tuple[list[s
              "- The score is P(b | a) / P(b) among pairs within that distance (squidpy's): above 1, b is near a more often "
              "than among all pairs at that range. It is symmetric: a near b equals b near a. Nearby does not mean "
              "interacting."]
+    if left_out:
+        lines.append(f"- {left_out} pair(s) of labels have fewer than {MIN_PAIRS} pairs of {s['unit']}s within {at}: too "
+                     "few to read, so left out here (a rare label can give a very high or low score by chance).")
+    elif s.get("count") is None:
+        lines.append("- This run was saved without its pair counts, so a score from very few pairs cannot be told apart.")
     if splits:
         lines.append("- This run reproduces squidpy's mean over row-order splits: it depends on the row order and scores run "
                      "low, so a score below 1 does not mean apart. Counting all pairs is the default.")

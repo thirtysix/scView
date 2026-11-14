@@ -353,6 +353,12 @@ async def get_filter_preview(
     drop_hash_negatives: bool | None = None,
     counts_floor: float | None = None,
     genes_floor: float | None = None,
+    pct_mt_floor: float | None = None,
+    max_counts: float | None = None,
+    min_atac_counts: float | None = None,
+    max_atac_counts: float | None = None,
+    max_nucleosome_signal: float | None = None,
+    min_tss_enrichment: float | None = None,
     grid_mito: bool = False,
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
@@ -371,6 +377,11 @@ async def get_filter_preview(
     ``mito_type_floor`` makes it never stricter than the global rule.
     ``genes_floor``: MAD mode's genes cut is never below it (default: the data's, 200 for
     cells; ``mad`` says per sample which cut applied and what the floor removed).
+    ``pct_mt_floor``: MAD mode's % mito bound is never below it (default 2%; ``mad`` says per
+    sample which bound applied). On nuclei a warning says when % mito removes over 5% of a sample.
+    ``max_counts`` and the ATAC cut-offs (``min_atac_counts``, ``max_atac_counts``,
+    ``max_nucleosome_signal``, ``min_tss_enrichment``; 0 = off) apply in both modes; ``atac_qc``
+    lists the ATAC columns and Signac's vignette cuts as a suggestion, with what they remove.
     ``doublet_source`` (auto | hashing | scrublet | classifier | consensus | either) is whose doublets
     ``drop_doublets`` drops, ``drop_hash_negatives`` drops cell hashing's
     negatives; ``doublets`` describes the choice (core/doublet_source.py).
@@ -388,7 +399,11 @@ async def get_filter_preview(
                        ("qc_mito_type_column", mito_type_column or None),
                        ("qc_mito_type_floor", mito_type_floor),
                        ("qc_doublet_source", doublet_source), ("drop_hash_negatives", drop_hash_negatives),
-                       ("qc_counts_floor", counts_floor), ("qc_genes_floor", genes_floor)):
+                       ("qc_counts_floor", counts_floor), ("qc_genes_floor", genes_floor),
+                       ("qc_pct_mt_floor", pct_mt_floor), ("max_counts", max_counts),
+                       ("qc_min_atac_counts", min_atac_counts), ("qc_max_atac_counts", max_atac_counts),
+                       ("qc_max_nucleosome_signal", max_nucleosome_signal),
+                       ("qc_min_tss_enrichment", min_tss_enrichment)):
         if value is not None:
             setattr(params, key, value)
             params.explicit = (*params.explicit, key)
@@ -552,9 +567,12 @@ async def run_assessment_pipeline(
     body: RunPipelineRequest,
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
-    """Run specified preprocessing steps on the dataset and save the result."""
+    """Run specified preprocessing steps on the dataset and save the result. With
+    ``reset_from_original`` the reset_to_counts step starts from the cells as uploaded."""
     _check_steps(body.steps)  # before loading: a wrong name costs nothing
     params = _run_params(body.params)
+    if params.reset_from_original:
+        return await _run_from_original(dm, dataset_id, body.steps, params)
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
@@ -597,9 +615,12 @@ async def run_assessment_pipeline_stream(
     body: RunPipelineRequest,
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
-    """Run preprocessing steps with Server-Sent Events progress streaming."""
+    """Run preprocessing steps with Server-Sent Events progress streaming. With
+    ``reset_from_original`` the reset_to_counts step starts from the cells as uploaded."""
     _check_steps(body.steps)  # before loading: a wrong name costs nothing
     params = _run_params(body.params)
+    if params.reset_from_original:
+        return await _stream_from_original(dm, dataset_id, body.steps, params)
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
@@ -1040,6 +1061,86 @@ async def preview_mito_refilter(
 
 def _refilter_what(dm: DatasetManager, dataset_id: str, need: int, what: str) -> str:
     return f"{what} {dm.dataset_name(dataset_id)} from its original upload" if need else what
+
+
+# ---------------------------------------------------------------------------
+# A run whose reset starts from the cells as uploaded (core/reset_original.py)
+# ---------------------------------------------------------------------------
+
+
+async def _from_original_control(dm: DatasetManager, dataset_id: str, steps: list[str],
+                                 params: PipelineParams) -> RunControl:
+    """The checks made before anything big is read (404, large dataset, no original upload, no
+    reset step, annotation target), and the run's control: watchdog, Cancel, the pre-step
+    memory check, and its growth reserved from the original's estimate, as the re-filter's."""
+    from scview.core import reset_original
+
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
+    large_mode.check(adaptor, "Resetting to the cells as uploaded",
+                     "it reads the original upload and re-processes it in memory")
+    _check_annotation_target(adaptor, steps, params)
+    del adaptor
+    try:
+        await asyncio.to_thread(reset_original.check, dm, dataset_id, steps)
+    except reset_original.ResetError as e:
+        raise HTTPException(status_code=e.status, detail=str(e))
+    control = RunControl()
+    control.step_needs = lambda run_adaptor: reset_original.step_needs(dm, dataset_id, steps, params)
+    return control
+
+
+async def _run_from_original(dm: DatasetManager, dataset_id: str, steps: list[str],
+                             params: PipelineParams) -> dict:
+    from scview.core import reset_original
+
+    control = await _from_original_control(dm, dataset_id, steps, params)
+
+    def _run(adaptor):
+        output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
+        return reset_original.run(dm, dataset_id, adaptor, steps, params, output_path, control)
+
+    need = await asyncio.to_thread(reset_original.read_need, dm, dataset_id)
+    try:  # the original is read whole in the run: room for it first
+        async with working_copy.reading(dm, dataset_id, need, _refilter_what(dm, dataset_id, need, "Resetting")):
+            result = await run_exclusive(dm, dataset_id, _run, control)
+        return result.to_dict()
+    except (HTTPException, DatasetMemoryError):
+        raise
+    except Exception as e:
+        logger.error("Run from the original upload failed for %s: %s", dataset_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Pipeline run failed: {e}")
+
+
+async def _stream_from_original(dm: DatasetManager, dataset_id: str, steps: list[str],
+                                params: PipelineParams) -> StreamingResponse:
+    from scview.core import reset_original
+
+    control = await _from_original_control(dm, dataset_id, steps, params)
+
+    def _events(adaptor):
+        output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
+        return reset_original.run_events(dm, dataset_id, adaptor, steps, params, output_path, control)
+
+    async def event_generator():
+        try:
+            need = await asyncio.to_thread(reset_original.read_need, dm, dataset_id)
+            async with working_copy.reading(dm, dataset_id, need,
+                                            _refilter_what(dm, dataset_id, need, "Resetting")):
+                async with aclosing(iterate_exclusive(dm, dataset_id, _events, control)) as events:
+                    async for event_type, event_data in events:
+                        yield f"event: {event_type}\ndata: {json.dumps(event_data)}\n\n"
+        except Exception as e:
+            logger.error("Streamed run from the original upload failed for %s: %s", dataset_id, e, exc_info=True)
+            detail = e.detail if isinstance(e, HTTPException) else str(e)
+            yield f"event: error\ndata: {json.dumps({'error': detail})}\n\n"
+
+    return StreamingResponse(
+        keepalive(event_generator()),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/datasets/{dataset_id}/qc/mito-refilter-stream")

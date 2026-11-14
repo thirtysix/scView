@@ -723,7 +723,8 @@ def run_child(files: dict[str, Path], out: Path, assembly: str,
 
 def _child(argv: list[str]) -> None:
     import argparse
-    import resource
+
+    from scview.core import memory_budget
 
     ap = argparse.ArgumentParser()
     for a in ("--assembly", "--jaspar", "--upstream", "--refgene", "--out"):
@@ -742,7 +743,7 @@ def _child(argv: list[str]) -> None:
     t0 = time.time()
     table = build(Path(args.jaspar), Path(args.upstream), Path(args.refgene), assembly=args.assembly,
                   progress=emit)
-    peak_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024  # kB on Linux
+    peak_mb = memory_budget.own_peak_mb()  # the child's own, not the server's (ru_maxrss survives exec)
     table.meta.update(peak_mb=round(peak_mb), threads=os.environ.get("OPENBLAS_NUM_THREADS"),
                       built_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
                       inputs={s.filename: s.sha256 for s in sources_for(args.assembly)}

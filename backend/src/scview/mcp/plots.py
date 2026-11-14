@@ -291,3 +291,61 @@ def dotplot(result: dict[str, Any], title: str, caption: str) -> bytes:
     ax.set_title(title, fontsize=11)
     fig.text(0.01, -0.02, caption, fontsize=8, color="#555555")
     return _png(fig)
+
+
+MAX_TRACKS = 16  # coverage tracks drawn; the caption says how many there are
+MAX_GENE_ARROWS = 12
+
+
+def coverage(result: dict[str, Any], title: str, caption: str) -> bytes:
+    """ATAC coverage tracks (``GET /atac/coverage``): one filled track per group on a shared
+    y-axis (normalised depth), the peaks in the window as bars, the genes as arrows."""
+    from matplotlib.patches import Rectangle
+
+    tracks = list(result.get("tracks") or [])[:MAX_TRACKS]
+    x = np.asarray(result.get("x") or [], dtype=float)
+    reg = result.get("region") or {}
+    n = max(1, len(tracks))
+    fig = _figure(10, 0.75 * n + 1.6)
+    axes = fig.subplots(n + 2, 1, sharex=True,
+                        gridspec_kw={"height_ratios": [1.0] * n + [0.35, 0.6], "hspace": 0.08})
+    colours = _palette(n)
+    top = max((max(t.get("values") or [0]) for t in tracks), default=0.0)
+    ymax = float(result.get("ymax") or 0) or float(top) or 1.0
+    width = float(x[1] - x[0]) if x.size > 1 else 1.0
+    for ax, t, colour in zip(axes[:n], tracks, colours):
+        v = np.asarray(t.get("values") or [], dtype=float)
+        if v.size and v.size == x.size:
+            ax.fill_between(x, 0, v, step="mid", color=colour, alpha=0.85, linewidth=0)
+        ax.set_ylim(0, ymax)
+        ax.set_yticks([])
+        ax.set_ylabel(str(t.get("name")), rotation=0, ha="right", va="center", fontsize=8)
+    pax, gax = axes[n], axes[n + 1]
+    for p in result.get("peaks") or []:
+        pax.add_patch(Rectangle((p["start"], 0.2), max(p["end"] - p["start"], width / 4), 0.6,
+                                color="#555555", linewidth=0))
+    pax.set_ylim(0, 1)
+    lo, hi = reg.get("start", 0), reg.get("end", 1)
+    for i, g in enumerate((result.get("genes") or [])[:MAX_GENE_ARROWS]):
+        y = 0.75 - 0.5 * (i % 2)
+        start, end = max(g["start"], lo), min(g["end"], hi)
+        forward = g.get("strand") != "-"
+        gax.annotate("", xy=(end if forward else start, y), xytext=(start if forward else end, y),
+                     arrowprops={"arrowstyle": "->", "color": "#1f4e79", "lw": 1.2})
+        gax.text((start + end) / 2, y + 0.1, g.get("name"), ha="center", va="bottom", fontsize=7)
+    gax.set_ylim(0, 1.15)
+    for ax, name in ((pax, "peaks"), (gax, "genes")):
+        ax.set_yticks([])
+        ax.set_ylabel(name, rotation=0, ha="right", va="center", fontsize=8)
+    for ax in axes:
+        for side in ("top", "right", "left"):
+            ax.spines[side].set_visible(False)
+    gax.set_xlim(lo, hi)
+    gax.set_xlabel(f"{reg.get('chrom', '')} position (bp)", fontsize=8)
+    gax.ticklabel_format(axis="x", style="plain", useOffset=False)
+    axes[0].set_title(title, fontsize=11)
+    import textwrap
+
+    # wrapped: a long caption would widen the figure past MAX_PX
+    fig.text(0.01, -0.02, textwrap.fill(caption, 150), fontsize=8, color="#555555", va="top")
+    return _png(fig)

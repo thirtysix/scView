@@ -19,6 +19,11 @@ COPY src/ src/
 # so a one-off `docker run` of this image (e.g. to run pytest) is covered too.
 ENV PYTHONDONTWRITEBYTECODE=1
 
+# Two glibc malloc arenas instead of 8 per CPU: each request's thread kept its own arena of freed
+# memory. Measured v0.78 (2 CPUs, 39,934 x 24,551 file): memory held after 3 pages open Data
+# Assessment at once 3.98 -> 3.50 GiB (anon 3.89 -> 3.30), peak 4.40 -> 4.22; Kang run as fast.
+ENV MALLOC_ARENA_MAX=2
+
 # Dev target: source mounted as volume, uvicorn with reload
 FROM base AS dev
 ENV PYTHONPATH=/app/src

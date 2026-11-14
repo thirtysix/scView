@@ -395,6 +395,26 @@ def fixed_drop(qc, min_genes, max_genes, min_counts, max_pct_mt):
             pct = qc["pct_mt"]
             drop |= np.isfinite(pct) & (pct >= max_pct_mt)
     return drop
+
+
+def cut_drop(values, low=0, high=0):
+    """The cells below low or above high (0 turns a side off); a cell without a value stays."""
+    v = np.asarray(values, dtype=np.float64)
+    drop = np.zeros(v.size, dtype=bool)
+    with np.errstate(invalid="ignore"):
+        if low:
+            drop |= np.isfinite(v) & (v < low)
+        if high:
+            drop |= np.isfinite(v) & (v > high)
+    return drop
+
+
+def obs_values(adata, column):
+    """An obs column as numbers, or all NaN (with a note) when this data does not have it."""
+    if column not in adata.obs.columns:
+        print(f"NOTE: obs column {column} is missing here, so its cut-off removes nothing.")
+        return np.full(adata.n_obs, np.nan)
+    return adata.obs[column].to_numpy(dtype=np.float64)
 ''',
     "type_mito_drop": '''
 def mito_only(qc):
@@ -1422,13 +1442,14 @@ def _atac_helper() -> str:
     computes them as scView did; the peaks are read again from the input."""
     import inspect
 
-    from scview.core import atac, atac_lr
+    from scview.core import atac, atac_lr, fragment_activity
 
     lines = ["import gzip", "import os", "import re", "from concurrent.futures import ThreadPoolExecutor",
              "from scipy.special import expit, ndtr", ""]
     lines += [f"{name} = {_lit(getattr(atac_lr, name))}" for name in atac_lr.REPLAY_CONSTANTS]
     lines += [f"{name} = {_lit(getattr(atac, name))}" for name in atac.REPLAY_CONSTANTS]
-    for obj in (*atac_lr.REPLAY_CODE, *atac.REPLAY_CODE):
+    lines += [f"{name} = {_lit(getattr(fragment_activity, name))}" for name in fragment_activity.REPLAY_CONSTANTS]
+    for obj in (*atac_lr.REPLAY_CODE, *atac.REPLAY_CODE, *fragment_activity.REPLAY_CODE):
         lines += ["", "", inspect.getsource(obj).rstrip("\n")]
     lines += ["", "", _ATAC_READERS.strip("\n")]
     return "\n".join(lines) + "\n"
@@ -1462,15 +1483,21 @@ class AtacCounts:
 
 
 def atac_differential(counts, peak_names, labels, settings):
-    """iter_differential on the counts in memory: a table of each chosen group vs the rest."""
+    """iter_differential on the counts in memory: a table of each chosen group vs the rest, or of
+    one group vs another (``vs``; the cells of every other group then take no part)."""
     missing = pd.isna(labels)
     every = sorted({str(x) for x in labels[~missing]})
+    if settings.get("vs") is not None:
+        every = [str(settings["groups"][0]), str(settings["vs"])]
     code = {g: i for i, g in enumerate(every)}
-    codes = np.array([-1 if m else code[str(x)] for x, m in zip(labels, missing)], dtype=np.int32)
+    codes = np.array([-1 if m else code.get(str(x), -1) for x, m in zip(labels, missing)], dtype=np.int32)
     chosen = settings.get("groups") or every
+    peak_mask = None
+    if settings.get("standard_only"):  # chrM, unplaced scaffolds and alt contigs left out
+        peak_mask = standard_chromosomes([re.split(r"[:_-]", n[::-1], maxsplit=2)[-1][::-1] for n in peak_names])
     for item in iter_differential(AtacCounts(counts), np.arange(counts.shape[0]), codes, every, chosen,
                                   test=settings["test"], min_pct=settings["min_pct"], max_peaks=settings["max_peaks"],
-                                  lrt_per_group=settings.get("lrt_peaks", LRT_PER_GROUP)):
+                                  lrt_per_group=settings.get("lrt_peaks", LRT_PER_GROUP), peak_mask=peak_mask):
         if item["type"] == "result":
             frame = item["frame"]
             frame.insert(1, "peak", np.asarray(peak_names, dtype=object)[frame["peak_index"].to_numpy()])
@@ -1560,15 +1587,13 @@ def atac_gene_table(url):
             attr = lambda key: (re.search(rf'{key} "([^"]+)"', parts[8]) or [None, ""])[1]  # noqa: E731
             if attr("gene_id").endswith("_PAR_Y"):
                 continue
-            rows.append((attr("gene_id").split(".")[0], attr("gene_name"), parts[0], int(parts[3]) - 1, int(parts[4]), parts[6]))
-    return pd.DataFrame(rows, columns=["gene_id", "gene_name", "chrom", "start", "end", "strand"])
+            rows.append((attr("gene_id").split(".")[0], attr("gene_name"), parts[0], int(parts[3]) - 1, int(parts[4]), parts[6],
+                         attr("gene_type")))
+    return pd.DataFrame(rows, columns=["gene_id", "gene_name", "chrom", "start", "end", "strand", "gene_type"])
 
 
-def atac_gene_activity(adata, counts, peak_names, table, upstream):
-    """Peak counts in each dataset gene's body + ``upstream`` (matched by gene id, else name):
-    a cells x genes CSR and its gene names."""
-    from types import SimpleNamespace
-
+def atac_dataset_genes(adata, table):
+    """The dataset's genes with a position (by gene id, else name): their names and table rows."""
     genes = adata.raw.var if adata.raw is not None and adata.raw.n_vars > adata.n_vars else adata.var
     ids = genes["gene_ids"].astype(str).str.replace(r"\\.\\d+$", "", regex=True) if "gene_ids" in genes.columns else None
     by_id = table.drop_duplicates("gene_id").set_index("gene_id")
@@ -1582,7 +1607,15 @@ def atac_gene_activity(adata, counts, peak_names, table, upstream):
         else:
             continue
         names.append(name)
-    frame = pd.DataFrame(picked)
+    return names, pd.DataFrame(picked)
+
+
+def atac_gene_activity(adata, counts, peak_names, table, upstream):
+    """Peak counts in each dataset gene's body + ``upstream`` (matched by gene id, else name):
+    a cells x genes CSR and its gene names."""
+    from types import SimpleNamespace
+
+    names, frame = atac_dataset_genes(adata, table)
     start, end = gene_regions(frame, upstream)
     parts = [re.split(r"[:_-]", n[::-1], maxsplit=2) for n in peak_names]
     chrom = np.asarray([p[2][::-1] for p in parts], dtype=object)
@@ -1591,6 +1624,24 @@ def atac_gene_activity(adata, counts, peak_names, table, upstream):
     m = overlap_matrix(chrom, p_start, p_end, SimpleNamespace(chrom=frame["chrom"].to_numpy(dtype=object), start=start,
                                                               end=end, names=names))
     return (counts @ m).tocsr(), names
+
+
+def atac_fragment_activity(adata, table, upstream, name):
+    """Signac's GeneActivity from the fragments file beside the input or here: fragments over the
+    body + ``upstream`` of the dataset's protein-coding genes under MAX_WIDTH. (cells x genes CSR,
+    gene names), or (None, []) when the file is not there."""
+    path = next((p for p in (name, os.path.join(os.path.dirname(os.path.abspath(INPUT)), name)) if os.path.exists(p)), None)
+    if path is None:
+        print(f"Gene activity: {name} (and its .tbi) is not beside the input or here, so the fragment-based "
+              "activity is left out.")
+        return None, []
+    names, frame = atac_dataset_genes(adata, table)
+    start, end = gene_regions(frame, upstream)
+    keep = signac_genes(start, end, frame["gene_type"].to_numpy(dtype=object))
+    chrom = frame["chrom"].to_numpy(dtype=object)
+    m, seen = fragment_gene_counts(path, list(adata.obs_names.astype(str)), chrom[keep], start[keep], end[keep])
+    in_file = np.isin(chrom[keep].astype(str), sorted(seen))  # as Signac: genes on a contig the file never names go
+    return m[:, np.flatnonzero(in_file)].tocsr(), [n for n, k in zip(np.asarray(names)[keep], in_file) if k]
 '''
 _HELPERS["atac"] = _atac_helper()
 _HELPER_ORDER += ("atac",)
@@ -1602,7 +1653,7 @@ def _atac_links_helper() -> str:
     script computes the links as scView did."""
     import inspect
 
-    from scview.core import atac_links, genome_seq
+    from scview.core import atac_links, genome_build, genome_seq
 
     lines = ["import hashlib", "import mmap", "import shutil", "import struct", "import tempfile", "import threading", "from pathlib import Path",
              "from types import SimpleNamespace", "from typing import Iterable", ""]
@@ -1610,7 +1661,8 @@ def _atac_links_helper() -> str:
     lines += [f"{name} = {_lit(getattr(genome_seq, name))}" for name in ("UNKNOWN", "_SIGNATURE")]
     lines += ["_FROM_2BIT = np.array([3, 1, 0, 2], dtype=np.uint8)",
               "_BYTE_TO_CODES = np.array([[_FROM_2BIT[(b >> s) & 3] for s in (6, 4, 2, 0)] for b in range(256)], dtype=np.uint8)"]
-    for obj in (genome_seq.TwoBit, genome_seq.sequences, genome_seq.base_counts, genome_seq.gc_percent):
+    for obj in (genome_seq.TwoBit, genome_seq.sequences, genome_seq.base_counts, genome_seq.gc_percent,
+                genome_build.standard_chromosomes):
         lines += ["", "", inspect.getsource(obj).rstrip("\n")]
     lines += ["", "", "genome_seq = SimpleNamespace(sequences=sequences, base_counts=base_counts, gc_percent=gc_percent)"]
     for obj in atac_links.REPLAY_CODE:
@@ -1665,7 +1717,7 @@ def atac_links_table(adata, counts, peak_names, settings):
     folder = tempfile.mkdtemp(prefix="links-")
     try:
         for item in iter_links(AtacCounts(counts), rows, mask, read_genes, genes, peak_names, chrom, start, end, gc, folder,
-                               seed=settings.get("seed", SEED)):
+                               seed=settings.get("seed", SEED), standard_only=settings.get("standard_only", False)):
             if item["type"] == "result":
                 print("Peak-gene links:", item["counts"])
                 return item["frame"].drop(columns="peak_index")
@@ -1685,7 +1737,7 @@ def _atac_motifs_helper() -> str:
     (scanpy needs it anyway)."""
     import inspect
 
-    from scview.core import atac_chromvar, atac_motifs, genome_seq, tf_motifs
+    from scview.core import atac_chromvar, atac_motifs, genome_build, genome_seq, tf_motifs
 
     lines = ["import hashlib", "import mmap", "import os", "import re", "import struct", "import threading",
              "from collections.abc import Iterable", "from concurrent.futures import ThreadPoolExecutor",
@@ -1697,7 +1749,7 @@ def _atac_motifs_helper() -> str:
               "_BYTE_TO_CODES = np.array([[_FROM_2BIT[(b >> s) & 3] for s in (6, 4, 2, 0)] for b in range(256)], dtype=np.uint8)",
               'MOTIF_ROW = re.compile(r"^([ACGT])\\s*\\[([^\\]]*)\\]$")', "_ROW = MOTIF_ROW"]
     for obj in (genome_seq.TwoBit, genome_seq.sequences, genome_seq.base_counts, genome_seq.gc_percent, tf_motifs.Motif,
-                tf_motifs.parse_jaspar, *atac_motifs.REPLAY_CODE, *atac_chromvar.REPLAY_CODE):
+                tf_motifs.parse_jaspar, genome_build.standard_chromosomes, *atac_motifs.REPLAY_CODE, *atac_chromvar.REPLAY_CODE):
         lines += ["", "", inspect.getsource(getattr(obj, "py_func", obj)).rstrip("\n")]
     lines += ["", "", _ATAC_MOTIF_READERS.strip("\n")]
     return "\n".join(lines) + "\n"
@@ -1764,7 +1816,8 @@ def atac_motif_table(peak_names, inputs):
             codes, offsets = sequences(genome, chrom[idx], start[idx], end[idx])
             joined, starts = join_regions(codes, offsets)
             hits[idx] = scan_block(joined, starts, strands, len(motifs), threads=BUILD_THREADS)
-    out = {"hits": hits, "gc": gc, "ids": [m.id for m in motifs], "names": [m.name for m in motifs]}
+    out = {"hits": hits, "gc": gc, "ids": [m.id for m in motifs], "names": [m.name for m in motifs],
+           "standard": standard_chromosomes(chrom)}
     _motif_tables[key] = out
     return out
 
@@ -1772,6 +1825,8 @@ def atac_motif_table(peak_names, inputs):
 def atac_motif_enrichment(table, peak_names, da_table, settings):
     """FindMotifs on each group's peaks of a differential table: one long table, lowest p first."""
     hits, gc = table["hits"], table["gc"]
+    if settings.get("standard_only"):  # chrM, unplaced scaffolds and alt contigs: neither query nor background
+        gc = np.where(table["standard"], gc, np.nan)
     index = pd.Index(peak_names)
     frames = []
     for g in settings.get("groups") or list(dict.fromkeys(da_table["group"].astype(str))):
@@ -1794,7 +1849,7 @@ def atac_motif_enrichment(table, peak_names, da_table, settings):
 def atac_chromvar_run(counts, table, settings):
     """chromVAR z and deviations, cells x motifs, a block of cells at a time."""
     total = np.asarray(counts.sum(axis=0), dtype=np.float64).ravel()
-    kept = np.flatnonzero((total > 0) & np.isfinite(table["gc"]))
+    kept = np.flatnonzero((total > 0) & np.isfinite(table["gc"]) & (table["standard"] if settings.get("standard_only") else True))
     bg = background_peaks(total[kept], table["gc"][kept] / 100.0, iterations=settings["iterations"], w=settings["w"], bs=settings["bs"],
                           seed=settings["seed"])
     rows, cols = np.nonzero(table["hits"][kept])
@@ -2225,6 +2280,12 @@ def _filtering(p: dict, ctx: _Ctx) -> Snippet:
         if "min_genes" not in p:
             status, note = APPROXIMATE, "fixed cut-offs not recorded"
             code.insert(0, "# NOTE: this record has no cut-offs (an older scView): none applied.")
+    cuts, approx = _cut_lines(p)
+    if cuts:
+        _need(ctx, "fixed_drop")  # defines cut_drop and obs_values too
+        code += cuts
+        if approx and status == EXACT:
+            status, note = APPROXIMATE, "ATAC counts read from obs"
     if p.get("drop_doublets"):
         _need(ctx, "doublet_calls")
         code += [*_doublet_source_code(p), "if calls is not None:", "    drop |= calls"]
@@ -2244,6 +2305,27 @@ def _filtering(p: dict, ctx: _Ctx) -> Snippet:
                  f"    redefine(adata, same_v_gene={_lit(bool(clones.get('same_v_gene')))})"]
     code.append(f"sc.pp.filter_genes(adata, min_cells={_lit(min_cells)})")
     return Snippet(status, code, note)
+
+
+def _cut_lines(p: dict) -> tuple[list[str], bool]:
+    """The filtering's max counts and ATAC cut-offs (core/qc_filter.py ``ATAC_CRITERIA``), as
+    recorded (absent: off), and whether one needs ATAC counts this script does not make."""
+    from scview.core.qc_filter import ATAC_CRITERIA
+
+    lines: list[str] = []
+    if p.get("max_counts"):
+        lines.append(f"drop |= cut_drop(qc[\"total_counts\"], high={_lit(float(p['max_counts']))})  # max counts")
+    approx = False
+    for c, (col, side, what) in ATAC_CRITERIA.items():
+        v = p.get(f"qc_{c}")
+        if not v:
+            continue
+        if col == "atac_total_counts":
+            approx = True
+            lines.append("# ATAC counts in peaks per cell, as scView wrote them at import (Signac's nCount_ATAC).")
+        lines.append(f"drop |= cut_drop(obs_values(adata, {_lit(col)}), {'low' if side == 'min' else 'high'}="
+                     f"{_lit(float(v))})  # {what}")
+    return lines, approx
 
 
 def _doublet_source_code(p: dict) -> list[str]:
@@ -3446,17 +3528,28 @@ adata.uns["atac_gene_activity_genes"] = list(activity_genes)
 adata.obs["atac_activity_total"] = np.asarray(activity.sum(axis=1), dtype=np.float32).ravel()
 '''
 
+_ATAC_FRAGMENT_ACTIVITY_CODE = '''
+gene_table = atac_gene_table(ATAC["gene_positions_url"])
+activity, activity_genes = atac_fragment_activity(adata, gene_table, ATAC["upstream"], ATAC["fragments_file"])
+if activity is not None:
+    adata.obsm["atac_gene_activity"] = activity
+    adata.uns["atac_gene_activity_genes"] = list(activity_genes)
+    adata.obs["atac_activity_total"] = np.asarray(activity.sum(axis=1), dtype=np.float32).ravel()
+    # Signac's NormalizeData(scale.factor = median(nCount)): log1p(count / total * this)
+    adata.uns["atac_gene_activity_scale_factor"] = float(max(1.0, np.median(adata.obs["atac_activity_total"])))
+'''
+
 
 def _atac_lsi(p: dict, ctx: _Ctx) -> Snippet:
     """ATAC LSI (core/atac.py, Signac's recipe) from the input's peaks, its graph under its own
-    key, the UMAP, Leiden, and the peak-based gene activity."""
+    key, the UMAP, Leiden, and the gene activity (fragment-based from the fragments file, or peak-based)."""
     need = ("n_lsi", "dims", "lanczos_block", "lanczos_steps")
     if any(not p.get(x) for x in need):
         return Snippet(NOT_REPLAYABLE, ["# ATAC LSI: its settings are not recorded. Recorded:", *_param_comment(p)],
                        "settings not recorded")
     _need(ctx, "atac")
     keys = ("percentile", "n_lsi", "lanczos_block", "lanczos_steps", "seed", "dims", "k", "metric", "min_dist",
-            "resolution", "upstream", "gene_positions_url")
+            "resolution", "upstream", "gene_positions_url", "fragments_file")
     settings = {x: p.get(x) for x in keys}
     n_iter = p.get("n_iterations")
     passes = f", n_iterations={_lit(n_iter)}" if n_iter not in (None, -1) else ""
@@ -3468,7 +3561,11 @@ def _atac_lsi(p: dict, ctx: _Ctx) -> Snippet:
         'sc.tl.leiden(adata, resolution=ATAC["resolution"], key_added="atac_leiden", neighbors_key="atac", '
         f'flavor="leidenalg"{passes})',
     ]
-    if p.get("gene_activity") and p.get("gene_positions_url"):
+    if p.get("gene_activity") and p.get("gene_positions_url") and p.get("activity_source") == "fragments":
+        lines += ["# Fragment-based gene activity (Signac's GeneActivity): fragments over the body + 2 kb upstream of",
+                  "# protein-coding genes under 500 kb. Needs the fragments file (and its .tbi) beside the input.",
+                  *_block(_ATAC_FRAGMENT_ACTIVITY_CODE)]
+    elif p.get("gene_activity") and p.get("gene_positions_url"):
         lines += ["# Peak-based gene activity: peak counts in gene body + 2 kb upstream, not fragments.",
                   *_block(_ATAC_ACTIVITY_CODE)]
     return Snippet(EXACT, lines)
@@ -3505,7 +3602,7 @@ def _atac_differential(p: dict, ctx: _Ctx) -> Snippet:
         return Snippet(NOT_REPLAYABLE, ["# Differential peaks: the settings are not recorded. Recorded:", *_param_comment(p)],
                        "settings not recorded")
     _need(ctx, "atac")
-    keys = ("column", "groups", "min_pct", "max_peaks", "test", "lrt_peaks")
+    keys = ("column", "groups", "min_pct", "max_peaks", "test", "lrt_peaks", "standard_only", "vs")
     settings = {x: p.get(x) for x in keys if p.get(x) is not None}
     return Snippet(EXACT, [
         f"# Differential peaks by {comment_text(p.get('column'), 80)}, {comment_text(p.get('test'), 12)}: each group vs "
@@ -3529,7 +3626,8 @@ def _atac_links(p: dict, ctx: _Ctx) -> Snippet:
         return Snippet(NOT_REPLAYABLE, ["# Peak-gene links: the settings are not recorded. Recorded:", *_param_comment(p)],
                        "settings not recorded")
     _need(ctx, "atac_links")
-    keys = ("genes", "gene_list", "cells_column", "cells_value", "seed", "genome_url", "gene_positions_url", "selection")
+    keys = ("genes", "gene_list", "cells_column", "cells_value", "seed", "genome_url", "gene_positions_url", "selection",
+            "standard_only")
     settings = {x: p.get(x) for x in keys if p.get(x) is not None}
     settings["key"] = str(p.get("result_id") or p.get("genes"))  # a run of its own: several can be recorded
     return Snippet(EXACT, [
@@ -3574,7 +3672,7 @@ def _atac_motif_enrichment(p: dict, ctx: _Ctx) -> Snippet:
         return Snippet(NOT_REPLAYABLE, ["# Motifs in differential peaks: the settings are not recorded. Recorded:", *_param_comment(p)],
                        "settings not recorded")
     _need(ctx, "atac_motifs")
-    settings = {k: p[k] for k in keys} | {"groups": p.get("groups")}
+    settings = {k: p[k] for k in keys} | {"groups": p.get("groups"), "standard_only": bool(p.get("standard_only"))}
     return Snippet(EXACT, [
         f"# Motifs in differential peaks by {comment_text(p.get('column'), 80)} ({comment_text(p.get('genome'), 12)}): "
         "the hits as motifmatchr gives them, FindMotifs per group, a table in uns.",
@@ -3599,7 +3697,7 @@ def _atac_chromvar(p: dict, ctx: _Ctx) -> Snippet:
     return Snippet(EXACT, [
         f"# chromVAR per-cell motif activity ({comment_text(p.get('genome'), 12)}): z and deviations, cells x motifs, in obsm.",
         f"ATAC_MOTIF_INPUTS = {_lit(_motif_inputs(p['genome']))}",
-        f"CHROMVAR = {_lit({k: p[k] for k in keys})}",
+        f"CHROMVAR = {_lit({k: p[k] for k in keys} | {'standard_only': bool(p.get('standard_only'))})}",
         *_block(_ATAC_MOTIF_TABLE_CODE),
         *_block(_ATAC_CHROMVAR_CODE),
     ])
@@ -3752,9 +3850,14 @@ def _hashing_demux(p: dict, ctx: _Ctx) -> Snippet:
     _need(ctx, "hashing", "read_hashtags")
     feats = {t: features[t] for t in tags}
     srcs = {t: str(sources.get(t) or "") for t in tags}
-    if method == hashing.HTODEMUX:
-        q = p.get("positive_quantile", hashing.POSITIVE_QUANTILE)
-        run = [f"call = htodemux(counts, tags, {_lit(float(q))})  # = Seurat 5.1.0 HTODemux"]
+    q = float(p.get("positive_quantile", hashing.POSITIVE_QUANTILE))
+    split = p.get("split_by")
+    if isinstance(split, str) and split:
+        run = [f"channel = adata.obs[{_lit(split)}]",
+               "channel = channel.astype(object).where(channel.notna(), \"\").astype(str).to_numpy(dtype=object)",
+               f"call, _ = split_call(counts, tags, channel, {_lit(method)}, {_lit(q)})  # within each channel"]
+    elif method == hashing.HTODEMUX:
+        run = [f"call = htodemux(counts, tags, {_lit(q)})  # = Seurat 5.1.0 HTODemux"]
     else:
         run = ["call = hashed_drops(counts, tags)  # = DropletUtils 1.24 hashedDrops, defaults"]
     code = [
