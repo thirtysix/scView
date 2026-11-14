@@ -748,8 +748,34 @@ def _pipeline_result(job: jobs.Job) -> dict[str, Any]:
     return out
 
 
+def _single_sample_note(adaptor) -> str | None:
+    """The clusters of the active clustering that are almost all one sample (confounding.py)."""
+    from scview.core import confounding, qc_groups
+
+    adata = adaptor.adata
+    cluster_col = adaptor.active_clustering_column()
+    sample_col, _why = qc_groups.sample_grouping(adata)
+    if not cluster_col or not sample_col:
+        return None
+    found = confounding.single_sample_clusters(adata.obs, cluster_col, sample_col)
+    return confounding.single_sample_note(found, cluster_col, sample_col, int(adata.obs[sample_col].nunique()))
+
+
+async def _run_result(job: jobs.Job) -> dict[str, Any]:
+    """The run's summary; after a clustering, a note on clusters that are one sample."""
+    out = _pipeline_result(job)
+    if "clustering" in (out.get("steps_run") or []) and out.get("status") not in ("cancelled", "stopped"):
+        try:
+            note = await asyncio.to_thread(_single_sample_note, await _adaptor(job.dataset_id))
+        except Exception:  # noqa: BLE001 - a note only: the run's own summary stands
+            note = None
+        if note:
+            out["clusters_one_sample"] = note
+    return out
+
+
 async def _start_run(dataset_id: str, steps: list[str], p: dict[str, Any], kind: str,
-                     finish: Callable = _pipeline_result, allow_large_mode: bool = True) -> jobs.Job:
+                     finish: Callable = _run_result, allow_large_mode: bool = True) -> jobs.Job:
     if any(j.dataset_id == dataset_id for j in jobs.running()):
         busy = next(j for j in jobs.running() if j.dataset_id == dataset_id)
         raise ToolError(f"Job {busy.id} ({busy.kind}) is still running on this dataset; "
