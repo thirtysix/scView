@@ -804,6 +804,11 @@ def iter_run(p: Prepared, stop: Callable[[], bool] | None = None) -> Iterator[di
             check()
             yield _progress("direction", f"Checking the direction against {p.ordering.label}")
             direction = vd.evaluate(p.ordering, p.embeddings[emb][p.positions], arrows[emb], p.positions, emb)
+            check()
+            yield _progress("direction", "Looking for genes that turn the direction")
+            direction["gene_flags"] = vd.gene_flags(
+                p.ordering, direction["transitions"], run_next, fit_next, p.positions,
+                {"gene": genes, "gamma": gamma.tolist(), "r2": r2.tolist(), "velocity_gene": velocity_genes.tolist()})
         out = {"genes": genes, "gamma": gamma, "r2": r2, "velocity_genes": velocity_genes, "n_kept": int(kept.size),
                "n_store_genes": int(n_genes), "length": length, "confidence": confidence,
                "unspliced_fraction": unspliced_fraction, "arrows": arrows, "table": table,
@@ -1044,7 +1049,14 @@ def recheck(adaptor, data_dir: str | Path, dataset_id: str, spec: dict[str, Any]
         return vd.unchecked(why or "No order to check against.", emb)
     coords, arrows, _ = arrows_for(adaptor, data_dir, dataset_id, emb)
     positions = np.flatnonzero(np.isfinite(arrows).all(axis=1))
-    return vd.evaluate(ordering, coords[positions], arrows[positions], positions, emb)
+    out = vd.evaluate(ordering, coords[positions], arrows[positions], positions, emb)
+    run_path, fit_path = ms.store_path(data_dir, dataset_id, RUN_STORE), ms.store_path(data_dir, dataset_id, FIT_STORE)
+    if run_path.exists() and fit_path.exists():
+        with ms.ModalityStore(run_path) as store:
+            store_positions = adata.obs_names.get_indexer(store.barcodes)
+        out["gene_flags"] = vd.gene_flags(ordering, out["transitions"], run_path, fit_path, store_positions,
+                                          run["gene_table"])
+    return out
 
 
 def set_direction(adata, direction: dict[str, Any]) -> dict[str, Any]:
@@ -1275,7 +1287,13 @@ def remember(adaptor, run: dict[str, Any], result_id: str) -> None:
             _last[adaptor] = k
     except TypeError:  # a test double
         pass
-    results_store.keep(adaptor, KIND, k, result_id=result_id, key="",
+    d = run.get("direction") or {}
+    params = {"method": run.get("method"),
+              **{key: val for key, val in (run.get("params") or {}).items() if key != "exclude_genes"},
+              "n_excluded": len((run.get("params") or {}).get("exclude_genes") or []),
+              "group_column": run.get("group_column"), "embeddings": run.get("embeddings"),
+              "direction": {"embedding": d.get("embedding"), **(d.get("spec") or {})} if d.get("checked") else None}
+    results_store.keep(adaptor, KIND, k, result_id=result_id, key="", params=params, warnings=run.get("warnings"),
                        label=f"RNA velocity ({run['method']}, {run['n_velocity_genes']:,} velocity genes)")
 
 

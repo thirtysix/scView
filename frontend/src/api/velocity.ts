@@ -69,6 +69,36 @@ export interface VelocityTransition {
   status: VelocityTransitionStatus;
 }
 
+/** Velocity genes whose expression rises along an expected step while their velocity says it falls */
+export interface VelocityGeneFlags {
+  checked: boolean;
+  reason?: string;
+  rule: string;
+  n_velocity_genes?: number;
+  n_flagged?: number;
+  top_n?: number;
+  n_in_top?: number;
+  genes?: {
+    gene: string;
+    r2: number;
+    /** Rank by r2 among the velocity genes */
+    rank: number;
+    steps: {
+      from: string;
+      to: string;
+      status?: VelocityTransitionStatus;
+      spliced_from: number;
+      spliced_to: number;
+      ratio_from: number;
+      ratio_to: number;
+      share_negative: number;
+    }[];
+  }[];
+  steps?: string[];
+  n_cells?: number;
+  sampled?: boolean;
+}
+
 export interface VelocityDirection {
   checked: boolean;
   /** Why it is unchecked */
@@ -96,6 +126,7 @@ export interface VelocityDirection {
   derived?: boolean;
   order_auc?: number | null;
   note: string;
+  gene_flags?: VelocityGeneFlags;
 }
 
 export interface VelocityRun {

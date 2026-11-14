@@ -4,6 +4,7 @@ import {
   checkVelocityDirection,
   type VelocityDirection as Direction,
   type VelocityDirectionSpec,
+  type VelocityGeneFlags,
   type VelocityRun,
   type VelocityTransition,
 } from "@/api/velocity";
@@ -95,6 +96,56 @@ function TransitionTable({ rows, k }: { rows: VelocityTransition[]; k: number })
   );
 }
 
+function GeneFlags({ flags, backward, onGene, onExclude, busy }: {
+  flags: VelocityGeneFlags;
+  backward: boolean;
+  onGene: (gene: string) => void;
+  onExclude: (genes: string[]) => void;
+  busy: boolean;
+}) {
+  const genes = flags.genes ?? [];
+  if (!flags.checked) return <p className="text-slate-500">Gene flags: {flags.reason}</p>;
+  return (
+    <div className="space-y-1">
+      <p>
+        <Help id="velocity.gene_flags">Genes that may turn the direction</Help>:{" "}
+        {genes.length
+          ? `${flags.n_flagged} of ${flags.n_velocity_genes?.toLocaleString()} velocity genes (${flags.n_in_top} of the top ${flags.top_n} by r2)`
+          : `none of ${flags.n_velocity_genes?.toLocaleString()} velocity genes`}
+        {genes.length > 0 && !backward ? ". No transition runs backward, so they matter less here." : "."}
+      </p>
+      {genes.length > 0 && (
+        <>
+          <div className="flex flex-wrap gap-x-2 gap-y-0.5">
+            {genes.map((g) => (
+              <button
+                key={g.gene}
+                type="button"
+                onClick={() => onGene(g.gene)}
+                className="text-blue-600 hover:underline"
+                title={g.steps.map((s) => `${s.from} -> ${s.to}: unspliced/spliced ${s.ratio_from.toPrecision(2)} -> ${s.ratio_to.toPrecision(2)}, spliced ${s.spliced_from.toPrecision(2)} -> ${s.spliced_to.toPrecision(2)}, velocity below 0 in ${Math.round(s.share_negative * 100)}% of ${s.from}`).join("; ")}
+              >
+                {g.gene} <span className="text-slate-500">#{g.rank}</span>
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => onExclude(genes.map((g) => g.gene))}
+            className="rounded-md border border-slate-300 px-2 py-0.5 hover:bg-slate-50 disabled:opacity-50"
+          >
+            Leave these out and run again
+          </button>
+        </>
+      )}
+      <Caption n={flags.n_cells ? { value: flags.n_cells, unit: flags.sampled ? "cells (a sample)" : "cells" } : undefined}>
+        {flags.rule}
+      </Caption>
+    </div>
+  );
+}
+
 /**
  * The direction check of a velocity run (backend core/velocity_direction.py): its arrows against an
  * order the user trusts, per transition and per cell, and the controls to check against another order
@@ -109,6 +160,9 @@ export function VelocityDirection({
   choice,
   setChoice,
   onChecked,
+  onGene,
+  onExclude,
+  running = false,
 }: {
   datasetId: string;
   run: VelocityRun;
@@ -119,6 +173,11 @@ export function VelocityDirection({
   choice: DirectionChoice;
   setChoice: (c: DirectionChoice) => void;
   onChecked: (run: VelocityRun) => void;
+  /** Show this gene's phase portrait */
+  onGene: (gene: string) => void;
+  /** Leave these genes out and run velocity again */
+  onExclude: (genes: string[]) => void;
+  running?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -177,6 +236,9 @@ export function VelocityDirection({
             </p>
           )}
           <Caption>{d.note}</Caption>
+          {d.gene_flags && (
+            <GeneFlags flags={d.gene_flags} backward={backward.length > 0} onGene={onGene} onExclude={onExclude} busy={busy || running} />
+          )}
         </>
       )}
       {otherPlot && (

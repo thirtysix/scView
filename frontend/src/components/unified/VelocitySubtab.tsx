@@ -266,7 +266,9 @@ export function VelocitySubtab() {
     }
   };
 
-  const start = async () => {
+  const start = async (alsoLeaveOut: string[] = []) => {
+    const leaveOut = [...new Set([...geneNames(excludeText), ...alsoLeaveOut])];
+    if (alsoLeaveOut.length) setExcludeText(leaveOut.join(" "));
     setRunning(true);
     setError(null);
     setMemoryNote(null);
@@ -282,7 +284,7 @@ export function VelocitySubtab() {
           group_by: groupBy || null,
           direction: directionSpec(dirChoice, groupBy || null) ?? directionSpec(DEFAULT_DIRECTION, groupBy || null),
           embedding: blocked ? null : embedding,
-          exclude_genes: geneNames(excludeText),
+          exclude_genes: leaveOut,
           exclude_sets: excludeSets,
         },
         { signal: abort.current.signal, onProgress: setProgress, onWatchdog: setMemoryNote },
@@ -566,6 +568,9 @@ export function VelocitySubtab() {
             choice={dirChoice}
             setChoice={setDirChoice}
             onChecked={(r) => setStatus({ ...status, run: r })}
+            onGene={setGene}
+            onExclude={(g) => void start(g)}
+            running={running}
           />
 
           <Caption n={[{ value: run.n_cells, unit: "cells", of: run.n_dataset_cells }, { value: run.n_velocity_genes, unit: "velocity genes", of: run.n_genes_fit }]}>

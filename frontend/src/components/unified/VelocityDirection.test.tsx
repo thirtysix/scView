@@ -37,6 +37,8 @@ function renderIt(props: Partial<Parameters<typeof VelocityDirection>[0]> = {}) 
     choice = c;
   });
   const onChecked = vi.fn();
+  const onGene = vi.fn();
+  const onExclude = vi.fn();
   const utils = render(
     <VelocityDirection
       datasetId="d1"
@@ -47,10 +49,12 @@ function renderIt(props: Partial<Parameters<typeof VelocityDirection>[0]> = {}) 
       choice={choice}
       setChoice={setChoice}
       onChecked={onChecked}
+      onGene={onGene}
+      onExclude={onExclude}
       {...props}
     />,
   );
-  return { ...utils, setChoice, onChecked, choice: () => choice };
+  return { ...utils, setChoice, onChecked, onGene, onExclude, choice: () => choice };
 }
 
 describe("VelocityDirection", () => {
@@ -92,6 +96,30 @@ describe("VelocityDirection", () => {
     expect(api.checkVelocityDirection).toHaveBeenCalledWith("d1", {
       group_by: "celltype", order: ["Ery1", "Ery9"], embedding: "X_umap_original",
     });
+  });
+
+  it("lists the genes that may turn the direction, opens one, and leaves them out on request", () => {
+    const flags = {
+      checked: true, rule: "A velocity gene is flagged when ... the MURK pattern.", n_velocity_genes: 311, n_flagged: 2,
+      top_n: 50, n_in_top: 1, n_cells: 9815, sampled: false, steps: ["Ery2 -> Ery3"],
+      genes: [
+        { gene: "Cox6b2", r2: 0.7, rank: 28, steps: [{ from: "Ery2", to: "Ery3", status: "backward" as const, spliced_from: 0.27, spliced_to: 0.53, ratio_from: 0.18, ratio_to: 0.29, share_negative: 0.755 }] },
+        { gene: "Dcxr", r2: 0.5, rank: 38, steps: [{ from: "Ery2", to: "Ery3", spliced_from: 0.06, spliced_to: 0.09, ratio_from: 0.008, ratio_to: 0.064, share_negative: 0.99 }] },
+      ],
+    };
+    const { onGene, onExclude } = renderIt({ run: { ...run, direction: { ...backward, gene_flags: flags } } as VelocityRun });
+    expect(screen.getByText(/2 of 311 velocity genes \(1 of the top 50 by r2\)/)).toBeTruthy();
+    expect(screen.getByText(/the MURK pattern/)).toBeTruthy();
+    const cox = screen.getByText("Cox6b2").closest("button")!;
+    expect(cox.title).toMatch(/unspliced\/spliced 0.18 -> 0.29, spliced 0.27 -> 0.53, velocity below 0 in 76% of Ery2/);
+    fireEvent.click(cox);
+    expect(onGene).toHaveBeenCalledWith("Cox6b2");
+    fireEvent.click(screen.getByText("Leave these out and run again"));
+    expect(onExclude).toHaveBeenCalledWith(["Cox6b2", "Dcxr"]);
+    cleanup();
+    const forward = { ...backward, transitions: [backward.transitions![0]!], n_backward: 0, gene_flags: flags };
+    renderIt({ run: { ...run, direction: forward } as VelocityRun });
+    expect(screen.getByText(/No transition runs backward, so they matter less here/)).toBeTruthy();
   });
 
   it("switching to an order fills in the table's groups", () => {

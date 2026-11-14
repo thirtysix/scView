@@ -195,6 +195,24 @@ describe("VelocitySubtab", () => {
     expect(await hoverTip(screen.getByText(/MURK genes \(Barile 2021\), 89 mouse/))).toMatch(/Barile et al. 2021/);
   });
 
+  it("leaves the flagged genes out and runs again", async () => {
+    const direction = {
+      checked: true, kind: "order", label: "x", spec: { group_by: "clusters", order: ["Pre", "Beta"] }, group_column: "clusters",
+      embedding: "X_umap", k: 30, note: "", transitions: [],
+      gene_flags: { checked: true, rule: "rule", n_velocity_genes: 100, n_flagged: 1, top_n: 50, n_in_top: 1,
+        genes: [{ gene: "Smim1", r2: 0.5, rank: 3, steps: [] }] },
+    };
+    const withRun = { ...run, params: { ...run.params, exclude_given: ["Gata1"] }, direction };
+    api.getVelocity.mockResolvedValue({ ...base, attached: true, source: { file: "x" }, run: withRun, estimate: null });
+    api.getVelocityGenes.mockResolvedValue({ genes: [], n_genes: 0, n_velocity_genes: 0, sort: "" });
+    api.runVelocity.mockResolvedValue(withRun);
+    render(<VelocitySubtab />);
+    fireEvent.click(await screen.findByText("Leave these out and run again"));
+    await waitFor(() => expect(api.runVelocity).toHaveBeenCalled());
+    expect(api.runVelocity.mock.calls[0]![1].exclude_genes).toEqual(["Gata1", "Smim1"]);
+    expect((screen.getByLabelText("Genes to leave out") as HTMLTextAreaElement).value).toBe("Gata1 Smim1");
+  });
+
   it("says when the cells changed and draws nothing, and on 3D says why no arrows", async () => {
     api.getVelocity.mockResolvedValue({ ...base, attached: true, source: { file: "x" }, run, stale: "The cells changed: run velocity again.", estimate: null });
     render(<VelocitySubtab />);

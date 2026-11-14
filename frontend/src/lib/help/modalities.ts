@@ -198,6 +198,8 @@ export const MODALITIES_HELP: Record<string, string> = {
     "Genes the fit leaves out, as if they were not in the counts (each cell's total too). Use it for genes known to mislead velocity, such as genes whose transcription rate changes along the path; the gene flags below suggest some.",
   "velocity.murk":
     "Barile et al. 2021 (Genome Biology, Table S2): 89 mouse erythroid genes whose transcription steps up late. They turn scVelo's erythroid flow backwards; leaving them out restored it. For mouse blood and erythroid data only.",
+  "velocity.gene_flags":
+    "Velocity genes whose expression rises from one group to the next while their velocity says it falls, with the unspliced share rising too: the pattern of genes whose transcription rate steps up along the path. Click a gene for its phase portrait; leaving them out can turn a backward step around.",
   "velocity.phase":
     "Each dot is a cell's spliced and unspliced levels for this gene, averaged over the cell and its neighbours. The red line is the fitted steady-state ratio (gamma). Cells above it are read as inducing the gene, cells below as repressing it. A gene with no clear almond shape gives little to fit.",
 };

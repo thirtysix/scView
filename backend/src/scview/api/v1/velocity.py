@@ -31,7 +31,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from scview.core import preflight
+from scview.core import preflight, results_store
 from scview.core import velocity as vel
 from scview.core import velocity_direction as vd
 from scview.core import velocity_input as vi
@@ -394,6 +394,7 @@ async def velocity_direction(dataset_id: str, body: DirectionRequest, dm: Datase
         else:
             dm.saved_in_place(dataset_id, adaptor, output_path)
         vel.remember(adaptor, run, str(result_id))
+    await asyncio.to_thread(results_store.flush)  # the stored result is read back at once (MCP, the next call)
     return {"direction": direction, "warnings": run["warnings"], "run": vel.public_run(run)}
 
 

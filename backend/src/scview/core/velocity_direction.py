@@ -37,6 +37,23 @@ MIN_BOUNDARY = 10  # boundary cells for a transition's verdict
 ORDER_AUC = 0.75  # a numeric order: B is later than A for at least this share of cell pairs
 AUC_SAMPLE = 4000  # cells per group in that comparison
 MAX_GROUPS = 100
+# Gene flags (``gene_flags``): the MURK pattern of Barile 2021 at an expected step A -> B.
+FLAG_MIN_CELLS = 20  # cells of each group of a step
+FLAG_EXPRESSED = 0.25  # A's mean spliced is at least this share of the gene's highest group mean
+FLAG_RISE = 1.25  # spliced rises A -> B by at least this factor
+FLAG_RATIO_STEP = 1.2  # unspliced / spliced rises A -> B by at least this factor
+FLAG_NEGATIVE = 2 / 3  # velocity below 0 in at least this share of A's cells that express it
+FLAG_TOP = 50  # "top velocity genes": the velocity genes with the highest r2
+FLAG_MAX_CELLS = 50_000  # group means from a seeded sample past this
+FLAG_BLOCK_GENES = 256
+FLAG_RULE = (
+    "A velocity gene is flagged at an expected step A -> B when, on its smoothed levels, it is expressed in A "
+    "(mean spliced at least 25% of its highest group's), spliced rises at least 1.25-fold to B, unspliced/spliced rises at "
+    "least 1.2-fold to B, and velocity is negative in at least 2/3 of A's cells that express it: rising expression read "
+    "as switching off. That is the MURK pattern (Barile 2021): transcription steps up along the path. Tuned on the "
+    "erythroid atlas (7 of 311 velocity genes flagged, 6 of them Barile's MURK genes); the pancreas positive control "
+    "flags 33 of 1,050."
+)
 MAX_TRANSITIONS = 60
 NN_BLOCK = 50_000
 _NUMBER = re.compile(r"[-+]?\d*\.?\d+")
@@ -410,6 +427,80 @@ def evaluate(o: Ordering, X: np.ndarray, V: np.ndarray, positions: np.ndarray, e
     }
 
 
+def gene_flags(o: Ordering, transitions: list[dict[str, Any]], run_path, fit_path, store_positions: np.ndarray,
+               table: dict[str, list]) -> dict[str, Any]:
+    """Velocity genes whose expression rises along an expected step while their velocity says
+    it falls (FLAG_RULE), from the run's stores: the fit's normalised counts per gene and the
+    moments' weights per cell. ``store_positions``: each store cell's row in the dataset (-1:
+    gone). ``table``: the run's gene table (gene, gamma, r2, velocity_gene)."""
+    from scview.core import modality_store as ms
+
+    vel_idx = [i for i, v in enumerate(table["velocity_gene"]) if v]
+    genes = [table["gene"][i] for i in vel_idx]
+    gamma = np.asarray([table["gamma"][i] for i in vel_idx], dtype=np.float64)
+    r2 = np.asarray([table["r2"][i] for i in vel_idx], dtype=np.float64)
+    rank = np.empty(len(genes), dtype=np.int64)
+    rank[np.argsort(-r2, kind="stable")] = np.arange(1, len(genes) + 1)
+    labels = np.asarray([o.labels[i] if i >= 0 else None for i in store_positions], dtype=object)
+    steps = []
+    for r in transitions:
+        a, b = r["from"], r["to"]
+        if (labels == a).sum() >= FLAG_MIN_CELLS and (labels == b).sum() >= FLAG_MIN_CELLS:
+            steps.append((a, b, r.get("status")))
+    if not steps or not genes:
+        return {"checked": False, "reason": f"No expected step has {FLAG_MIN_CELLS}+ cells on each side.", "rule": FLAG_RULE}
+    groups = sorted({g for a, b, _ in steps for g in (a, b)})
+    gi = {g: i for i, g in enumerate(groups)}
+    cells = np.flatnonzero(np.isin(labels, groups))
+    sampled = cells.size > FLAG_MAX_CELLS
+    if sampled:
+        cells = np.sort(np.random.default_rng(0).choice(cells, FLAG_MAX_CELLS, replace=False))
+    codes = np.asarray([gi[v] for v in labels[cells]], dtype=np.int64)
+    n_g = len(groups)
+    one_hot = np.zeros((n_g, cells.size))
+    one_hot[codes, np.arange(cells.size)] = 1.0
+    n_cells = one_hot.sum(axis=1)
+    sum_s = np.zeros((n_g, len(genes)))
+    sum_u = np.zeros((n_g, len(genes)))
+    expressed = np.zeros((n_g, len(genes)))
+    negative = np.zeros((n_g, len(genes)))
+    with ms.ModalityStore(run_path) as run, ms.ModalityStore(fit_path) as fit:
+        W = run.read("connectivities", cells)
+        rows = fit.rows_of(genes)
+        for a in range(0, len(genes), FLAG_BLOCK_GENES):
+            sel = slice(a, a + FLAG_BLOCK_GENES)
+            S = fit.read("spliced", rows[sel]).T.tocsr()
+            U = fit.read("unspliced", rows[sel]).T.tocsr()
+            Ms = np.asarray((W @ S).todense(), dtype=np.float64)
+            Mu = np.asarray((W @ U).todense(), dtype=np.float64)
+            V = Mu - gamma[sel] * Ms
+            sum_s[:, sel], sum_u[:, sel] = one_hot @ Ms, one_hot @ Mu
+            expressed[:, sel] = one_hot @ (Ms > 0)
+            negative[:, sel] = one_hot @ ((V < 0) & (Ms > 0))
+    mean_s = sum_s / n_cells[:, None]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ratio = np.where(sum_s > 0, sum_u / sum_s, np.nan)
+        neg_share = np.where(expressed > 0, negative / expressed, np.nan)
+    top_s = mean_s.max(axis=0)
+    flagged: dict[int, list[dict[str, Any]]] = {}
+    for a, b, status in steps:
+        ia, ib = gi[a], gi[b]
+        with np.errstate(invalid="ignore"):
+            hit = ((mean_s[ia] > FLAG_EXPRESSED * top_s) & (mean_s[ib] >= FLAG_RISE * mean_s[ia])
+                   & (ratio[ib] >= FLAG_RATIO_STEP * ratio[ia]) & (neg_share[ia] >= FLAG_NEGATIVE))
+        for j in np.flatnonzero(hit):
+            flagged.setdefault(int(j), []).append({
+                "from": a, "to": b, "status": status, "spliced_from": float(f"{mean_s[ia, j]:.4g}"),
+                "spliced_to": float(f"{mean_s[ib, j]:.4g}"), "ratio_from": float(f"{ratio[ia, j]:.4g}"),
+                "ratio_to": float(f"{ratio[ib, j]:.4g}"), "share_negative": round(float(neg_share[ia, j]), 3)})
+    rows_out = sorted(({"gene": genes[j], "r2": round(float(r2[j]), 4), "rank": int(rank[j]), "steps": st}
+                       for j, st in flagged.items()), key=lambda r: r["rank"])
+    top_n = min(FLAG_TOP, len(genes))
+    return {"checked": True, "rule": FLAG_RULE, "n_velocity_genes": len(genes), "n_flagged": len(rows_out),
+            "top_n": top_n, "n_in_top": sum(1 for r in rows_out if r["rank"] <= top_n), "genes": rows_out[:200],
+            "steps": [f"{a} -> {b}" for a, b, _ in steps], "n_cells": int(cells.size), "sampled": bool(sampled)}
+
+
 def unchecked(reason: str, embedding: str | None = None) -> dict[str, Any]:
     return {"checked": False, "reason": reason, "embedding": embedding, "note": CAPTION.format(k=K)}
 
@@ -424,7 +515,13 @@ def warnings(direction: dict[str, Any] | None) -> list[str]:
     parts = "; ".join(f"{r['from']} -> {r['to']} (mean cosine {r['mean_cos']:+.2f}, {r['n_cells']:,} boundary cells, "
                       f"{r['share_forward']:.0%} forward)" for r in back[:4])
     more = f" and {len(back) - 4} more" if len(back) > 4 else ""
+    flags = direction.get("gene_flags") or {}
+    named = ""
+    if flags.get("n_flagged"):
+        names = ", ".join(r["gene"] for r in flags["genes"][:6])
+        named = (f" {flags['n_flagged']} of {flags['n_velocity_genes']:,} velocity genes show that pattern here "
+                 f"({names}{', ...' if flags['n_flagged'] > 6 else ''}; {flags['n_in_top']} in the top {flags['top_n']}).")
     return [f"The arrows point backward against {direction['label']} at {parts}{more}, on "
             f"{direction['embedding']}. Velocity confidence cannot show this. Known causes: genes whose transcription "
-            "rate steps up along the path (MURK genes, Barile 2021), or a graph split by batch. Check the flagged genes, "
-            "leave genes out and run again, or do not read the arrows there."]
+            "rate steps up along the path (MURK genes, Barile 2021), or a graph split by batch." + named
+            + " Leave genes out and run again, or do not read the arrows there."]

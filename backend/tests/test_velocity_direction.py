@@ -223,3 +223,115 @@ async def test_run_with_an_order_that_names_nothing_is_refused_before_it_runs(cl
                           json={"n_top_genes": 200, "n_neighbors": 20, "direction": {"root": "early"}})
     events = _sse(r.text)
     assert events[-1][0] == "error" and "PAGA" in events[-1][1]["error"]
+
+
+# -- genes that turn the direction (gene_flags) ----------------------------------------------
+
+
+def _flag_stores(tmp_path, n_a=100, n_b=100):
+    """Two groups; moments = the counts (identity weights). murk: spliced doubles A -> B, its
+    unspliced share triples, so with B's gamma A reads as switching off. induced: spliced doubles
+    with the unspliced share falling (unspliced leads). faint: barely expressed in A."""
+    from scview.core import modality_store as ms
+
+    rng = np.random.default_rng(0)
+    n = n_a + n_b
+    names = [f"c{i}" for i in range(n)]
+    in_b = np.arange(n) >= n_a
+    s = {"murk": np.where(in_b, 4.0, 2.0), "induced": np.where(in_b, 4.0, 2.0), "faint": np.where(in_b, 4.0, 0.05)}
+    u = {"murk": s["murk"] * np.where(in_b, 0.3, 0.1), "induced": s["induced"] * np.where(in_b, 0.2, 0.6),
+         "faint": s["faint"] * np.where(in_b, 0.3, 0.1)}
+    genes = list(s)
+    S = np.c_[[s[g] * rng.uniform(0.9, 1.1, n) for g in genes]]  # genes x cells
+    U = np.c_[[u[g] * rng.uniform(0.9, 1.1, n) for g in genes]]
+    run_path, fit_path = tmp_path / "run.h5", tmp_path / "fit.h5"
+    ms.write(run_path, {"connectivities": sp.identity(n, format="csr", dtype=np.float32)}, names, names)
+    ms.write(fit_path, {"spliced": sp.csr_matrix(S, dtype=np.float32), "unspliced": sp.csr_matrix(U, dtype=np.float32)},
+             genes, names)
+    table = {"gene": genes + ["unfit"], "gamma": [0.3, 0.3, 0.3, 0.3], "r2": [0.5, 0.9, 0.4, 0.8],
+             "velocity_gene": [True, True, True, False]}
+    labels = np.where(in_b, "B", "A").astype(object)
+    return run_path, fit_path, table, labels
+
+
+def test_gene_flags_find_rising_expression_read_as_switching_off(tmp_path):
+    run_path, fit_path, table, labels = _flag_stores(tmp_path)
+    o = _ordering(labels, np.where(labels == "B", 1.0, 0.0), [("A", "B")])
+    steps = [{"from": "A", "to": "B", "status": "backward"}]
+    f = vd.gene_flags(o, steps, run_path, fit_path, np.arange(labels.size), table)
+    assert f["checked"] and f["n_velocity_genes"] == 3 and f["n_flagged"] == 1
+    g = f["genes"][0]
+    assert g["gene"] == "murk" and g["rank"] == 2  # by r2 among velocity genes: induced 0.9, murk 0.5, faint 0.4
+    st = g["steps"][0]
+    assert st["from"] == "A" and st["status"] == "backward" and st["share_negative"] == 1.0
+    assert st["ratio_to"] / st["ratio_from"] == pytest.approx(3, rel=0.1) and st["spliced_to"] > st["spliced_from"]
+    assert f["n_in_top"] == 1 and f["top_n"] == 3 and "MURK" in f["rule"]
+    # In the warning a backward step earns, with how many of the top genes they are.
+    d = {"checked": True, "label": "x", "embedding": "X_umap", "gene_flags": f,
+         "transitions": [{"from": "A", "to": "B", "status": "backward", "mean_cos": -0.3, "n_cells": 50, "share_forward": 0.2}]}
+    assert "1 of 3 velocity genes show that pattern here (murk; 1 in the top 3)" in vd.warnings(d)[0]
+    # Cells the dataset no longer has are left out; too few on a side: no flags.
+    few = vd.gene_flags(o, steps, run_path, fit_path, np.r_[np.arange(10), np.full(190, -1)], table)
+    assert few["checked"] is False and "20+" in few["reason"]
+
+
+def test_run_flags_a_planted_murk_gene_and_the_api_keeps_params_and_warnings(tmp_path):
+    a = splicing_counts()
+    t = a.obsm["X_umap"][:, 0] / 10
+    rng = np.random.default_rng(3)
+    late = t >= 0.5
+    # Levels after each cell is scaled to the median total (the fixture's totals grow with t):
+    # spliced rising along the order, the unspliced share stepping up in the late group.
+    tot_s = np.asarray(a.layers["spliced"].sum(axis=1)).ravel()
+    tot_u = np.asarray(a.layers["unspliced"].sum(axis=1)).ravel()
+    level = 20 + 60 * t
+    s = level * tot_s / np.median(tot_s)
+    u = level * np.where(late, 0.5, 0.15) * tot_u / np.median(tot_u)
+    extra_s = np.c_[[rng.poisson(s * k) for k in (1.0, 1.1, 0.9)]].T
+    extra_u = np.c_[[rng.poisson(u * k) for k in (1.0, 1.1, 0.9)]].T
+    b = ad.AnnData(sp.csr_matrix(np.c_[a.X.toarray(), extra_s], dtype=np.float32), obs=a.obs.copy(),
+                   var=pd.DataFrame(index=[*a.var_names, "M0", "M1", "M2"]))
+    b.layers["spliced"] = sp.csr_matrix(np.c_[a.layers["spliced"].toarray(), extra_s], dtype=np.float32)
+    b.layers["unspliced"] = sp.csr_matrix(np.c_[a.layers["unspliced"].toarray(), extra_u], dtype=np.float32)
+    b.obsm["X_umap"] = a.obsm["X_umap"]
+    vi.adopt_anndata(b, "ds", tmp_path, file_name="x.h5ad")
+    params = vel.Params(n_top_genes=300, n_neighbors=20, n_pcs=10, direction={"order": ["early", "late"]})
+    p = vel.prepare(Adaptor(b), tmp_path, "ds", params)
+    out = next(ev["out"] for ev in vel.iter_run(p) if ev["type"] == "result")
+    flags = out["direction"]["gene_flags"]  # computed inside the run, from its stores
+    named = {g["gene"] for g in flags["genes"]}
+    assert {"M0", "M1", "M2"} <= named, flags
+    assert len(named) <= 10  # the synthetic dynamic genes switch on with unspliced leading: not flagged
+
+
+def test_copilot_reads_the_check_and_routes_its_words(tmp_path):
+    from scview.core.rag import router
+
+    adata = splicing_counts()
+    vi.adopt_anndata(adata, "ds", tmp_path, file_name="x.h5ad")
+    params = vel.Params(n_top_genes=200, n_neighbors=20, n_pcs=10, direction={"order": ["late", "early"]})
+    p = vel.prepare(Adaptor(adata), tmp_path, "ds", params)
+    events = list(vel.iter_run(p))
+    vel.save(adata, p, next(ev["out"] for ev in events if ev["type"] == "result"), {"result_id": "g1"})
+    lines, _ = vel.grounding_lines(Adaptor(adata))
+    assert any(x.startswith("- Direction checked against the order of clusters given on X_umap: late -> early backward")
+               for x in lines)
+    assert any("point backward" in x for x in lines)
+    for q in ("are the arrows pointing the wrong way", "what are murk genes doing here", "did the direction check pass"):
+        assert "groups" in router.named_result_facets(q), q
+
+
+async def test_stored_result_has_its_params_and_warnings(client, dataset_manager):
+    did, _a = dataset_with_store(dataset_manager, "velres")
+    events = await _run(client, did, direction={"order": ["late", "early"]}, exclude_genes=["G0"])
+    rid = dict(events)["result"]["run"]["result_id"]
+    r = (await client.get(f"{API}/datasets/{did}/results/{rid}")).json()
+    assert r["kind"] == "velocity" and r["params"]["method"] == "stochastic" and r["params"]["n_top_genes"] == 200
+    assert r["params"]["n_excluded"] == 1 and r["params"]["exclude_given"] == ["G0"]
+    assert r["params"]["direction"]["order"] == ["late", "early"] and r["params"]["direction"]["embedding"] == "X_umap"
+    assert any("point backward" in w for w in r["warnings"])
+    await client.post(f"{API}/datasets/{did}/velocity/direction", json={"order": ["early", "late"]})
+    r = (await client.get(f"{API}/datasets/{did}/results/{rid}")).json()
+    assert r["params"]["direction"]["order"] == ["early", "late"] and not any("point backward" in w for w in r["warnings"])
+    body = (await client.get(f"{API}/datasets/{did}/velocity")).json()["run"]["direction"]
+    assert body["gene_flags"]["checked"] is True and "rule" in body["gene_flags"]
