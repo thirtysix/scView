@@ -711,10 +711,26 @@ The differential, links, motif enrichment and chromVAR results are also in the r
 |-------|--------------|------|
 | `GET /datasets/{id}/velocity` | | spliced / unspliced counts attached, what matched, the last run, its estimate |
 | `POST /datasets/{id}/velocity/attach` | multipart `files` (a velocyto .loom, an .h5ad with the layers, or STARsolo Velocyto files; one loom per sample together) | matched to the cells; replaces earlier counts |
-| `POST /datasets/{id}/velocity/run-stream` | `{"method": "stochastic"\|"steady_state", "n_top_genes", "n_neighbors", "group_by"}` | SSE: scVelo 0.3.3's steady-state or stochastic model |
+| `POST /datasets/{id}/velocity/run-stream` | `{"method": "stochastic"\|"steady_state", "n_top_genes", "n_neighbors", "group_by", "exclude_genes", "exclude_sets", "direction", "embedding"}` | SSE: scVelo 0.3.3's steady-state or stochastic model, then the direction check |
+| `POST /datasets/{id}/velocity/direction` | `{"group_by", "order"\|"transitions"\|"root"\|"column" (+ "column_order"), "embedding"}` | the saved run's arrows checked against an order and kept with the run; `{direction, warnings, run}` |
 | `GET /datasets/{id}/velocity/grid` | `embedding`, `density` | arrows on an embedding |
 | `GET /datasets/{id}/velocity/phase` | `gene`, `color_by` | one gene's phase portrait |
 | `GET /datasets/{id}/velocity/genes` | | the fitted genes: gamma, r2, whether each passed |
+
+Run fields: `exclude_genes` (names, up to 5,000) and `exclude_sets` (`["murk_barile2021"]`: the 89 mouse
+erythroid MURK genes of Barile et al. 2021) are left out before the variable genes are chosen; the run's
+`excluded` says how many matched. `direction` is the order the arrows are checked against after the run,
+one of: `order` (groups of `group_by`, earliest first), `transitions` (`[[from, to], ...]`), `root` (the
+earliest group: transitions follow the PAGA tree of `group_by`, so run PAGA on it first) or `column` (a
+numeric pseudotime or time, or a stage column; `column_order` gives a text column's values in order).
+Without one, scView's diffusion pseudotime is used when there is one, else the check is skipped.
+`embedding` is the 2D plot it is checked on (default `X_umap`). The run (and `GET .../velocity`) carries
+`direction`: per transition the boundary cells' mean cosine with its 95% interval and a status
+(`forward`, `backward`, `unclear`, `few_cells`, `no_boundary`), and `gene_flags`, the velocity genes whose
+expression and unspliced share rise along an expected step while their velocity reads them as switching off
+(MURK-like; the rule is in `gene_flags.rule`). A backward
+transition adds a warning to `warnings`, which the stored result (`GET /datasets/{id}/results/{rid}`) also
+carries.
 
 ---
 
@@ -725,7 +741,9 @@ private mode). The tools for the routes above: `guide_assignment`, `mixscape`, `
 `hashing_demux`, `hashing_samples`, `atac_status`, `atac_fragment_qc`, `atac_lsi`, `wnn`,
 `atac_gene_activity`, `atac_differential`, `atac_links`, `atac_motif_enrichment`, `atac_chromvar`,
 `plot(kind="coverage")`, and `layer="protein"` on `differential_expression` /
-`per_donor_expression`. `upload_instructions` gives the curl recipes above;
+`per_donor_expression`. Trajectory and velocity: `paga`, `pseudotime`, `pseudotime_genes`,
+`velocity`, `get_velocity`, `velocity_direction`, `plot(overlay=["velocity", "paga"])`,
+`plot(kind="phase")` and `plot(kind="violin", value_column=...)`. `upload_instructions` gives the curl recipes above;
 `import_server_path` imports a file or folder on the server under `MCP_IMPORT_DIRS` (off when
 unset, always off with `DEPLOYMENT_MODE=public`).
 
