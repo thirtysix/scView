@@ -652,3 +652,44 @@ def test_grounding_lines_say_nothing_without_atac_and_tag_their_facts(world):
     assert atac.grounding_lines(ad.AnnData(X=np.zeros((2, 2), dtype=np.float32))) == ([], "")
     lines, detail = atac.grounding_lines(world["adata"])
     assert "72 peaks" in detail and all(atac.TAG in line for line in lines[1:])
+
+
+# Measured at 2 CPUs through a running server, 2026-11-14 (v0.79): seconds of whole runs.
+# (cells, values, fragments file bytes or None, measured s, compile still to come)
+_LSI_RUNS = [
+    (11_208, 97_980_766, None, 102.3, "warm"),  # PBMC 10k, peak activity
+    (11_208, 97_980_766, 2_403_785_496, 197.7, "warm"),  # PBMC 10k, fragment activity
+    (5_116, 24_025_758, None, 45.1, "cold"),  # 5k mouse kidney, first ATAC graph in the process (cosine search)
+    (5_116, 24_025_758, 1_351_160_196, 81.3, "warm"),
+]
+
+
+@pytest.mark.parametrize("cells,nnz,fragments,measured,state", _LSI_RUNS)
+def test_lsi_estimate_is_within_20_percent_of_the_measured_runs(monkeypatch, cells, nnz, fragments, measured, state):
+    """QA round 4: the mouse kidney's LSI ran in 30 s against an estimate of 57 (a 20 s first-run constant on
+    every run, and a per-value SVD cost fit on PBMC alone)."""
+    from scview.core import numba_warm
+
+    monkeypatch.setattr(numba_warm, "search_metrics", lambda: set() if state == "cold" else {"cosine", "euclidean"})
+    monkeypatch.setattr(numba_warm, "graph_compiled", lambda: True)
+    monkeypatch.setattr(numba_warm, "layout_compiled", lambda: True)
+    monkeypatch.setattr(numba_warm, "import_seconds", lambda: 0.0)
+    est = atac.estimate_seconds(cells, nnz, activity=True, fragment_bytes=fragments)
+    assert abs(est / measured - 1) < 0.2, (est, measured)
+
+
+@pytest.mark.parametrize("cells,metrics,measured", [
+    (11_208, {"cosine", "euclidean"}, 19.9),  # PBMC 10k (19.5-21.5 s in three runs)
+    (5_116, {"cosine", "euclidean"}, 14.1),  # 5k mouse kidney
+    (5_116, {"cosine"}, 21.3),  # its first WNN: the euclidean index still to compile
+])
+def test_wnn_estimate_is_within_20_percent_of_the_measured_runs(monkeypatch, cells, metrics, measured):
+    """QA round 4: WNN took 20 s and 14 s against estimates of 39 and 28."""
+    from scview.core import numba_warm
+
+    monkeypatch.setattr(numba_warm, "search_metrics", lambda: metrics)
+    monkeypatch.setattr(numba_warm, "graph_compiled", lambda: True)
+    monkeypatch.setattr(numba_warm, "layout_compiled", lambda: True)
+    monkeypatch.setattr(numba_warm, "import_seconds", lambda: 0.0)  # umap-learn imported by the pipeline
+    est = atac.estimate_wnn_seconds(cells)
+    assert abs(est / measured - 1) < 0.2, (est, measured)

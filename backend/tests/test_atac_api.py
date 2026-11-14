@@ -529,3 +529,44 @@ async def test_differential_cells_changed_mid_run_saves_nothing(client, dataset_
     assert last[0] == "error" and "cells changed" in last[1]["error"]
     assert did not in atac_api._running
     assert (await client.get(f"{API}/datasets/{did}/atac/differential")).json() is None
+
+
+async def test_a_run_is_watched_as_one_step_against_its_estimate(monkeypatch):
+    """QA round 4: an LSI run estimated at 139 s got a slow note at 61 s, from one stage. The
+    whole run is one watched step now, its first note at 1.5 x the estimate."""
+    import time
+
+    from scview.core import run_watchdog
+
+    monkeypatch.setattr(run_watchdog, "SAMPLE_SECONDS", 0.01)
+    monkeypatch.setattr(run_watchdog, "SLOW_STEP_SECONDS", 0.05)
+
+    class DM:
+        def reserve_run(self, dataset_id, need):
+            return None
+
+        def release_run(self, dataset_id):
+            return None
+
+    def gen(stop):
+        for i in range(20):
+            time.sleep(0.1)  # each stage longer than the 0.05 s interval
+            yield {"type": "stage", "stage": f"s{i}"}
+        yield {"type": "result"}
+
+    async def on_result(item, res):
+        return {"resources": res}
+
+    text = "".join([e async for e in atac_api._events(DM(), "watched", "run", {"estimate_seconds": 1.0}, 0, gen, on_result,
+                                                      "ATAC analysis")])
+    events = _events(text)
+    kinds = [k for k, _ in events]
+    first = kinds.index("watchdog")
+    # The fixed interval would have sent one during the first stage; 1.5 x the estimate is 1.5 s in
+    assert kinds[:4] == ["start", "stage", "stage", "stage"] and first >= 4
+    slow = [d for k, d in events if k == "watchdog"]
+    assert slow[0]["kind"] == "slow_step" and slow[0]["step"] == "atac"
+    assert slow[0]["expected_s"] == pytest.approx([0.8, 1.2]) and slow[0]["estimate_s"] == 1
+    res = dict(events)["result"]["resources"]
+    assert res["steps"]["atac"]["elapsed_s"] >= 2.0  # the whole run, not its last stage
+    assert kinds[-1] == "complete" and "watched" not in atac_api._running

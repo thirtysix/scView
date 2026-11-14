@@ -8,10 +8,13 @@ run's stream:
 
 - ``kind: "memory"`` when use first crosses 80% and again at 90% of the limit
   (each once, and again only after use has dropped ``REARM_MARGIN`` below it);
-- ``kind: "slow_step"`` every ``SLOW_STEP_SECONDS`` one step keeps running, with the
-  step's preflight time range (``expected_s``, ``expected_text``) when the run has one
-  (``expected``, set by ``core/processing.py``), so the page can say whether the step is
-  still inside its estimate or past it;
+- ``kind: "slow_step"`` while one step keeps running: when the run has the step's
+  preflight time range (``expected``, set by ``core/processing.py``, or ``expect`` from
+  a single estimate), first at ``SLOW_ESTIMATE_FACTOR`` times its estimate (never before
+  ``SLOW_STEP_SECONDS``), with the range (``expected_s``, ``expected_text``) and the
+  estimate (``estimate_s``), so the page can say whether the step is still inside its
+  estimate or past it; without one, first at ``SLOW_STEP_SECONDS``; then every
+  ``SLOW_STEP_SECONDS``;
 - ``kind: "waiting"`` (sent by the pre-step check, not the sampler) while the run waits
   before a step for other work to finish (``room_for_step``), with the sentence to show.
 
@@ -54,6 +57,9 @@ MEMORY_THRESHOLDS = (0.8, 0.9)
 # so a reading that wobbles around 80% does not repeat the warning every sample.
 REARM_MARGIN = 0.05
 SLOW_STEP_SECONDS = 60.0
+# A step with an estimate gets its first slow note at this many times it (QA round 4: a note
+# at 61 s on an ATAC run estimated at 139 s said nothing was wrong).
+SLOW_ESTIMATE_FACTOR = 1.5
 GB = 1024**3
 # A run whose next step fits only once other work has finished (another run's or a read's
 # reserved growth, ``DatasetManager.outstanding``) waits for it before the step instead of
@@ -82,6 +88,13 @@ def read_memory(cgroup: Path = memory_budget.CGROUP) -> Memory:
     already leaves out the reclaimable file cache)."""
     budget = memory_budget.read_budget(cgroup)
     return Memory(budget.used_bytes, budget.limit_bytes, budget.limited)
+
+
+def _point(rng: tuple[float, float]) -> float:
+    """The point estimate of a (low, high) range: the preflight's ranges are half to twice
+    it (``preflight._range``), so their geometric mean."""
+    lo, hi = float(rng[0]), float(rng[1])
+    return (lo * hi) ** 0.5 if lo > 0 else hi
 
 
 def _gb(n: int | None) -> float | None:
@@ -128,6 +141,7 @@ class RunWatchdog:
         self.steps: dict[str, dict[str, Any]] = {}  # step -> elapsed_s, peak_gb
         # step -> (low, high) seconds the preflight estimated for it (core/processing.py)
         self.expected: dict[str, tuple[float, float]] = {}
+        self._points: dict[str, float] = {}  # step -> its single estimate (``expect``)
         self.events: list[dict[str, Any]] = []  # every warning sent, for the result
 
     # -- sampling ---------------------------------------------------------
@@ -172,7 +186,27 @@ class RunWatchdog:
 
             event["expected_s"] = [float(rng[0]), float(rng[1])]
             event["expected_text"] = time_text(rng)
+            event["estimate_s"] = int(round(self._estimate(self._step)))
         return event
+
+    def _first_slow(self, step: str) -> float:
+        """When ``step``'s first slow note is due: ``SLOW_ESTIMATE_FACTOR`` times its
+        estimate (at least the fixed interval), or the fixed interval without one."""
+        if step not in self.expected:
+            return self._slow_every
+        return max(self._slow_every, SLOW_ESTIMATE_FACTOR * self._estimate(step))
+
+    def _estimate(self, step: str) -> float:
+        return self._points.get(step) or _point(self.expected[step])
+
+    def expect(self, step: str, seconds: float | None) -> None:
+        """A run with one estimate for ``step`` (seconds): its range is the estimate's error
+        band (``preflight.ERROR_BAND``). None or 0: no estimate."""
+        from scview.core.preflight import ERROR_BAND
+
+        if seconds and seconds > 0:
+            self.expected[step] = (float(seconds) * (1 - ERROR_BAND), float(seconds) * (1 + ERROR_BAND))
+            self._points[step] = float(seconds)
 
     def _memory_events(self, mem: Memory) -> list[dict[str, Any]]:
         share = mem.used / mem.limit
@@ -218,7 +252,7 @@ class RunWatchdog:
             self._step = step
             self._step_t0 = self._clock()
             self._step_peak = None
-            self._next_slow = self._slow_every
+            self._next_slow = self._first_slow(step)
         self.sample()
 
     def step_finished(self, step: str) -> None:
@@ -571,15 +605,18 @@ class RunControl:
         return ("stopped", str(message)) if message else None
 
     @contextlib.contextmanager
-    def step(self, name: str) -> Iterator[None]:
-        """Around one step: it is timed and watched, and its Leiden child cancellable."""
+    def step(self, name: str, timed: bool = True) -> Iterator[None]:
+        """Around one step: it is timed and watched, and its Leiden child cancellable.
+        ``timed`` False: only the latter (a part of a step the caller times as a whole)."""
         token = _CURRENT.set(self)
         self.current_step = name
-        self.watchdog.step_started(name)
+        if timed:
+            self.watchdog.step_started(name)
         try:
             yield
         finally:
-            self.watchdog.step_finished(name)
+            if timed:
+                self.watchdog.step_finished(name)
             self.current_step = None
             try:
                 _CURRENT.reset(token)

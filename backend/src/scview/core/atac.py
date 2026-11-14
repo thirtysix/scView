@@ -387,17 +387,23 @@ def depth_correlation(embedding, depth):
 # Plan, estimates
 # ---------------------------------------------------------------------------
 
-# Measured at 2 CPUs on PBMC 10k (11,898 cells, 137k peaks selected, 104M values). A pass of the
-# store reads 8 B a value through lzf (3.3 s); the TF-IDF pass that writes the spool; a product costs
-# per value x direction, its mapped reads included.
-_READ_SECONDS_PER_VALUE = 3.3e-8
-_SPOOL_SECONDS_PER_VALUE = 1.0e-7
-_PRODUCT_SECONDS_PER_VALUE_DIM = 0.9e-9
-_ACTIVITY_SECONDS_PER_VALUE = 3.0e-7
+# The totals' pass, the TF-IDF spool and the block Lanczos products, measured at 2 CPUs (2026-11-14,
+# v0.79): PBMC 10k, 11,208 cells, 98.0M values: 66.2 and 81.7 s; 5k mouse kidney, 5,116 cells,
+# 24.0M values: 12.4 and 12.9 s. Time grows faster than the values (x 5.9 for x 4.1: the products
+# stream the spool from disk), so a power of them, through both datasets; the products' share
+# scales with the components asked for. The earlier per-value model (fit on PBMC only) said 18.5 s
+# for the kidney.
+SVD_SECONDS = 74.0
+SVD_REF_VALUES = 98_000_000
+SVD_POWER = 1.26
+_GRAPH_SECONDS_PER_CELL = 3e-4  # cosine neighbours once compiled: PBMC 1.65-1.8 s, kidney 1.7 s
+# Peak-based gene activity: PBMC 22.6 s for 98.0M values, kidney 3.6 s for 24.0M.
+_ACTIVITY_SECONDS_PER_VALUE = 2.2e-7
 # Fragment-based activity: one pass over the fragments file, as the QC pass (47 s per GB at 2 CPUs)
 # with the overlaps on top. At 2 CPUs (v0.78): 5k mouse kidney 1.35 GB 72.8 s (57.8 s/GB), PBMC 10k
-# 2.40 GB 107.8 s (44.9 s/GB); peak +0.8 / +1.0 GB of container memory over the whole run.
-FRAGMENT_SECONDS_PER_GB = 52.0
+# 2.40 GB 107.8 s (44.9 s/GB); peak +0.8 / +1.0 GB of container memory over the whole run. v0.79
+# (2026-11-14): kidney 59.0 s (46.9 s per GiB), PBMC 101.8 s (45.5 s per GiB).
+FRAGMENT_SECONDS_PER_GB = 48.0  # per GiB of the file
 FRAGMENT_PASS_BYTES = 600 * 1024**2  # text blocks, parsed arrays, the open genes' pairs, a write's rows
 _DA_SECONDS_PER_VALUE = 3.5e-7
 _DA_SECONDS_PER_VALUE_GROUP = 1.4e-8
@@ -410,7 +416,6 @@ _DA_LR_SECONDS_PER_VALUE_GROUP = 1.0e-8
 # between this laptop's PBMC run (240.7 s) and the earlier ones (281 s at 24 groups, 311 s at 21).
 _DA_LR_SECONDS_PER_CELL_FIT = 8.3e-8
 _DA_LR_SCALE_CELLS = 11_898  # the cell cost above at this many cells; below, x sqrt(cells / it), at least 0.5
-_RUN_FIRST_SECONDS = 20.0
 _BASE_BYTES = 600 * 1024**2  # scanpy, numba, umap-learn and pynndescent loaded
 _BLOCK_BYTES = BLOCK_VALUES * 40  # one block read, its TF-IDF copies and transposed product
 _KEPT_BYTES_PER_CELL = 2_500  # components, layouts, the graph
@@ -418,17 +423,21 @@ _KEPT_BYTES_PER_CELL = 2_500  # components, layouts, the graph
 
 def estimate_seconds(n_cells: int, nnz: int, *, n_iterations: int = -1, activity: bool = True,
                      n_lsi: int = N_LSI, fragment_bytes: int | None = None) -> float:
-    """A run's time at 2 CPUs: passes of the store, the graph, a UMAP, Leiden (their estimates
-    from ``core/preflight.py``), and the gene activity: a pass of the fragments file
-    (``fragment_bytes``, its size) or of the peaks with its turn by gene."""
-    from scview.core import preflight
+    """A run's time at 2 CPUs: numba's compile still to come for the cosine graph and its UMAP
+    (``core/numba_warm.py``: about 20 s in a fresh process, none once an ATAC graph was made),
+    the passes of the store and the SVD, the graph, a UMAP, Leiden (their estimates from
+    ``core/preflight.py``), and the gene activity: a pass of the fragments file (``fragment_bytes``,
+    its size) or of the peaks with its turn by gene. Measured (v0.79, warm): PBMC 10k 102 s with
+    peak activity (estimate 110), 198 s with fragments (196); 5k kidney 45 s first run (49), 81 s
+    with fragments (84)."""
+    from scview.core import numba_warm, preflight
 
-    lanczos = 1 + 2 * (LANCZOS_STEPS + 1)
+    work = LANCZOS_STEPS * 2 + 3
     n = max(0, int(n_cells))
-    svd = (nnz * (_READ_SECONDS_PER_VALUE + _SPOOL_SECONDS_PER_VALUE)  # the totals' pass, the spool
-           + nnz * _PRODUCT_SECONDS_PER_VALUE_DIM * (lanczos * LANCZOS_BLOCK + n_lsi))
-    return round(_RUN_FIRST_SECONDS + svd + preflight.umap_seconds(n, three_d=False) + 3e-4 * n
-                 + preflight.leiden_seconds(n, n_iterations)
+    svd = (SVD_SECONDS * (max(0, nnz) / SVD_REF_VALUES) ** SVD_POWER
+           * (work * LANCZOS_BLOCK + n_lsi) / (work * LANCZOS_BLOCK + N_LSI))
+    return round(numba_warm.graph_umap_seconds(n, "cosine") + svd + preflight.umap_seconds(n, three_d=False)
+                 + _GRAPH_SECONDS_PER_CELL * n + preflight.leiden_seconds(n, n_iterations)
                  + (0.0 if not activity else fragment_bytes / 1024**3 * FRAGMENT_SECONDS_PER_GB if fragment_bytes
                     else nnz * _ACTIVITY_SECONDS_PER_VALUE), 0)
 
@@ -1644,12 +1653,23 @@ class WnnAtacPlan:
         return d
 
 
+# WNN's neighbour stages (both indexes, bandwidths, weights, joint neighbours) at 2 CPUs (2026-11-14):
+# PBMC 10k, 11,208 cells, 10.3-10.8 s; 5k mouse kidney, 5,116 cells, 7.3 s. Whole runs 19.5-21.5 s
+# and 14.1 s, where v0.78 said 39 and 28 (a 10 s constant and 1.6e-3 s per cell).
+_WNN_SECONDS = 3.5
+_WNN_SECONDS_PER_CELL = 6.3e-4
+
+
 def estimate_wnn_seconds(n_cells: int, n_iterations: int = -1) -> float:
-    from scview.core import preflight
+    """WNN RNA + ATAC at 2 CPUs: numba's compile still to come (the euclidean index past
+    ``wnn.EXACT_MAX_CELLS``, ``core/numba_warm.py``), the neighbour stages, a UMAP and Leiden
+    (``core/preflight.py``). PBMC 10k 20 s (estimate 22), 5k kidney 14 s (16), 21 s with the
+    euclidean search still to compile (22)."""
+    from scview.core import numba_warm, preflight
 
     n = max(0, int(n_cells))
-    # PBMC 10k, 11k cells: 28 s with numba already compiled, 52 s right after a start.
-    return round(10.0 + 1.6e-3 * n + preflight.umap_seconds(n, three_d=False)
+    first = numba_warm.graph_umap_seconds(n, "euclidean", exact_below=wnn.EXACT_MAX_CELLS + 1)
+    return round(first + _WNN_SECONDS + _WNN_SECONDS_PER_CELL * n + preflight.umap_seconds(n, three_d=False)
                  + preflight.leiden_seconds(n, n_iterations), 0)
 
 
