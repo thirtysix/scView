@@ -90,6 +90,46 @@ def legacy_h5ad(path: Path, a: ad.AnnData) -> None:
         f.create_group("obsm")["X_umap"] = a.obsm["X_umap"]
 
 
+def legacy_categories_h5ad(path: Path, a: ad.AnnData) -> None:
+    """The anndata 0.7.x layout scVelo's gastrulation_erythroid ships in: obs and var as groups,
+    each categorical column's codes with an attribute ``categories`` that is an HDF5 OBJECT
+    REFERENCE to ``<group>/__categories/<column>``; matrices as csr groups."""
+    strings = h5py.special_dtype(vlen=str)
+
+    def write_matrix(group, name, m):
+        g = group.create_group(name)
+        g.attrs["encoding-type"], g.attrs["encoding-version"] = "csr_matrix", "0.1.0"
+        g.attrs["shape"] = np.asarray(m.shape)
+        g["data"], g["indices"], g["indptr"] = m.data, m.indices, m.indptr
+
+    def write_frame(f, key, index, columns):
+        g = f.create_group(key)
+        g.attrs["_index"] = "_index"
+        g.attrs["column-order"] = np.asarray(list(columns), dtype=object)
+        g.attrs["encoding-type"], g.attrs["encoding-version"] = "dataframe", "0.1.0"
+        g.create_dataset("_index", data=np.asarray(list(index), dtype=object), dtype=strings)
+        cats = g.create_group("__categories")
+        for col, values in columns.items():
+            if isinstance(values, pd.Categorical):
+                cats.create_dataset(col, data=np.asarray(values.categories.astype(str), dtype=object), dtype=strings)
+                g[col] = values.codes.astype("i1")
+                g[col].attrs["categories"] = cats[col].ref
+            else:
+                g[col] = np.asarray(values)
+
+    with h5py.File(path, "w") as f:
+        write_frame(f, "obs", a.obs_names, {"clusters": pd.Categorical(a.obs["clusters"]),
+                                            "stage": pd.Categorical(np.where(np.arange(a.n_obs) % 3, "E8", "E7"))})
+        write_frame(f, "var", a.var_names, {"chrom": pd.Categorical(["1", "X"] * (a.n_vars // 2) + ["1"] * (a.n_vars % 2)),
+                                            "flag": np.arange(a.n_vars) % 2 == 0})
+        write_matrix(f, "X", sp.csr_matrix(a.X))
+        layers = f.create_group("layers")
+        for k in ("spliced", "unspliced"):
+            write_matrix(layers, k, sp.csr_matrix(a.layers[k]))
+        f.create_group("obsm")["X_umap"] = a.obsm["X_umap"]
+        f.create_group("uns")
+
+
 def write_loom(path: Path, a: ad.AnnData, sample="possorted_genome_bam_ABC12") -> None:
     """velocyto's layout: genes x cells, CellID sample:BARCODEx, Gene, Accession, main matrix = spliced."""
     with h5py.File(path, "w") as f:

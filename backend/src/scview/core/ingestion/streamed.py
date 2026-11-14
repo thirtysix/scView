@@ -49,7 +49,7 @@ import h5py
 import numpy as np
 import pandas as pd
 
-from scview.core import crispr, hashing, protein, spatial, velocity_input
+from scview.core import crispr, h5_copy, hashing, protein, spatial, velocity_input
 from scview.core.ingestion import feature_split as fs
 from scview.core.ingestion.bundling import FileRole, IngestUnit, UnitFormat
 from scview.core.ingestion.detection import legacy_tenx_genomes
@@ -677,7 +677,7 @@ def _copy_h5ad(su: StreamedUnit, fo: h5py.File) -> tuple:
                     fs._subset_matrix(fi["layers"][name], g, name, keep, [])
         for key in ("raw", "obsp"):
             if key in fi:
-                fi.copy(fi[key], fo, name=key)
+                h5_copy.copy(fi[key], fo, key)
         if isinstance(fo.get("raw"), h5py.Group) and isinstance(fo["raw"].get("var"), h5py.Group):
             from scview.core import gene_symbols
 
