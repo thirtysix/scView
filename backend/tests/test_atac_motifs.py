@@ -307,31 +307,55 @@ def test_query_is_the_vignettes_p_pct_and_positive_change():
 
 def test_enrich_groups_finds_the_motif_and_notes_small_queries():
     t = _table()
-    frame, summary = am.enrich_groups(t, _da_frame(), ["A", "B"], n_background=300, kept_per_group=5000)
+    frame, summary = am.enrich_groups(t, _da_frame(), ["A", "B"], min_pct=0.2, n_background=300, kept_per_group=5000)
     assert summary["A"]["n_query"] == 40 and summary["A"]["n_background"] == 300 and not summary["A"]["capped"]
     a = frame[frame["group"] == "A"]
     assert a.iloc[0]["motif"] == "SPI1" and a.iloc[0]["pval"] < 1e-5  # lowest p first
     assert a["gc_rich"].tolist()[a["motif"].tolist().index("MAX::MYC")]
     assert "only 2 query peaks" in summary["B"]["note"]
     # seeded per group: the same run gives the same numbers
-    again, _ = am.enrich_groups(t, _da_frame(), ["A", "B"], n_background=300)
+    again, _ = am.enrich_groups(t, _da_frame(), ["A", "B"], min_pct=0.2, n_background=300)
     assert a["pval"].tolist() == again[again["group"] == "A"]["pval"].tolist()
-    other, _ = am.enrich_groups(t, _da_frame(), ["A"], n_background=300, seed=9)
+    other, _ = am.enrich_groups(t, _da_frame(), ["A"], min_pct=0.2, n_background=300, seed=9)
     assert other["background"].tolist() != a["background"].tolist()
 
 
 def test_enrich_groups_says_when_nothing_passes_and_drops_peaks_without_bases():
     t = _table()
     t.gc[5] = np.nan
-    frame, summary = am.enrich_groups(t, _da_frame(), ["A"], n_background=300, p_max=1e-9)
+    frame, summary = am.enrich_groups(t, _da_frame(), ["A"], min_pct=0.2, n_background=300, p_max=1e-9)
     assert frame.empty and "No peak of A" in summary["A"]["note"]
-    _f, s = am.enrich_groups(t, _da_frame(), ["A"], n_background=300)
+    _f, s = am.enrich_groups(t, _da_frame(), ["A"], min_pct=0.2, n_background=300)
     assert s["A"]["n_query"] == 39 and s["A"]["n_left_out"] == 1
+
+
+def test_peaks_off_the_standard_chromosomes_are_neither_query_nor_background():
+    t = _table()
+    standard = np.ones(t.n_peaks, dtype=bool)
+    standard[[3, 7]] = False  # two query peaks on a scaffold
+    standard[40:] = False
+    standard[40:340] = True  # 300 background candidates left, all drawn
+    _f, s = am.enrich_groups(t, _da_frame(), ["A"], min_pct=0.2, n_background=1_000, standard=standard)
+    assert s["A"]["n_query"] == 38 and s["A"]["n_left_out"] == 2 and s["A"]["n_background"] == 300
+    _f, every = am.enrich_groups(t, _da_frame(), ["A"], min_pct=0.2, n_background=1_000)
+    assert every["A"]["n_background"] > 300
+
+
+def test_a_query_of_mostly_promoters_gets_a_note_and_the_default_is_five_percent():
+    t = _table()
+    f = _da_frame()
+    f["peak_class"] = ["promoter"] * 30 + ["distal"] * 10 + ["promoter"] * 5
+    _f, s = am.enrich_groups(t, f, ["A"], min_pct=0.2, n_background=300)
+    assert s["A"]["promoter_share"] == 0.75 and "75% of A's query peaks are promoters" in s["A"]["note"]
+    f["peak_class"] = ["promoter"] * 20 + ["distal"] * 25
+    _f, s = am.enrich_groups(t, f, ["A"], min_pct=0.2, n_background=300)
+    assert s["A"]["promoter_share"] == 0.5 and s["A"]["note"] is None
+    assert am.QUERY_PCT == 0.05 and am.QUERY_P == 0.005
 
 
 def test_a_query_at_the_stored_rows_limit_is_capped():
     t = _table()
-    _f, s = am.enrich_groups(t, _da_frame(), ["A"], n_background=300, kept_per_group=43, p_max=0.5)
+    _f, s = am.enrich_groups(t, _da_frame(), ["A"], min_pct=0.2, n_background=300, kept_per_group=43, p_max=0.5)
     assert s["A"]["capped"]
 
 

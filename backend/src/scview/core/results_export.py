@@ -131,6 +131,11 @@ def _mixscape(r: Any) -> pd.DataFrame:
                           "note": t.get("note", "")} for t in r.targets])
 
 
+def _frame(r: Any) -> pd.DataFrame:
+    """A result's own table, without the row positions into its store (``peak_index``)."""
+    return r.table.drop(columns=["peak_index"], errors="ignore")
+
+
 def _longest_records(value: Any) -> pd.DataFrame | None:
     """The longest list of records in a result (a fallback for kinds without a reader)."""
     best: list | None = None
@@ -166,6 +171,10 @@ READERS = {
     "de_audit": lambda e, r: _records(r.cell_only),
     "dsb": lambda e, v: _records(v["proteins"]),
     "gsea": lambda e, v: _records(v["terms"]),
+    "atac_differential": lambda e, r: _frame(r),
+    "atac_links": lambda e, r: _frame(r),
+    "atac_motif_enrichment": lambda e, r: _frame(r),
+    "atac_chromvar": lambda e, v: _records(v["motifs"]),
 }
 
 

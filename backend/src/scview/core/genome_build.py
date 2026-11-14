@@ -245,6 +245,28 @@ def other_from_names(names: Iterable[object]) -> str | None:
     return None
 
 
+STANDARD_TEXT = "chr1-22, X and Y; mouse chr1-19, X and Y"
+
+
+def standard_chromosomes(chrom):
+    """Per peak, True on a placed chromosome: 1-22, X or Y, with or without "chr" (Signac's
+    ``keepStandardChromosomes``; mouse has 1-19). False on chrM / MT, unplaced and unlocalised
+    scaffolds (``JH584304.1``, ``KI270728.1``, ``chrUn_...``) and alt or random contigs. A peak
+    without a chromosome name stays (nothing says otherwise), and so does every peak when the
+    names are not a human or mouse set (a chromosome numbered above 22, 2L, Z, roman numerals,
+    or none of these names at all): there is no list to apply. Self-contained: the replay script
+    copies it."""
+    import numpy as np
+
+    names = np.asarray(chrom, dtype=object).astype(str)
+    keys = {n: re.sub(r"^chr", "", n, flags=re.IGNORECASE).upper() for n in set(names.tolist()) - {"", "None", "nan"}}
+    numbered = [int(k) for k in keys.values() if k.isdigit()]
+    ok = {n: bool(re.fullmatch(r"[1-9]|1[0-9]|2[0-2]|X|Y", k)) for n, k in keys.items()}
+    if not any(ok.values()) or (numbered and max(numbered) > 22) or set(keys.values()) & {"2L", "2R", "3L", "3R", "Z", "W"}:
+        return np.ones(names.size, dtype=bool)
+    return np.fromiter((ok.get(n, True) for n in names.tolist()), dtype=bool, count=names.size)
+
+
 def _key(chrom: object) -> str | None:
     m = _CHROM.match(str(chrom))
     return m.group(1).upper() if m else None

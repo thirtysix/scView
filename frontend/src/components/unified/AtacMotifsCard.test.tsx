@@ -132,7 +132,7 @@ describe("AtacMotifsCard", () => {
     useAtacRunStore.setState({ da: { id: "d9", column: "cell_type", test: "lr" } as never });
     await waitFor(() => expect((screen.getByRole("button", { name: "Test motifs" }) as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(screen.getByRole("button", { name: "Test motifs" }));
-    await waitFor(() => expect(api.runEnrichment).toHaveBeenCalledWith("d1", { da_id: "d9", p_column: "pval", p_max: 0.005, min_pct: 0.2 }));
+    await waitFor(() => expect(api.runEnrichment).toHaveBeenCalledWith("d1", { da_id: "d9", p_column: "pval", p_max: 0.005, min_pct: 0.05 }));
     const result = await screen.findByTestId("atac-motif-enrichment-result");
     expect(result.textContent).toContain("PAX5");
     expect(result.textContent).toContain("62%");

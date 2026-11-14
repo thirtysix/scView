@@ -134,7 +134,7 @@ def _http(e: atac.AtacError | cv.ChromVarError) -> HTTPException:
 
 
 def _chromvar_state(summary: dict[str, Any], fingerprint: str | None) -> dict[str, Any]:
-    keep = ("run_id", "n_cells", "n_peaks_used", "n_peaks_no_counts", "n_peaks_left_out", "seed", "iterations", "w", "bs",
+    keep = ("run_id", "n_cells", "n_peaks_used", "n_peaks_no_counts", "n_peaks_left_out", "n_peaks_nonstandard", "seed", "iterations", "w", "bs",
             "genome", "seconds", "peak_mb", "created_at", "method")
     return {**{k: summary.get(k) for k in keep},
             "stale": fingerprint is not None and summary.get("cells_fingerprint") not in (None, fingerprint),
@@ -296,12 +296,15 @@ async def run_enrichment(dataset_id: str, body: EnrichmentRequest, dm: DatasetMa
     fingerprint = await asyncio.to_thread(adaptor.cells_fingerprint)
     params = {"da_id": da.result_id, "da_test": atac.da_test(da), "p_column": body.p_column, "p_max": body.p_max,
               "min_pct": body.min_pct, "min_log2fc": body.min_log2fc, "background": body.background, "seed": body.seed,
-              "groups": body.groups, "da_params": da.params}
+              "groups": body.groups, "da_params": da.params, "standard_only": True}
 
     def work() -> am.MotifEnrichment:
+        with atac.open_store(adata, dm.data_dir, dataset_id) as store:
+            standard = atac.standard_mask(store)
+        params["n_peaks_nonstandard"] = int((~standard).sum())
         frame, summary = am.enrich_groups(table, da.table, groups, p_column=body.p_column, p_max=body.p_max, min_pct=body.min_pct,
                                           min_log2fc=body.min_log2fc, n_background=body.background, seed=body.seed,
-                                          kept_per_group=atac.KEEP_PER_GROUP)
+                                          kept_per_group=atac.KEEP_PER_GROUP, standard=standard)
         if len(frame):
             symbols = {t for m in table.motif_names.tolist() for t in tf_motifs.tf_members(m)}
             am.annotate_expression(frame, am.tf_statistics(adaptor, da.column, symbols))
@@ -458,6 +461,7 @@ async def run_chromvar(dataset_id: str, body: ChromVarRequest, dm: DatasetManage
         await atac_api._save(dm, dataset_id, fingerprint, (), (), "chromVAR",  # noqa: SLF001
                              lambda data: cv.record(data, summary, resources))
         await asyncio.to_thread(cv.publish, out_dir, dm.data_dir, dataset_id, summary)
+        cv.keep(await _adaptor(dm, dataset_id), summary)
         return {**_chromvar_state(summary, fingerprint), "resources": res}
 
     start = {"n_cells": int(rows.size), "n_peaks": peaks.n_peaks, "seed": body.seed, "iterations": cv.N_ITERATIONS,

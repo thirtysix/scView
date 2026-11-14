@@ -260,6 +260,30 @@ def test_peak_annotation_classes_and_distance():
     assert np.isnan(d[6]) and out["nearest_gene"].iloc[6] == ""  # a contig without genes
 
 
+def test_a_named_gene_replaces_an_unnamed_nearest_when_as_near_or_holding_the_peak():
+    """QA: a peak inside CCDC57 was named AC129510.1, a clone-id lncRNA 26 kb away (Signac: CCDC57)."""
+    t = pd.DataFrame({"gene_id": [f"E{i}" for i in range(6)],
+                      "gene_name": ["CCDC57", "AC129510.1", "Gm12345", "Pck1", "AL000001.1", "Lonely1"],
+                      "chrom": ["chr17"] * 3 + ["chr2", "chr2", "chr3"],
+                      "start": [100_000, 140_000, 300_000, 500_000, 515_000, 10_000],
+                      "end": [200_000, 150_000, 301_000, 520_000, 516_000, 20_000],
+                      "strand": ["-", "+", "+", "+", "+", "+"],
+                      "gene_type": ["protein_coding", "lncRNA", "protein_coding", "protein_coding", "lncRNA", "protein_coding"],
+                      "tss": [199_999, 140_000, 300_000, 500_000, 515_000, 10_000]})
+    chrom = np.array(["chr17", "chr17", "chr2", "chr2", "chr17"], dtype=object)
+    start = np.array([165_000, 302_000, 509_000, 505_000, 139_000])
+    end = np.array([165_500, 302_500, 509_100, 505_100, 141_000])
+    out = atac.annotate_peaks(chrom, start, end, t)
+    assert out["nearest_gene"].tolist() == ["CCDC57", "Gm12345", "Pck1", "Pck1", "AC129510.1"]
+    d = out["distance_to_tss"].to_numpy()
+    assert d[0] == 199_999 - 165_499  # to CCDC57's own TSS, downstream on -
+    assert d[1] == 302_000 - 300_000  # Gm12345 is nearest and no named gene holds the peak: kept
+    assert d[2] == 9_000 and d[3] == 5_000  # inside Pck1: Pck1, not the AL clone 5.9 kb away
+    assert d[4] == 0  # the clone's own promoter (its TSS in the peak) stays the clone's, inside CCDC57 or not
+    assert atac.unnamed_gene("AC129510.1") and atac.unnamed_gene("Gm12345") and atac.unnamed_gene("4930451G09Rik")
+    assert not atac.unnamed_gene("Pck1") and not atac.unnamed_gene("LINC01857")
+
+
 def test_invalid_peak_positions_have_no_context():
     t = pd.DataFrame({"gene_id": ["E1"], "gene_name": ["G"], "chrom": ["chr1"], "start": [100], "end": [200],
                       "strand": ["+"], "gene_type": ["protein_coding"], "tss": [100]})
@@ -340,6 +364,41 @@ def test_differential_context_columns(world):
     assert table["peak"].iloc[0] in set(world["table"]["name"])
     table2, note2 = atac.attach_context(out["frame"].head(5), world["store"], "hg19", world["dir"])
     assert "on hg19 (GRCh37)" in note2 and (table2["nearest_gene"] == "").all()
+
+
+def test_one_group_against_another_leaves_every_other_cell_out(world):
+    """FindMarkers(ident.1 = A, ident.2 = C): the B cells take no part; TF-IDF over all cells as Signac's data slot."""
+    a = world["adata"]
+    labels = a.obs["group"].astype(str).to_numpy().copy()
+    b_cells = np.flatnonzero(labels == "B")
+    labels[b_cells[::2]] = "C"
+    a.obs["trio"] = pd.Categorical(labels)
+    codes, every, chosen = atac.group_codes(a, "trio", ["A"], "C")
+    assert every == ["A", "C"] and chosen == ["A"] and (codes == -1).sum() == (labels == "B").sum()
+    out = [i for i in atac.iter_differential(world["store"], world["rows"], codes, every, chosen) if i["type"] == "result"][0]
+    f = out["frame"]
+    assert set(f["group"]) == {"A"}
+    x = _manual_tfidf(world["peaks"])
+    for _, row in f.head(5).iterrows():
+        col = x[:, int(row["peak_index"])]
+        ref = mannwhitneyu(col[labels == "A"], col[labels == "C"], method="asymptotic", use_continuity=False)
+        assert row["pval"] == pytest.approx(ref.pvalue, rel=1e-6)
+        assert row["pct_rest"] == pytest.approx((col[labels == "C"] > 0).mean(), abs=1e-6)
+    # With two groups in the column, A vs B is A vs the rest, under either test.
+    for test in ("wilcoxon", "lr"):
+        pair = [i for i in atac.iter_differential(world["store"], world["rows"], *atac.group_codes(a, "group", ["A"], "B"), test=test)
+                if i["type"] == "result"][0]["frame"]
+        rest = [i for i in atac.iter_differential(world["store"], world["rows"], *atac.group_codes(a, "group", ["A"]), test=test)
+                if i["type"] == "result"][0]["frame"]
+        pd.testing.assert_frame_equal(pair.reset_index(drop=True), rest.reset_index(drop=True))
+    with pytest.raises(atac.AtacError, match="name one group"):
+        atac.group_codes(a, "trio", ["A", "B"], "C")
+    with pytest.raises(atac.AtacError, match="two different groups"):
+        atac.group_codes(a, "trio", ["A"], "A")
+    with pytest.raises(atac.AtacError, match="no group 'Z'"):
+        atac.group_codes(a, "trio", ["A"], "Z")
+    assert "A vs C (the cells of no other group used)" in atac.da_method("lr", 0.05, 100, 10, ("A", "C"))
+    assert "each group" not in atac.da_method("wilcoxon", 0.05, 100, 10, ("A", "C"))
 
 
 def test_group_codes_refuses_what_cannot_be_tested(world):

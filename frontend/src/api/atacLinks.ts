@@ -48,6 +48,8 @@ export interface LinksCounts {
   n_links_padj: number;
   n_peaks_kept: number;
   n_peaks_unknown: number;
+  /** On chrM, unplaced scaffolds or alt contigs: no candidates (absent on a result from before v0.78). */
+  n_peaks_nonstandard?: number;
   n_cells: number;
 }
 

@@ -48,6 +48,9 @@ export function countsText(r: LinksPage): string {
   if (c.n_peaks_unknown > 0) {
     parts.push(`${c.n_peaks_unknown.toLocaleString()} peaks left out: their contig has no bases under that name in the genome file, so no GC.`);
   }
+  if ((c.n_peaks_nonstandard ?? 0) > 0) {
+    parts.push(`${(c.n_peaks_nonstandard ?? 0).toLocaleString()} peaks on chrM, unplaced scaffolds or alt contigs left out.`);
+  }
   return parts.join(" ");
 }
 

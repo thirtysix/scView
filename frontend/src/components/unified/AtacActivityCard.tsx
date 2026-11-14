@@ -54,8 +54,9 @@ export function AtacActivityCard({
         <HoverTip
           width={300}
           tip={<>
-            Peak counts within the gene body + 2 kb upstream, summed per gene, log1p per 10k. It is peak-based: reads in a gene
-            outside every called peak are not counted, unlike Signac&rsquo;s fragment-based GeneActivity.
+            With a fragments file attached: Signac&rsquo;s GeneActivity, fragments over the gene body + 2 kb upstream of
+            protein-coding genes, log-normalised with the median cell total. Without one: peak counts in the same region, log1p
+            per 10k, which misses reads outside every called peak.
           </>}
         >
           Gene activity
@@ -69,8 +70,10 @@ export function AtacActivityCard({
         <>
           <GeneSearch datasetId={datasetId} onSelect={(g) => void pick(g)} placeholder="Gene for the activity overlay" />
           <Caption>
-            {(summary.n_genes_with_peaks ?? 0).toLocaleString()} of {(summary.n_genes ?? 0).toLocaleString()} genes have a peak in
-            their region ({summary.source}). {summary.caption}
+            {summary.kind === "fragment-based"
+              ? `${(summary.n_genes_with_fragments ?? 0).toLocaleString()} of ${(summary.n_genes ?? 0).toLocaleString()} protein-coding genes have fragments in their region`
+              : `${(summary.n_genes_with_peaks ?? 0).toLocaleString()} of ${(summary.n_genes ?? 0).toLocaleString()} genes have a peak in their region`}{" "}
+            ({summary.source}). {summary.caption}
           </Caption>
         </>
       )}
@@ -100,7 +103,8 @@ export function AtacActivityCard({
           />
           <Caption n={{ value: shown.rna.n_shown, unit: "cells", of: shown.n_cells }}>
             <Help id="atac.activity-vs-rna">
-              {shown.gene}{shown.gene === activeGene ? " (on the plot)" : ""}: RNA against peak-based activity
+              {shown.gene}{shown.gene === activeGene ? " (on the plot)" : ""}: RNA against{" "}
+              {shown.kind === "fragment-based" ? "fragment-based" : "peak-based"} activity
             </Help>
             {shown.r !== null ? `, r = ${shown.r.toFixed(2)} over all cells` : ""}. {shown.n_nonzero.toLocaleString()} cells have
             activity.

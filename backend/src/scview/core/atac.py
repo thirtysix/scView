@@ -14,11 +14,13 @@ WNN RNA + ATAC: ``core/wnn.py``'s FindMultiModalNeighbors with LSI as the second
 dims 2:n by default, each modality's rows L2-normalised as Seurat does. Own keys:
 ``wnn_atac``, ``X_umap_wnn_atac``, ``wnn_atac_rna_weight``, ``wnn_atac_leiden``.
 
-Gene activity: peak counts within gene body + 2 kb upstream (strand aware; ``core/
-gene_annotation.py``), summed per gene. It is peak-based, not fragment-based like Signac's
-GeneActivity: reads in a gene but outside every called peak are not counted. Stored for every
-barcode in the store ``atac_gene_activity`` (cells x genes, matrix ``gene_activity``) and by
-gene in ``atac_gene_activity_by_gene``, whose rows are genes, so one gene's overlay reads one row.
+Gene activity: with a fragments file attached, Signac's GeneActivity (``core/fragment_activity.py``:
+fragments over the body + 2 kb upstream of protein-coding genes under 500 kb, log-normalised with
+the median cell total as scale factor), the default; without one, peak counts within gene body
++ 2 kb upstream (strand aware; ``core/gene_annotation.py``), summed per gene, where reads in a
+gene but outside every called peak are not counted. Stored by gene in ``atac_gene_activity_by_gene``,
+whose rows are genes, so one gene's overlay reads one row (the peak-based run writes the cells x
+genes store ``atac_gene_activity`` first and turns it).
 
 Differential accessibility, each group vs the rest, peaks detected in >= 5% of the group or the rest,
 BH FDR within each group. Wilcoxon rank-sum on TF-IDF, the fast default, or logistic regression with
@@ -45,6 +47,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import shutil
 import tempfile
 import time
@@ -384,6 +387,11 @@ _READ_SECONDS_PER_VALUE = 3.3e-8
 _SPOOL_SECONDS_PER_VALUE = 1.0e-7
 _PRODUCT_SECONDS_PER_VALUE_DIM = 0.9e-9
 _ACTIVITY_SECONDS_PER_VALUE = 3.0e-7
+# Fragment-based activity: one pass over the fragments file, as the QC pass (47 s per GB at 2 CPUs)
+# with the overlaps on top. At 2 CPUs (v0.78): 5k mouse kidney 1.35 GB 72.8 s (57.8 s/GB), PBMC 10k
+# 2.40 GB 107.8 s (44.9 s/GB); peak +0.8 / +1.0 GB of container memory over the whole run.
+FRAGMENT_SECONDS_PER_GB = 52.0
+FRAGMENT_PASS_BYTES = 600 * 1024**2  # text blocks, parsed arrays, the open genes' pairs, a write's rows
 _DA_SECONDS_PER_VALUE = 3.5e-7
 _DA_SECONDS_PER_VALUE_GROUP = 1.4e-8
 _DA_LR_SECONDS_PER_VALUE = 1.5e-7
@@ -402,9 +410,10 @@ _KEPT_BYTES_PER_CELL = 2_500  # components, layouts, the graph
 
 
 def estimate_seconds(n_cells: int, nnz: int, *, n_iterations: int = -1, activity: bool = True,
-                     n_lsi: int = N_LSI) -> float:
+                     n_lsi: int = N_LSI, fragment_bytes: int | None = None) -> float:
     """A run's time at 2 CPUs: passes of the store, the graph, a UMAP, Leiden (their estimates
-    from ``core/preflight.py``), and the gene activity pass with its turn by gene."""
+    from ``core/preflight.py``), and the gene activity: a pass of the fragments file
+    (``fragment_bytes``, its size) or of the peaks with its turn by gene."""
     from scview.core import preflight
 
     lanczos = 1 + 2 * (LANCZOS_STEPS + 1)
@@ -413,10 +422,11 @@ def estimate_seconds(n_cells: int, nnz: int, *, n_iterations: int = -1, activity
            + nnz * _PRODUCT_SECONDS_PER_VALUE_DIM * (lanczos * LANCZOS_BLOCK + n_lsi))
     return round(_RUN_FIRST_SECONDS + svd + preflight.umap_seconds(n, three_d=False) + 3e-4 * n
                  + preflight.leiden_seconds(n, n_iterations)
-                 + (nnz * _ACTIVITY_SECONDS_PER_VALUE if activity else 0.0), 0)
+                 + (0.0 if not activity else fragment_bytes / 1024**3 * FRAGMENT_SECONDS_PER_GB if fragment_bytes
+                    else nnz * _ACTIVITY_SECONDS_PER_VALUE), 0)
 
 
-def estimate_bytes(n_cells: int, n_peaks: int, *, n_lsi: int = N_LSI) -> int:
+def estimate_bytes(n_cells: int, n_peaks: int, *, n_lsi: int = N_LSI, fragments: bool = False) -> int:
     """What a run holds beyond the loaded dataset at its peak: the libraries, a block, the
     SVD's Lanczos basis (cells) with a step's two sides, and the kept arrays; or the largest of
     a UMAP and the Leiden child."""
@@ -428,7 +438,8 @@ def estimate_bytes(n_cells: int, n_peaks: int, *, n_lsi: int = N_LSI) -> int:
     scale = max(1.0, n / 88_640)
     umap = n * preflight.UMAP_BYTES_PER_CELL * scale ** preflight.UMAP_MEMORY_EXPONENT
     leiden = 60 * 1024**2 + n * 9_000
-    return int(_BASE_BYTES + n * _KEPT_BYTES_PER_CELL + max(svd, umap, leiden, BUCKET_VALUES * 12))
+    activity = FRAGMENT_PASS_BYTES + n * 16 if fragments else BUCKET_VALUES * 12
+    return int(_BASE_BYTES + n * _KEPT_BYTES_PER_CELL + max(svd, umap, leiden, activity))
 
 
 def estimate_da_seconds(nnz: int, n_groups: int = 1, test: str = "wilcoxon", *, n_cells: int = 0, n_fits: int | None = None) -> float:
@@ -485,20 +496,28 @@ class AtacPlan:
     resolution: float = wnn.DEFAULT_RESOLUTION
     n_iterations: int = -1
     activity: bool = True
+    activity_source: str = "peaks"  # fragments (Signac's GeneActivity, with a fragments file) | peaks
+    fragment_bytes: int | None = None
+    fragments_file: str | None = None  # the attached file's own name (the replay looks for it)
     notes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
+        fragments = self.activity and self.activity_source == "fragments"
         d["estimate_seconds"] = estimate_seconds(self.n_cells, self.nnz, n_iterations=self.n_iterations,
-                                                 activity=self.activity, n_lsi=self.n_lsi)
-        d["estimate_bytes"] = estimate_bytes(self.n_cells, self.n_peaks, n_lsi=self.n_lsi)
+                                                 activity=self.activity, n_lsi=self.n_lsi,
+                                                 fragment_bytes=self.fragment_bytes if fragments else None)
+        d["estimate_bytes"] = estimate_bytes(self.n_cells, self.n_peaks, n_lsi=self.n_lsi, fragments=fragments)
         d["estimate_disk_bytes"] = estimate_disk_bytes(self.nnz, self.activity)
         return d
 
 
 def plan(adata, data_dir: str | Path, dataset_id: str, *, n_lsi: int | None = None, dims_to: int | None = None,
-         drop_first: str = "auto", resolution: float | None = None, activity: bool = True) -> AtacPlan:
-    from scview.core import leiden
+         drop_first: str = "auto", resolution: float | None = None, activity: bool = True,
+         activity_source: str = "auto") -> AtacPlan:
+    """``activity_source``: auto (fragments when a fragments file and its index are attached,
+    else peaks), fragments, or peaks."""
+    from scview.core import atac_fragments, leiden
 
     with open_store(adata, data_dir, dataset_id) as store:
         cell_rows(store, adata)
@@ -518,12 +537,24 @@ def plan(adata, data_dir: str | Path, dataset_id: str, *, n_lsi: int | None = No
     if not 0 < res <= 10:
         raise AtacError("Resolution must be above 0 and at most 10.")
     nnz = int(round(nnz * adata.n_obs / max(1, n_store)))  # the cells left after filtering
+    if activity_source not in ("auto", "fragments", "peaks"):
+        raise AtacError("Gene activity comes from fragments, peaks or auto.")
+    try:
+        frag_path, _index = atac_fragments.require_files(data_dir, dataset_id)
+        fragment_bytes = int(frag_path.stat().st_size)
+        fragments_file = atac_fragments.status(data_dir, dataset_id).get("name") or atac_fragments.FRAGMENTS_FILE
+    except atac_fragments.FragmentsError as e:
+        if activity and activity_source == "fragments":
+            raise AtacError(f"Fragment-based gene activity needs the fragments file. {e}", 409) from e
+        fragment_bytes = fragments_file = None
+    source = ("fragments" if fragment_bytes else "peaks") if activity_source == "auto" else activity_source
     emb = wnn._last_params(adata, "embeddings") or {}
     return AtacPlan(n_cells=int(adata.n_obs), n_peaks=n_peaks, nnz=nnz, genome=genome, n_lsi=width, dims_to=to,
                     drop_first=drop_first, resolution=res,
                     min_dist=float(emb["umap_min_dist"] if emb.get("umap_min_dist") is not None
                                    else wnn.DEFAULT_MIN_DIST),
-                    k=min(K_NN, adata.n_obs - 1), n_iterations=leiden.recorded_iterations(adata), activity=activity)
+                    k=min(K_NN, adata.n_obs - 1), n_iterations=leiden.recorded_iterations(adata), activity=activity,
+                    activity_source=source, fragment_bytes=fragment_bytes, fragments_file=fragments_file)
 
 
 # ---------------------------------------------------------------------------
@@ -648,6 +679,15 @@ def iter_run(store: ModalityStore, rows: np.ndarray, p: AtacPlan, *, data_dir: s
             activity = {"available": False}
         elif genes.reason:
             activity = {"available": False, "reason": genes.reason}
+        elif p.activity_source == "fragments":
+            for item in iter_fragment_activity(store, genes, data_dir, dataset_id, stop):
+                if item["type"] == "progress":
+                    yield item
+                else:
+                    activity, totals = item["activity"], item["totals"]
+            activity_total = totals[rows]
+            if activity.get("available"):  # Signac's NormalizeData(scale.factor = median(nCount))
+                activity["scale_factor"] = float(max(1.0, np.median(activity_total))) if activity_total.size else SCALE_FACTOR
         else:
             activity, totals = write_activity(store, genes, data_dir, dataset_id, stop)
             activity_total = totals[rows]
@@ -681,7 +721,8 @@ def replay_params(p: AtacPlan, lsi: LsiResult) -> dict[str, Any]:
             "lanczos_steps": LANCZOS_STEPS, "seed": SEED, "dims": lsi.dims_used, "k": p.k,
             "metric": "cosine", "min_dist": p.min_dist, "resolution": p.resolution,
             "n_iterations": p.n_iterations, "gene_activity": bool(p.activity), "upstream": UPSTREAM,
-            "genome": p.genome, "gene_positions_url": url}
+            "activity_source": p.activity_source if p.activity else None, "genome": p.genome, "gene_positions_url": url,
+            **({"fragments_file": p.fragments_file} if p.activity and p.activity_source == "fragments" else {})}
 
 
 def save_run(adata, p: AtacPlan, res: AtacResult, *, resources: dict | None = None,
@@ -744,6 +785,7 @@ class GeneChoice:
     genome: str | None = None
     source: str | None = None
     reason: str | None = None  # why there are none (a missing annotation, no peak positions)
+    types: np.ndarray | None = None  # each gene's gene_type (fragment-based activity keeps protein-coding ones)
 
 
 def _dataset_genes(adata) -> pd.DataFrame:
@@ -793,7 +835,8 @@ def choose_genes(adata, genome: str | None, data_dir: str | Path, auto_download:
     return GeneChoice(names=genes["name"].to_numpy()[use].tolist(), ids=genes["gene_id"].to_numpy()[use].tolist(),
                       chrom=frame["chrom"].to_numpy(dtype=object), start=start, end=end,
                       n_dataset_genes=len(genes), by_id=int(id_hit.sum()), by_name=int((name_hit & ~id_hit).sum()),
-                      genome=gene_annotation.canonical_genome(genome), source=gene_annotation.source_of(genome))
+                      genome=gene_annotation.canonical_genome(genome), source=gene_annotation.source_of(genome),
+                      types=frame["gene_type"].to_numpy(dtype=object) if "gene_type" in frame.columns else None)
 
 
 def peak_positions(store: ModalityStore) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -861,7 +904,8 @@ def write_activity(store: ModalityStore, genes: GeneChoice, data_dir: str | Path
     n_with = int((per_gene > 0).sum())
     return ({"available": True, "n_genes": n_genes, "n_genes_with_peaks": n_with, "by_id": genes.by_id,
              "by_name": genes.by_name, "n_dataset_genes": genes.n_dataset_genes, "genome": genes.genome,
-             "source": genes.source, "upstream": UPSTREAM, "nnz": int(per_gene.sum()), "caption": ACTIVITY_CAPTION}, totals)
+             "source": genes.source, "upstream": UPSTREAM, "nnz": int(per_gene.sum()), "caption": ACTIVITY_CAPTION,
+             "kind": "peak-based"}, totals)
 
 
 def _write_by_gene(by_cell: Path, dest: Path, per_gene: np.ndarray, meta: dict, stop: Callable[[], bool]) -> None:
@@ -904,8 +948,54 @@ def _write_by_gene(by_cell: Path, dest: Path, per_gene: np.ndarray, meta: dict, 
                 p.unlink(missing_ok=True)
 
 
+def iter_fragment_activity(store: ModalityStore, genes: GeneChoice, data_dir: str | Path, dataset_id: str,
+                           stop: Callable[[], bool] = lambda: False) -> Iterator[dict[str, Any]]:
+    """Signac's GeneActivity from the attached fragments file, every barcode of the store, written
+    by gene. Yields ``progress``, then ``{"type": "done", "activity": summary, "totals": per barcode}``."""
+    from scview.core import atac_fragments, fragment_activity as fa, fragment_file as ff
+
+    frag, index = atac_fragments.require_files(data_dir, dataset_id)
+    keep = fa.signac_genes(genes.start, genes.end, genes.types if genes.types is not None
+                           else np.full(len(genes.names), "protein_coding", dtype=object))
+    in_file = ff.load_index(index).names
+    keep &= np.isin(genes.chrom.astype(str), in_file)  # as Signac: genes on a contig the file never names (chrM) go
+    if not keep.any():
+        yield {"type": "done", "activity": {"available": False, "reason": "None of this dataset's genes is a protein-coding "
+                                                                          "gene under 500 kb."}, "totals": np.zeros(store.n_obs)}
+        return
+    names = np.asarray(genes.names, dtype=object)[keep]
+    chrom, start, end = genes.chrom[keep], genes.start[keep], genes.end[keep]
+    order = fa.row_order(chrom, start, in_file)
+    folder = modality_store.store_dir(data_dir, dataset_id)
+    meta = {"genome": genes.genome, "source": genes.source, "upstream": fa.UPSTREAM, "kind": "fragment-based",
+            "biotypes": list(fa.BIOTYPES), "max_width": fa.MAX_WIDTH}
+    result: dict[str, Any] = {}
+    with modality_store.StoreWriter(folder / f"{ACTIVITY_BY_GENE}.h5", names[order].tolist(), store.barcodes, None, meta) as w:
+        try:
+            for item in fa.iter_counts(frag, store.barcodes, chrom[order], start[order], end[order],
+                                       lambda m: w.append(ACTIVITY_MATRIX, m), stop=stop):
+                if item["type"] == "progress":
+                    yield item
+                else:
+                    result = item
+        except fa.FragmentActivityCancelled:
+            raise AtacCancelled() from None
+        except fa.FragmentActivityError as e:
+            raise AtacError(str(e), 422) from e
+    (folder / f"{ACTIVITY_STORE}.h5").unlink(missing_ok=True)  # an earlier peak-based run's cells x genes copy
+    yield {"type": "done", "totals": result["totals"].astype(np.float64), "activity": {
+        "available": True, "kind": "fragment-based", "n_genes": int(keep.sum()),
+        "n_genes_with_fragments": int(result["n_genes_with_fragments"]), "n_genes_left_out": int((~keep).sum()),
+        "by_id": genes.by_id, "by_name": genes.by_name, "n_dataset_genes": genes.n_dataset_genes, "genome": genes.genome,
+        "source": genes.source, "upstream": fa.UPSTREAM, "biotypes": list(fa.BIOTYPES), "max_width": fa.MAX_WIDTH,
+        "nnz": int(result["n_counted"]), "n_fragments_read": int(result["n_lines"]), "seconds": result["seconds"],
+        "caption": fa.CAPTION}}
+
+
 def activity_gene(adata, data_dir: str | Path, dataset_id: str, gene: str) -> dict[str, Any]:
-    """One gene's activity for the dataset's cells: counts, and log1p per 10k for display."""
+    """One gene's activity for the dataset's cells: counts, and log1p of counts over the cell's
+    total times the scale factor for display (the median cell total for fragment-based activity,
+    as Signac's vignette; 10,000 for peak-based)."""
     path = store_path(data_dir, dataset_id, ACTIVITY_BY_GENE)
     if not path.exists():
         raise AtacError("No gene activity for this dataset yet: run ATAC analysis on the Accessibility tab.", 404)
@@ -925,8 +1015,11 @@ def activity_gene(adata, data_dir: str | Path, dataset_id: str, gene: str) -> di
     if OBS_ACTIVITY_TOTAL not in adata.obs.columns:
         raise AtacError("The activity totals are missing: run ATAC analysis on the Accessibility tab again.", 409)
     total = adata.obs[OBS_ACTIVITY_TOTAL].to_numpy(dtype=np.float64)
-    values = np.log1p(np.divide(counts * SCALE_FACTOR, total, out=np.zeros(counts.shape), where=total > 0))
-    return {"gene": gene, "counts": counts, "values": values.astype(np.float32), "caption": ACTIVITY_CAPTION}
+    saved = (atac_import.read_info(adata) or {}).get("activity") or {}
+    scale = float(saved.get("scale_factor") or SCALE_FACTOR)
+    values = np.log1p(np.divide(counts * scale, total, out=np.zeros(counts.shape), where=total > 0))
+    return {"gene": gene, "counts": counts, "values": values.astype(np.float32),
+            "caption": saved.get("caption") or ACTIVITY_CAPTION, "kind": saved.get("kind") or "peak-based"}
 
 
 
@@ -936,10 +1029,47 @@ def activity_gene(adata, data_dir: str | Path, dataset_id: str, gene: str) -> di
 # ---------------------------------------------------------------------------
 
 
+_MOUSE_UNNAMED = re.compile(r"^(Gm\d+|\d{7}[A-Z]\d{2}Rik)$")  # predicted genes and RIKEN cDNA clones
+
+
+def unnamed_gene(name: str) -> bool:
+    """A gene with an identifier but no name: a clone id (AC012345.1), a bare Ensembl id
+    (``gene_filters.is_unnamed``), or mouse Gm12345 / 4930451G09Rik."""
+    from scview.core import gene_filters
+
+    return gene_filters.is_unnamed(name) or bool(_MOUSE_UNNAMED.match(str(name)))
+
+
+def _nearest_tss(tss, strand, s, e):
+    """Per peak [s, e): the position in ``tss`` (sorted) of the nearest TSS, the bases to it (0
+    inside the peak), and that distance signed (positive downstream on the gene's strand)."""
+    right = np.searchsorted(tss, s, side="left")  # first TSS at or after the peak's start
+    left = np.clip(right - 1, 0, tss.size - 1)
+    right = np.clip(right, 0, tss.size - 1)
+
+    def gap(t_):  # bases from the peak to a TSS; 0 inside
+        return np.maximum(0, np.maximum(s - t_, t_ - (e - 1)))
+
+    d_left, d_right = gap(tss[left]), gap(tss[right])
+    pick = np.where(d_left <= d_right, left, right)
+    d = np.minimum(d_left, d_right).astype(np.float64)
+    return pick, d, d * _strand_sign(strand[pick], (s + e) / 2 - tss[pick])
+
+
+def _strand_sign(strand, offset):
+    sign = np.where(strand == "-", -1.0, 1.0) * np.sign(offset)
+    return np.where(sign == 0, 1.0, sign)
+
+
 def annotate_peaks(chrom: np.ndarray, start: np.ndarray, end: np.ndarray, table: pd.DataFrame) -> pd.DataFrame:
     """Per peak: nearest gene by TSS, distance to that TSS (0 when inside the peak; positive
     downstream of the TSS on the gene's strand), class (promoter within 2 kb of a TSS, gene
-    body, distal). Pseudogenes and small RNAs are left out of "nearest"."""
+    body, distal). Pseudogenes and small RNAs are left out of "nearest". When the nearest is an
+    unnamed gene (AC/AL clone id, Gm12345), a named gene takes its place if one is as near, or if
+    the peak sits in a named gene's body (Signac's ClosestFeature distance 0) and not in the
+    unnamed gene's promoter, the nearest such by TSS; the distance is then to that gene's TSS."""
+    from scview.core.fragment_activity import region_hits
+
     keep = ~table["gene_type"].astype(str).str.contains("pseudogene") & ~table["gene_type"].isin(_SKIP_GENE_TYPES)
     t = table[keep]
     n = chrom.size
@@ -957,18 +1087,39 @@ def annotate_peaks(chrom: np.ndarray, start: np.ndarray, end: np.ndarray, table:
         gene = group["gene_name"].to_numpy(dtype=object)[order]
         strand = group["strand"].to_numpy(dtype=object)[order]
         s, e = start[idx], end[idx]
-        right = np.searchsorted(tss, s, side="left")  # first TSS at or after the peak's start
-        left = np.clip(right - 1, 0, tss.size - 1)
-        right = np.clip(right, 0, tss.size - 1)
-        def gap(t_):  # bases from the peak to a TSS; 0 inside
-            return np.maximum(0, np.maximum(s - t_, t_ - (e - 1)))
-        d_left, d_right = gap(tss[left]), gap(tss[right])
-        pick = np.where(d_left <= d_right, left, right)
-        d = np.minimum(d_left, d_right).astype(np.float64)
-        centre = (s + e) / 2
-        sign = np.where(strand[pick] == "-", -1.0, 1.0) * np.sign(centre - tss[pick])
+        pick, d, signed = _nearest_tss(tss, strand, s, e)
         near[idx] = gene[pick]
-        dist[idx] = d * np.where(sign == 0, 1.0, sign)
+        dist[idx] = signed
+        named = ~np.fromiter((unnamed_gene(g) for g in gene), dtype=bool, count=gene.size)
+        swap = np.flatnonzero(~named[pick])
+        if swap.size and named.any():
+            ns, ne = s[swap], e[swap]
+            n_pick, n_d, n_signed = _nearest_tss(tss[named], strand[named], ns, ne)
+            same = n_d == d[swap]
+            # named genes whose body holds the peak: the one whose TSS is nearest
+            bodies = group.iloc[order][named]
+            b_order = np.argsort(bodies["start"].to_numpy(), kind="stable")
+            b_start = bodies["start"].to_numpy()[b_order]
+            b_end = bodies["end"].to_numpy()[b_order]
+            hit_peak, hit_gene = region_hits(ns, ne, b_start, b_end, np.maximum.accumulate(b_end))
+            body_gene = np.full(swap.size, -1)
+            body_signed = np.full(swap.size, np.nan)
+            if hit_peak.size:
+                g_tss = bodies["tss"].to_numpy()[b_order][hit_gene]
+                gaps = np.maximum(0, np.maximum(ns[hit_peak] - g_tss, g_tss - (ne[hit_peak] - 1)))
+                first = np.lexsort((gaps, hit_peak))
+                lead = first[np.r_[True, np.diff(hit_peak[first]) != 0]]
+                body_gene[hit_peak[lead]] = b_order[hit_gene[lead]]
+                g_strand = bodies["strand"].to_numpy(dtype=object)[b_order][hit_gene[lead]]
+                body_signed[hit_peak[lead]] = gaps[lead] * _strand_sign(g_strand, (ns[hit_peak[lead]] + ne[hit_peak[lead]]) / 2
+                                                                        - g_tss[lead])
+            names_named = gene[named]
+            use_same = same
+            use_body = ~same & (body_gene >= 0) & (d[swap] > PROMOTER)  # an unnamed gene's own promoter stays
+            near[idx[swap[use_same]]] = names_named[n_pick[use_same]]
+            dist[idx[swap[use_same]]] = n_signed[use_same]
+            near[idx[swap[use_body]]] = names_named[body_gene[use_body]]
+            dist[idx[swap[use_body]]] = body_signed[use_body]
         bodies = group.sort_values("start")
         starts = bodies["start"].to_numpy()
         reach = np.maximum.accumulate(bodies["end"].to_numpy())
@@ -1049,8 +1200,26 @@ class DaResult:
     n_fit: dict[str, dict[str, int]] | None = None  # lr: per group, how many peaks got each kind of p
 
 
-def group_codes(adata, column: str, groups: list[str] | None = None) -> tuple[np.ndarray, list[str], list[str]]:
-    """Each cell's group code (-1 for a missing label), every group, and the ones tested."""
+def group_codes(adata, column: str, groups: list[str] | None = None,
+                vs: str | None = None) -> tuple[np.ndarray, list[str], list[str]]:
+    """Each cell's group code (-1 for a missing label), every group, and the ones tested. With
+    ``vs``, one group against another (Signac's ``FindMarkers(ident.1, ident.2)``): ``groups`` names
+    the one group, every other cell is unlabelled, so "the rest" is ``vs``'s cells alone."""
+    if vs is not None:
+        if not groups or len(groups) != 1:
+            raise AtacError("To compare two groups, name one group and the group to compare it with.", 422)
+        if str(groups[0]) == str(vs):
+            raise AtacError("Pick two different groups to compare.", 422)
+        codes, every, _chosen = group_codes(adata, column, None)
+        code = {g: i for i, g in enumerate(every)}
+        for g in (str(groups[0]), str(vs)):
+            if g not in code:
+                raise AtacError(f"'{column}' has no group '{g}'.", 404)
+        a, b = code[str(groups[0])], code[str(vs)]
+        pair = np.where(codes == a, 0, np.where(codes == b, 1, -1)).astype(np.int32)
+        if min(int((pair == 0).sum()), int((pair == 1).sum())) < MIN_GROUP_CELLS:
+            raise AtacError(f"Each group needs at least {MIN_GROUP_CELLS} cells to compare.", 422)
+        return pair, [str(groups[0]), str(vs)], [str(groups[0])]
     if column not in adata.obs.columns:
         raise AtacError(f"Column '{column}' not found.", 404)
     s = adata.obs[column]
@@ -1173,10 +1342,11 @@ def _iter_lr(store, rows, codes, tested_codes, tested, detect, idf, cell_total, 
 
 
 def iter_differential(store, rows, codes, every, chosen, *, test="wilcoxon", min_pct=MIN_PCT, max_peaks=MAX_PEAKS_PER_GROUP,
-                      stop=lambda: False, batch_values=DA_BATCH_VALUES, lrt_per_group=LRT_PER_GROUP):
+                      stop=lambda: False, batch_values=DA_BATCH_VALUES, lrt_per_group=LRT_PER_GROUP, peak_mask=None):
     """Each chosen group vs every other labelled cell, as a generator (``progress`` events, then
     ``{"type": "result", "frame": ..., "n_tested": ...}``): one pass for detection, then, for
-    ``wilcoxon``, one per batch of peaks (``batch_values`` stored values); for ``lr``, ``_iter_lr``."""
+    ``wilcoxon``, one per batch of peaks (``batch_values`` stored values); for ``lr``, ``_iter_lr``.
+    ``peak_mask``: the peaks that may be tested (the standard chromosomes), None for all."""
     n_vars = store.n_vars
     k = len(every)
     labelled = codes >= 0
@@ -1202,7 +1372,7 @@ def iter_differential(store, rows, codes, every, chosen, *, test="wilcoxon", min
     code_of = {g: i for i, g in enumerate(every)}
     for g in chosen:
         i = code_of[g]
-        ok = np.flatnonzero((pct_in[i] >= min_pct) | (pct_out[i] >= min_pct))
+        ok = np.flatnonzero(((pct_in[i] >= min_pct) | (pct_out[i] >= min_pct)) & (True if peak_mask is None else peak_mask))
         if ok.size > max_peaks:
             ok = ok[np.argsort(-np.maximum(pct_in[i][ok], pct_out[i][ok]), kind="stable")[:max_peaks]]
         tested[i, ok] = True
@@ -1277,6 +1447,7 @@ def iter_differential(store, rows, codes, every, chosen, *, test="wilcoxon", min
         frames.append(pd.DataFrame(columns))
     frame = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     yield {"type": "result", "frame": frame, "n_tested": n_tested, "n_significant": n_significant,
+           "n_left_out": 0 if peak_mask is None else int(n_vars - np.count_nonzero(peak_mask)),
            **({"n_fit": n_fit} if fit is not None else {})}
 
 
@@ -1285,7 +1456,24 @@ REPLAY_CONSTANTS = ("LANCZOS_BLOCK", "LANCZOS_STEPS", "SEED", "SCALE_FACTOR", "M
                     "LR_MIN_BLOCK", "LR_MAX_BLOCK", "LR_THREADS", "FIT_SCORE", "FIT_LRT", "FIT_LRT_SEPARATED", "FIT_SCORE_NO_FIT",
                     "FIT_UNTESTABLE", "FIT_NAMES")
 REPLAY_CODE = (top_peaks, block_lanczos_svd, scaled_embedding, depth_correlation, gene_regions, overlap_matrix, _bh,
-               wilcoxon_sparse, _iter_lr, iter_differential)
+               wilcoxon_sparse, _iter_lr, iter_differential, genome_build.standard_chromosomes)
+
+
+def standard_mask(store: ModalityStore) -> np.ndarray:
+    """Each peak of the store: on a standard chromosome (``genome_build.standard_chromosomes``);
+    all of them when the store names no positions."""
+    try:
+        return genome_build.standard_chromosomes(store.feature_attr("chrom"))
+    except modality_store.ModalityStoreError:
+        return np.ones(store.n_vars, dtype=bool)
+
+
+def left_out_text(n: int) -> str:
+    """The method's sentence on the peaks off the standard chromosomes ('' when none)."""
+    if not n:
+        return ""
+    return (f" {n:,} peak{'s' if n != 1 else ''} on chrM, unplaced scaffolds or alt contigs left out "
+            f"(standard chromosomes only: {genome_build.STANDARD_TEXT}).")
 
 
 def attach_context(frame: pd.DataFrame, store: ModalityStore, genome: str | None, data_dir: str | Path,
@@ -1322,6 +1510,18 @@ DA_METHOD_LR = ("Logistic regression with the cell's total peak counts as covari
 _DA_LAST: dict[str, DaResult] = {}
 
 
+def da_method(test: str, min_pct: float, max_peaks: int, lrt_peaks: int, pair: tuple[str, str] | None = None) -> str:
+    """The method sentence; ``pair`` (A, B) for one group against another, which drops every other cell."""
+    text = (DA_METHOD_LR.format(min_pct=min_pct, max_peaks=max_peaks, lrt_peaks=lrt_peaks) if test == "lr"
+            else DA_METHOD.format(min_pct=min_pct, max_peaks=max_peaks))
+    if pair is None:
+        return text
+    a, b = pair
+    return (text.replace("each group vs the rest", f"{a} vs {b} (the cells of no other group used)")
+            .replace("of the group or the rest", "of either group").replace("of each group", "")
+            .replace("BH FDR within each group", "BH FDR").replace("within each group across both", "across both"))
+
+
 def da_test(res: DaResult) -> str:
     """The test of a kept result; one saved before the choice existed was a Wilcoxon."""
     return str((res.params or {}).get("test") or "wilcoxon")
@@ -1339,7 +1539,7 @@ def da_payload(res: DaResult, group: str | None = None, offset: int = 0, limit: 
         pages = {g: json.loads(t[t["group"] == g].iloc[:limit][columns].to_json(orient="records", double_precision=15)) for g in res.groups}
     return {"id": res.result_id, "column": res.column, "groups": list(res.groups), "n_tested": dict(res.n_tested),
             "n_significant": dict(res.n_significant), "rows": pages, "params": dict(res.params), "method": res.method,
-            "test": da_test(res), "n_fit": res.n_fit, "kept_per_group": KEEP_PER_GROUP, "created_at": res.created_at}
+            "test": da_test(res), "vs": (res.params or {}).get("vs"), "n_fit": res.n_fit, "kept_per_group": KEEP_PER_GROUP, "created_at": res.created_at}
 
 
 def record_differential(adata, params: dict[str, Any], resources: dict | None = None) -> None:
@@ -1356,8 +1556,17 @@ def remember_da(adaptor, dataset_id: str, res: DaResult) -> None:
     _DA_LAST[res.result_id] = res
     while len(_DA_LAST) > KEEP_RESULTS:
         _DA_LAST.pop(next(iter(_DA_LAST)))
-    results_store.keep(adaptor, RESULT_KIND, res, result_id=res.result_id, key=res.column,
-                       label=f"Differential accessibility by {res.column} ({len(res.groups)} groups)")
+    vs = (res.params or {}).get("vs")
+    key = res.column if vs is None else f"{res.column}|{res.groups[0]}|{vs}"  # a pair never replaces the column's all-groups run
+    results_store.keep(adaptor, RESULT_KIND, res, result_id=res.result_id, key=key, params=dict(res.params),
+                       label=da_label(res))
+
+
+def da_label(res: DaResult) -> str:
+    vs = (res.params or {}).get("vs")
+    if vs is not None:
+        return f"Differential accessibility {res.groups[0]} vs {vs} by {res.column}"
+    return f"Differential accessibility by {res.column} ({len(res.groups)} groups)"
 
 
 def recall_da(dataset_id: str, result_id: str) -> DaResult | None:
@@ -1756,7 +1965,11 @@ def grounding_lines(adata, data_dir: str | Path | None = None) -> tuple[list[str
                      f"sequencing depth, {kept}; graph on components {dims[0]}:{dims[-1]}; {lsi.get('n_clusters')} ATAC "
                      f"clusters (obs {OBS_CLUSTERS}) [{TAG}]")
     activity = info.get("activity") or {}
-    if activity.get("available"):
+    if activity.get("available") and activity.get("kind") == "fragment-based":
+        lines.append(f"- ATAC gene activity: fragment-based (Signac's GeneActivity: fragments over body + 2 kb upstream), "
+                     f"{activity.get('n_genes_with_fragments', 0):,} of {activity.get('n_genes', 0):,} protein-coding genes "
+                     f"have fragments [{TAG}]")
+    elif activity.get("available"):
         lines.append(f"- ATAC gene activity: {activity.get('n_genes_with_peaks', 0):,} genes have at least one overlapping "
                      f"peak of {activity.get('n_genes', 0):,}; peak-based (body + 2 kb upstream), not fragment-based [{TAG}]")
     w = info.get("wnn") or {}
@@ -1786,7 +1999,9 @@ def da_grounding_lines(adaptor) -> list[str]:
     name = ("logistic regression with the cell's total peak counts as covariate (Seurat's LR)" if lr
             else "Wilcoxon rank-sum on TF-IDF, no depth covariate")
     parts = [f"{g} {res.n_significant.get(g, 0):,} of {res.n_tested.get(g, 0):,}" for g in res.groups[:12]]
-    line = f"- Differential peaks by {res.column}, test: {name}; peaks at FDR 5% per group: {'; '.join(parts)}"
+    vs = (res.params or {}).get("vs")
+    what = f"{res.groups[0]} vs {vs} (no other cells)" if vs is not None else "each group vs the rest"
+    line = f"- Differential peaks by {res.column}, {what}, test: {name}; peaks at FDR 5% per group: {'; '.join(parts)}"
     if lr and res.n_fit:
         separated = sum(v.get("lrt_separated", 0) for v in res.n_fit.values())
         no_fit = sum(v.get("score_no_fit", 0) + v.get("untestable", 0) for v in res.n_fit.values())
