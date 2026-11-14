@@ -916,7 +916,7 @@ def remember(adaptor, dataset_id: str, res: MotifEnrichment) -> None:
     _LAST[f"{dataset_id}:{res.result_id}"] = res
     while len(_LAST) > KEEP_RESULTS:
         _LAST.pop(next(iter(_LAST)))
-    results_store.keep(adaptor, RESULT_KIND, res, result_id=res.result_id, key=res.column,
+    results_store.keep(adaptor, RESULT_KIND, res, result_id=res.result_id, key=res.column, params=dict(res.params),
                        label=f"Motifs in differential peaks by {res.column} ({len(res.groups)} groups)")
 
 

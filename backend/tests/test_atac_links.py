@@ -400,8 +400,18 @@ async def test_run_kept_paged_by_gene_csv_locus_and_a_replay_step(client, seeded
     csv = await client.get(f"{API}/datasets/{did}/atac/links/{rid}/csv")
     assert csv.status_code == 200 and csv.text.splitlines()[0].startswith("gene,peak,chrom,start,end,tss,distance_to_tss,score,z,p,padj")
     assert len(csv.text.splitlines()) == result["counts"]["n_links"] + 1
+    results_store.flush()
+    entry = (await client.get(f"{API}/datasets/{did}/results/{rid}")).json()
+    assert entry["kind"] == "atac_links" and entry["params"]["seed"] == atac_links.SEED
+    t = await client.get(f"{API}/datasets/{did}/results/{rid}/table.tsv.gz")
+    assert t.status_code == 200, t.text
+    import io
 
-    locus = (await client.get(f"{API}/datasets/{did}/atac/links/{rid}/locus", params={"gene": "GENEA"})).json()
+    table = pd.read_csv(io.BytesIO(t.content), sep="\t", compression="gzip")
+    assert len(table) == result["counts"]["n_links"] and {"gene", "peak", "z", "padj"} <= set(table.columns)
+    assert "peak_index" not in table.columns
+
+    locus =(await client.get(f"{API}/datasets/{did}/atac/links/{rid}/locus", params={"gene": "GENEA"})).json()
     assert locus["gene"] == "GENEA" and locus["tss"] == 100_000 and locus["chrom"] == "chr1"
     assert locus["start"] <= min(a["middle"] for a in locus["arcs"]) and locus["end"] >= max(a["middle"] for a in locus["arcs"])
     assert locus["start"] <= 100_000 <= locus["end"] and any(p["start"] == 105_000 for p in locus["peaks"])

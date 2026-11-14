@@ -458,6 +458,7 @@ async def run_chromvar(dataset_id: str, body: ChromVarRequest, dm: DatasetManage
         await atac_api._save(dm, dataset_id, fingerprint, (), (), "chromVAR",  # noqa: SLF001
                              lambda data: cv.record(data, summary, resources))
         await asyncio.to_thread(cv.publish, out_dir, dm.data_dir, dataset_id, summary)
+        cv.keep(await _adaptor(dm, dataset_id), summary)
         return {**_chromvar_state(summary, fingerprint), "resources": res}
 
     start = {"n_cells": int(rows.size), "n_peaks": peaks.n_peaks, "seed": body.seed, "iterations": cv.N_ITERATIONS,

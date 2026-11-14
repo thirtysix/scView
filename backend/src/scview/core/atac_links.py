@@ -629,7 +629,8 @@ def remember(adaptor, dataset_id: str, res: LinksResult) -> None:
     _LAST[res.result_id] = res
     while len(_LAST) > KEEP_RESULTS:
         _LAST.pop(next(iter(_LAST)))
-    results_store.keep(adaptor, RESULT_KIND, res, result_id=res.result_id, key=run_key(res.params), label=run_label(res))
+    results_store.keep(adaptor, RESULT_KIND, res, result_id=res.result_id, key=run_key(res.params), label=run_label(res),
+                       params=dict(res.params))
 
 
 def recall(dataset_id: str, result_id: str) -> LinksResult | None:

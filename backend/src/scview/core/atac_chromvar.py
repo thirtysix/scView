@@ -525,6 +525,22 @@ def ranking(summary: dict[str, Any], n: int = 100) -> list[dict[str, Any]]:
              "gc_rich": bool((summary.get("gc_rich") or [False] * len(sd))[j])} for j in order]
 
 
+RESULT_KIND = "atac_chromvar"
+
+
+def keep(adaptor, summary: dict[str, Any]) -> None:
+    """The run's motif ranking in the results store, so it lists, reads and exports as a table
+    like the other results (the per-cell z stay beside the peak store)."""
+    from scview.core import results_store
+
+    n = len(summary["motif_ids"])
+    params = {k: summary.get(k) for k in ("seed", "iterations", "w", "bs", "genome", "table", "n_cells", "n_peaks_used",
+                                          "n_peaks_left_out")}
+    results_store.keep(adaptor, RESULT_KIND, {"motifs": ranking(summary, n), "method": summary.get("method"), **params},
+                       result_id=str(summary["run_id"]), key="chromvar", params=params,
+                       label=f"chromVAR motif variability ({summary['n_cells']:,} cells, {n:,} motifs)")
+
+
 def record(adata, summary: dict[str, Any], resources: dict | None = None) -> None:
     from scview.core import provenance
 

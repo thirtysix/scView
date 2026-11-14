@@ -317,6 +317,14 @@ async def test_a_differential_result_comes_back_from_the_results_store(client, d
     assert latest["id"] == result["id"] and latest["n_tested"] == result["n_tested"]
     page = await client.get(f"{API}/datasets/{did}/atac/differential/{result['id']}", params={"group": "A", "limit": 2})
     assert page.status_code == 200 and page.json()["rows"]["A"][0]["peak"] == result["rows"]["A"][0]["peak"]
+    # the generic results routes (and the MCP's get_result on them): settings and a table with peak names
+    entry = (await client.get(f"{API}/datasets/{did}/results/{result['id']}")).json()
+    assert entry["kind"] == "atac_differential" and entry["params"]["column"] == "group"
+    t = await client.get(f"{API}/datasets/{did}/results/{result['id']}/table.tsv.gz")
+    assert t.status_code == 200, t.text
+    table = pd.read_csv(io.BytesIO(t.content), sep="\t", compression="gzip")
+    assert {"group", "peak", "z", "log2fc", "pval", "pval_adj"} <= set(table.columns) and "peak_index" not in table.columns
+    assert table["peak"].iloc[0] == result["rows"]["A"][0]["peak"]
 
 
 async def test_one_run_at_a_time(client, dataset_manager):

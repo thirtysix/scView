@@ -1356,7 +1356,7 @@ def remember_da(adaptor, dataset_id: str, res: DaResult) -> None:
     _DA_LAST[res.result_id] = res
     while len(_DA_LAST) > KEEP_RESULTS:
         _DA_LAST.pop(next(iter(_DA_LAST)))
-    results_store.keep(adaptor, RESULT_KIND, res, result_id=res.result_id, key=res.column,
+    results_store.keep(adaptor, RESULT_KIND, res, result_id=res.result_id, key=res.column, params=dict(res.params),
                        label=f"Differential accessibility by {res.column} ({len(res.groups)} groups)")
 
 
