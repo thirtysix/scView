@@ -326,3 +326,50 @@ async def test_import_server_path_copies_and_commits_a_file(client, dataset_mana
     d = await _call("get_dataset", {"dataset_id": did})
     assert d["n_cells"] == 50 and d["name"] == "tiny from the server"
     assert src.read_bytes() == before and src.exists()  # copied, never moved
+
+
+# --- friction fixes -----------------------------------------------------------------------------------------
+
+async def test_describe_column_reads_a_category_of_numbers_as_categories(client, dataset_manager):
+    a = ad.AnnData(np.ones((340, 3), dtype=np.float32))
+    a.obs["leiden"] = pd.Categorical([str(i % 17) for i in range(340)])
+    a.obs["depth"] = np.arange(340, dtype=float)
+    did = _register(dataset_manager, a, "mdc")
+    r = await _call("describe_column", {"dataset_id": did, "column": "leiden"})
+    assert r["kind"] == "categories" and r["n_values"] == 17
+    assert (await _call("describe_column", {"dataset_id": did, "column": "depth"}))["kind"] == "numeric"
+    text = await _call("describe_column", {"dataset_id": did, "column": "leiden", "groupby": ["depth"]},
+                       error=True)
+    assert "not numeric" in text
+
+
+async def test_get_recipe_has_measured_time_and_memory(client, dataset_manager):
+    from scview.core import provenance
+
+    a = _cite(n_per=20)
+    provenance.record_step(a, step="pca", tool="scanpy", params={"n_comps": 5},
+                           resources={"elapsed_s": 1.5, "peak_gb": 2.25})
+    provenance.record_step(a, step="atac_lsi", tool="scview", params={}, resources={"seconds": 3, "peak_gb": 1.0,
+                                                                                    "limit_gb": 6})
+    provenance.record_step(a, step="label_cells", tool="scview", params={})
+    did = _register(dataset_manager, a, "mrc")
+    r = await _call("get_recipe", {"dataset_id": did})
+    by = {s["step"]: s for s in r["steps"]}
+    assert by["pca"]["measured"] == {"seconds": 1.5, "peak_gb": 2.25}
+    assert by["atac_lsi"]["measured"] == {"seconds": 3, "peak_gb": 1.0, "limit_gb": 6}
+    assert "measured" not in by["label_cells"]
+
+
+def test_replay_script_pages_are_large():
+    import inspect
+
+    sig = inspect.signature(tools.get_replay_script)
+    assert sig.parameters["max_chars"].default == 40_000
+
+
+async def test_prefs_json_dtype_in_the_metadata_route(client, dataset_manager):
+    a = ad.AnnData(np.ones((20, 3), dtype=np.float32))
+    a.obs["leiden"] = pd.Categorical([str(i % 3) for i in range(20)])
+    did = _register(dataset_manager, a, "mdt")
+    r = await client.get(f"/api/v1/datasets/{did}/metadata/leiden", params={"format": "json"})
+    assert r.json()["dtype"] == "category" and json.dumps(r.json())

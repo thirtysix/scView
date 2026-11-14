@@ -250,17 +250,30 @@ def column_message(name: str, names: list[str]) -> str:
 
 
 async def _obs_values(dataset_id: str, column: str) -> pd.Series:
-    """One obs column's values (missing as None), or the closest names when it is not there."""
+    """One obs column's values (missing as None), or the closest names when it is not there.
+    ``attrs["dtype"]``: the column's dtype in obs (a Leiden column of "0".."16" is a category)."""
     try:
         d = await api.get(f"{_ds(dataset_id)}/metadata/{column}", format="json")
     except api.RouteError as e:
         if e.status == 404 and e.detail.startswith("Column"):
             raise await _column_error(dataset_id, column) from None
         raise _fail(e) from None
-    return pd.Series(d["values"], dtype=object)
+    s = pd.Series(d["values"], dtype=object)
+    s.attrs["dtype"] = d.get("dtype") or ""
+    return s
+
+
+_CATEGORY_DTYPES = ("category", "object", "string", "str", "bool")
+
+
+def _stored_as_categories(s: pd.Series) -> bool:
+    """A category, text or bool column in obs: its values are labels, whatever they look like."""
+    return str(s.attrs.get("dtype") or "").lower().startswith(_CATEGORY_DTYPES)
 
 
 def _is_numeric(s: pd.Series) -> bool:
+    if _stored_as_categories(s):
+        return False
     present = s.dropna()
     if present.empty or present.map(type).eq(bool).any():
         return False
@@ -297,8 +310,9 @@ async def describe_column(
     limit: Limit = DEFAULT_LIMIT,
     offset: Annotated[int, Field(ge=0, description="With groupby: the group row to start from.")] = 0,
 ) -> str:
-    """One obs column: each value's cell count (largest first) for a category, or a
-    numeric summary (min, quartiles, max, mean, missing). With groupby, a numeric column
+    """One obs column: each value's cell count (largest first) for a category (a category or
+    text column in obs, even of numbers such as cluster ids), or a numeric summary (min,
+    quartiles, max, mean, missing). With groupby, a numeric column
     (depth, genes per cell, % mito, doublet score) per group: per sample, or per donor x
     condition. A missing column's error names the closest columns."""
     s = await _obs_values(dataset_id, column)
@@ -324,7 +338,7 @@ async def describe_column(
                            "n_missing": int(s.isna().sum())}
     numeric = pd.to_numeric(s, errors="coerce")
     if s.notna().any() and numeric.notna().sum() == s.notna().sum() and s.map(type).ne(bool).all() \
-            and s.nunique() > 12:
+            and s.nunique() > 12 and not _stored_as_categories(s):
         q = numeric.quantile([0, 0.25, 0.5, 0.75, 1]).tolist()
         out.update(kind="numeric", min=q[0], q25=q[1], median=q[2], q75=q[3], max=q[4],
                    mean=float(numeric.mean()))
@@ -765,12 +779,24 @@ async def run_pipeline(dataset_id: DatasetId, steps: Steps, params: Params = Non
 
 @tool(READ)
 async def get_recipe(dataset_id: DatasetId) -> str:
-    """The dataset's recorded processing, in order: each step with its parameters and how the
-    replay script reproduces it, and the source the data came from."""
+    """The dataset's recorded processing, in order: each step with its parameters, how the
+    replay script reproduces it, its measured time and peak memory (measured: seconds,
+    peak_gb, for runs scView watched; peak_gb is the server's whole use), and the source the
+    data came from."""
     d = await _get(f"{_ds(dataset_id)}/recipe")
+    try:  # the measured time and memory per step sit in the full record only
+        history = ((await api.get(f"{_ds(dataset_id)}/provenance")).get("recorded") or {}).get("history") or []
+    except api.RouteError:
+        history = []
+    used = {h.get("commit_id"): h.get("resources") for h in history if isinstance(h.get("resources"), dict)}
     steps = []
     for s in d.get("recipe") or []:
         e = pick(s, "step", "tool", "params", "timestamp")
+        res = used.get(s.get("commit_id"))
+        if res:
+            seconds = res.get("elapsed_s", res.get("seconds"))
+            e["measured"] = {k: v for k, v in (("seconds", seconds), ("peak_gb", res.get("peak_gb")),
+                                               ("limit_gb", res.get("limit_gb"))) if v is not None}
         e["params"] = {k: v if len(json.dumps(v, default=str)) <= 200
                        else f"({len(json.dumps(v, default=str))} chars: see the UI's History)"
                        for k, v in (e.get("params") or {}).items()}
@@ -785,15 +811,19 @@ async def get_recipe(dataset_id: DatasetId) -> str:
 async def get_replay_script(
     dataset_id: DatasetId,
     offset: Annotated[int, Field(ge=0, description="Character to start from (page through a long script).")] = 0,
-    max_chars: Annotated[int, Field(ge=500, le=60000, description="Page length in characters.")] = 7000,
+    max_chars: Annotated[int, Field(ge=500, le=compact.MAX_CHARS * 10, description=(
+        "Page length in characters (default 40,000; at most 80,000)."))] = 40_000,
 ) -> str:
     """The standalone Python (scanpy) script that replays the recorded steps from the input
-    file, one page at a time (it is often longer than one page)."""
+    file, a page at a time (a multiome or spatial script can run to 150,000 characters), and
+    the REST route that downloads it whole."""
     _, data = await _raw(f"{_ds(dataset_id)}/recipe/script")
     text = data.decode("utf-8", "replace")
     end = min(len(text), offset + max_chars)
     head = (f"# scView replay script, characters {offset}-{end} of {len(text)}"
-            + (f"; next page: offset={end}" if end < len(text) else "") + "\n")
+            + (f"; next page: offset={end}" if end < len(text) else "")
+            + (f"\n# whole file: GET /api/v1/datasets/{dataset_id}/recipe/script on the backend "
+               "(e.g. http://127.0.0.1:8080)" if offset == 0 and end < len(text) else "") + "\n")
     return head + text[offset:end]
 
 
@@ -1164,8 +1194,9 @@ async def compare_de_results(
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
     """Compare two DE results' significant genes (the DE overlap the UI draws): how many each
-    calls, how many both call, their sign agreement, and the top genes only one of them calls
-    (largest |log2FC| first). Use case: cell-level Wilcoxon vs donor-level pseudobulk."""
+    calls, how many both call with the same sign and with opposite signs, their sign agreement,
+    and the top genes only one of them calls (largest |log2FC| first). Use case: cell-level
+    Wilcoxon vs donor-level pseudobulk, or two perturbations' programmes."""
     d = await _post(f"{_ds(dataset_id)}/de/overlap", {
         "result_ids": [result_a, result_b], "direction": "both", "padj_max": padj_max, "lfc_min": lfc_min,
         "restrict_to_common_tested": common_tested_only})
@@ -1186,7 +1217,9 @@ async def compare_de_results(
         "a": pick(sets[0], "name", "method", "n", "n_up", "n_down", "n_tested") if sets else None,
         "b": pick(sets[1], "name", "method", "n", "n_up", "n_down", "n_tested") if len(sets) > 1 else None,
         "n_common_tested": d.get("n_common_tested"),
-        "both": shared, "discordant_sign": disc,
+        "both_same_sign": shared, "both_opposite_sign": disc, "both_any_sign": shared + disc,
+        "both_note": ("both_same_sign: significant in both with the same direction; both_opposite_sign: "
+                      "significant in both, up in one and down in the other (listed in discordant_genes)"),
         "sign_agreement": round(shared / (shared + disc), 4) if shared + disc else None,
         "jaccard": pair.get("jaccard"),
         "only_a": genes((0,)), "only_b": genes((1,)),
