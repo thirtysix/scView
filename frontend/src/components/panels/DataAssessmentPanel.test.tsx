@@ -147,6 +147,7 @@ describe("filterThresholds", () => {
     const mad = {
       qc_threshold_mode: "mad", qc_mad_k: 5, qc_mad_k_mt: 3, qc_mad_upper: false, qc_sample_column: "",
       qc_mito_mode: "global", qc_mito_type_column: "", qc_mito_type_floor: false, qc_doublet_source: "auto", drop_hash_negatives: false,
+      max_counts: 0, qc_min_atac_counts: 0, qc_max_atac_counts: 0, qc_max_nucleosome_signal: 0, qc_min_tss_enrichment: 0,
     };
     expect(filterThresholds(undefined)).toEqual({
       min_genes: 200, max_genes: 0, min_counts: 0, max_pct_mt: 20, drop_doublets: false, ...mad,

@@ -354,6 +354,11 @@ async def get_filter_preview(
     counts_floor: float | None = None,
     genes_floor: float | None = None,
     pct_mt_floor: float | None = None,
+    max_counts: float | None = None,
+    min_atac_counts: float | None = None,
+    max_atac_counts: float | None = None,
+    max_nucleosome_signal: float | None = None,
+    min_tss_enrichment: float | None = None,
     grid_mito: bool = False,
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
@@ -374,6 +379,9 @@ async def get_filter_preview(
     cells; ``mad`` says per sample which cut applied and what the floor removed).
     ``pct_mt_floor``: MAD mode's % mito bound is never below it (default 2%; ``mad`` says per
     sample which bound applied). On nuclei a warning says when % mito removes over 5% of a sample.
+    ``max_counts`` and the ATAC cut-offs (``min_atac_counts``, ``max_atac_counts``,
+    ``max_nucleosome_signal``, ``min_tss_enrichment``; 0 = off) apply in both modes; ``atac_qc``
+    lists the ATAC columns and Signac's vignette cuts as a suggestion, with what they remove.
     ``doublet_source`` (auto | hashing | scrublet | classifier | consensus | either) is whose doublets
     ``drop_doublets`` drops, ``drop_hash_negatives`` drops cell hashing's
     negatives; ``doublets`` describes the choice (core/doublet_source.py).
@@ -392,7 +400,10 @@ async def get_filter_preview(
                        ("qc_mito_type_floor", mito_type_floor),
                        ("qc_doublet_source", doublet_source), ("drop_hash_negatives", drop_hash_negatives),
                        ("qc_counts_floor", counts_floor), ("qc_genes_floor", genes_floor),
-                       ("qc_pct_mt_floor", pct_mt_floor)):
+                       ("qc_pct_mt_floor", pct_mt_floor), ("max_counts", max_counts),
+                       ("qc_min_atac_counts", min_atac_counts), ("qc_max_atac_counts", max_atac_counts),
+                       ("qc_max_nucleosome_signal", max_nucleosome_signal),
+                       ("qc_min_tss_enrichment", min_tss_enrichment)):
         if value is not None:
             setattr(params, key, value)
             params.explicit = (*params.explicit, key)

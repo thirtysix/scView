@@ -18,6 +18,7 @@ import { useLibraryConcordance } from "@/components/panels/LibraryConcordance";
 import { RemovalAudit } from "@/components/qc/RemovalAudit";
 import { MitoModeControl } from "@/components/qc/MitoModeControl";
 import { DoubletFilterControl } from "@/components/qc/DoubletFilterControl";
+import { AtacFilterControl } from "@/components/qc/AtacFilterControl";
 
 const DEBOUNCE_MS = 150;
 const ROWS = 6; // per table, more behind "show all"
@@ -360,6 +361,7 @@ export function QcFilterSummary({
         {/* Per sample: the card below, with each sample's QC and loss. */}
         {preview.clusters && <LossTable title="Per cluster" grouping={preview.clusters} />}
         {onChange && <DoubletFilterControl preview={preview} thresholds={thresholds} onChange={onChange} />}
+        {onChange && <AtacFilterControl preview={preview} thresholds={thresholds} onChange={onChange} />}
         <p className="text-[11px] text-slate-400">
           {preview.has_mt || preview.grid_note ? "" : "% mito can't be measured here, so no mito threshold applies. "}
           {mode === "mad" ? "The fixed genes and counts cut-offs are not used in MAD mode. " : ""}

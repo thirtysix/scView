@@ -87,6 +87,15 @@ class PipelineParams:
     min_genes: int = 200  # fixed mode only, as are max_genes and min_counts
     max_genes: int = 0
     min_counts: int = 0
+    # Keep cells with at most this many counts (0 = off), in both modes (an absolute ceiling).
+    max_counts: float = 0
+    # 10x Multiome ATAC QC (core/qc_filter.py ATAC_CRITERIA), 0 = off, in both modes: ATAC counts
+    # in peaks (atac_total_counts), and fragment QC's nucleosome signal and TSS enrichment.
+    # The preview suggests Signac's vignette cuts (1,800-100,000, < 2, > 1); none is a default.
+    qc_min_atac_counts: float = 0.0
+    qc_max_atac_counts: float = 0.0
+    qc_max_nucleosome_signal: float = 0.0
+    qc_min_tss_enrichment: float = 0.0
     min_cells: int = 3
     # Keep cells with at least this many counts in both modes (a targeted panel's default
     # is 10, core/targeted_panel.py; 0 = none).
@@ -615,6 +624,10 @@ def filter_judgement(adata: ad.AnnData, params: PipelineParams):
     if t.mode == "mad":  # recorded by every run since the floor existed (0: none); older runs had none
         found["qc_genes_floor"] = t.genes_floor or 0.0
         found["qc_pct_mt_floor"] = t.pct_mt_floor or 0.0  # likewise, since v0.78
+    if t.max_counts > 0:  # absent: off (before v0.78 there was none)
+        found["max_counts"] = t.max_counts
+    for c in qc_filter.atac_on(t):
+        found[f"qc_{c}"] = getattr(t, c)
     nuclei = qc_filter.nuclei_mito_warnings(adata, cells, removed, samples)
     if nuclei:
         found["qc_nuclei_note"] = nuclei[0]["message"]
