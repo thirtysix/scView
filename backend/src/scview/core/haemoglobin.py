@@ -34,6 +34,7 @@ cells, since most non-erythroid cells have no haemoglobin read and the median is
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 
 from scview.core.gene_filters import top_markers
 from scview.core.species import match_genes
@@ -66,6 +67,12 @@ SCALE_FLOOR = 0.1  # floor on their robust spread, in percentage points
 # The dataset note: the typical non-erythroid cluster at 0.5% (30-60 times the
 # clean data) means haemoglobin RNA is everywhere, not in one population.
 AMBIENT_WIDE_PCT = 0.5
+# A cluster whose cells detect red-cell genes besides haemoglobin this often makes its own
+# haemoglobin (``lineage_detected``): no ambient flag, and when the typical cluster does, no
+# ambient note. Two or more of ERYTHROID_GENES per cell, measured 2026-11-14: Kang's 12
+# non-erythroid clusters 0-0.3% of cells (Eryth 52%); Pijuan-Sala's erythroid clusters
+# 52-100% (blood progenitors 1: 20%); paul15's myeloid clusters 14-43%.
+LINEAGE_SHARE = 0.5
 
 FLAG_HELP = (
     "Haemoglobin RNA without erythroid markers: far more haemoglobin than the other "
@@ -102,6 +109,38 @@ def erythroid_markers(adata, column: str) -> dict[str, list[str]] | None:
     wanted = {g.upper() for g in (*HUMAN_HB, *MOUSE_HB, *ERYTHROID_GENES)}
     wanted |= {a.upper() for names in ERYTHROID_ALIASES.values() for a in names}
     return {g: [x for x in genes if x.upper() in wanted] for g, genes in top.items()}
+
+
+def lineage_detected(adata, labels, groups) -> dict[str, float] | None:
+    """Per group: the share of its cells that detect at least ``MIN_ERYTHROID_MARKERS``
+    red-cell genes besides haemoglobin (``ERYTHROID_GENES``), in the counts (or .raw, or
+    X). None when the dataset is backed (a column read would read the whole file) or has
+    too few of those genes.
+
+    Markers compare a cluster with the others, so when EVERY cluster is red-cell lineage
+    (Pijuan-Sala's erythroid cells: blood progenitors to Erythroid3) no cluster has
+    red-cell markers, and their own haemoglobin read as ambient RNA in all of them. Ambient
+    RNA carries haemoglobin above all, and hardly any of these genes."""
+    if getattr(adata, "isbacked", False):
+        return None
+    from scview.core.anndata_adaptor import _counts_matrix
+
+    M, names = _counts_matrix(adata)
+    genes = match_genes(ERYTHROID_GENES, names, ERYTHROID_ALIASES)
+    if len(genes) < MIN_ERYTHROID_MARKERS:
+        return None
+    cols = pd.Index(names).get_indexer(genes)
+    sub = M[:, cols]
+    hits = np.asarray((sub > 0).sum(axis=1)).ravel() if hasattr(sub, "toarray") \
+        else (np.asarray(sub) > 0).sum(axis=1)
+    has = hits >= MIN_ERYTHROID_MARKERS
+    lab = pd.Series(np.asarray(labels).astype(object), index=None)
+    out: dict[str, float] = {}
+    for g in groups:
+        mask = (lab == g).to_numpy()
+        if mask.any():
+            out[g] = float(has[mask].mean())
+    return out
 
 
 def lineage_markers(markers: list[str] | None) -> list[str]:
