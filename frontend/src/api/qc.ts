@@ -404,6 +404,8 @@ export interface FilterThresholds {
   qc_counts_floor?: number;
   /** MAD mode: no sample's genes cut below this (unset: the data's, 200 cells / 100 spots; 0 = off). */
   qc_genes_floor?: number;
+  /** MAD mode: no sample's % mito bound below this (unset: 2%; 0 = off). Nuclei: their bound collapses. */
+  qc_pct_mt_floor?: number;
   /** MADs below the median for counts and genes (log scale); above too with `qc_mad_upper`. */
   qc_mad_k?: number;
   /** MADs above the median for % mito. */
@@ -489,6 +491,11 @@ export interface MadSampleBounds {
   n_floor?: number;
   /** The floor was not applied: it would have removed this many cells, over half the sample. */
   floor_skipped?: number;
+  /** With a % mito floor: the sample's own bound, which bound applies (max_pct_mt), and the
+   *  cells the floor keeps that the MAD bound removes (backend qc_filter.apply_pct_mt_floor). */
+  max_pct_mt_mad?: number | null;
+  max_pct_mt_by?: "mad" | "floor";
+  n_pct_mt_floor?: number;
 }
 
 /** MAD mode's per-sample thresholds (backend qc_filter.MadBounds.to_dict). */
@@ -509,6 +516,8 @@ export interface MadThresholds {
   reused_from?: string | null;
   /** No sample's genes cut is below this (absent: no floor). */
   genes_floor?: number;
+  /** No sample's % mito bound is below this (absent: no floor). */
+  pct_mt_floor?: number;
 }
 
 /** Removed ~ condition in one group (backend qc_filter.rate_test): over the
@@ -631,8 +640,9 @@ export interface FilterPreview {
   samples: FilterGrouping | null;
   clusters: FilterGrouping | null;
   warnings: {
-    kind: "sample" | "cluster";
-    column: string;
+    /** "nuclei": the data look like nuclei and % mito alone removes over 5% of a sample. */
+    kind: "sample" | "cluster" | "nuclei";
+    column: string | null;
     group: string;
     n_cells: number;
     n_removed: number;
@@ -668,6 +678,7 @@ export async function getFilterPreview(
   });
   if (t.qc_counts_floor !== undefined) q.set("counts_floor", String(t.qc_counts_floor));
   if (t.qc_genes_floor !== undefined) q.set("genes_floor", String(t.qc_genes_floor));
+  if (t.qc_pct_mt_floor !== undefined) q.set("pct_mt_floor", String(t.qc_pct_mt_floor));
   if (t.qc_mad_k !== undefined) q.set("mad_k", String(t.qc_mad_k));
   if (t.qc_mad_k_mt !== undefined) q.set("mad_k_mt", String(t.qc_mad_k_mt));
   if (t.qc_mad_upper !== undefined) q.set("mad_upper", String(t.qc_mad_upper));

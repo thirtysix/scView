@@ -95,6 +95,9 @@ class PipelineParams:
     # near-empty cells has a wide MAD). None: 200 for cells, 100 for spots and Visium HD cells,
     # none on bins and targeted panels (core/qc_filter.py); 0 = no floor.
     qc_genes_floor: float | None = None
+    # MAD mode: a sample's % mito bound never below this (nuclei: median + 3 MADs collapses to
+    # a fraction of a percent). None: 2% (core/qc_filter.py MITO_FLOOR); 0 = no floor.
+    qc_pct_mt_floor: float | None = None
     # Used only when % mito can be measured (MT- genes); a ceiling in MAD mode.
     max_pct_mt: float = 20.0
     # Spots and bins: % mito rules are off, they cut tissue out (qc_filter.grid_rules); opt-in.
@@ -262,6 +265,8 @@ class PipelineResult:
     cleared: dict[str, list[str]] = field(default_factory=dict)
     # Steps that ran but had nothing to do, and why (not errors; see StepSkipped).
     notes: dict[str, str] = field(default_factory=dict)
+    # Steps that ran and found something to check (the filtering step's nuclei % mito note).
+    cautions: dict[str, str] = field(default_factory=dict)
     elapsed_seconds: float = 0.0
     output_path: str | None = None
     # "complete" (every step ran) | "finished_with_errors" (a step failed: the steps that
@@ -609,6 +614,10 @@ def filter_judgement(adata: ad.AnnData, params: PipelineParams):
     found: dict[str, Any] = {k: getattr(params, k) for k in used}
     if t.mode == "mad":  # recorded by every run since the floor existed (0: none); older runs had none
         found["qc_genes_floor"] = t.genes_floor or 0.0
+        found["qc_pct_mt_floor"] = t.pct_mt_floor or 0.0  # likewise, since v0.78
+    nuclei = qc_filter.nuclei_mito_warnings(adata, cells, removed, samples)
+    if nuclei:
+        found["qc_nuclei_note"] = nuclei[0]["message"]
     if t.counts_floor > 0:  # within each sample's bound in MAD mode, min_counts in fixed
         found["qc_counts_floor"] = t.counts_floor
         if t.mode == "fixed":
@@ -2358,6 +2367,12 @@ _PEARSON_TOOLS = {
 }
 
 
+def _note_caution(result: PipelineResult, step: str, ret: Any) -> None:
+    """A step's recorded note the run's result shows beside it (``PipelineResult.cautions``)."""
+    if isinstance(ret, dict) and ret.get("qc_nuclei_note"):
+        result.cautions[step] = str(ret["qc_nuclei_note"])
+
+
 def _record_pipeline_step(
     adata: ad.AnnData, step_name: str, params: PipelineParams, ret: Any = None,
     resources: dict[str, Any] | None = None,
@@ -2690,6 +2705,7 @@ def run_pipeline(
                 adata = new
             result.steps_run.append(step_name)
             outcome.succeeded.append(step_name)
+            _note_caution(result, step_name, ret)
             _record_pipeline_step(adata, step_name, params, ret,
                                   _step_resources(control, step_name))
         except StepSkipped as e:
@@ -2808,6 +2824,7 @@ def run_pipeline_streamed(
                 adata = new
             result.steps_run.append(step_name)
             outcome.succeeded.append(step_name)
+            _note_caution(result, step_name, ret)
             _record_pipeline_step(adata, step_name, params, ret,
                                   _step_resources(control, step_name))
             elapsed = round(time.time() - step_t0, 2)

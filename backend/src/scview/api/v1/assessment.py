@@ -353,6 +353,7 @@ async def get_filter_preview(
     drop_hash_negatives: bool | None = None,
     counts_floor: float | None = None,
     genes_floor: float | None = None,
+    pct_mt_floor: float | None = None,
     grid_mito: bool = False,
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
@@ -371,6 +372,8 @@ async def get_filter_preview(
     ``mito_type_floor`` makes it never stricter than the global rule.
     ``genes_floor``: MAD mode's genes cut is never below it (default: the data's, 200 for
     cells; ``mad`` says per sample which cut applied and what the floor removed).
+    ``pct_mt_floor``: MAD mode's % mito bound is never below it (default 2%; ``mad`` says per
+    sample which bound applied). On nuclei a warning says when % mito removes over 5% of a sample.
     ``doublet_source`` (auto | hashing | scrublet | classifier | consensus | either) is whose doublets
     ``drop_doublets`` drops, ``drop_hash_negatives`` drops cell hashing's
     negatives; ``doublets`` describes the choice (core/doublet_source.py).
@@ -388,7 +391,8 @@ async def get_filter_preview(
                        ("qc_mito_type_column", mito_type_column or None),
                        ("qc_mito_type_floor", mito_type_floor),
                        ("qc_doublet_source", doublet_source), ("drop_hash_negatives", drop_hash_negatives),
-                       ("qc_counts_floor", counts_floor), ("qc_genes_floor", genes_floor)):
+                       ("qc_counts_floor", counts_floor), ("qc_genes_floor", genes_floor),
+                       ("qc_pct_mt_floor", pct_mt_floor)):
         if value is not None:
             setattr(params, key, value)
             params.explicit = (*params.explicit, key)

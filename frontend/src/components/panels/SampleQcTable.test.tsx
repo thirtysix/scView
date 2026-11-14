@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { render, screen, fireEvent, within } from "@testing-library/react";
 import type { FilterGroupLoss, FilterPreview, MadThresholds } from "@/api/qc";
-import { floorSummary, heat, SampleQcTable, SampleThresholds } from "./SampleQcTable";
-import { filterThresholds } from "./DataAssessmentPanel";
+import { floorSummary, heat, mitoFloorSummary, SampleQcTable, SampleThresholds } from "./SampleQcTable";
+import { filterThresholds, StepCautions } from "./DataAssessmentPanel";
 
 function group(name: string, n: number, genes: number, counts: number, mito: number, removed: number,
   flags: FilterGroupLoss["flags"] = [], reasons: string[] = []): FilterGroupLoss {
@@ -143,5 +143,38 @@ describe("the genes floor", () => {
     expect(filterThresholds(undefined).qc_genes_floor).toBeUndefined();
     expect(filterThresholds({ qc_genes_floor: 0 }).qc_genes_floor).toBe(0);
     expect(filterThresholds({ qc_genes_floor: 150 }).qc_genes_floor).toBe(150);
+  });
+});
+
+describe("the % mito floor", () => {
+  const floored: MadThresholds = {
+    ...MAD,
+    pct_mt_floor: 2,
+    samples: [
+      { ...MAD.samples[0]!, max_pct_mt_mad: 7, max_pct_mt_by: "mad", n_pct_mt_floor: 0 },
+      { ...MAD.samples[1]!, max_pct_mt: 2, max_pct_mt_mad: 0.139, max_pct_mt_by: "floor", n_pct_mt_floor: 1163 },
+    ],
+  };
+
+  it("marks the samples whose bound is the floor and says what it kept", () => {
+    render(<SampleThresholds mad={floored} />);
+    const table = screen.getByRole("table", { name: "Thresholds per sample" });
+    expect(within(table).getByText("(floor)")).toBeInTheDocument();
+    expect(within(table).getByTitle(/The % mito floor of 2% applies: its own bound is 0\.14%\. The floor keeps 1,163 cells/)).toBeInTheDocument();
+    expect(screen.getByTestId("mito-floor")).toHaveTextContent(
+      "% mito floor 2%: it set the bound in 1 of 2 samples (their own was lower, as in nuclei) and kept 1,163 cells.");
+  });
+
+  it("is silent when the floor set no bound, and is sent only when set", () => {
+    expect(mitoFloorSummary({ ...floored, samples: [floored.samples[0]!] })).toBeNull();
+    expect(mitoFloorSummary(MAD)).toBeNull();
+    expect(filterThresholds(undefined).qc_pct_mt_floor).toBeUndefined();
+    expect(filterThresholds({ qc_pct_mt_floor: 0 }).qc_pct_mt_floor).toBe(0);
+    expect(filterThresholds({ qc_pct_mt_floor: 5 }).qc_pct_mt_floor).toBe(5);
+  });
+
+  it("shows a run's cautions beside the step", () => {
+    render(<StepCautions cautions={{ filtering: "These look like nuclei." }} />);
+    expect(screen.getByTestId("step-cautions")).toHaveTextContent("These look like nuclei.");
   });
 });

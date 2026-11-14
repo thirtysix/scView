@@ -275,7 +275,7 @@ async def test_endpoint_defaults_to_the_pipelines_thresholds(client, dataset_man
     p = PipelineParams()
     # MAD mode: the fixed cut-offs are not applied, so not echoed; the genes floor is.
     assert body["thresholds"] == {"mode": "mad", "min_genes": None, "max_genes": None,
-                                  "min_counts": None, "genes_floor": 200.0, "counts_floor": 0.0,
+                                  "min_counts": None, "genes_floor": 200.0, "counts_floor": 0.0, "pct_mt_floor": 2.0,
                                   "max_pct_mt": p.max_pct_mt,
                                   "drop_doublets": False, "mad_k": 5.0, "mad_k_mt": 3.0,
                                   "mad_upper": False, "mito_mode": "global", "mito_type_column": "",

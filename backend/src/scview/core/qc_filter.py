@@ -165,6 +165,9 @@ class Thresholds:
     # MAD mode: a sample's genes cut is never below this (``apply_genes_floor``); 0 = none,
     # None = the data's default (``default_genes_floor``, set by ``resolve_floor``).
     genes_floor: float | None = 0.0
+    # MAD mode: a sample's % mito bound is never below this (``apply_pct_mt_floor``); 0 = none,
+    # None = the default (``MITO_FLOOR``, set by ``resolve_floor``).
+    pct_mt_floor: float | None = 0.0
     # "per_type": each cell type's own % mito bound (median + mad_k_mt MADs) instead
     # of the global rule (module docstring); "global": the rule above for every cell.
     mito_mode: str = "global"
@@ -184,12 +187,14 @@ class Thresholds:
         floor = float(getattr(params, "qc_counts_floor", 0) or 0)
         min_counts = float(getattr(params, "min_counts", 0) or 0)
         genes_floor = getattr(params, "qc_genes_floor", None)
+        pct_mt_floor = getattr(params, "qc_pct_mt_floor", None)
         return cls(
             min_genes=float(getattr(params, "min_genes", 0) or 0),
             max_genes=float(getattr(params, "max_genes", 0) or 0),
             min_counts=max(min_counts, floor) if mode == "fixed" else min_counts,
             counts_floor=floor,
             genes_floor=None if genes_floor is None else float(genes_floor),
+            pct_mt_floor=None if pct_mt_floor is None else float(pct_mt_floor),
             max_pct_mt=None if mt is None else float(mt),
             drop_doublets=bool(getattr(params, "drop_doublets", False)),
             mode=mode,
@@ -220,6 +225,8 @@ class Thresholds:
                 raise ValueError(f"The {name} must be a positive number, not {k}.")
         if self.genes_floor is not None and not (math.isfinite(self.genes_floor) and self.genes_floor >= 0):
             raise ValueError(f"The genes floor must be 0 or more, not {self.genes_floor}.")
+        if self.pct_mt_floor is not None and not (math.isfinite(self.pct_mt_floor) and 0 <= self.pct_mt_floor <= 100):
+            raise ValueError(f"The % mito floor must be between 0 and 100, not {self.pct_mt_floor}.")
 
 
 # Spots and bins are positions on a capture grid, not cells: few genes and a high % mito say what
@@ -306,11 +313,103 @@ def default_genes_floor(adata) -> float:
     return GENES_FLOOR
 
 
+# The % mito floor under MAD mode (``pct_mt_floor``): nuclei hold almost no mitochondria, so % mito
+# piles up near 0 and median + 3 MADs collapses. Measured on the 10x mouse kidney multiome (5,287
+# nuclei, median 0.039%, MAD 0.033): the bound was 0.139% and removed 1,257 nuclei (24%; half of
+# the thick ascending limb, 42% of the endothelium, 15% of the proximal tubule), and on Wilson 2022
+# kidney nuclei (39,176, 11 donors) bounds of 0.14-0.57% removed 3,702 (9.4%). With the floor at 2%
+# the kidney loses 94 (1.8%) to % mito and Wilson none. Whole cells are not touched: the lowest
+# sample bound on PBMC 1k v3, PBMC 10k CITE-seq, PBMC 10k multiome and Wilk 2020 (13 donors) is
+# 8.1%, so 2% changes no cell there (Kang 2018 and Emont 2022 have no MT- genes to measure).
+MITO_FLOOR = 2.0
+
+
 def resolve_floor(adata, t: Thresholds) -> Thresholds:
-    """``t`` with its genes floor set: the data's default when it is None (not given)."""
-    if t.genes_floor is not None:
-        return t
-    return replace(t, genes_floor=default_genes_floor(adata))
+    """``t`` with its floors set: the genes floor to the data's default and the % mito floor
+    to ``MITO_FLOOR`` when they are None (not given)."""
+    if t.genes_floor is None:
+        t = replace(t, genes_floor=default_genes_floor(adata))
+    if t.pct_mt_floor is None:
+        t = replace(t, pct_mt_floor=MITO_FLOOR)
+    return t
+
+
+# Nuclei (single-nucleus RNA, every 10x Multiome): their few mito reads are mostly ambient RNA and
+# rise as a nucleus's own counts fall (kidney multiome: Spearman -0.26 against UMIs), so a % mito
+# bound selects by cell type and depth more than it finds damaged cells. The preview and the
+# filtering step say so when % mito alone removes more than NUCLEI_MITO_WARN of a sample.
+NUCLEI_MITO_WARN = 0.05
+_NUCLEUS_RE = re.compile(r"nucle|single[ ._-]?nuc|snrna|multiome", re.I)
+
+
+def nuclei_reason(adata, cells: dict | None = None) -> str | None:
+    """Why ``adata`` looks like nuclei rather than whole cells (a few words), or None: a
+    ``suspension_type`` of nucleus (CELLxGENE), an assay naming nuclei or Multiome, 10x Multiome
+    ATAC peaks beside the RNA, or, from ``cells``, a median under ``cluster_qc.NUCLEI_MITO_MEDIAN``
+    % mito (the cluster QC's nuclei test)."""
+    from scview.core import atac_import
+
+    obs = adata.obs
+    if "suspension_type" in obs.columns:
+        s = obs["suspension_type"].astype(str).str.lower()
+        if (s == "nucleus").mean() > HALF:
+            return "suspension_type is nucleus"
+    for col in ("assay", "assay_type", "technology"):
+        if col in obs.columns and _few_values(obs[col], 20):
+            hit = next((str(v) for v in pd.unique(obs[col].astype(str)) if _NUCLEUS_RE.search(str(v))), None)
+            if hit:
+                return f"{col} is {hit}"
+    if atac_import.UNS_KEY in adata.uns or atac_import.OBS_TOTAL in obs.columns:
+        return "10x Multiome: RNA and ATAC from the same nuclei"
+    if cells is not None and _mito_measurable(cells):
+        pct = _values(cells, "pct_mt")
+        pct = pct[np.isfinite(pct)]
+        if pct.size and float(np.median(pct)) < cluster_qc.NUCLEI_MITO_MEDIAN:
+            return f"the median cell has {float(np.median(pct)):.2f}% mito reads, as nuclei do"
+    return None
+
+
+def nuclei_mito_warnings(adata, cells: dict, removed: dict[str, np.ndarray],
+                         samples: Samples | None) -> list[dict]:
+    """One warning when the data look like nuclei (``nuclei_reason``) and % mito alone removes
+    more than ``NUCLEI_MITO_WARN`` of a sample (of all cells without a sample column)."""
+    mito = removed.get("max_pct_mt")
+    if mito is None or not mito.any():
+        return []
+    reason = nuclei_reason(adata, cells)
+    if reason is None:
+        return []
+    n = mito.size
+    groups: list[tuple[str, int, int]] = []
+    if samples is not None and samples.column and samples.names:
+        sizes = np.bincount(samples.codes[samples.codes >= 0], minlength=len(samples.names))
+        lost = np.bincount(samples.codes[(samples.codes >= 0) & mito], minlength=len(samples.names))
+        groups = [(name, int(sz), int(r)) for name, sz, r in zip(samples.names, sizes, lost)
+                  if sz and r / sz > NUCLEI_MITO_WARN]
+    elif mito.sum() / n > NUCLEI_MITO_WARN:
+        groups = [("all cells", n, int(mito.sum()))]
+    if not groups:
+        return []
+    groups.sort(key=lambda g: -g[2] / g[1])
+    shown = ", ".join(f"{name} {r / sz:.0%} ({r:,} of {sz:,})" for name, sz, r in groups[:4])
+    more = f" and {len(groups) - 4} more samples" if len(groups) > 4 else ""
+    where = (f"% mito alone removes {shown}{more}" if samples is not None and samples.column
+             else f"% mito alone removes {groups[0][2] / n:.0%} of the cells ({groups[0][2]:,} of {n:,})")
+    total = int(mito.sum())
+    return [{
+        "kind": "nuclei",
+        "column": samples.column if samples is not None else None,
+        "group": "nuclei",
+        "n_cells": n,
+        "n_removed": total,
+        "fraction": round(total / n, 4) if n else 0.0,
+        "whole": False,
+        "criterion": "max_pct_mt",
+        "reason": reason,
+        "message": (f"These look like nuclei ({reason}), and {where}. Nuclei hold few mitochondria: their "
+                    "mito reads are mostly ambient RNA, so a % mito bound removes some cell types more "
+                    "than others. Check the removal table, or raise the % mito floor or Max % mito."),
+    }]
 
 
 @dataclass
@@ -372,6 +471,7 @@ class MadBounds:
             "upper": self.t.mad_upper,
             **({"counts_floor": self.t.counts_floor} if self.t.counts_floor > 0 else {}),
             **({"genes_floor": self.t.genes_floor} if (self.t.genes_floor or 0) > 0 else {}),
+            **({"pct_mt_floor": self.t.pct_mt_floor} if (self.t.pct_mt_floor or 0) > 0 and "pct_mt" in self.hi else {}),
             "ceiling_pct_mt": self.t.max_pct_mt if "pct_mt" in self.hi else None,
             "min_sample_cells": MIN_SAMPLE_CELLS,
             "samples": groups,
@@ -429,6 +529,8 @@ def _recorded_bounds(row: dict) -> dict:
     out = {b: row.get(b) for b in _BOUNDS}
     if "min_genes_mad" in row:
         out["min_genes"] = row["min_genes_mad"]
+    if "max_pct_mt_mad" in row:  # likewise the % mito floor
+        out["max_pct_mt"] = row["max_pct_mt_mad"]
     return out
 
 
@@ -451,6 +553,20 @@ def apply_genes_floor(row: dict, genes: np.ndarray, floor: float) -> None:
         row["floor_skipped"] = int(below_floor.sum())
         return
     row.update(min_genes=float(floor), min_genes_by="floor", n_floor=int((below_floor & ~below_mad).sum()))
+
+
+def apply_pct_mt_floor(row: dict, pct: np.ndarray, floor: float, ceiling: float | None) -> None:
+    """Raise ``row``'s % mito bound (``max_pct_mt``, the MAD bound under the ceiling) to
+    ``floor`` (never above the ceiling) and say which bound applies (``max_pct_mt_by`` "mad"
+    or "floor") and how many cells the floor keeps that the MAD bound removes
+    (``n_pct_mt_floor``). ``pct``: % mito of the cells the row judges."""
+    own = row.get("max_pct_mt")
+    row.update(max_pct_mt_mad=own, max_pct_mt_by="mad", n_pct_mt_floor=0)
+    target = float(floor) if ceiling is None else min(float(floor), float(ceiling))
+    if own is None or own >= target:
+        return
+    p = pct[np.isfinite(pct)]
+    row.update(max_pct_mt=target, max_pct_mt_by="floor", n_pct_mt_floor=int(((p > own) & (p <= target)).sum()))
 
 
 def _reusable(recorded: dict | None, t: Thresholds, column: str | None,
@@ -528,6 +644,11 @@ def mad_bounds(cells: dict, t: Thresholds, samples: Samples | None = None,
         for row, m in zip(rows, groups):
             apply_genes_floor(row, genes[m], t.genes_floor)
         apply_genes_floor(pooled, genes[samples.codes < 0] if samples.column else genes, t.genes_floor)
+    if has_mt and (t.pct_mt_floor or 0) > 0:
+        pct = _values(cells, "pct_mt")
+        for row, m in zip(rows, groups):
+            apply_pct_mt_floor(row, pct[m], t.pct_mt_floor, ceiling)
+        apply_pct_mt_floor(pooled, pct[samples.codes < 0] if samples.column else pct, t.pct_mt_floor, ceiling)
 
     # Per cell, on the scale the masks compare: log1p for counts and genes, % for
     # mito. Row i < k is sample i; row k the pooled bounds (unlabelled cells).
@@ -920,6 +1041,12 @@ def applied_summary(applied: dict) -> str:
         parts.append(f"genes never cut below {floor:,.0f}"
                      + (f" (this floor set the cut in {n_set} of {len(rows)} samples)" if n_set
                         else " (no sample's own cut was below it)"))
+    pct_mt_floor = applied.get("pct_mt_floor")
+    if pct_mt_floor:
+        n_set = sum(1 for r in rows if r.get("max_pct_mt_by") == "floor")
+        parts.append(f"% mito never cut below {pct_mt_floor:g}%"
+                     + (f" (this floor set the bound in {n_set} of {len(rows)} samples)" if n_set
+                        else " (no sample's own bound was below it)"))
     n_pooled = sum(1 for s in samples if s.get("pooled"))
     where = (f"within each {applied['column']} ({len(samples)} samples"
              + (f", {n_pooled} too small and judged on all cells" if n_pooled else "") + ")"
@@ -1064,6 +1191,7 @@ def preview(adata, cells: dict, t: Thresholds, sample_column: str | None = None,
     has_mt = bool(cells.get("has_mt", True))
     warnings = _warnings("sample", samples) + _warnings("cluster", clusters)
     warnings.sort(key=lambda w: (not w["whole"], -w["fraction"]))
+    warnings = nuclei_mito_warnings(adata, cells, removed, samp) + warnings
     previous = recorded_filtering(adata)
     who = audit(adata, drop, removed, label_column, condition_column, samp.column,
                 skip={(w["column"], w["group"]) for w in warnings})
@@ -1079,6 +1207,7 @@ def preview(adata, cells: dict, t: Thresholds, sample_column: str | None = None,
             "max_genes": t.max_genes if t.mode == "fixed" else None,
             "min_counts": t.min_counts if t.mode == "fixed" else None,
             "genes_floor": (t.genes_floor or 0.0) if t.mode == "mad" else None,
+            "pct_mt_floor": (t.pct_mt_floor or 0.0) if t.mode == "mad" and has_mt else None,
             "counts_floor": t.counts_floor if t.mode == "mad" else None,
             "max_pct_mt": t.max_pct_mt if has_mt else None,
             "drop_doublets": t.drop_doublets,

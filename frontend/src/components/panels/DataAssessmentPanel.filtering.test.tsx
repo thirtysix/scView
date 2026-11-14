@@ -104,7 +104,7 @@ describe("DataAssessmentPanel filtering mode", () => {
     expect(input("Cell thresholds")).toHaveValue("fixed");
     expect(input("Min genes/cell")).not.toBeDisabled();
     expect(input("MADs for % mito")).toBeDisabled();
-    expect(screen.getAllByText("Not used: fixed cut-offs.")).toHaveLength(5); // the MAD multipliers, upper bounds, samples, genes floor
+    expect(screen.getAllByText("Not used: fixed cut-offs.")).toHaveLength(6); // the MAD multipliers, upper bounds, samples, genes and % mito floors
     expect(input("Also cut high counts / genes")).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: /re-run this step/i }));
     await waitFor(() => expect(fetchSpy).toHaveBeenCalled());

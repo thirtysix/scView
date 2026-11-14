@@ -141,6 +141,8 @@ interface PipelineResult extends RunOutcomeFields {
   errors: Record<string, string>;
   /** Steps that had nothing to do on this dataset, and why (not errors). */
   notes?: Record<string, string>;
+  /** Steps that ran and found something to check (filtering: % mito on nuclei). */
+  cautions?: Record<string, string>;
   elapsed_seconds: number;
   output_path: string | null;
 }
@@ -315,6 +317,21 @@ const STEP_PARAMS: Record<string, ParamConfig[]> = {
         "No sample's genes cut goes below this, so a sample with many near-empty cells (whose MADs are wide) " +
         "still loses them. Empty: 200 for cells, 100 for spots, none on bins and targeted panels. 0 turns it off.",
     },
+    {
+      param: "qc_pct_mt_floor",
+      label: "Max % mito floor",
+      type: "number",
+      min: 0,
+      max: 100,
+      step: 0.5,
+      default: null,
+      placeholder: "2%",
+      zeroAllowed: true,
+      mode: "mad",
+      help:
+        "No sample's % mito bound goes below this. Nuclei have almost no mito reads, so median + 3 MADs can fall " +
+        "under 0.2% and remove whole cell types. Empty: 2%. 0 turns it off.",
+    },
     { param: "min_genes", label: "Min genes/cell", type: "number", min: 0, max: 5000, step: 50, default: 200, mode: "fixed" },
     { param: "max_genes", label: "Max genes/cell (0 = off)", type: "number", min: 0, max: 20000, step: 100, default: 0, mode: "fixed" },
     { param: "min_counts", label: "Min counts/cell (0 = off)", type: "number", min: 0, max: 100000, step: 100, default: 0, mode: "fixed" },
@@ -469,6 +486,8 @@ export function filterThresholds(
     qc_counts_floor: set?.qc_counts_floor != null ? Number(set.qc_counts_floor) : undefined,
     // Likewise the genes floor: unset, the backend picks the data's (200 cells, 100 spots).
     qc_genes_floor: set?.qc_genes_floor != null ? Number(set.qc_genes_floor) : undefined,
+    // And the % mito floor: unset, the backend's 2%.
+    qc_pct_mt_floor: set?.qc_pct_mt_floor != null ? Number(set.qc_pct_mt_floor) : undefined,
     qc_mito_mode: set?.qc_mito_mode === "per_type" ? "per_type" : "global",
     qc_mito_type_column: String(set?.qc_mito_type_column ?? ""),
     qc_mito_type_floor: Boolean(set?.qc_mito_type_floor ?? false),
@@ -556,6 +575,21 @@ export function StepCaution({ caution }: { caution?: string | null }) {
 
 /** Steps a run skipped because they had nothing to do (e.g. too few signature
  *  genes), with the reason: not errors, so not in red. */
+/** What a step that ran wants checked (the filtering step on nuclei). */
+export function StepCautions({ cautions }: { cautions?: Record<string, string> }) {
+  const entries = Object.entries(cautions ?? {});
+  if (entries.length === 0) return null;
+  return (
+    <div className="mt-2 text-amber-800" data-testid="step-cautions">
+      {entries.map(([step, text]) => (
+        <p key={step}>
+          {STEP_ORDER.find((s) => s.key === step)?.label ?? step}: {text}
+        </p>
+      ))}
+    </div>
+  );
+}
+
 export function SkippedSteps({ notes }: { notes?: Record<string, string> }) {
   const entries = Object.entries(notes ?? {});
   if (entries.length === 0) return null;
@@ -1428,6 +1462,7 @@ export function DataAssessmentPanel() {
                   : "No step finished; nothing changed."}
               </p>
               <RunErrors result={runResult} label={stepLabel} />
+              <StepCautions cautions={runResult.cautions} />
               <SkippedSteps notes={runResult.notes} />
               {!running &&
                 runResult.steps_run.length > 0 &&
@@ -1459,6 +1494,7 @@ export function DataAssessmentPanel() {
                   ))}
                 </div>
               )}
+              <StepCautions cautions={runResult.cautions} />
               <SkippedSteps notes={runResult.notes} />
               {!running &&
                 runResult.steps_run.length > 0 &&
