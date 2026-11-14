@@ -796,9 +796,11 @@ def remember(adaptor, result: MixscapeResult) -> None:
             _last[adaptor] = result
     except TypeError:  # not weak-referenceable (a test double)
         return
+    # ``writes`` names the run's own class columns: a later run that changed them (or a new
+    # guide assignment, through ``labels``) makes this one stale (results_store.LABEL_STEPS).
     results_store.keep(adaptor, "mixscape", result, key=f"{result.labels}|{result.control}",
                        label=f"Mixscape: {result.n_targets} targets vs {result.control}",
-                       params=result.params)
+                       params={**result.params, "writes": [CLASS, GLOBAL]})
 
 
 def last_result(adaptor) -> MixscapeResult | None:

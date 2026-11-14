@@ -33,7 +33,7 @@ DATA_CHANGING = {
     "subcluster", "merge_clusters", "keep_resolution", "keep_hvg_setting", "keep_layout",
     "doublet_threshold", "mito_refilter",
     "protein_dsb",
-    "vdj_attach", "vdj_clonotypes", "vdj_remove", "crispr_assign", "mixscape",
+    "vdj_attach", "vdj_clonotypes", "vdj_remove",
 }
 
 

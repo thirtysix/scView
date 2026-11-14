@@ -137,9 +137,12 @@ ADDITIVE_STEPS = frozenset({
 # write their own columns only (hash_*, the sample column): QA 2026-11-14 found one demux
 # marking every DE and Mixscape result stale. A demux that moved antibody features into
 # or out of the protein modality changes that modality's data: it counts as
-# data-changing (``HASHING_PROTEIN``, see ``_history_steps``).
+# data-changing (``HASHING_PROTEIN``, see ``_history_steps``). A guide assignment and a
+# Mixscape run (core/crispr.py, core/mixscape.py) write their own obs columns only too: a
+# result goes stale after one only when it named a column whose labels changed (a DE by
+# ``mixscape_class`` after Mixscape re-ran, a Mixscape run after the guides were re-assigned).
 LABEL_STEPS = frozenset({"label_cells", "undo_label_cells", "combine_columns", "hashing_demux",
-                         "hashing_samples"})
+                         "hashing_samples", "crispr_assign", "mixscape"})
 HASHING_PROTEIN = "hashing_demux_protein"
 
 # Wilson 2022: a neighbours rebuild and a new annotation column marked all 20 DE,
@@ -215,15 +218,31 @@ def _strings(obj: Any) -> list[str]:
     return out
 
 
+def label_step_columns(adata: Any) -> set[str]:
+    """The obs columns a ``LABEL_STEPS`` step writes that a result of any kind may name:
+    the user annotation columns, the guide assignment's and Mixscape's."""
+    from scview.core.user_labels import user_columns
+
+    out = set(user_columns(adata))
+    try:
+        from scview.core import crispr, mixscape
+
+        cols = (crispr.read_state(adata).get("call") or {}).get("columns") or {}
+        out |= {str(c) for c in cols.values() if isinstance(c, str)}
+        out |= set(mixscape.OBS_COLUMNS)
+    except Exception:  # an unreadable record: the user columns still count
+        pass
+    return {c for c in out if c in adata.obs.columns}
+
+
 def used_user_columns(adaptor: Any, *objs: Any, kind: str | None = None) -> dict[str, str | None]:
     """The obs columns ``objs`` (a result, its parameters) name, each with its labels'
-    hash now: the user annotation columns, and for a ``NAMED_COLUMN_KINDS`` result every
-    obs column (a clustering or annotation step then stales it only through them)."""
+    hash now: the columns label steps write (``label_step_columns``), and for a
+    ``NAMED_COLUMN_KINDS`` result every obs column (a clustering or annotation step then
+    stales it only through them)."""
     try:
-        from scview.core.user_labels import user_columns
-
         adata = adaptor.adata
-        mine = set(adata.obs.columns.astype(str)) if kind in NAMED_COLUMN_KINDS else set(user_columns(adata))
+        mine = set(adata.obs.columns.astype(str)) if kind in NAMED_COLUMN_KINDS else label_step_columns(adata)
         names = sorted({s for o in objs for s in _strings(o) if s in mine})
         return {c: (column_fingerprint(adata, c, cells="-") or {}).get("labels") for c in names}
     except Exception:  # a test double, or no data
