@@ -50,9 +50,10 @@ FLAG_RULE = (
     "A velocity gene is flagged at an expected step A -> B when, on its smoothed levels, it is expressed in A "
     "(mean spliced at least 25% of its highest group's), spliced rises at least 1.25-fold to B, unspliced/spliced rises at "
     "least 1.2-fold to B, and velocity is negative in at least 2/3 of A's cells that express it: rising expression read "
-    "as switching off. That is the MURK pattern (Barile 2021): transcription steps up along the path. Tuned on the "
-    "erythroid atlas (7 of 311 velocity genes flagged, 6 of them Barile's MURK genes); the pancreas positive control "
-    "flags 33 of 1,050."
+    "as switching off. That is the MURK pattern (Barile 2021): transcription steps up along the path. On the "
+    "erythroid atlas it flags 7 of 311 velocity genes, 6 of them Barile's MURK genes; leaving those 7 out moved the "
+    "backward step from -0.19 to -0.01, Barile's full list to +0.26. The pancreas control, forward at every step, "
+    "flags 28 to 54 of 1,050 by the order used: a flag alone is no fault."
 )
 MAX_TRANSITIONS = 60
 NN_BLOCK = 50_000
