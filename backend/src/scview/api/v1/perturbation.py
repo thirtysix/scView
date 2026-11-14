@@ -61,6 +61,8 @@ class MixscapeRequest(BaseModel):
     lda: bool = True
     # all: every gene, Seurat RunMixscape's DE rule (default); variable: the variable genes (scView 0.77)
     de_genes: str = mixscape.DE_ALL
+    guide_column: str | None = None  # per-guide KO table; default: the assignment's guide column
+    replicate_column: str | None = None  # per-replicate KO table; default: split_by
 
 
 def _sse(event: str, data: dict[str, Any]) -> str:
@@ -157,7 +159,8 @@ def _params(adata, body: MixscapeRequest) -> mixscape.Params:
     return mixscape.Params(labels=labels, control=control, split_by=body.split_by or None,
                            n_neighbors=body.n_neighbors, n_dims=body.n_dims, logfc_threshold=body.logfc_threshold,
                            pval_cutoff=body.pval_cutoff, min_de_genes=body.min_de_genes,
-                           iter_num=body.iter_num, lda=body.lda, de_genes=body.de_genes)
+                           iter_num=body.iter_num, lda=body.lda, de_genes=body.de_genes,
+                           guide_column=body.guide_column or None, replicate_column=body.replicate_column or None)
 
 
 async def _save(dm: DatasetManager, dataset_id: str, result: mixscape.MixscapeResult, columns: dict,

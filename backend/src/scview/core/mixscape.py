@@ -121,6 +121,11 @@ class Params:
     scale: bool = True
     lda: bool = True
     de_genes: str = DE_ALL
+    # KO share per guide and per replicate (``per_guide`` / ``per_replicate``): None picks
+    # the saved assignment's guide column (or a guide-named column nested in ``labels``)
+    # and ``split_by``.
+    guide_column: str | None = None
+    replicate_column: str | None = None
 
 
 @dataclass
@@ -142,6 +147,11 @@ class MixscapeResult:
     created: str = ""
     n_cells_total: int = 0
     excluded: dict = field(default_factory=dict)  # labels left out as not targets -> n_cells, reason
+    # Per target x guide and per target x replicate: n_cells, n_ko, ko_fraction (Papalexi Fig. 3c)
+    guide_column: str | None = None
+    replicate_column: str | None = None
+    per_guide: list[dict] = field(default_factory=list)
+    per_replicate: list[dict] = field(default_factory=list)
 
     def summary(self) -> dict:
         n_target_cells = sum(t["n_cells"] for t in self.targets)
@@ -170,12 +180,17 @@ class Plan:
     gene_source: str
     expression_source: str
     n_cells_total: int
+    guide_column: str | None = None
+    guides: np.ndarray | None = None  # each used cell's guide (str), when a guide column is known
+    replicate_column: str | None = None
+    replicates: np.ndarray | None = None
 
     def to_dict(self) -> dict:
         return {"labels": self.params.labels, "control": self.params.control, "split_by": self.params.split_by,
                 "n_cells": int(self.rows.size), "n_control": int((self.labels == self.params.control).sum()),
                 "n_targets": len(self.targets), "targets": self.targets, "skipped": self.skipped,
-                "excluded": self.excluded,
+                "excluded": self.excluded, "guide_column": self.guide_column,
+                "replicate_column": self.replicate_column,
                 "n_genes": int(self.gene_idx.size), "gene_source": self.gene_source,
                 "expression_source": self.expression_source, "n_splits": len(self.splits),
                 "params": asdict(self.params)}
@@ -242,8 +257,9 @@ def plan(adata, params: Params) -> Plan:
     p = params
     if p.labels not in obs.columns:
         raise MixscapeError(f"Column '{p.labels}' not found: assign the guides first.")
-    if p.split_by and p.split_by not in obs.columns:
-        raise MixscapeError(f"Column '{p.split_by}' not found.")
+    for col in (p.split_by, p.guide_column, p.replicate_column):
+        if col and col not in obs.columns:
+            raise MixscapeError(f"Column '{col}' not found.")
     if not 1 <= p.n_neighbors <= 200:
         raise MixscapeError("Neighbours must be 1 to 200.")
     if not 0 <= p.logfc_threshold <= 10 or not 0 < p.pval_cutoff <= 1:
@@ -282,8 +298,7 @@ def plan(adata, params: Params) -> Plan:
     rows = np.flatnonzero(keep)
     labels = lab.to_numpy()[rows].astype(str)
     if p.split_by:
-        sv = obs[p.split_by].astype(object).to_numpy()[rows]
-        sv = np.array(["" if v is None or (isinstance(v, float) and np.isnan(v)) else str(v) for v in sv])
+        sv = _text(obs[p.split_by], rows)
         splits = [(s, sv == s) for s in pd.unique(sv)]
     else:
         splits = [("all", np.ones(rows.size, dtype=bool))]
@@ -300,10 +315,52 @@ def plan(adata, params: Params) -> Plan:
         gene_idx = np.arange(len(expr.names))
         gene_source = (f"all {gene_idx.size:,} genes (Seurat's rule: detected in >= {MIN_PCT:.0%} of either "
                        "group, Bonferroni)")
+    guide_col = p.guide_column or guide_column_for(adata, p.labels, rows)
+    rep_col = p.replicate_column or p.split_by
     return Plan(params=p, rows=rows, labels=labels, targets=sorted(targets), skipped=skipped, excluded=excluded,
                 splits=splits,
                 gene_idx=gene_idx, gene_names=np.asarray(expr.names).astype(str)[gene_idx],
-                gene_source=gene_source, expression_source=expr.source, n_cells_total=int(adata.n_obs))
+                gene_source=gene_source, expression_source=expr.source, n_cells_total=int(adata.n_obs),
+                guide_column=guide_col, guides=_text(obs[guide_col], rows) if guide_col else None,
+                replicate_column=rep_col, replicates=_text(obs[rep_col], rows) if rep_col else None)
+
+
+def _text(col: pd.Series, rows: np.ndarray) -> np.ndarray:
+    """An obs column's values at ``rows`` as text ("" for a missing value)."""
+    v = col.astype(object).to_numpy()[rows]
+    return np.array(["" if x is None or (isinstance(x, float) and np.isnan(x)) else str(x) for x in v],
+                    dtype=object)
+
+
+def guide_column_for(adata, labels: str, rows: np.ndarray) -> str | None:
+    """The column naming each cell's guide for the targets in ``labels``: the saved
+    assignment's ``guide_call`` when ``labels`` is its target column, else an obs column
+    named like a guide (``guide_ID``, ``sgRNA``, ...) whose values each sit within one
+    target for at least 99% of their cells and outnumber the targets. None without one."""
+    from scview.core import crispr
+
+    call = crispr.read_state(adata).get("call") or {}
+    cols = call.get("columns") or {}
+    if cols.get("perturbation") == labels and cols.get("guide_call") in adata.obs.columns:
+        return str(cols["guide_call"])
+    obs = adata.obs
+    lab = _text(obs[labels], rows)
+    n_lab = len(set(lab))
+    for c in obs.columns:
+        name = str(c)
+        if name == labels or not ("guide" in name.lower() or "grna" in name.lower()):
+            continue
+        s = obs[c]
+        if pd.api.types.is_numeric_dtype(s) and not isinstance(s.dtype, pd.CategoricalDtype):
+            continue
+        g = _text(s, rows)
+        df = pd.DataFrame({"g": g, "t": lab})
+        if df["g"].nunique() <= n_lab or df["g"].nunique() > crispr.MAX_GUIDES:
+            continue
+        top = df.groupby(["g", "t"], sort=False).size().groupby(level=0).max().sum()
+        if top >= 0.99 * len(df):
+            return name
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -646,9 +703,23 @@ def iter_mixscape(adata, pl: Plan, *, stop: Callable[[], bool] | None = None) ->
         gene_source=pl.gene_source, expression_source=pl.expression_source, targets=rows_out,
         warnings=warnings, lda=lda, seconds=round(time.perf_counter() - t0, 2),
         created=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), n_cells_total=pl.n_cells_total,
-        excluded=pl.excluded)
+        excluded=pl.excluded, guide_column=pl.guide_column, replicate_column=pl.replicate_column,
+        per_guide=ko_table(pl.labels, pl.guides, glob, p.control, "guide"),
+        per_replicate=ko_table(pl.labels, pl.replicates, glob, p.control, "replicate"))
     yield {"type": "result", "result": result,
            "columns": {"rows": pl.rows, CLASS: cls, GLOBAL: glob, P_KO: pko}}
+
+
+def ko_table(labels: np.ndarray, by: np.ndarray | None, glob: np.ndarray, control: str, key: str) -> list[dict]:
+    """KO share per target x value of ``by`` (a guide or a replicate), target cells only:
+    ``[{"target", key, "n_cells", "n_ko", "ko_fraction"}]`` by target, then value."""
+    if by is None:
+        return []
+    tgt = labels != control
+    df = pd.DataFrame({"target": labels[tgt], key: by[tgt], "ko": glob[tgt] == KO})
+    g = df.groupby(["target", key], sort=True)["ko"].agg(["size", "sum"])
+    return [{"target": str(t), key: str(v), "n_cells": int(n), "n_ko": int(k), "ko_fraction": float(k / n)}
+            for (t, v), n, k in zip(g.index, g["size"], g["sum"])]
 
 
 def run(adata, params: Params) -> tuple[MixscapeResult, dict]:

@@ -12,6 +12,7 @@ import {
   saveAssignment,
   type AssignmentPreview,
   type GuideSource,
+  type KoShareRow,
   type MixscapeDeGenes,
   type MixscapeProgress,
   type MixscapeTarget,
@@ -21,6 +22,7 @@ import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
 import {
   deGenesOf,
   deHandoff,
+  koRowsFor,
   ldaTraces,
   mappingChanges,
   MIXSCAPE_CLASS,
@@ -43,6 +45,53 @@ const MAX_MAPPING_ROWS = 300;
 const btn = "rounded border px-1.5 py-0.5 text-[11px]";
 const chip = (on: boolean) =>
   `${btn} ${on ? "border-slate-600 bg-slate-600 text-white" : "border-slate-300 text-slate-600 hover:bg-slate-50"}`;
+
+/** A target's KO share by guide or by replicate (hidden when the run has no such rows). */
+function KoShareTable({
+  title,
+  kind,
+  rows,
+  testId,
+}: {
+  title: string;
+  kind: "guide" | "replicate";
+  rows: [string, KoShareRow][];
+  testId: string;
+}) {
+  if (!rows.length) return null;
+  return (
+    <table className="text-[11px]" data-testid={testId}>
+      <thead className="text-slate-500">
+        <tr>
+          <th className="px-1.5 py-0.5 text-left font-medium">
+            {kind === "guide" ? (
+              <Help id="perturbation.per_guide">{title}</Help>
+            ) : (
+              <Help id="perturbation.per_replicate">{title}</Help>
+            )}
+          </th>
+          <th className="px-1.5 py-0.5 text-right font-medium" title="This target's cells with this value">
+            Cells
+          </th>
+          <th className="px-1.5 py-0.5 text-right font-medium" title="Share of them called KO">
+            KO
+          </th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map(([value, r]) => (
+          <tr key={value} className="border-t border-slate-100">
+            <td className="px-1.5 py-0.5 font-mono text-[10px] text-slate-700">{value || "(none)"}</td>
+            <td className="px-1.5 py-0.5 text-right tabular-nums text-slate-600">{r.n_cells.toLocaleString()}</td>
+            <td className="px-1.5 py-0.5 text-right tabular-nums text-slate-600" title={`${r.n_ko} of ${r.n_cells} cells`}>
+              {pctText(r.ko_fraction)}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
 
 /**
  * A pooled CRISPR screen (backend core/crispr.py, core/mixscape.py): each cell's guide
@@ -574,6 +623,20 @@ export function PerturbationSubtab() {
                   {shownRow.top_de_genes.map((g) => `${g.gene} (${g.logfc > 0 ? "+" : ""}${g.logfc.toFixed(2)})`).join(", ")}
                 </p>
               )}
+              <div className="mt-1 flex flex-wrap items-start gap-3">
+                <KoShareTable
+                  title={`Per guide (${(result ?? saved)?.guide_column ?? ""})`}
+                  kind="guide"
+                  rows={koRowsFor((result ?? saved)?.per_guide, shownRow.target, "guide")}
+                  testId="mixscape-per-guide"
+                />
+                <KoShareTable
+                  title={`Per ${(result ?? saved)?.replicate_column ?? "replicate"}`}
+                  kind="replicate"
+                  rows={koRowsFor((result ?? saved)?.per_replicate, shownRow.target, "replicate")}
+                  testId="mixscape-per-replicate"
+                />
+              </div>
               {shownRow.posterior_hist && (
                 <>
                   <div style={{ height: 160 }}>

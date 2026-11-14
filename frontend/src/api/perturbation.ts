@@ -59,6 +59,16 @@ export interface MixscapeTarget {
   posterior_hist?: PosteriorHist;
 }
 
+/** One row of a KO-share table: a target's cells with one guide, or in one replicate. */
+export interface KoShareRow {
+  target: string;
+  guide?: string;
+  replicate?: string;
+  n_cells: number;
+  n_ko: number;
+  ko_fraction: number;
+}
+
 export interface MixscapeResult {
   params: Record<string, unknown>;
   labels: string;
@@ -74,6 +84,12 @@ export interface MixscapeResult {
   warnings: string[];
   /** Labels left out as not targets ("Unassigned", "multiple", a second control label) */
   excluded?: Record<string, { n_cells: number; reason: string }>;
+  /** The obs columns behind per_guide / per_replicate (null: none found or given) */
+  guide_column?: string | null;
+  replicate_column?: string | null;
+  /** KO share per target x guide, and per target x replicate (target cells only) */
+  per_guide?: KoShareRow[];
+  per_replicate?: KoShareRow[];
   lda:{ x: number[]; y: number[]; label: string[]; n_cells: number; n_shown: number; dims: number } | null;
   seconds: number;
   created: string;

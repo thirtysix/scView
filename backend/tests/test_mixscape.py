@@ -180,6 +180,47 @@ def test_seurat_rule_min_pct_fold_change_and_bonferroni():
         assert more.loc[g, "pval_adj"] == pytest.approx(min(2 * p, 1.0))
 
 
+def test_ko_share_per_guide_and_per_replicate():
+    """Papalexi Fig. 3c (IRF1 guides 39-92% KO) needed a crosstab by hand (QA 2026-11-14)."""
+    a, ko = planted()
+    lab = a.obs["perturbation"].astype(str).to_numpy()
+    idx = np.arange(a.n_obs)
+    guide = np.where(lab == "NT", "NTg1", np.char.add(lab.astype(str), np.where(idx % 3 == 0, "g1", "g2")))
+    a.obs["guide_ID"] = pd.Categorical(guide)
+    res, cols = mixscape.run(a, mixscape.Params(split_by="rep", lda=False))
+    assert res.guide_column == "guide_ID" and res.replicate_column == "rep"
+    glob = np.full(a.n_obs, "", dtype=object)
+    glob[cols["rows"]] = cols[mixscape.GLOBAL]
+    rows = {(r["target"], r["guide"]): r for r in res.per_guide}
+    assert set(rows) == {("A", "Ag1"), ("A", "Ag2"), ("B", "Bg1"), ("B", "Bg2")}
+    m = guide == "Ag1"
+    assert rows[("A", "Ag1")]["n_cells"] == m.sum() and rows[("A", "Ag1")]["n_ko"] == (glob[m] == "KO").sum()
+    assert sum(r["n_ko"] for r in res.per_guide if r["target"] == "A") == {t["target"]: t for t in res.targets}["A"]["n_ko"]
+    reps = {(r["target"], r["replicate"]): r["ko_fraction"] for r in res.per_replicate}
+    m = (lab == "A") & (a.obs["rep"].astype(str).to_numpy() == "r1")
+    assert reps[("A", "r1")] == pytest.approx((glob[m] == "KO").mean())
+    # No guide column found and no split: no tables
+    b, _ = planted()
+    res_b, _ = mixscape.run(b, mixscape.Params(lda=False))
+    assert res_b.guide_column is None and res_b.per_guide == [] and res_b.per_replicate == []
+    # An explicit replicate column without a split
+    res_c, _ = mixscape.run(b, mixscape.Params(lda=False, replicate_column="rep"))
+    assert {r["replicate"] for r in res_c.per_replicate} == {"r1", "r2"}
+    with pytest.raises(mixscape.MixscapeError, match="not found"):
+        mixscape.plan(b, mixscape.Params(guide_column="nope"))
+
+
+def test_guide_column_from_the_saved_assignment():
+    from scview.core import crispr
+
+    a, _ = planted()
+    a.obs["guide_call"] = pd.Categorical(a.obs["perturbation"].astype(str) + "_1")
+    crispr._write_state(a, {"call": {"columns": {"perturbation": "perturbation", "guide_call": "guide_call"}}})
+    rows = np.arange(a.n_obs)
+    assert mixscape.guide_column_for(a, "perturbation", rows) == "guide_call"
+    assert mixscape.guide_column_for(a, "rep", rows) is None  # not this assignment's targets
+
+
 def test_filler_and_control_labels_are_not_targets():
     """set_labels' "Unassigned" filler (18,430 Papalexi cells) ran as a target (QA 2026-11-14)."""
     a, _ = planted()

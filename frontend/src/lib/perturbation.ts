@@ -1,6 +1,6 @@
 import type { Data } from "plotly.js";
 import type { DESettings } from "@/stores/deSettingsStore";
-import type { MixscapeDeGenes, MixscapeResult, MixscapeTarget, PosteriorHist } from "@/api/perturbation";
+import type { KoShareRow, MixscapeDeGenes, MixscapeResult, MixscapeTarget, PosteriorHist } from "@/api/perturbation";
 
 /** obs columns Mixscape writes (backend core/mixscape.py). */
 export const MIXSCAPE_CLASS = "mixscape_class";
@@ -64,6 +64,11 @@ export function deHandoff(target: string): Partial<DESettings> {
     withinCol: "",
     withinVal: "",
   };
+}
+
+/** One target's rows of a KO-share table (per guide or per replicate), as [value, row]. */
+export function koRowsFor(rows: KoShareRow[] | undefined, target: string, key: "guide" | "replicate"): [string, KoShareRow][] {
+  return (rows ?? []).filter((r) => r.target === target).map((r) => [String(r[key] ?? ""), r]);
 }
 
 /** A run's DE gene choice: "all" (Seurat's rule) unless it ran on the variable genes;

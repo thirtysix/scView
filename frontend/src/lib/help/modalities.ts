@@ -126,6 +126,10 @@ export const MODALITIES_HELP: Record<string, string> = {
     "Find each cell's control neighbours only within its own replicate or batch. Use it when replicates or batches differ, so a batch difference is not read as a perturbation.",
   "perturbation.de_genes":
     "Which genes each target is tested on against the controls. All genes is Seurat's RunMixscape rule: detected in at least 10% of either group, Bonferroni over every gene. Variable genes is scView 0.77's rule and the pertpy tutorial's; on Papalexi 2021 it found no MYC knockout cells.",
+  "perturbation.per_guide":
+    "The share of this target's cells called KO, for each guide. Guides of one gene often differ (an in-frame edit, a weak guide): a guide far below the others may not work.",
+  "perturbation.per_replicate":
+    "The share of this target's cells called KO in each replicate or batch (the Within column, or the one named in the request). A share that changes a lot between replicates is not a stable knockout call.",
   "perturbation.colour_by":
     "class: each cell as its target's KO or NP, or NT for the controls. KO / NP / NT: the same without the target names. P(KO): each cell's probability of being perturbed, from 0 to 1.",
   "perturbation.result":
