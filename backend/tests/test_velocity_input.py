@@ -150,6 +150,132 @@ def test_starsolo_unsorted_matrix_gives_the_same_rows(tmp_path):
         assert (st.read("spliced", st.rows_of(dataset.obs_names)).toarray() == a.layers["spliced"].toarray()).all()
 
 
+# -- a dataset built apart from the looms: several samples, names in another form ------------------
+# Real case: Pollyea 2019 AML (Zenodo 6587903), velocyto CellID "cellsorted_day0_UIB5X:BARCODE"
+# against an h5ad of bare barcodes with a "batch" column; 12 barcodes recur across its samples.
+
+_SAMPLES = {"day0": 0, "day2": 50, "day4": 100}  # first barcode of each sample's 60: 50-59 and 100-109 recur
+
+
+def _sample_runs(n=60, genes=50):
+    """Each sample's own counts (one velocyto loom each) with overlapping barcodes."""
+    runs = {}
+    for k, (name, start) in enumerate(_SAMPLES.items()):
+        a = splicing_counts(n, genes, seed=k)
+        a.obs_names = [barcode(start + i) + "-1" for i in range(n)]
+        runs[name] = a
+    return runs
+
+
+def _merged(runs, keep_every=1, names="bare"):
+    """The dataset as an author's h5ad: cells of every sample, bare barcodes (or Cell Ranger
+    aggr's -1/-2/-3), a sample column and a QC flag that splits each sample, in another order."""
+    parts = []
+    for k, (name, a) in enumerate(runs.items()):
+        b = a[(k % 2 if keep_every > 1 else 0)::keep_every].copy()  # day2 keeps odd rows: barcodes day0 lost
+        code = [n.split("-")[0] for n in b.obs_names]
+        b.obs_names = code if names == "bare" else [f"{c}-{k + 1}" for c in code]
+        b.obs["batch"] = name
+        b.obs["qc_pass"] = np.where(np.arange(b.n_obs) % 10 == 0, "no", "yes")
+        parts.append(b)
+    for b in parts:
+        for k in vi.LAYERS:
+            del b.layers[k]
+    merged = ad.concat(parts, merge="first")
+    merged.obs_names_make_unique()
+    order = np.random.default_rng(3).permutation(merged.n_obs)
+    return merged[order].copy()
+
+
+def _truth(runs, dataset):
+    """Each dataset cell's own unspliced counts, from its own sample."""
+    out = []
+    for name, cell in zip(dataset.obs["batch"], dataset.obs_names, strict=True):
+        a = runs[name]
+        code = cell.split("-")[0]
+        out.append(a.layers["unspliced"][[n.split("-")[0] for n in a.obs_names].index(code)].toarray()[0])
+    return np.asarray(out)
+
+
+def test_a_merged_dataset_matches_each_sample_by_its_sample_column():
+    runs = _sample_runs()
+    dataset = _merged(runs, keep_every=2)
+    file_names = [f"cellsorted_{s}_X{k}:{n.split('-')[0]}" for k, (s, a) in enumerate(runs.items()) for n in a.obs_names]
+    m = vi.match_cells(file_names, list(dataset.obs_names), vi.sample_columns(dataset.obs))
+    assert m.sample_key == "batch" and m.n_matched == dataset.n_obs == 90 and m.n_ambiguous == 0
+    assert [(s["file_sample"], s["dataset_sample"], s["cells_matched"]) for s in m.samples] == [
+        ("cellsorted day0 X0", "day0", 30), ("cellsorted day2 X1", "day2", 30), ("cellsorted day4 X2", "day4", 30)]
+    batch = dict(zip(dataset.obs_names, dataset.obs["batch"], strict=True))
+    assert all(batch[d] in file_names[r] for r, d in zip(m.file_rows, m.dataset_names, strict=True))
+    # Without the column the names alone cannot tell recurring barcodes apart: left out, counted.
+    bare = vi.match_cells(file_names, list(dataset.obs_names))
+    assert bare.sample_key is None and bare.n_matched < 90 and bare.n_ambiguous > 0
+    # The QC flag splits each sample: never taken for the sample.
+    assert "qc_pass" in vi.sample_columns(dataset.obs)
+    only_flag = vi.match_cells(file_names, list(dataset.obs_names), {"qc_pass": vi.sample_columns(dataset.obs)["qc_pass"]})
+    assert only_flag.sample_key is None
+
+
+def test_cell_ranger_aggr_suffixes_are_learned_as_samples():
+    runs = _sample_runs()
+    dataset = _merged(runs, names="aggr")  # BARCODE-1, -2, -3: nothing in common with the loom's sample names
+    file_names = [f"run{k}_ABCDE:{n.split('-')[0]}x" for k, a in enumerate(runs.values()) for n in a.obs_names]
+    m = vi.match_cells(file_names, list(dataset.obs_names), {})
+    assert m.sample_key == "cell names" and m.n_matched == 180 and m.n_ambiguous == 0
+    assert [s["dataset_sample"] for s in m.samples] == ["1", "2", "3"]
+
+
+def test_one_samples_loom_pairs_none_of_another_samples_cells():
+    """Old matching paired a barcode found once on each side even across samples: on Pollyea,
+    the day0 loom alone gave 58 day2/day4 cells day0 cells' counts."""
+    runs = _sample_runs()
+    dataset = _merged(runs, keep_every=2)  # day0 keeps even rows, day2 odd: 51-59 are day2's alone
+    file_names = [f"cellsorted_day0_X0:{n.split('-')[0]}" for n in runs["day0"].obs_names]
+    m = vi.match_cells(file_names, list(dataset.obs_names), vi.sample_columns(dataset.obs))
+    batch = dict(zip(dataset.obs_names, dataset.obs["batch"], strict=True))
+    assert m.n_matched == 30 and {batch[d] for d in m.dataset_names} == {"day0"}
+    assert m.n_other_sample == 5  # 51, 53, ... 59: in the dataset, but day2's cells
+    old = vi.match_cells(file_names, list(dataset.obs_names))  # names alone: those 5 paired with day2's cells
+    assert old.n_matched == 35 and sum(batch[d] != "day0" for d in old.dataset_names) == 5
+    assert m.samples_without == [{"dataset_sample": "day2", "cells": 30}, {"dataset_sample": "day4", "cells": 30}]
+    # A third of the dataset, half of the file: refused before, now judged within its own sample (all 30).
+    assert m.n_dataset_in_samples == 30
+    vi.check_majority(m, "day0.loom")
+    with pytest.raises(vi.VelocityInputError, match="matches only 35 of this dataset's 90 cells"):
+        vi.check_majority(old, "day0.loom")
+
+
+def test_attach_one_loom_per_sample_together(tmp_path):
+    runs = _sample_runs()
+    dataset = _merged(runs, keep_every=2)
+    paths = []
+    for k, (name, a) in enumerate(runs.items()):
+        paths.append(tmp_path / f"stored_{name}.loom")
+        write_loom(paths[-1], a, sample=f"cellsorted_{name}_X{k}")
+    rec = vi.attach(dataset, "ds", tmp_path, paths, labels=[f"{n}.loom" for n in runs])
+    assert rec["file"] == "day0.loom + day2.loom + day4.loom" and rec["kind"] == "loom"
+    assert rec["cells_matched"] == 90 and rec["cells_in_file"] == 180 and rec["cells_in_file_unmatched"] == 90
+    assert rec["sample_key"] == "batch" and rec["samples_without"] == []
+    with ms.ModalityStore(vi.store_path(tmp_path, "ds")) as st:
+        got = st.read("unspliced", st.rows_of(dataset.obs_names)).toarray()
+    np.testing.assert_array_equal(got, _truth(runs, dataset))
+    # Files of other genes are refused before anything changes.
+    other = splicing_counts(60, 40)
+    write_loom(tmp_path / "other.loom", other, sample="x")
+    with pytest.raises(vi.VelocityInputError, match="lists other genes than day0.loom"):
+        vi.attach(dataset, "ds2", tmp_path, [paths[0], tmp_path / "other.loom"], labels=["day0.loom", "other.loom"])
+    assert not vi.has_store(tmp_path, "ds2")
+    # Bare names in several files: each file's name keeps their barcodes apart.
+    for k, (name, a) in enumerate(runs.items()):
+        b = a.copy()
+        b.obs_names = [n.split("-")[0] for n in a.obs_names]
+        b.write_h5ad(tmp_path / f"{name}.h5ad")
+    rec = vi.attach(dataset, "ds3", tmp_path, [tmp_path / f"{n}.h5ad" for n in runs])
+    assert rec["cells_matched"] == 90 and rec["sample_key"] == "batch"
+    with ms.ModalityStore(vi.store_path(tmp_path, "ds3")) as st:
+        np.testing.assert_array_equal(st.read("unspliced", st.rows_of(dataset.obs_names)).toarray(), _truth(runs, dataset))
+
+
 # -- the import wizard ---------------------------------------------------------
 
 

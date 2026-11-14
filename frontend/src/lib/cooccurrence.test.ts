@@ -1,6 +1,20 @@
 import { describe, expect, it } from "vitest";
 import type { CoOccurrencePlan, CoOccurrenceResult } from "@/api/spatialDomains";
-import { csvHeaders, csvRows, curvesOf, distanceSource, firstUsable, matrixAt, reachOf, scoreScale, unitText } from "./cooccurrence";
+import {
+  csvHeaders,
+  csvRows,
+  curvePointsHidden,
+  curvesOf,
+  distanceSource,
+  firstUsable,
+  matrixAt,
+  minPairs,
+  reachOf,
+  scoreScale,
+  tooFew,
+  tooFewAt,
+  unitText,
+} from "./cooccurrence";
 
 const result: CoOccurrenceResult = {
   available: true,
@@ -71,10 +85,75 @@ describe("co-occurrence slices", () => {
   it("writes every score with its pairs in the CSV", () => {
     const rows = csvRows(result);
     expect(rows).toHaveLength(8);
-    expect(rows[0]).toEqual(["a", "a", 10, 1.5, 40]);
-    expect(rows[7]).toEqual(["b", "b", 20, 1.1, 20]);
-    expect(csvHeaders(result)).toEqual(["label", "other_label", "distance_um", "score", "ordered_pairs"]);
+    expect(rows[0]).toEqual(["a", "a", 10, 1.5, 40, null]); // no floor given: not judged
+    expect(rows[7]).toEqual(["b", "b", 20, 1.1, 20, null]);
+    expect(csvHeaders(result)).toEqual(["label", "other_label", "distance_um", "score", "ordered_pairs", "too_few_pairs"]);
     expect(csvHeaders({ ...result, distance_unit: "position units" })[2]).toBe("distance_units");
+    const floored = csvRows({ ...result, min_pairs: 30 });
+    expect(floored[0]).toEqual(["a", "a", 10, 1.5, 40, "false"]);
+    expect(floored[7]).toEqual(["b", "b", 20, 1.1, 20, "true"]); // kept, with its flag
+  });
+});
+
+describe("co-occurrence floor (too few pairs)", () => {
+  // QA (Kuppe 2022): a rare label's few spots gave Lymphoid|Myeloid a score of 89.
+  const floored: CoOccurrenceResult = { ...result, min_pairs: 30 };
+
+  it("greys scores from fewer pairs than the floor and keeps them out of the colour range", () => {
+    expect(minPairs(floored)).toBe(30);
+    expect(matrixAt(floored, 0)).toEqual([
+      [1.5, null],
+      [null, null], // 8 pairs: too few
+    ]);
+    expect(tooFewAt(floored, 0)).toEqual([
+      [null, null], // 0 pairs is blank, not grey
+      [null, 8],
+    ]);
+    expect(tooFewAt(floored, 1)).toEqual([
+      [null, null],
+      [null, 20],
+    ]);
+    expect(scoreScale(matrixAt(floored, 0)).zmax).toBe(2); // the 2.0 from 8 pairs no longer sets the scale
+    expect(tooFew(0, 30)).toBe(false);
+    expect(tooFew(29, 30)).toBe(true);
+    expect(tooFew(30, 30)).toBe(false);
+    expect(tooFew(5, null)).toBe(false);
+  });
+
+  it("leaves those points out of the curves and counts them", () => {
+    expect(curvesOf(floored, "b")[1]?.scores).toEqual([null, null]);
+    expect(curvesOf(floored, "a")[0]?.scores).toEqual([1.5, 1.2]);
+    expect(curvePointsHidden(floored, "b")).toBe(2);
+    expect(curvePointsHidden(result, "b")).toBe(0); // no floor
+  });
+
+  it("applies no floor to a run saved without counts", () => {
+    const old = { ...floored, count: null };
+    expect(minPairs(old)).toBeNull();
+    expect(matrixAt(old, 0)).toEqual([
+      [1.5, 0],
+      [0, 2],
+    ]); // every score as saved
+    expect(tooFewAt(old, 0)).toEqual([
+      [null, null],
+      [null, null],
+    ]);
+    expect(firstUsable({ ...result, min_pairs: 100 })).toBe(1); // none reaches 100: the last
+  });
+
+  it("opens the heatmap where most pairs of labels are readable, else where more than the diagonal is", () => {
+    // Lymph node at 28 labels: the old rule opened at 183 µm with 660 of 784 cells grey.
+    const three = (t0: number[][], t1: number[][]): CoOccurrenceResult => ({
+      ...result,
+      labels: ["a", "b", "c"],
+      distances: [10, 20],
+      min_pairs: 100,
+      count: t0.map((row, i) => row.map((v, j) => [v, t1[i]![j]!])),
+    });
+    const t0 = [[500, 500, 10], [500, 500, 10], [10, 10, 10]]; // 4 of 9: more than the diagonal, not most
+    const t1 = [[500, 500, 500], [500, 500, 500], [10, 10, 10]]; // 6 of 9
+    expect(firstUsable(three(t0, t1))).toBe(1);
+    expect(firstUsable(three(t0, t0))).toBe(0); // no distance with most: the old rule
   });
 });
 

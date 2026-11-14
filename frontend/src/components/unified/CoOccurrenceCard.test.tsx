@@ -211,6 +211,44 @@ describe("CoOccurrenceCard", () => {
     expect(drawn.filter((p) => p.data[0]?.type === "heatmap").at(-1)?.data[0]?.z?.[0]).toEqual([1.5, 0.5]);
   });
 
+  it("greys heatmap cells from too few pairs with a hover tip, leaves them out of the curves, and says how many", async () => {
+    // QA (Kuppe 2022): a rare label's few spots gave Lymphoid|Myeloid a score of 89.
+    getCoOccurrence.mockResolvedValue(info({ result: { ...saved, min_pairs: 30 } as CoOccurrenceInfo["result"] }));
+    render(<CoOccurrenceCard columns={columns} labelDefault="clusters" />);
+    await screen.findByTestId("cooccurrence-results");
+    const heat = drawn.filter((p) => p.data[0]?.type === "heatmap").at(-1)!;
+    expect(heat.data[0]?.z).toEqual([
+      [1.2, 0.8],
+      [0.8, null],
+    ]);
+    const grey = heat.data[1] as { name?: string; z?: unknown[][]; customdata?: unknown[][]; hovertemplate?: string };
+    expect(grey.name).toBe("too few pairs");
+    expect(grey.z).toEqual([
+      [null, null],
+      [null, 1],
+    ]);
+    expect(grey.customdata?.[1]?.[1]).toBe(20);
+    expect(grey.hovertemplate).toContain("pairs, too few to read");
+    const heatCaption = screen.getByTestId("cooccurrence-heatmap").textContent;
+    expect(heatCaption).toContain("1 of 4 cells are grey: fewer than 30 pairs at this distance, too few to read.");
+    const lines = drawn.filter((p) => p.data[0]?.type === "scatter").at(-1)!;
+    expect(lines.data[1]).toMatchObject({ y: [null, 0.8] }); // a|b from 10 pairs at 500 µm
+    expect(screen.getByTestId("cooccurrence-curves").textContent).toContain(
+      "1 point with fewer than 30 pairs is left out of the lines: too few to read.");
+    fireEvent.change(screen.getByLabelText("Heatmap distance"), { target: { value: "0" } });
+    expect(screen.getByTestId("cooccurrence-heatmap").textContent).toContain("3 of 4 cells are grey");
+  });
+
+  it("says a run saved without pair counts is shown without the floor", async () => {
+    getCoOccurrence.mockResolvedValue(info({ result: { ...saved, count: null, min_pairs: null } as CoOccurrenceInfo["result"] }));
+    render(<CoOccurrenceCard columns={columns} labelDefault="clusters" />);
+    await screen.findByTestId("cooccurrence-results");
+    expect(screen.getByTestId("cooccurrence-heatmap").textContent).toContain("saved without its pair counts");
+    const heat = drawn.filter((p) => p.data[0]?.type === "heatmap").at(-1)!;
+    expect(heat.data).toHaveLength(1);
+    expect(heat.data[0]?.z?.[0]?.[0]).not.toBeNull();
+  });
+
   it("over several sections says how they were combined and shows one section's own curves", async () => {
     // QA (Kuppe 2022): pooled over 8 slides, Fibroblast|Myeloid rose to 1.71 at 4 mm from slide composition.
     const several = {

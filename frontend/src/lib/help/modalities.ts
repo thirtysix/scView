@@ -165,7 +165,7 @@ export const MODALITIES_HELP: Record<string, string> = {
 
   // Velocity
   "velocity.attach":
-    "Velocity needs counts of spliced and unspliced reads made from the same sequencing files as this dataset (velocyto, STARsolo or kb). Cells are matched by barcode and genes by id or name; cells without counts get no arrow.",
+    "Velocity needs counts of spliced and unspliced reads made from the same sequencing files as this dataset (velocyto, STARsolo or kb). Several samples: pick every sample's file together. Cells are matched by barcode within their own sample, genes by id or name; cells without counts get no arrow.",
   "velocity.model":
     "Steady state fits each gene's ratio of unspliced to spliced RNA from their smoothed levels. Stochastic, the default here, also uses how they vary across neighbouring cells. Both follow scVelo.",
   "velocity.table_by":

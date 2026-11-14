@@ -577,8 +577,61 @@ def test_the_fact_skips_distances_with_too_few_pairs():
     s = {"labels": ["a", "b", "c"], "occ": np.ones((3, 3, 2)).tolist(), "count": np.zeros((3, 3, 2), dtype=int).tolist()}
     s["occ"][0][1] = [9.0, 1.5]
     s["count"] = (np.full((3, 3, 2), 100) * np.array([0, 1])).tolist()
-    high, _, t = cc._top_pairs(s)
-    assert t == 1 and high == ["a with b (score 1.50)"]
+    high, _, t, left_out = cc._top_pairs(s)
+    assert t == 1 and high == ["a with b (score 1.50)"] and left_out == 0
+
+
+def test_the_floor_greys_scores_from_too_few_pairs_and_keeps_them_stored():
+    """QA (Kuppe 2022 Visium): a rare label's few spots gave Lymphoid|Myeloid a score of 89.
+    MIN_PAIRS comes from thinning a common label (see the constant): under 100 pairs, more than 1
+    score in 20 is off by over 2x."""
+    assert cc.MIN_PAIRS == 100
+    count = np.array([[[0, 50, 300], [99, 100, 400]], [[99, 100, 400], [2, 500, 900]]])
+    assert cc.too_few(count)[:, :, 0].tolist() == [[False, True], [True, True]]  # 0 pairs is blank, not too few
+    assert cc.too_few_by_distance(count) == [2, 1, 0]  # each two labels once, a label with itself included
+    assert cc.first_readable(count, 2) == 1  # 100, 100, 500 reach the floor: more than the diagonal
+    assert cc.first_readable(np.zeros((2, 2, 3)), 2) == 2  # none: the last
+    # Most pairs of labels readable comes first: 4 of 9 at t0 (more than the diagonal), 6 of 9 at t1.
+    three = np.full((3, 3, 2), 500)
+    three[:, :, 0] = [[500, 500, 10], [500, 500, 10], [10, 10, 10]]
+    three[:, :, 1] = [[500, 500, 500], [500, 500, 500], [10, 10, 10]]
+    assert cc.first_readable(three, 3) == 1
+    assert cc.first_readable(three[:, :, :1], 3) == 0  # no distance with most: the old rule
+    # The co-pilot's fact: the shortest readable distance; a rare pair is left out and said so.
+    s = {"labels": ["a", "b", "rare"], "occ": np.ones((3, 3, 2)).tolist(), "column": "c", "distances": [10.0, 20.0],
+         "distance_unit": "µm", "n_used": 500, "n_labelled": 500, "unit": "spot", "available": True, "stale": False}
+    s["occ"][0][2] = s["occ"][2][0] = [89.0, 89.0]
+    s["occ"][0][1] = s["occ"][1][0] = [1.4, 1.4]
+    s["count"] = np.full((3, 3, 2), 500).tolist()
+    s["count"][0][2] = s["count"][2][0] = [12, 40]
+    high, _, t, left_out = cc._top_pairs(s)
+    assert t == 0 and high == ["a with b (score 1.40)"] and left_out == 1
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(cc, "cooccurrence_summary", lambda *a, **k: s)
+        text = "\n".join(cc.grounding_lines(None)[0])
+    assert "89" not in text and "1 pair(s) of labels have fewer than 100 pairs of spots within 10 µm" in text
+    # A run saved without counts (older, or squidpy's own): every score, said so.
+    s.update(count=None)
+    high, _, _, left_out = cc._top_pairs(s)
+    assert high[0] == "a with rare (score 89.00)" and left_out == 0
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(cc, "cooccurrence_summary", lambda *a, **k: s)
+        assert "saved without its pair counts" in "\n".join(cc.grounding_lines(None)[0])
+
+
+def test_the_summary_gives_the_floor_and_reads_a_result_without_counts():
+    a = synthetic.tissue("xenium", n_side=12)
+    inp = cc.prepare_cooccurrence(a, cc.plan_cooccurrence(a, "stripe", interval=8))
+    s = cc.save_cooccurrence(a, inp, cc.run_cooccurrence(inp), cells_fingerprint="fp")
+    count = np.asarray(s["count"])
+    assert s["min_pairs"] == cc.MIN_PAIRS and s["too_few"] == cc.too_few_by_distance(count) and len(s["too_few"]) == 7
+    assert sum(s["too_few"]) > 0  # 144 cells: the short distances have few pairs
+    stored = a.uns["stripe_co_occurrence"]
+    np.testing.assert_array_equal(stored["count"], count)  # nothing dropped from the stored result
+    del stored["count"]
+    old = cc.cooccurrence_summary(a, "stripe", "fp")
+    assert old["available"] and old["count"] is None and old["min_pairs"] is None and old["too_few"] is None
+    assert len(old["occ"]) == 4
 
 
 @pytest.mark.parametrize("question", [

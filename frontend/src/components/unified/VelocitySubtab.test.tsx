@@ -120,6 +120,41 @@ describe("VelocitySubtab", () => {
     expect(screen.getByLabelText("Top genes")).toBeTruthy();
   });
 
+  it("says which file sample is which dataset sample, where the file's other cells went, and takes several files", async () => {
+    // A loom of day0 alone attached to a 3-sample dataset (Pollyea, Zenodo 6587903).
+    api.getVelocity.mockResolvedValue({
+      ...base,
+      attached: true,
+      run: null,
+      estimate: null,
+      source: {
+        file: "day0.loom", cells_in_file: 9099, cells_matched: 3054, cells_in_dataset: 4679, cells_in_file_unmatched: 6045,
+        cells_other_sample: 0, sample_key: "batch",
+        samples: [{ file_sample: "cellsorted day0 UIB5X", dataset_sample: "day0", cells_in_file: 9099, cells_matched: 3054 }],
+        samples_without: [{ dataset_sample: "day2", cells: 836 }, { dataset_sample: "day4", cells: 789 }],
+      },
+    });
+    render(<VelocitySubtab />);
+    await screen.findByText(/3,054 of 4,679 cells matched/);
+    expect(screen.getByText(/6,045 of the file's 9,099 cells are not in this dataset \(filtered out, or another sample's\)/)).toBeTruthy();
+    expect(screen.getByText("Samples matched by column batch: cellsorted day0 UIB5X = day0 (3,054 of 9,099 cells).")).toBeTruthy();
+    const missing = screen.getByText(/No counts for day2 \(836 cells\), day4 \(789 cells\): attach every sample's file together/);
+    expect(missing.className).toContain("text-amber-700");
+    cleanup();
+    api.getVelocity.mockResolvedValue({
+      ...base, attached: true, run: null, estimate: null,
+      source: { file: "day2.loom", cells_in_file: 1631, cells_matched: 836, cells_in_dataset: 4679, cells_in_file_unmatched: 795, cells_other_sample: 16 },
+    });
+    render(<VelocitySubtab />);
+    await screen.findByText(/795 of the file's 1,631 cells are not in this dataset \(filtered out; 16 of them share a barcode with another sample's cell there, and were not paired with it\)/);
+    const input = screen.getByLabelText("Velocity .loom or .h5ad files") as HTMLInputElement;
+    expect(input.multiple).toBe(true);
+    api.attachVelocity.mockResolvedValue({ attached: true, source: {} });
+    const files = [new File(["a"], "day0.loom"), new File(["b"], "day2.loom")];
+    fireEvent.change(input, { target: { files } });
+    await waitFor(() => expect(api.attachVelocity).toHaveBeenCalledWith("d1", files));
+  });
+
   it("says when the cells changed and draws nothing, and on 3D says why no arrows", async () => {
     api.getVelocity.mockResolvedValue({ ...base, attached: true, source: { file: "x" }, run, stale: "The cells changed: run velocity again.", estimate: null });
     render(<VelocitySubtab />);

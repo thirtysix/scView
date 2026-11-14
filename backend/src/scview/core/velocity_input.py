@@ -120,7 +120,10 @@ def barcode_of(name: str) -> tuple[str, str]:
 
 @dataclass
 class CellMatch:
-    """``file_rows[i]`` of the file is the dataset's ``dataset_names[i]``."""
+    """``file_rows[i]`` of the file is the dataset's ``dataset_names[i]``. ``samples``: each
+    sample of the file (the name around the barcode, e.g. velocyto's ``sample:``), the dataset's
+    sample it was found to be (None: not in this dataset), and its cells; ``sample_key`` says
+    where the dataset's samples were read (``cell names`` or an obs column)."""
 
     file_rows: np.ndarray
     dataset_names: list[str]
@@ -128,16 +131,93 @@ class CellMatch:
     n_file: int
     n_ambiguous: int = 0
     used_sample: bool = False
+    samples: list[dict[str, Any]] = field(default_factory=list)
+    sample_key: str | None = None
+    n_other_sample: int = 0  # the file's cells whose barcode is in the dataset, but under another sample
+    samples_without: list[dict[str, Any]] = field(default_factory=list)  # the dataset's samples no file sample is
+    n_dataset_in_samples: int | None = None  # the dataset's cells in the samples the file has
 
     @property
     def n_matched(self) -> int:
         return len(self.dataset_names)
 
 
-def match_cells(file_names, dataset_names) -> CellMatch:
+MIN_SAMPLE_SHARE = 0.8  # of a file sample's barcode-unique pairs that must fall in one dataset sample
+MIN_SAMPLE_CELLS = 0.02  # of a file sample's cells paired, at least: below, chance barcode collisions
+MAX_SAMPLE_COLUMNS = 30  # obs columns tried as the dataset's sample
+
+
+def sample_columns(obs) -> dict[str, list[str]]:
+    """Label columns of the dataset that could name its samples: 2 to 200 values, each held by
+    many cells (at most a tenth of the cells as values)."""
+    out: dict[str, list[str]] = {}
+    n = len(obs)
+    for c in obs.columns:
+        s = obs[c]
+        if not (isinstance(s.dtype, pd.CategoricalDtype) or s.dtype == object or pd.api.types.is_string_dtype(s)):
+            continue
+        k = s.nunique(dropna=True)
+        if 2 <= k <= 200 and k <= max(2, n // 10):
+            out[str(c)] = s.astype(str).where(s.notna(), "").tolist()
+        if len(out) >= MAX_SAMPLE_COLUMNS:
+            break
+    return out
+
+
+def _learn_samples(tentative: list[tuple[int, int]], file_sample: list[str], keys: dict[str, list[str]],
+                   file_sizes: dict[str, int], ds_codes: list[str], file_codes: set[str]
+                   ) -> tuple[str, dict[str, str]] | None:
+    """Which of the dataset's sample keys (the name around the barcode, or an obs column) tells
+    the file's samples apart, from the cells whose barcode is unique on both sides: (key, file
+    sample -> dataset sample). A file sample is placed when most of its unique pairs fall in one
+    dataset sample and they are more than chance collisions. A key is no sample key when a value
+    a file sample took has most of its barcodes outside the file, or one no file sample took has
+    most inside it (a QC flag or a cluster cuts across samples). The key placing the most distinct
+    samples, then splitting the dataset, then the most pairs, wins. None when nothing has two
+    samples to tell apart."""
+    best = None
+    for key, values in keys.items():
+        table: dict[str, dict[str, int]] = {}
+        for i, d in tentative:
+            row = table.setdefault(file_sample[i], {})
+            row[values[d]] = row.get(values[d], 0) + 1
+        mapping, agreeing = {}, 0
+        for f, row in table.items():
+            v, top = max(row.items(), key=lambda x: x[1])
+            if top >= MIN_SAMPLE_SHARE * sum(row.values()) and top >= max(3, MIN_SAMPLE_CELLS * file_sizes[f]) and v != "":
+                mapping[f] = v
+                agreeing += top
+        if not mapping:
+            continue
+        taken = set(mapping.values())
+        cells: dict[str, list[int]] = {}
+        for d, v in enumerate(values):
+            c = cells.setdefault(v, [0, 0])
+            c[0] += 1
+            c[1] += ds_codes[d] in file_codes
+        # A sample's cells are (nearly) all in its file; another sample's only by chance collisions.
+        if any((hit < 0.5 * n) if v in taken else (hit > 0.5 * n) for v, (n, hit) in cells.items()):
+            continue
+        score = (len(taken), len(set(values) - {""}) > 1, agreeing)  # "": a name or cell with no sample
+        if best is None or score > best[0]:
+            best = (score, key, mapping)
+    if best is None:
+        return None
+    (n_values, splits, _), key, mapping = best
+    if n_values < 2 and len(file_sizes) < 2 and not splits:
+        return None  # one sample each side: the barcode alone decides
+    return key, mapping
+
+
+def match_cells(file_names, dataset_names, dataset_columns: dict[str, list[str]] | None = None) -> CellMatch:
     """Pair the file's cells with the dataset's: exact names first, then by the barcode inside
-    the name. A barcode held by several cells on either side (a multi-sample file or dataset) is
-    paired by the other parts of the name; what stays ambiguous is left out and counted."""
+    the name. When either side has several samples (velocyto's ``sample:`` prefix, a suffix such
+    as ``-1`` / ``-2`` or ``_day0``, or a dataset's sample column, ``dataset_columns``), which
+    file sample is which dataset sample is learned from the barcodes found once on each side
+    (``_learn_samples``), and every cell is then paired within its own sample: a file sample not
+    in the dataset pairs with nothing, even where its barcodes recur there. Without that, a
+    barcode held by several cells is paired by the other parts of the name. What stays ambiguous
+    is left out and counted."""
     file_names = [str(n) for n in file_names]
     dataset_names = [str(n) for n in dataset_names]
     exact = {n: i for i, n in enumerate(dataset_names)}
@@ -145,14 +225,24 @@ def match_cells(file_names, dataset_names) -> CellMatch:
     if len(pairs) == len(dataset_names) or len(pairs) == len(file_names):
         return _match(pairs, file_names, dataset_names, 0, False)
 
-    by_ds: dict[str, list[tuple[int, set[str]]]] = {}
-    for i, n in enumerate(dataset_names):
-        code, rest = barcode_of(n)
-        by_ds.setdefault(code, []).append((i, set(rest.split())))
-    by_file: dict[str, list[tuple[int, set[str]]]] = {}
-    for i, n in enumerate(file_names):
-        code, rest = barcode_of(n)
-        by_file.setdefault(code, []).append((i, set(rest.split())))
+    ds_parsed = [barcode_of(n) for n in dataset_names]
+    file_parsed = [barcode_of(n) for n in file_names]
+    by_ds: dict[str, list[int]] = {}
+    for i, (code, _rest) in enumerate(ds_parsed):
+        by_ds.setdefault(code, []).append(i)
+    by_file: dict[str, list[int]] = {}
+    for i, (code, _rest) in enumerate(file_parsed):
+        by_file.setdefault(code, []).append(i)
+    file_sample = [rest for _code, rest in file_parsed]
+    file_sizes: dict[str, int] = {}
+    for f in file_sample:
+        file_sizes[f] = file_sizes.get(f, 0) + 1
+    tentative = [(cells[0], by_ds[code][0]) for code, cells in by_file.items()
+                 if len(cells) == 1 and len(by_ds.get(code, ())) == 1]
+    keys = {"cell names": [rest for _code, rest in ds_parsed], **(dataset_columns or {})}
+    learned = _learn_samples(tentative, file_sample, keys, file_sizes, [code for code, _rest in ds_parsed], set(by_file))
+    if learned is not None:
+        return _match_by_sample(learned, keys, by_file, by_ds, file_sample, file_names, dataset_names, file_sizes)
 
     pairs = {}
     ambiguous = 0
@@ -162,18 +252,61 @@ def match_cells(file_names, dataset_names) -> CellMatch:
         if not ds:
             continue
         if len(cells) == 1 and len(ds) == 1:
-            pairs[cells[0][0]] = ds[0][0]
+            pairs[cells[0]] = ds[0]
             continue
         used_sample = True
         taken: set[int] = set()
-        for i, parts in cells:
-            hits = [d for d, dparts in ds if d not in taken and parts & dparts]
+        for i in cells:
+            parts = set(file_sample[i].split())
+            hits = [d for d in ds if d not in taken and parts & set(ds_parsed[d][1].split())]
             if len(hits) == 1:
                 pairs[i] = hits[0]
                 taken.add(hits[0])
             else:
                 ambiguous += 1
     return _match(pairs, file_names, dataset_names, ambiguous, used_sample)
+
+
+def _match_by_sample(learned: tuple[str, dict[str, str]], keys: dict[str, list[str]], by_file: dict[str, list[int]],
+                     by_ds: dict[str, list[int]], file_sample: list[str], file_names: list[str], dataset_names: list[str],
+                     file_sizes: dict[str, int]) -> CellMatch:
+    key, mapping = learned
+    values = keys[key]
+    pairs: dict[int, int] = {}
+    ambiguous = other = 0
+    for code, cells in by_file.items():
+        ds = by_ds.get(code)
+        if not ds:
+            continue
+        wanted: dict[str, list[int]] = {}
+        for i in cells:
+            target = mapping.get(file_sample[i])
+            if target is None:
+                other += 1  # a sample the dataset does not have: its barcode there is another cell
+            else:
+                wanted.setdefault(target, []).append(i)
+        for target, mine in wanted.items():
+            hits = [d for d in ds if values[d] == target]
+            if len(mine) == 1 and len(hits) == 1:
+                pairs[mine[0]] = hits[0]
+            elif hits:
+                ambiguous += len(mine)  # one barcode twice in a sample, or two file samples in one
+            else:
+                other += len(mine)  # its own copy was filtered out; the dataset's is another sample's cell
+    matched: dict[str, int] = {}
+    for i in pairs:
+        matched[file_sample[i]] = matched.get(file_sample[i], 0) + 1
+    samples = [{"file_sample": f or "(none)", "dataset_sample": mapping.get(f), "cells_in_file": n,
+                "cells_matched": matched.get(f, 0)} for f, n in sorted(file_sizes.items())]
+    sizes: dict[str, int] = {}
+    for v in values:
+        sizes[v] = sizes.get(v, 0) + 1
+    taken = set(mapping.values())
+    out = _match(pairs, file_names, dataset_names, ambiguous, True)
+    out.samples, out.sample_key, out.n_other_sample = samples, key, other
+    out.samples_without = [{"dataset_sample": v or "(none)", "cells": n} for v, n in sorted(sizes.items()) if v not in taken]
+    out.n_dataset_in_samples = sum(n for v, n in sizes.items() if v in taken)
+    return out
 
 
 def _match(pairs: dict[int, int], file_names: list[str], dataset_names: list[str], ambiguous: int,
@@ -184,9 +317,13 @@ def _match(pairs: dict[int, int], file_names: list[str], dataset_names: list[str
 
 
 def check_majority(m: CellMatch, file_name: str) -> None:
+    """Refuse a file that matches no clear majority: of the dataset's cells, of the file's, or,
+    once its samples were placed, of the dataset's cells in those samples (one sample's loom
+    of a merged dataset, where the author kept a third of its barcodes)."""
     ds_share = m.n_matched / max(m.n_dataset, 1)
     file_share = m.n_matched / max(m.n_file, 1)
-    if ds_share >= MIN_DATASET_SHARE or file_share >= MIN_FILE_SHARE:
+    own_share = m.n_matched / max(m.n_dataset_in_samples, 1) if m.n_dataset_in_samples else 0.0
+    if ds_share >= MIN_DATASET_SHARE or file_share >= MIN_FILE_SHARE or own_share >= MIN_DATASET_SHARE:
         return
     extra = f"; {m.n_ambiguous:,} barcodes occur in several samples and could not be told apart" if m.n_ambiguous else ""
     raise VelocityInputError(
@@ -403,16 +540,57 @@ def open_starsolo(paths: list[Path], workdir: Path, label: str = "STARsolo Veloc
     return Source("starsolo", label, barcodes, genes, ids, have, rows, files=sorted(p.name for p in files.values()))
 
 
+def open_several(paths: list[Path], labels: list[str] | None = None) -> Source:
+    """Several .loom / .h5ad files as one source: one file per sample (velocyto writes one loom
+    per sample). Their cells one after another; a name without velocyto's ``sample:`` gets its
+    file's name in front, so a barcode in two files stays two cells. They must list the same
+    genes (made with one annotation); the matrices are those every file has."""
+    labels = labels if labels and len(labels) == len(paths) else [p.name for p in paths]
+    sources: list[Source] = []
+    try:
+        for p, name in zip(paths, labels, strict=True):
+            sources.append(open_loom(p, name) if p.suffix.lower() == ".loom" else open_h5ad(p, name))
+        genes = sources[0].genes
+        for s in sources[1:]:
+            if s.genes != genes:
+                raise VelocityInputError(f"{s.label} lists other genes than {sources[0].label} ({len(s.genes):,} vs "
+                                         f"{len(genes):,}): attach files made with the same gene annotation.")
+    except Exception:
+        for s in sources:
+            s.close()
+        raise
+    barcodes: list[str] = []
+    for s in sources:
+        stem = re.sub(r"\.(loom|h5ad)$", "", s.label, flags=re.I)
+        barcodes += [b if ":" in b else f"{stem}:{b}" for b in s.barcodes]
+    have = [m for m in LAYERS if all(m in s.matrices for s in sources)]
+
+    def rows(matrix: str) -> Iterator[sp.csr_matrix]:
+        for s in sources:
+            yield from s.rows(matrix)
+
+    def close() -> None:
+        for s in sources:
+            s.close()
+
+    kinds = sorted({s.kind for s in sources})
+    return Source("+".join(kinds), " + ".join(s.label for s in sources), barcodes, genes, sources[0].gene_ids, have,
+                  rows, close, [f for s in sources for f in s.files])
+
+
 @contextmanager
-def open_source(paths: list[Path], workdir: Path, label: str | None = None):
-    """The source these uploaded files make: one .h5ad or .loom, or a STARsolo folder's files.
-    ``label``: the name to report it by (an upload's stored name carries a hash)."""
+def open_source(paths: list[Path], workdir: Path, label: str | None = None, labels: list[str] | None = None):
+    """The source these uploaded files make: one .h5ad or .loom, several (one per sample), or a
+    STARsolo folder's files. ``label``: the name to report one file by (an upload's stored name
+    carries a hash); ``labels``: each file's, for several."""
     if not paths:
         raise VelocityInputError(f"No file was sent. {SOURCE_HELP}")
     if len(paths) == 1 and paths[0].suffix.lower() == ".h5ad":
         src = open_h5ad(paths[0], label)
     elif len(paths) == 1 and paths[0].suffix.lower() == ".loom":
         src = open_loom(paths[0], label)
+    elif len(paths) > 1 and all(p.suffix.lower() in (".loom", ".h5ad") for p in paths):
+        src = open_several(paths, labels)
     elif any(re.search(r"\.mtx(\.gz)?$", p.name.lower()) for p in paths):
         src = open_starsolo(paths, workdir)
     else:
@@ -570,7 +748,7 @@ def match_genes(src: Source, var_names, var_ids: list[str] | None) -> tuple[list
 
 
 def attach(adata, dataset_id: str, data_dir: str | Path, paths: list[Path], stored_as: list[str] | None = None,
-           label: str | None = None) -> dict[str, Any]:
+           label: str | None = None, labels: list[str] | None = None) -> dict[str, Any]:
     """Match the file's cells and genes to the dataset, write the store (replacing an earlier one,
     only once the new one is complete), and record the source in uns. Raises VelocityInputError
     before anything changes."""
@@ -581,8 +759,8 @@ def attach(adata, dataset_id: str, data_dir: str | Path, paths: list[Path], stor
     workdir = store.parent / ".velocity-attach"
     workdir.mkdir(exist_ok=True)
     try:
-        with open_source(paths, workdir, label) as src:
-            match = match_cells(src.barcodes, adata.obs_names)
+        with open_source(paths, workdir, label, labels) as src:
+            match = match_cells(src.barcodes, adata.obs_names, sample_columns(adata.obs))
             check_majority(match, src.label)
             var_ids = next((adata.var[c].astype(str).tolist() for c in ID_COLUMNS if c in adata.var.columns), None)
             genes, n_id, n_name = match_genes(src, adata.var_names, var_ids)
@@ -597,6 +775,10 @@ def attach(adata, dataset_id: str, data_dir: str | Path, paths: list[Path], stor
                 "cells_without": match.n_dataset - match.n_matched, "cells_ambiguous": match.n_ambiguous,
                 "sample_used": match.used_sample, "genes_in_file": len(src.genes), "genes_by_id": n_id,
                 "genes_by_name": n_name, "genes_in_dataset": int(adata.n_vars),
+                # The file's cells left out: not in the dataset (filtered out, or another sample's).
+                "cells_in_file_unmatched": match.n_file - match.n_matched,
+                "cells_other_sample": match.n_other_sample, "samples": match.samples, "sample_key": match.sample_key,
+                "samples_without": match.samples_without,
             }
         record.update(_totals(tmp))
     except BaseException:

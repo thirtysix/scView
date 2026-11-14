@@ -33,6 +33,7 @@ services:
       - DATA_DIR=/data
       - CONVERTER_URL=http://converter:8001
       - MSIGDB_DIR=/msigdb
+      - MALLOC_ARENA_MAX=2  # as in backend/Dockerfile: fewer glibc arenas hold less freed memory
     depends_on:
       converter:
         condition: service_healthy

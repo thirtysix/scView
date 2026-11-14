@@ -262,8 +262,12 @@ export interface CoOccurrenceResult {
   sizes?: number[];
   /** labels x labels x distances */
   occ?: number[][][];
-  /** The ordered pairs of observations behind each score */
-  count?: number[][][];
+  /** The ordered pairs of observations behind each score; null for a run saved without them */
+  count?: number[][][] | null;
+  /** A score from fewer pairs than this at a distance is too few to read; null without counts */
+  min_pairs?: number | null;
+  /** At each distance, the pairs of labels (each two once) with too few pairs */
+  too_few?: number[] | null;
   /** Each score's distance on the axis, in `distance_unit` */
   distances?: number[];
   distance_unit?: string;
