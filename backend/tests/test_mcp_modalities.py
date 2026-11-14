@@ -61,6 +61,7 @@ async def test_guide_assignment_previews_saves_then_mixscape_with_per_guide_tabl
     assert "must be 0 or at least 1 (got 0.5)" in text  # the route's own refusal
     saved = await _call("guide_assignment", {"dataset_id": did, "save": True})
     assert saved["saved"] is True and saved["counts"]["multiple"] == 1 and "mixscape" in saved["next"]
+    assert saved["n_targets"] == 2 and saved["per_target"]["rows"][0][2] is True  # NT, the control, first
     r = await _done(await _call("mixscape", {"dataset_id": did, "split_by": "rep"}))
     by = {row[0]: dict(zip(r["targets"]["columns"], row)) for row in r["targets"]["rows"]}
     assert by["A"]["n_ko"] == int(ko.sum()) and by["B"]["n_ko"] == 0
@@ -71,6 +72,15 @@ async def test_guide_assignment_previews_saves_then_mixscape_with_per_guide_tabl
     assert last["targets"]["rows"] == r["targets"]["rows"] and last["per_guide"] == r["per_guide"]
     listed = await _call("list_results", {"dataset_id": did, "kind": "mixscape"})
     assert listed["n_total"] == 1
+
+
+def test_the_assignment_reply_reads_the_preview_and_the_saved_call():
+    from scview.mcp.modalities import _assignment_reply
+
+    preview = {"control": "NT", "per_target": [], "targets_without_cells": [{"target": "eGFP", "guides": ["eGFPg1"]}]}
+    saved = {"control": "NT", "per_target": [], "targets_without_cells": ["eGFP", "PDL1"]}
+    assert _assignment_reply(preview, "d", 5, False)["targets_without_cells"] == ["eGFP"]
+    assert _assignment_reply(saved, "d", 5, True)["targets_without_cells"] == ["eGFP", "PDL1"]
 
 
 # --- cell hashing -------------------------------------------------------------------------------------
@@ -95,6 +105,7 @@ async def test_hashing_refusal_is_the_routes_words_and_split_by_calls_per_lane(c
     tags = ["T1", "T2", "T3", "T4"]
     text = await _call("hashing_demux", {"dataset_id": did, "tags": tags, "method": "hashedDrops"}, error=True)
     assert "split by 'lane'" in text and "have no counts at all in 50% of the cells" in text  # verbatim
+    assert text.endswith("(Here: allow_warnings=true.)")
     r = await _call("hashing_demux", {"dataset_id": did, "tags": tags, "split_by": "lane"})
     assert r["call"]["split_by"] == "lane" and r["call"]["n_uncalled"] == 0
     plain = _register(dataset_manager, ad.AnnData(np.ones((60, 3), dtype=np.float32)), "mhn")
@@ -165,14 +176,18 @@ async def test_the_multiome_path_lsi_wnn_activity_differential_and_results(clien
     assert s["available"] and s["plan"]["estimate_seconds"] > 0 and "Run ATAC analysis first" in s["wnn_reason"]
     lsi = await _done(await _call("atac_lsi", {"dataset_id": did, "n_lsi": 10, "dims_to": 8, "resolution": 0.5}))
     assert lsi["lsi"]["n_selected"] > 0 and lsi["activity"]["available"]
+    assert "wnn" not in lsi and "info" not in lsi and "LSI" in lsi["computed"]  # the run's own sections
+    assert "cells_fingerprint" not in json.dumps(lsi)
     w = await _done(await _call("wnn", {"dataset_id": did, "modality": "atac"}))
+    assert w["wnn"]["n_clusters"] >= 1 and "lsi" not in w and "WNN" in w["computed"]
     assert w["dataset_id"] == did
     s = await _call("atac_status", {"dataset_id": did, "groupby": "group"})
     assert s["lsi"]["stale"] is False and s["wnn"] is not None
     act = await _call("atac_gene_activity", {"dataset_id": did, "gene": "GENEA", "groupby": "group"})
     assert act["by_group"]["columns"] == ["group", "n", "mean", "median", "pct_above_0"] and act["kind"]
     assert act["by_group"]["n_total"] == 2
-    da = await _done(await _call("atac_differential", {"dataset_id": did, "column": "group"}))
+    da = await _done(await _call("atac_differential", {"dataset_id": did, "column": "group", "limit": 2}))
+    assert all(len(t["rows"]) <= 2 for t in da["top_peaks"].values())
     assert da["result_id"] and da["counts"]["n_total"] == 2 and set(da["top_peaks"]) == {"A", "B"}
     t = await _call("get_result", {"dataset_id": did, "result_id": da["result_id"], "sort_by": "pval_adj"})
     assert t["kind"] == "atac_differential" and {"peak", "group", "pval_adj"} <= set(t["columns"]) and t["rows"]
@@ -188,7 +203,8 @@ async def test_the_multiome_path_lsi_wnn_activity_differential_and_results(clien
     t = await _call("get_result", {"dataset_id": did, "result_id": me["result_id"]})
     assert t["kind"] == "atac_motif_enrichment" and "motif" in t["columns"] and t["rows"]
     cv = await _done(await _call("atac_chromvar", {"dataset_id": did, "seed": 3, "column": "group"}))
-    assert cv["result_id"] and cv["most_variable"]["n_total"] >= 1 and cv["by_group"]
+    assert cv["result_id"] and cv["most_variable"]["n_total"] >= 1
+    assert cv["by_group"]["columns"] == ["group", "top_motifs", "padj_of_first"] and cv["by_group"]["n_total"] == 2
     from scview.core import results_store
 
     results_store.flush()

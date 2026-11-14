@@ -1952,7 +1952,8 @@ async def _coverage_plot(dataset_id: str, gene: str | None, region: str | None, 
     tracks = d.get("tracks") or []
     caption = (f"{len(tracks)} groups of {by}" if by else "all cells") + (
         f" ({plots.MAX_TRACKS} drawn)" if len(tracks) > plots.MAX_TRACKS else "")
-    caption += f"; {d.get('normalisation') or 'normalised depth'}; {len(d.get('peaks') or [])} peaks"
+    norm = str(d.get("normalisation") or "normalised depth").rstrip(". ")
+    caption += f"; {norm}, one y-axis for all, top {num(d.get('ymax'))}; {len(d.get('peaks') or [])} peaks"
     notes = [n for n in (d.get("notes") or []) if isinstance(n, str)]
     if d.get("genes_note"):
         notes.append(d["genes_note"])

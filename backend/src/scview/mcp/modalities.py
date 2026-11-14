@@ -20,9 +20,9 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
 from scview.mcp import api, jobs
-from scview.mcp.compact import DEFAULT_LIMIT, clamp, dumps, pick, table
+from scview.mcp.compact import DEFAULT_LIMIT, clamp, dumps, num, pick, table
 from scview.mcp.spatial import _body, _compact, _rest, _result, _started
-from scview.mcp.tools import READ, WRITE, DatasetId, Limit, _ds, _get, _line, _max_chars, _post, tool
+from scview.mcp.tools import P0_NOTE, READ, WRITE, DatasetId, Limit, _ds, _get, _line, _max_chars, _post, tool
 
 GET_RESULT = "get_result(dataset_id, result_id) pages through every row"
 
@@ -36,25 +36,33 @@ def _rows(records: list[dict[str, Any]] | None, n: int, skip: tuple[str, ...] = 
 
 # --- CRISPR screens: guide assignment and Mixscape ------------------------------------------------
 
-def _per_target(per_target: list[dict[str, Any]] | None, n: int) -> dict[str, Any]:
-    recs = [{"target": t.get("target"), "n_cells": t.get("n_cells"), "control": t.get("control") or None,
-             "n_guides": len(t.get("guides") or []), "guides": ", ".join(map(str, (t.get("guides") or [])[:8]))}
-            for t in per_target or []]
+def _per_target(p: dict[str, Any], n: int) -> dict[str, Any]:
+    """Cells per target with its guides (the preview lists them; the saved call has the mapping)."""
+    control, mapping = p.get("control"), p.get("mapping") or {}
+    recs = []
+    for t in p.get("per_target") or []:
+        guides = t.get("guides") or sorted(g for g, v in mapping.items() if v == t.get("target"))
+        recs.append({"target": t.get("target"), "n_cells": t.get("n_cells"),
+                     "control": True if t.get("target") == control else None,
+                     "n_guides": len(guides), "guides": ", ".join(map(str, guides[:8]))})
     recs.sort(key=lambda r: -(r["n_cells"] or 0))
-    return table(recs, ["target", "n_cells", "control", "n_guides", "guides"], n)
+    guided = any(r["n_guides"] for r in recs)  # a saved call keeps no guide list: leave the columns out
+    return table(recs, ["target", "n_cells", "control", *(("n_guides", "guides") if guided else ())], n)
 
 
 def _assignment_reply(p: dict[str, Any], dataset_id: str, n: int, saved: bool) -> dict[str, Any]:
     out: dict[str, Any] = {"dataset_id": dataset_id, "saved": saved,
                            **pick(p, "source", "source_label", "column", "params", "control", "n_cells", "counts")}
-    out["n_targets"] = len(p.get("targets") or p.get("per_target") or [])
-    out["per_target"] = _per_target(p.get("per_target"), n)
+    out["n_targets"] = p["n_targets"] if p.get("n_targets") is not None else len(p.get("targets") or [])
+    out["per_target"] = _per_target(p, n)
     if p.get("targets_without_cells"):
-        out["targets_without_cells"] = [t.get("target") for t in p["targets_without_cells"]]
-    guides = p.get("guides") or []
-    auto, full = p.get("auto_mapping") or {}, p.get("mapping") or {}
-    out["n_guides"] = len(guides)
-    overrides = {g: t for g, t in full.items() if auto.get(g) != t}
+        # the preview lists {target, guides}, the saved call the names
+        out["targets_without_cells"] = [t.get("target") if isinstance(t, dict) else str(t)
+                                        for t in p["targets_without_cells"]]
+    auto, full = p.get("auto_mapping"), p.get("mapping") or {}
+    if p.get("guides") or full:
+        out["n_guides"] = len(p.get("guides") or full)
+    overrides = {g: t for g, t in full.items() if auto is not None and auto.get(g) != t}
     if overrides:
         out["mapping_overrides"] = overrides
     if not saved:
@@ -119,9 +127,11 @@ def _mixscape_reply(r: dict[str, Any], dataset_id: str, n: int) -> dict[str, Any
                        "min_de_genes", "iter_num", "lda", "de_genes"),
         "targets": table(targets, list(_TARGET_COLUMNS), n),
     }
+    rank = {t["target"]: i for i, t in enumerate(targets)}  # the targets' order: highest KO share first
     for key in ("per_guide", "per_replicate"):
         if r.get(key):
-            out[key] = _rows(r[key], n)
+            recs = sorted(r[key], key=lambda x: rank.get(x.get("target"), len(rank)))
+            out[key] = _rows(recs, n)
     out["columns_written"] = ["mixscape_class", "mixscape_class_global", "mixscape_p_ko"]
     out["note"] = ("KO: the guide's cells that moved away from the controls; NP: not perturbed (escapers). "
                    "per_guide / per_replicate: each target's KO share per guide and per replicate. "
@@ -236,7 +246,12 @@ async def hashing_demux(
                 raise ToolError("This dataset has no hashtag counts or antibody features to demultiplex.")
             raise ToolError(f"Name the tags: none is suggested. Tags and antibody features: {', '.join(have[:60])}.")
     body = _body(tags=tags, method=method, quantile=quantile, split_by=split_by, allow_warnings=allow_warnings)
-    s = await _post(f"{_ds(dataset_id)}/hashing/demux", body)
+    try:
+        s = await api.post(f"{_ds(dataset_id)}/hashing/demux", body)
+    except api.RouteError as e:
+        # the route's refusal word for word; its "Save anyway" is this tool's allow_warnings
+        hint = " (Here: allow_warnings=true.)" if e.status == 409 and "Save anyway" in e.detail else ""
+        raise ToolError(e.detail + hint) from None
     return dumps(_hashing_reply(s, dataset_id, clamp(limit)), _max_chars(limit))
 
 
@@ -317,13 +332,14 @@ async def atac_status(
 
 
 MAX_VALUES = 12  # a list of numbers longer than this (sdev per component, a histogram) is cut
+_LEAN_SKIP = ("top_peaks", "stage_seconds", "cells_fingerprint", "inputs_fingerprint", "run_id")
 
 
 def _lean(v: Any) -> Any:
     """A run's summary without its long number lists (they are for the UI's plots): the
     first MAX_VALUES values and how many there are."""
     if isinstance(v, dict):
-        return {k: _lean(x) for k, x in v.items() if k not in ("top_peaks", "stage_seconds")}
+        return {k: _lean(x) for k, x in v.items() if k not in _LEAN_SKIP}
     if isinstance(v, list):
         if len(v) > MAX_VALUES and all(isinstance(x, (int, float)) or x is None for x in v):
             return {"first": v[:MAX_VALUES], "n": len(v)}
@@ -333,6 +349,18 @@ def _lean(v: Any) -> Any:
 
 def _atac_reply(r: dict[str, Any], dataset_id: str, n: int) -> dict[str, Any]:
     return {"dataset_id": dataset_id, **_lean(_rest(r, ("cells_fingerprint", "inputs_fingerprint"), n))}
+
+
+def _sections(*keep: str):
+    """The reply of a run whose result is the dataset's whole ATAC record: only the ``keep``
+    sections (the run's own) and what has been computed, not the earlier runs again."""
+    def reply(r: dict[str, Any], dataset_id: str, n: int) -> dict[str, Any]:
+        out = _atac_reply({k: v for k, v in r.items() if k in keep or k in ("resources", "peak_gb")}, dataset_id, n)
+        computed = (r.get("info") or {}).get("computed")
+        if computed:
+            out["computed"] = computed
+        return out
+    return reply
 
 
 async def _atac_job(dataset_id: str, kind: str, path: str, body: dict[str, Any], limit: int, reply=_atac_reply,
@@ -376,7 +404,7 @@ async def atac_lsi(
     waits up to 20 s, else job_id. Then wnn(modality='atac'), atac_gene_activity, atac_differential."""
     body = _body(n_lsi=n_lsi, dims_to=dims_to, drop_first=drop_first, resolution=resolution, activity=activity,
                  activity_source=activity_source)
-    return await _atac_job(dataset_id, "atac_lsi", "/atac/run-stream", body, limit)
+    return await _atac_job(dataset_id, "atac_lsi", "/atac/run-stream", body, limit, _sections("lsi", "activity"))
 
 
 @tool(WRITE)
@@ -399,7 +427,8 @@ async def wnn(
         if protein_pcs is not None:
             raise ToolError("protein_pcs is for modality='protein'.")
         return await _atac_job(dataset_id, "wnn", "/atac/wnn/run-stream",
-                               _body(lsi_first=lsi_first, lsi_last=lsi_last, resolution=resolution), limit)
+                               _body(lsi_first=lsi_first, lsi_last=lsi_last, resolution=resolution), limit,
+                               _sections("wnn"))
     if lsi_first is not None or lsi_last is not None:
         raise ToolError("lsi_first and lsi_last are for modality='atac'.")
     return await _atac_job(dataset_id, "wnn", "/wnn/run-stream", _body(protein_pcs=protein_pcs, resolution=resolution),
@@ -454,7 +483,7 @@ def _da_reply(r: dict[str, Any], dataset_id: str, n: int) -> dict[str, Any]:
                            "params": pick(r.get("params") or {}, "min_pct", "max_peaks", "on", "latent", "lrt_peaks",
                                           "standard_only", "n_peaks_left_out", "n_cells_vs"),
                            "counts": table(counts, ["group", "n_tested", "n_significant"], n),
-                           "top_peaks": _pages(r.get("rows"), n, 5 if len(groups) > 2 else 10)}
+                           "top_peaks": _pages(r.get("rows"), n, min(n, 5 if len(groups) > 2 else 10))}
     out["next"] = (f"{GET_RESULT} (sort_by='pval_adj'); atac_motif_enrichment(da_id=result_id) tests motifs in "
                    "each group's peaks")
     return out
@@ -551,7 +580,7 @@ def _motif_reply(r: dict[str, Any], dataset_id: str, n: int) -> dict[str, Any]:
            "params": pick(r.get("params") or {}, "da_test", "p_column", "p_max", "min_pct", "min_log2fc",
                           "background", "seed"),
            "summary": _compact(r.get("summary"), n),
-           "top_motifs": _pages(r.get("rows"), n, 5 if len(r.get("groups") or []) > 2 else 10)}
+           "top_motifs": _pages(r.get("rows"), n, min(n, 5 if len(r.get("groups") or []) > 2 else 10))}
     out["next"] = GET_RESULT
     return out
 
@@ -595,11 +624,25 @@ async def atac_motif_enrichment(
     return await _started(job, limit)
 
 
+def _chromvar_groups(g: dict[str, Any], n: int) -> dict[str, Any]:
+    """Each group's motifs most above the rest (mean z, adjusted p), three per group."""
+    recs = []
+    for group, rows in (g.get("rows") or {}).items():
+        top = sorted(rows or [], key=lambda r: -(r.get("mean_diff") or 0))[:3]
+        recs.append({"group": group, "top_motifs": "; ".join(f"{r.get('motif')} z {num(r.get('mean_z'))}" for r in top),
+                     "padj_of_first": top[0].get("pval_adj") if top else None})
+    out = {"column": g.get("column"), **table(recs, ["group", "top_motifs", "padj_of_first"], n)}
+    out["note"] = "each group's mean chromVAR z against the rest's; z of a motif is relative to matched background peaks"
+    return out
+
+
 def _chromvar_reply(r: dict[str, Any], dataset_id: str, n: int) -> dict[str, Any]:
     out = {"dataset_id": dataset_id, "result_id": r.get("run_id"),
            **pick(r, "n_cells", "n_peaks_used", "n_peaks_no_counts", "n_peaks_left_out", "n_peaks_nonstandard",
                   "iterations", "genome", "seconds", "stale", "method", "caveats")}
     out["most_variable"] = _rows(r.get("ranking"), n)
+    if any(x.get("p") == 0 for x in (r.get("ranking") or [])[:n]):
+        out["note"] = P0_NOTE
     return out
 
 
@@ -627,7 +670,7 @@ async def atac_chromvar(
         out = _chromvar_reply(_result(job), dataset_id, n)
         if column:
             g = await _get(f"{_ds(dataset_id)}/atac/motifs/chromvar/groups", column=column)
-            out["by_group"] = _compact({k: v for k, v in g.items() if k not in ("cells_fingerprint",)}, n)
+            out["by_group"] = _chromvar_groups(g, n)
         return out
 
     job = jobs.new("atac_chromvar", dataset_id, "", body, progress_line=_line, finish=finish, runner=run,

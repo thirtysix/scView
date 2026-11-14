@@ -344,5 +344,8 @@ def coverage(result: dict[str, Any], title: str, caption: str) -> bytes:
     gax.set_xlabel(f"{reg.get('chrom', '')} position (bp)", fontsize=8)
     gax.ticklabel_format(axis="x", style="plain", useOffset=False)
     axes[0].set_title(title, fontsize=11)
-    fig.text(0.01, -0.02, caption, fontsize=8, color="#555555")
+    import textwrap
+
+    # wrapped: a long caption would widen the figure past MAX_PX
+    fig.text(0.01, -0.02, textwrap.fill(caption, 150), fontsize=8, color="#555555", va="top")
     return _png(fig)
