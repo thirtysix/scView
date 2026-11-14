@@ -155,6 +155,25 @@ describe("VelocitySubtab", () => {
     await waitFor(() => expect(api.attachVelocity).toHaveBeenCalledWith("d1", files));
   });
 
+  it("shows the direction check and runs again with the same order, on the plot on screen", async () => {
+    const direction = {
+      checked: true, kind: "order", label: "the order of clusters given", spec: { group_by: "clusters", order: ["Pre", "Beta"] },
+      group_column: "clusters", embedding: "X_umap", k: 30, n_backward: 1, note: "Direction check.",
+      transitions: [{ from: "Pre", to: "Beta", n_cells: 86, mean_cos: -0.4, low: -0.5, high: -0.3, share_forward: 0.2, status: "backward" }],
+    };
+    api.getVelocity.mockResolvedValue({ ...base, attached: true, source: { file: "x" }, run: { ...run, direction }, estimate: null });
+    api.getVelocityGenes.mockResolvedValue({ genes: [], n_genes: 0, n_velocity_genes: 0, sort: "" });
+    api.runVelocity.mockResolvedValue({ ...run, direction });
+    render(<VelocitySubtab />);
+    await screen.findByText(/Backward at Pre -> Beta \(-0.40, n = 86\)/);
+    expect((screen.getByLabelText("Group order") as HTMLInputElement).value).toBe("Pre > Beta");
+    fireEvent.click(screen.getByText("Run again"));
+    await waitFor(() => expect(api.runVelocity).toHaveBeenCalled());
+    expect(api.runVelocity.mock.calls[0]![1]).toMatchObject({
+      group_by: "clusters", embedding: "X_umap", direction: { group_by: "clusters", order: ["Pre", "Beta"] },
+    });
+  });
+
   it("says when the cells changed and draws nothing, and on 3D says why no arrows", async () => {
     api.getVelocity.mockResolvedValue({ ...base, attached: true, source: { file: "x" }, run, stale: "The cells changed: run velocity again.", estimate: null });
     render(<VelocitySubtab />);

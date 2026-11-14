@@ -28,6 +28,7 @@ import { ARROW_DENSITY_RANGE, ARROW_SCALE_RANGE, arrowsBlocked, isOtherPcPair } 
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useUnifiedViewStore } from "@/stores/unifiedViewStore";
+import { choiceFrom, DEFAULT_DIRECTION, directionSpec, VelocityDirection, type DirectionChoice } from "./VelocityDirection";
 
 const GENE_LIMIT = 100;
 
@@ -148,6 +149,7 @@ export function VelocitySubtab() {
   const [gene, setGene] = useState<string | null>(null);
   const [phase, setPhase] = useState<VelocityPhase | null>(null);
   const [phaseError, setPhaseError] = useState<string | null>(null);
+  const [dirChoice, setDirChoice] = useState<DirectionChoice>(DEFAULT_DIRECTION);
   const abort = useRef<AbortController | null>(null);
 
   const load = async (id: string) => {
@@ -165,6 +167,7 @@ export function VelocitySubtab() {
     setGenes(null);
     setGene(null);
     setPhase(null);
+    setDirChoice(DEFAULT_DIRECTION);
     let live = true;
     getVelocity(datasetId)
       .then((s) => {
@@ -176,6 +179,7 @@ export function VelocitySubtab() {
           setNTop(s.run.params.n_top_genes);
           setNNeighbors(s.run.params.n_neighbors);
           setGroupBy(s.run.group_column ?? "");
+          setDirChoice(choiceFrom(s.run.direction));
         }
       })
       .catch((e) => live && setLoadError(errorMessage(e)));
@@ -260,7 +264,14 @@ export function VelocitySubtab() {
     try {
       await runVelocity(
         datasetId,
-        { method, n_top_genes: nTop, n_neighbors: nNeighbors, group_by: groupBy || null },
+        {
+          method,
+          n_top_genes: nTop,
+          n_neighbors: nNeighbors,
+          group_by: groupBy || null,
+          direction: directionSpec(dirChoice, groupBy || null) ?? directionSpec(DEFAULT_DIRECTION, groupBy || null),
+          embedding: blocked ? null : embedding,
+        },
         { signal: abort.current.signal, onProgress: setProgress, onWatchdog: setMemoryNote },
       );
       await refresh(datasetId);
@@ -503,6 +514,17 @@ export function VelocitySubtab() {
           {run.warnings.map((w) => (
             <p key={w} className="rounded-md border border-amber-300 bg-amber-50 p-2 text-amber-800">{w}</p>
           ))}
+
+          <VelocityDirection
+            datasetId={datasetId}
+            run={run}
+            embedding={embedding}
+            embeddingOk={!blocked}
+            columns={(dataset.obs_columns ?? []).filter((c) => c.n_unique >= 2)}
+            choice={dirChoice}
+            setChoice={setDirChoice}
+            onChecked={(r) => setStatus({ ...status, run: r })}
+          />
 
           <Caption n={[{ value: run.n_cells, unit: "cells", of: run.n_dataset_cells }, { value: run.n_velocity_genes, unit: "velocity genes", of: run.n_genes_fit }]}>
             <Help id="velocity.summary">

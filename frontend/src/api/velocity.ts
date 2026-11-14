@@ -45,6 +45,59 @@ export interface VelocityGroup {
   top_genes: string[];
 }
 
+/** The order a run's arrows are checked against (core/velocity_direction.py): one of these, or none for scView's pseudotime. */
+export interface VelocityDirectionSpec {
+  group_by?: string | null;
+  order?: string[];
+  transitions?: [string, string][];
+  root?: string;
+  column?: string;
+  column_order?: string[];
+}
+
+export type VelocityTransitionStatus = "forward" | "backward" | "unclear" | "few_cells" | "no_boundary";
+
+export interface VelocityTransition {
+  from: string;
+  to: string;
+  /** Cells of `from` with cells of `to` among their nearest on the plot */
+  n_cells: number;
+  mean_cos?: number;
+  low?: number;
+  high?: number;
+  share_forward?: number;
+  status: VelocityTransitionStatus;
+}
+
+export interface VelocityDirection {
+  checked: boolean;
+  /** Why it is unchecked */
+  reason?: string;
+  kind?: "pseudotime" | "column" | "order" | "transitions" | "root";
+  label?: string;
+  spec?: VelocityDirectionSpec;
+  group_column?: string;
+  embedding: string | null;
+  k?: number;
+  min_cells?: number;
+  transitions?: VelocityTransition[];
+  n_backward?: number;
+  n_forward?: number;
+  n_unclear?: number;
+  /** Groups that meet on the plot but that the order does not separate */
+  skipped?: { groups: [string, string]; auc: number }[];
+  cells?: {
+    n_cells: number;
+    n_run_cells: number;
+    mean_cos: number | null;
+    share_forward: number | null;
+    by_group: { group: string; n_cells: number; mean_cos: number; share_forward: number }[];
+  };
+  derived?: boolean;
+  order_auc?: number | null;
+  note: string;
+}
+
 export interface VelocityRun {
   result_id: string;
   method: VelocityMethod;
@@ -67,6 +120,7 @@ export interface VelocityRun {
   warnings: string[];
   note: string;
   embeddings: string[];
+  direction?: VelocityDirection | null;
 }
 
 export interface VelocityEstimate {
@@ -150,6 +204,9 @@ export interface VelocityRunBody {
   n_top_genes: number;
   n_neighbors: number;
   group_by?: string | null;
+  direction?: VelocityDirectionSpec | null;
+  /** The 2D plot the direction is checked on */
+  embedding?: string | null;
 }
 
 export async function runVelocity(
@@ -187,4 +244,15 @@ export function getVelocityPhase(datasetId: string, gene: string, colorBy?: stri
 
 export function getVelocityGenes(datasetId: string): Promise<{ genes: VelocityGene[]; n_genes: number; n_velocity_genes: number; sort: string }> {
   return apiFetch(`/datasets/${datasetId}/velocity/genes`);
+}
+
+export function checkVelocityDirection(
+  datasetId: string,
+  body: VelocityDirectionSpec & { embedding?: string | null },
+): Promise<{ direction: VelocityDirection; warnings: string[]; run: VelocityRun }> {
+  return apiFetch(`/datasets/${datasetId}/velocity/direction`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
 }

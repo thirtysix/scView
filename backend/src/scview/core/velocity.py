@@ -58,7 +58,7 @@ import pandas as pd
 import scipy.sparse as sp
 
 from scview.core import modality_store as ms
-from scview.core import results_store, velocity_input as vi
+from scview.core import results_store, velocity_direction as vd, velocity_input as vi
 
 logger = logging.getLogger(__name__)
 
@@ -390,6 +390,8 @@ class Params:
     n_pcs: int = N_PCS
     min_shared_counts: int = MIN_SHARED_COUNTS
     group_by: str | None = None
+    direction: dict[str, Any] | None = None  # the order to check the arrows against (velocity_direction.resolve)
+    embedding: str | None = None  # the plot that check is made on (default: a UMAP)
 
 
 @dataclass
@@ -413,6 +415,9 @@ class Prepared:
     group_column: str | None
     source: dict[str, Any] = field(default_factory=dict)
     var_names: list[str] = field(default_factory=list)
+    ordering: Any = None  # velocity_direction.Ordering, or None (then ``unchecked`` says why)
+    unchecked: str | None = None
+    direction_embedding: str | None = None
 
 
 def embedding_names(adata) -> list[str]:
@@ -425,6 +430,18 @@ def embedding_names(adata) -> list[str]:
         if len(shape) == 2 and shape[0] == adata.n_obs and (shape[1] == 2 or key == "X_pca"):
             out.append(str(key))
     return out
+
+
+def direction_embedding(names: list[str], wanted: str | None) -> str | None:
+    """The plot the direction check is made on: the one asked for (the panel sends the plot on
+    screen), else the UMAP the main plot opens on, else another UMAP, else the first 2D one."""
+    if wanted in names:
+        return wanted
+    for key in ("X_umap", *sorted(n for n in names if "umap" in n.lower())):
+        if key in names:
+            return key
+    flat = [n for n in names if n != "X_pca"]
+    return flat[0] if flat else (names[0] if names else None)
 
 
 def obsm_key(embedding: str) -> str:
@@ -490,9 +507,14 @@ def prepare(adaptor, data_dir: str | Path, dataset_id: str, params: Params) -> P
         if column not in adata.obs.columns:
             raise VelocityError(f"This dataset has no column '{column}' to group the table by.")
         groups = adata.obs[column].astype(object).where(adata.obs[column].notna(), None).astype(str)
+    try:
+        ordering, unchecked = vd.resolve(adata, params.direction, column)
+    except vd.DirectionError as e:
+        raise VelocityError(str(e))
     return Prepared(dataset_id, str(data_dir), params, rows[mask], positions, [str(adata.obs_names[i]) for i in positions],
                     int(adata.n_obs), adaptor.cells_fingerprint(), pca, pca_note, conn, dist, k, note, embeddings, groups,
-                    column, vi.read_record(adata).get("source") or {}, var_names)
+                    column, vi.read_record(adata).get("source") or {}, var_names, ordering, unchecked,
+                    direction_embedding(list(embeddings), params.embedding))
 
 
 def fit_block_genes(n_cells: int) -> int:
@@ -717,11 +739,20 @@ def iter_run(p: Prepared, stop: Callable[[], bool] | None = None) -> Iterator[di
                 check()
                 arrows[name] = _project(run_store, np.arange(n), self_prob, emb[p.positions])
         table = _cluster_table(p, confidence, length, size_u, size_s, V, U, vidx, genes)
+        emb = p.direction_embedding
+        if emb is None:
+            direction = vd.unchecked("This dataset has no 2D plot to check the arrows on.")
+        elif p.ordering is None:
+            direction = vd.unchecked(p.unchecked or "No order to check against.", emb)
+        else:
+            check()
+            yield _progress("direction", f"Checking the direction against {p.ordering.label}")
+            direction = vd.evaluate(p.ordering, p.embeddings[emb][p.positions], arrows[emb], p.positions, emb)
         out = {"genes": genes, "gamma": gamma, "r2": r2, "velocity_genes": velocity_genes, "n_kept": int(kept.size),
                "n_store_genes": int(n_genes), "length": length, "confidence": confidence,
                "unspliced_fraction": unspliced_fraction, "arrows": arrows, "table": table,
                "self_prob": self_prob, "pca_note": pca_note, "sum_u": float(size_u.sum()), "sum_s": float(size_s.sum()),
-               "n_velocity_genes": int(vidx.size)}
+               "n_velocity_genes": int(vidx.size), "direction": direction}
         del V, U, S
         yield {"type": "result", "out": out}
     except BaseException:
@@ -876,7 +907,8 @@ def save(adata, p: Prepared, out: dict[str, Any], summary_extra: dict[str, Any],
     unspliced = out["sum_u"] / max(out["sum_u"] + out["sum_s"], 1)
     params = p.params
     cells_without = int(n_total - p.positions.size)
-    warnings = warnings_for(unspliced, float(np.median(conf)), out["n_velocity_genes"], cells_without)
+    direction = out.get("direction")
+    warnings = warnings_for(unspliced, float(np.median(conf)), out["n_velocity_genes"], cells_without) + vd.warnings(direction)
     run = {
         **summary_extra,
         "method": params.method, "method_name": METHOD_NAMES[params.method],
@@ -892,7 +924,7 @@ def save(adata, p: Prepared, out: dict[str, Any], summary_extra: dict[str, Any],
         "embeddings": sorted(out["arrows"]), "embedding_hashes": hashes, "obsm_keys": keys,
         "gene_table": {"gene": out["genes"], "gamma": [float(f"{g:.5g}") for g in gamma],
                        "r2": [round(float(x), 4) for x in r2], "velocity_gene": [bool(x) for x in vg]},
-        "grid": grids,
+        "grid": grids, "direction": direction,
     }
     record = vi.read_record(adata)
     adata.uns[UNS_KEY] = json.dumps({"source": record.get("source") or p.source, "run": run})
@@ -917,6 +949,50 @@ def save(adata, p: Prepared, out: dict[str, Any], summary_extra: dict[str, Any],
         )
     except Exception as e:  # provenance must never block the result
         logger.warning("Could not record velocity provenance: %s", e)
+    return run
+
+
+def run_warnings(run: dict[str, Any]) -> list[str]:
+    """A saved run's warnings from its own numbers and its direction check."""
+    return warnings_for(float(run.get("unspliced_fraction") or 0), float(run.get("median_confidence") or 0),
+                        int(run.get("n_velocity_genes") or 0), int(run.get("cells_without") or 0)) + \
+        vd.warnings(run.get("direction"))
+
+
+def recheck(adaptor, data_dir: str | Path, dataset_id: str, spec: dict[str, Any] | None,
+            embedding: str | None) -> dict[str, Any]:
+    """The saved run's arrows checked against another order, or on another plot (a worker
+    thread; nothing saved here: ``set_direction``)."""
+    adata = adaptor.adata
+    run = saved(adata)
+    if run is None:
+        raise VelocityError("Run velocity on this dataset first.", 404)
+    if run.get("fingerprint") != adaptor.cells_fingerprint():
+        raise VelocityError("The cells changed since the velocity run: run it again.", 409)
+    names = embedding_names(adata)
+    if embedding and embedding not in names:
+        raise VelocityError(f"The direction is checked on a 2D plot; this dataset has none called '{embedding}'.", 422)
+    emb = direction_embedding(names, embedding)
+    if emb is None:
+        return vd.unchecked("This dataset has no 2D plot to check the arrows on.")
+    try:
+        ordering, why = vd.resolve(adata, spec, run.get("group_column"))
+    except vd.DirectionError as e:
+        raise VelocityError(str(e))
+    if ordering is None:
+        return vd.unchecked(why or "No order to check against.", emb)
+    coords, arrows, _ = arrows_for(adaptor, data_dir, dataset_id, emb)
+    positions = np.flatnonzero(np.isfinite(arrows).all(axis=1))
+    return vd.evaluate(ordering, coords[positions], arrows[positions], positions, emb)
+
+
+def set_direction(adata, direction: dict[str, Any]) -> dict[str, Any]:
+    """Keep a direction check with the saved run (its warnings follow); the caller saves uns."""
+    record = vi.read_record(adata)
+    run = dict(record.get("run") or {})
+    run["direction"] = direction
+    run["warnings"] = run_warnings(run)
+    adata.uns[UNS_KEY] = json.dumps({**record, "run": run})
     return run
 
 
@@ -1158,6 +1234,15 @@ def grounding_lines(adaptor) -> tuple[list[str], str | None]:
         tops = [f"{r['group']}: {', '.join(r['top_genes'][:3])}" for r in rows[:6] if r.get("top_genes")]
         if tops:
             lines.append("- Highest mean velocity per group: " + "; ".join(tops) + ".")
+    d = run.get("direction") or {}
+    if d.get("checked"):
+        rows = d.get("transitions") or []
+        lines.append(f"- Direction checked against {d['label']} on {d['embedding']}: "
+                     + "; ".join(f"{r['from']} -> {r['to']} {r['status'].replace('_', ' ')}"
+                                 + (f" (mean cosine {r['mean_cos']:+.2f}, n = {r['n_cells']})" if "mean_cos" in r else "")
+                                 for r in rows[:8]) + f" [{TAG}].")
+    elif d:
+        lines.append(f"- Direction unchecked: {d.get('reason')}")
     lines.extend(f"- Caution: {w}" for w in run.get("warnings") or [])
     lines.append("- Arrows show direction on a 2D plot, not a fate claim; the dynamical model and latent time are not "
                  "offered.")

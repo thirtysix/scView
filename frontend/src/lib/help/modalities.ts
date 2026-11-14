@@ -190,6 +190,10 @@ export const MODALITIES_HELP: Record<string, string> = {
     "Colour the cells by velocity confidence: how well each cell's velocity agrees with its neighbours', from 0 to 1. Low values mark regions where the arrows mean little.",
   "velocity.summary":
     "Coherence is a group's mean confidence; groups with low coherence or few velocity genes give arrows to trust less. Unspliced is the share of reads not yet spliced; very low values leave little to fit.",
+  "velocity.direction":
+    "Whether the arrows point the way an order you trust says, such as cell types in order or a pseudotime. Each transition scores the cells at the border between two groups. Confidence cannot catch a backward run: neighbours can agree on the wrong direction.",
+  "velocity.direction_against":
+    "The order to check against: scView's pseudotime (if you ran it), groups you put in order, a root group with the PAGA tree of the table's column, or a column such as a time point or stage. The table's groups are the ones compared.",
   "velocity.phase":
     "Each dot is a cell's spliced and unspliced levels for this gene, averaged over the cell and its neighbours. The red line is the fitted steady-state ratio (gamma). Cells above it are read as inducing the gene, cells below as repressing it. A gene with no clear almond shape gives little to fit.",
 };

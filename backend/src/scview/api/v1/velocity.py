@@ -6,7 +6,8 @@ matched, the last run and its estimate (never a 404: the panel asks on open). ``
 Velocyto/filtered folder's files, stored beside the originals (``uploads/{id}/velocity/``,
 read-only) and matched to the cells. ``POST .../velocity/run-stream``: the run (SSE: ``start``,
 ``progress``, ``watchdog``, ``result``, ``complete`` or ``error``). ``GET .../velocity/grid``,
-``.../phase`` and ``.../genes`` read the saved run.
+``.../phase`` and ``.../genes`` read the saved run; ``POST .../velocity/direction`` checks its
+arrows against an order (``core/velocity_direction.py``) and keeps the check with it.
 
 A run reads the store and copies obsm and the graph out first; it never reads X, and holds the
 edit lock only for the final save, so a large dataset runs too. A client that goes away stops
@@ -32,6 +33,7 @@ from pydantic import BaseModel, Field
 
 from scview.core import preflight
 from scview.core import velocity as vel
+from scview.core import velocity_direction as vd
 from scview.core import velocity_input as vi
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import dataset_edit, edit_room, editable, save_edit, uns_snapshot
@@ -49,11 +51,38 @@ _SAFE = re.compile(r"[^A-Za-z0-9._-]+")
 _WHAT = "RNA velocity"
 
 
+class DirectionSpec(BaseModel):
+    """The order the arrows are checked against (core/velocity_direction.py): give one of
+    transitions, order, root or column; none: scView's diffusion pseudotime when there is one."""
+    group_by: str | None = Field(default=None, max_length=256, description=(
+        "Column of groups the transitions run between (default: the run's table column)."))
+    order: list[str] | None = Field(default=None, max_length=vd.MAX_GROUPS, description=(
+        "Groups of group_by, earliest first: each consecutive pair is an expected transition."))
+    transitions: list[tuple[str, str]] | None = Field(default=None, max_length=vd.MAX_TRANSITIONS, description=(
+        "Expected transitions as [from, to] pairs of group_by's groups (branches allowed)."))
+    root: str | None = Field(default=None, max_length=256, description=(
+        "The earliest group: transitions follow the PAGA tree of group_by away from it (run PAGA on it first)."))
+    column: str | None = Field(default=None, max_length=256, description=(
+        "A column that orders the cells: a pseudotime or time (numeric), or a stage (ordered, or one number per "
+        "value such as E7.5)."))
+    column_order: list[str] | None = Field(default=None, max_length=500, description=(
+        "The values of a text column, earliest first."))
+
+
 class RunRequest(BaseModel):
     method: Literal["stochastic", "steady_state"] = "stochastic"
     n_top_genes: int = Field(default=vel.N_TOP_GENES, ge=100, le=20_000)
     n_neighbors: int = Field(default=vel.N_NEIGHBORS, ge=5, le=100)
     group_by: str | None = Field(default=None, max_length=256)
+    direction: DirectionSpec | None = Field(default=None, description=(
+        "The order to check the arrows against after the run (default: scView's pseudotime, if any)."))
+    embedding: str | None = Field(default=None, max_length=256, description=(
+        "The 2D plot the direction is checked on (default: X_umap)."))
+
+
+class DirectionRequest(DirectionSpec):
+    embedding: str | None = Field(default=None, max_length=256, description=(
+        "The 2D plot the direction is checked on (default: X_umap)."))
 
 
 def _sse(event: str, data: dict[str, Any]) -> str:
@@ -245,7 +274,8 @@ async def run_velocity(dataset_id: str, body: RunRequest, dm: DatasetManager = D
                                   n_neighbors=body.n_neighbors)
     await dm.reserve(dataset_id, est["peak_bytes"], what=_WHAT)
     params = vel.Params(method=body.method, n_top_genes=body.n_top_genes, n_neighbors=body.n_neighbors,
-                        group_by=body.group_by)
+                        group_by=body.group_by, embedding=body.embedding,
+                        direction=body.direction.model_dump(exclude_none=True) if body.direction else None)
     del adaptor
 
     async def events():
@@ -318,6 +348,48 @@ async def run_velocity(dataset_id: str, body: RunRequest, dm: DatasetManager = D
 
     return StreamingResponse(keepalive(events()), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@router.post("/datasets/{dataset_id}/velocity/direction")
+async def velocity_direction(dataset_id: str, body: DirectionRequest, dm: DatasetManager = Depends(get_dataset_manager)):
+    """Check the saved run's arrows against an order (or on another plot) and keep the check with
+    the run; its warnings follow. Seconds: the arrows, a neighbour search on the plot, the scores."""
+    adaptor = await _adaptor(dm, dataset_id)
+    if dataset_id in _running:
+        raise HTTPException(status_code=409, detail="A velocity run is working on this dataset: wait for it.")
+    run = vel.saved(adaptor.adata)
+    result_id = (run or {}).get("result_id")
+    spec = body.model_dump(exclude={"embedding"}, exclude_none=True)
+    direction = await _read(vel.recheck, adaptor, dm.data_dir, dataset_id, spec, body.embedding)
+    del adaptor
+    async with dataset_edit(dataset_id) as held:
+        adaptor = await _adaptor(dm, dataset_id)
+        now = vel.saved(adaptor.adata)
+        if now is None or now.get("result_id") != result_id:
+            raise HTTPException(status_code=409, detail="The velocity run changed while it was checked: check again.")
+        output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
+        backed = await edit_room(dm, dataset_id, adaptor)
+
+        def work() -> dict[str, Any]:
+            data = editable(adaptor)
+            before = uns_snapshot(data)
+            out = vel.set_direction(data, direction)
+            save_edit(adaptor, data, output_path, before)
+            return out
+
+        try:
+            run = await held.run(work)
+        except Exception:
+            dm.evict(dataset_id)
+            raise
+        if backed:
+            dm.evict(dataset_id)
+            await dm.load_dataset(dataset_id)
+            adaptor = await _adaptor(dm, dataset_id)
+        else:
+            dm.saved_in_place(dataset_id, adaptor, output_path)
+        vel.remember(adaptor, run, str(result_id))
+    return {"direction": direction, "warnings": run["warnings"], "run": vel.public_run(run)}
 
 
 @router.get("/datasets/{dataset_id}/velocity/grid")
