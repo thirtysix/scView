@@ -54,7 +54,8 @@ async def get_result(dataset_id: str, result_id: str,
     e, _ = await _find(dm, dataset_id, result_id, value=False)
     if e is None:
         raise HTTPException(status_code=404, detail="No such stored result.")
-    return {**_summary(e), "params": e.get("params") or {}, "fingerprint": e.get("fingerprint")}
+    return {**_summary(e), "params": e.get("params") or {}, "warnings": e.get("warnings") or [],
+            "fingerprint": e.get("fingerprint")}
 
 
 @router.delete("/datasets/{dataset_id}/results/{result_id}")

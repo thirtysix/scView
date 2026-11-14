@@ -702,13 +702,15 @@ def keep(
     adaptor: Any = None,
     computed_on: dict[str, Any] | None = None,
     archived: bool = False,
+    warnings: list[str] | None = None,
 ) -> Future | None:
     """Store ``value`` for a dataset (``target`` is its adaptor or its id) in the
     background; returns the write's future (tests wait on it), or None when the
     dataset is unknown. ``key`` names what the result is about: a newer result of
     the same kind and key supersedes it. ``archived``: an older copy of a result
     whose current one lives in the h5ad (always superseded here); ``computed_on``
-    is the fingerprint of the data it was computed on (default: the adaptor's now)."""
+    is the fingerprint of the data it was computed on (default: the adaptor's now).
+    ``warnings``: what to read the result with, kept on the entry (``GET .../results/{id}``)."""
     if isinstance(target, str):
         dataset_id = target
     else:
@@ -729,6 +731,8 @@ def keep(
     }
     if archived:
         entry["archived"] = True
+    if warnings:
+        entry["warnings"] = [str(w) for w in warnings]
     return _writer.submit(_save, dataset_id, entry, value)
 
 

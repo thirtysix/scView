@@ -1349,11 +1349,15 @@ def velocity_barcode(name):
     return max(runs, key=len) if runs else str(name)
 
 
-def velocity_run(adata, files, method, n_top_genes, n_neighbors, n_pcs, min_shared_counts=20):
+def velocity_run(adata, files, method, n_top_genes, n_neighbors, n_pcs, min_shared_counts=20, exclude=None):
     """RNA velocity as scVelo 0.3.3 (steady state or stochastic), written where scView writes it:
     obs velocity_length, velocity_confidence, velocity_unspliced_fraction; obsm velocity_<embedding>;
-    var velocity_gamma, velocity_r2, velocity_gene."""
+    var velocity_gamma, velocity_r2, velocity_gene. ``exclude``: gene names left out before the
+    variable genes are chosen, as if not in the file (cell totals too)."""
     names, genes, S0, U0 = velocity_counts(files)
+    if exclude:  # as if those genes were not in the file
+        keep = ~np.isin(np.asarray(genes, dtype=object), list(exclude))
+        genes, S0, U0 = [g for g, k in zip(genes, keep) if k], S0[:, keep], U0[:, keep]
     rows = pd.Index(names).get_indexer(adata.obs_names)
     if (rows < 0).mean() > 0.5:  # other naming: by the barcode inside each name
         first = {}
@@ -3253,12 +3257,17 @@ def _velocity(p: dict, ctx: _Ctx) -> Snippet:
                        "settings not recorded")
     files = p.get("source_stored_as") or None
     _need(ctx, "velocity")
+    exclude = [str(g) for g in p.get("exclude_genes") or []]
+    sets = ", ".join(str(s) for s in p.get("exclude_sets") or [])
     return Snippet(EXACT, [
         f"# RNA velocity, {comment_text(vel.METHOD_NAMES[method], 60)} (ported from scVelo 0.3.3): counts from "
         + (comment_text(", ".join(p.get("source_files") or files), 120) + " (beside this script or the input)." if files
            else "the input's layers spliced and unspliced."),
+        *([f"# {len(exclude):,} genes left out" + (f" (lists: {comment_text(sets, 80)})" if sets else "") + "."]
+          if exclude else []),
         f"velocity_run(adata, {_lit(files)}, {_lit(method)}, {ints[0]}, {ints[1]}, {ints[2]}, "
-        f"{_lit(int(p.get('min_shared_counts', vel.MIN_SHARED_COUNTS)))})",
+        f"{_lit(int(p.get('min_shared_counts', vel.MIN_SHARED_COUNTS)))}"
+        + (f", exclude={_lit(exclude)}" if exclude else "") + ")",
     ])
 
 

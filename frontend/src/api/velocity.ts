@@ -45,11 +45,114 @@ export interface VelocityGroup {
   top_genes: string[];
 }
 
+/** The order a run's arrows are checked against (core/velocity_direction.py): one of these, or none for scView's pseudotime. */
+export interface VelocityDirectionSpec {
+  group_by?: string | null;
+  order?: string[];
+  transitions?: [string, string][];
+  root?: string;
+  column?: string;
+  column_order?: string[];
+}
+
+export type VelocityTransitionStatus = "forward" | "backward" | "unclear" | "few_cells" | "no_boundary";
+
+export interface VelocityTransition {
+  from: string;
+  to: string;
+  /** Cells of `from` with cells of `to` among their nearest on the plot */
+  n_cells: number;
+  mean_cos?: number;
+  low?: number;
+  high?: number;
+  share_forward?: number;
+  status: VelocityTransitionStatus;
+}
+
+/** Velocity genes whose expression rises along an expected step while their velocity says it falls */
+export interface VelocityGeneFlags {
+  checked: boolean;
+  reason?: string;
+  rule: string;
+  n_velocity_genes?: number;
+  n_flagged?: number;
+  top_n?: number;
+  n_in_top?: number;
+  genes?: {
+    gene: string;
+    r2: number;
+    /** Rank by r2 among the velocity genes */
+    rank: number;
+    steps: {
+      from: string;
+      to: string;
+      status?: VelocityTransitionStatus;
+      spliced_from: number;
+      spliced_to: number;
+      ratio_from: number;
+      ratio_to: number;
+      share_negative: number;
+    }[];
+  }[];
+  steps?: string[];
+  n_cells?: number;
+  sampled?: boolean;
+}
+
+export interface VelocityDirection {
+  checked: boolean;
+  /** Why it is unchecked */
+  reason?: string;
+  kind?: "pseudotime" | "column" | "order" | "transitions" | "root";
+  label?: string;
+  spec?: VelocityDirectionSpec;
+  group_column?: string;
+  embedding: string | null;
+  k?: number;
+  min_cells?: number;
+  transitions?: VelocityTransition[];
+  n_backward?: number;
+  n_forward?: number;
+  n_unclear?: number;
+  /** Groups that meet on the plot but that the order does not separate */
+  skipped?: { groups: [string, string]; auc: number }[];
+  cells?: {
+    n_cells: number;
+    n_run_cells: number;
+    mean_cos: number | null;
+    share_forward: number | null;
+    by_group: { group: string; n_cells: number; mean_cos: number; share_forward: number }[];
+  };
+  derived?: boolean;
+  order_auc?: number | null;
+  note: string;
+  gene_flags?: VelocityGeneFlags;
+}
+
 export interface VelocityRun {
   result_id: string;
   method: VelocityMethod;
   method_name: string;
-  params: { n_top_genes: number; n_neighbors: number; n_pcs: number; min_shared_counts: number };
+  params: {
+    n_top_genes: number;
+    n_neighbors: number;
+    n_pcs: number;
+    min_shared_counts: number;
+    /** Genes left out (as matched in the counts) and the built-in lists asked for */
+    exclude_genes?: string[];
+    exclude_sets?: string[];
+    /** The names typed in, as typed */
+    exclude_given?: string[];
+  };
+  /** What was asked to be left out and what matched; null when nothing was */
+  excluded?: {
+    sets: string[];
+    n_given: number;
+    n_matched: number;
+    n_unmatched: number;
+    unmatched: string[];
+    n_passing_filter: number;
+  } | null;
   n_cells: number;
   n_dataset_cells: number;
   cells_without: number;
@@ -67,6 +170,7 @@ export interface VelocityRun {
   warnings: string[];
   note: string;
   embeddings: string[];
+  direction?: VelocityDirection | null;
 }
 
 export interface VelocityEstimate {
@@ -90,6 +194,18 @@ export interface VelocityStatus {
   n_cells: number;
   estimate: VelocityEstimate | null;
   running: boolean;
+  /** Built-in gene lists a run can leave out */
+  gene_sets?: VelocityGeneSet[];
+}
+
+export interface VelocityGeneSet {
+  id: string;
+  name: string;
+  n_genes: number;
+  species: string;
+  source: string;
+  url: string;
+  note: string;
 }
 
 export interface VelocityGrid {
@@ -150,6 +266,11 @@ export interface VelocityRunBody {
   n_top_genes: number;
   n_neighbors: number;
   group_by?: string | null;
+  direction?: VelocityDirectionSpec | null;
+  /** The 2D plot the direction is checked on */
+  embedding?: string | null;
+  exclude_genes?: string[];
+  exclude_sets?: string[];
 }
 
 export async function runVelocity(
@@ -187,4 +308,15 @@ export function getVelocityPhase(datasetId: string, gene: string, colorBy?: stri
 
 export function getVelocityGenes(datasetId: string): Promise<{ genes: VelocityGene[]; n_genes: number; n_velocity_genes: number; sort: string }> {
   return apiFetch(`/datasets/${datasetId}/velocity/genes`);
+}
+
+export function checkVelocityDirection(
+  datasetId: string,
+  body: VelocityDirectionSpec & { embedding?: string | null },
+): Promise<{ direction: VelocityDirection; warnings: string[]; run: VelocityRun }> {
+  return apiFetch(`/datasets/${datasetId}/velocity/direction`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
 }
