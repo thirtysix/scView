@@ -162,6 +162,10 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Unified View > Perturbation > DE genes from", "",
      "Mixscape's DE genes per target from all genes (Seurat RunMixscape's rule, the default) or the variable genes; "
      "the result has each target's KO share per guide (Per guide) and per replicate"),
+    ("Unified View > Perturbation > Protein by target", "",
+     "with a protein panel (CITE / ECCITE-seq): each protein's shift per target in all, KO and NP cells against the "
+     "controls, judged on the replicates when 'Within' names them, and targets that move a protein with no RNA KO "
+     "class (which Mixscape alone calls all NP)"),
     ("Unified View > Spatial genes", "Moran's I",
      "spatially variable genes (Moran's I) on Visium spots, Visium HD bins or imaging cells, one section or all (then "
      "within each section, with each section's own I); click a gene to colour the tissue"),

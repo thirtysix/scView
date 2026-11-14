@@ -69,6 +69,52 @@ export interface KoShareRow {
   ko_fraction: number;
 }
 
+/** One group's shift of a protein against the controls (mean CLR difference, cell-level Wilcoxon). */
+export interface ProteinShift {
+  n: number;
+  diff: number;
+  p: number;
+  padj: number | null;
+}
+
+/** One target x protein row of the protein check (backend core/perturbation_protein.py). */
+export interface ProteinCheckRow {
+  target: string;
+  protein: string;
+  ko_fraction: number;
+  all: ProteinShift | null;
+  ko: ProteinShift | null;
+  np: ProteinShift | null;
+  replicates?: { replicate: string; n: number; diff: number }[];
+  n_replicates?: number;
+  same_sign?: number;
+  p_replicate?: number | null;
+  padj_replicate?: number;
+  note?: string;
+  /** replicate: judged on the replicates' agreement; cell: on cells alone */
+  unit: "replicate" | "cell";
+  significant: boolean;
+  /** a significant shift with (almost) no cells called KO on RNA */
+  flag: boolean;
+}
+
+export interface ProteinCheck {
+  layer: string;
+  proteins: string[];
+  n_proteins: number;
+  control: string;
+  n_control: number;
+  replicate_column: string | null;
+  min_cells: number;
+  ko_share_none: number;
+  alpha: number;
+  n_pairs: number;
+  rows: ProteinCheckRow[];
+  flags: { target: string; protein: string; diff: number; unit: string; ko_fraction: number; text: string }[];
+  notes: string[];
+  default_protein: string | null;
+}
+
 export interface MixscapeResult {
   params: Record<string, unknown>;
   labels: string;
@@ -90,6 +136,8 @@ export interface MixscapeResult {
   /** KO share per target x guide, and per target x replicate (target cells only) */
   per_guide?: KoShareRow[];
   per_replicate?: KoShareRow[];
+  /** Protein shift per target and protein-only flags (null: no protein modality) */
+  protein?: ProteinCheck | null;
   lda:{ x: number[]; y: number[]; label: string[]; n_cells: number; n_shown: number; dims: number } | null;
   seconds: number;
   created: string;
