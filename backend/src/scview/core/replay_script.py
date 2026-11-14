@@ -1462,11 +1462,14 @@ class AtacCounts:
 
 
 def atac_differential(counts, peak_names, labels, settings):
-    """iter_differential on the counts in memory: a table of each chosen group vs the rest."""
+    """iter_differential on the counts in memory: a table of each chosen group vs the rest, or of
+    one group vs another (``vs``; the cells of every other group then take no part)."""
     missing = pd.isna(labels)
     every = sorted({str(x) for x in labels[~missing]})
+    if settings.get("vs") is not None:
+        every = [str(settings["groups"][0]), str(settings["vs"])]
     code = {g: i for i, g in enumerate(every)}
-    codes = np.array([-1 if m else code[str(x)] for x, m in zip(labels, missing)], dtype=np.int32)
+    codes = np.array([-1 if m else code.get(str(x), -1) for x, m in zip(labels, missing)], dtype=np.int32)
     chosen = settings.get("groups") or every
     peak_mask = None
     if settings.get("standard_only"):  # chrM, unplaced scaffolds and alt contigs left out
@@ -3512,7 +3515,7 @@ def _atac_differential(p: dict, ctx: _Ctx) -> Snippet:
         return Snippet(NOT_REPLAYABLE, ["# Differential peaks: the settings are not recorded. Recorded:", *_param_comment(p)],
                        "settings not recorded")
     _need(ctx, "atac")
-    keys = ("column", "groups", "min_pct", "max_peaks", "test", "lrt_peaks", "standard_only")
+    keys = ("column", "groups", "min_pct", "max_peaks", "test", "lrt_peaks", "standard_only", "vs")
     settings = {x: p.get(x) for x in keys if p.get(x) is not None}
     return Snippet(EXACT, [
         f"# Differential peaks by {comment_text(p.get('column'), 80)}, {comment_text(p.get('test'), 12)}: each group vs "

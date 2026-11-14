@@ -366,6 +366,34 @@ async def test_differential_leaves_out_peaks_off_the_standard_chromosomes(client
     assert steps[0]["params"]["standard_only"] is True and steps[1]["params"]["standard_only"] is False
 
 
+async def test_one_group_against_another_streams_keeps_and_estimates(client, dataset_manager):
+    did, *_ = _register_multiome(dataset_manager, "pair")
+    e = (await client.get(f"{API}/datasets/{did}/atac/differential-estimate",
+                          params={"column": "group", "test": "lr", "group": "B", "vs": "A"})).json()
+    assert e["groups"] == ["A", "B"] and e["n_groups"] == 1 and e["vs"] == "A" and e["n_cells"] == 80
+    every = (await client.get(f"{API}/datasets/{did}/atac/differential-estimate", params={"column": "group"})).json()
+    assert every["groups"] == ["A", "B"] and every["n_groups"] == 2 and every["vs"] is None
+    r = await client.post(f"{API}/datasets/{did}/atac/differential", json={"column": "group", "groups": ["B"], "vs": "A"})
+    assert r.status_code == 200, r.text
+    events = _events(r.text)
+    assert events[0][1]["vs"] == "A" and events[0][1]["groups"] == ["B"]
+    res = next(d for e_, d in events if e_ == "result")
+    assert res["groups"] == ["B"] and res["vs"] == "A" and res["params"]["n_cells_vs"] == 40
+    assert "B vs A (the cells of no other group used)" in res["method"]
+    results_store.flush()
+    entry = (await client.get(f"{API}/datasets/{did}/results/{res['id']}")).json()
+    assert entry["label"] == "Differential accessibility B vs A by group" and entry["params"]["vs"] == "A"
+    # each group vs the rest on the same column is a result of its own (a pair does not replace it)
+    await client.post(f"{API}/datasets/{did}/atac/differential", json={"column": "group"})
+    results_store.flush()
+    listed = (await client.get(f"{API}/datasets/{did}/results", params={"kind": "atac_differential"})).json()["results"]
+    assert len(listed) == 2 and all(e_["status"] == "primary" for e_ in listed)
+    bad = await client.post(f"{API}/datasets/{did}/atac/differential", json={"column": "group", "vs": "A"})
+    assert bad.status_code == 422 and "name one group" in bad.json()["detail"]
+    same = await client.post(f"{API}/datasets/{did}/atac/differential", json={"column": "group", "groups": ["A"], "vs": "A"})
+    assert same.status_code == 422
+
+
 async def test_one_run_at_a_time(client, dataset_manager):
     did, *_ = _register_multiome(dataset_manager)
     atac_api._running[did] = "wnn"

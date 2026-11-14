@@ -157,6 +157,10 @@ export interface AtacDaEstimate {
   test: AtacDaTest;
   n_groups: number;
   n_cells: number;
+  /** The column's groups, for the one-against-another choice (absent from an older backend). */
+  groups?: string[];
+  group?: string | null;
+  vs?: string | null;
   estimate_seconds: number;
   estimate_bytes: number;
 }
@@ -171,6 +175,8 @@ export interface AtacDa {
   method: string;
   /** Absent on a result saved before the choice existed: a Wilcoxon. */
   test?: AtacDaTest;
+  /** One group against this one (groups holds the one), null for each group vs the rest. */
+  vs?: string | null;
   n_fit?: Record<string, Record<AtacDaFit, number>> | null;
   kept_per_group: number;
   created_at: string;
@@ -179,7 +185,7 @@ export interface AtacDa {
 
 export type AtacRunBody = { n_lsi?: number; dims_to?: number; drop_first?: "auto" | "yes" | "no"; resolution?: number; activity?: boolean };
 export type AtacWnnBody = { lsi_first?: number; lsi_last?: number; resolution?: number };
-export type AtacDaBody = { column: string; groups?: string[]; min_pct?: number; test?: AtacDaTest };
+export type AtacDaBody = { column: string; groups?: string[]; min_pct?: number; test?: AtacDaTest; vs?: string };
 
 export function getAtac(datasetId: string, groupby?: string): Promise<AtacState> {
   const q = new URLSearchParams({ allow_empty: "true" });
@@ -198,8 +204,12 @@ export function getAtacActivity(datasetId: string, gene: string, groupby?: strin
   return apiFetch(`/datasets/${datasetId}/atac/activity?${q.toString()}`);
 }
 
-export function getDaEstimate(datasetId: string, column: string, test: AtacDaTest): Promise<AtacDaEstimate> {
+export function getDaEstimate(datasetId: string, column: string, test: AtacDaTest, group = "", vs = ""): Promise<AtacDaEstimate> {
   const q = new URLSearchParams({ column, test });
+  if (group && vs) {
+    q.set("group", group);
+    q.set("vs", vs);
+  }
   return apiFetch(`/datasets/${datasetId}/atac/differential-estimate?${q.toString()}`);
 }
 

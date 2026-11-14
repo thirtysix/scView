@@ -101,7 +101,9 @@ export const SPATIAL_HELP: Record<string, string> = {
   "atac.activity-vs-rna":
     "Each dot is a cell: the gene's RNA across, its gene activity (open chromatin around the gene) up. Dots along a rising diagonal mean open chromatin and expression go together. Many cells at zero on one axis are normal, as both measures are sparse per cell.",
   "atac.da-groups":
-    "The metadata column whose groups are compared: each group's cells against all other cells, giving one table per group.",
+    "The metadata column whose groups are compared: each group's cells against all other cells, giving one table per group, or one group against another.",
+  "atac.da-compare":
+    "Each group vs the rest gives one table per group. One group vs another compares two groups directly and leaves every other cell out, as Signac's FindMarkers with ident.1 and ident.2 (the vignette's CD4 naive vs CD14 monocytes). Fold changes are larger than against the rest.",
   "atac.links-genes":
     "Which genes to link to nearby peaks: the variable genes (quicker), every gene, or a list you type. Each gene is tested against the peaks within 500 kb of its TSS.",
   "atac.links-cells":

@@ -112,7 +112,7 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Unified View > Accessibility > Gene activity", "peak-based",
      "peak counts in gene body + 2 kb upstream as an overlay and against RNA; peak-based, not fragment-based"),
     ("Unified View > Accessibility > Differential peaks", "LR with depth, or Wilcoxon",
-     "peaks per group vs the rest, logistic regression with a depth covariate (Seurat's LR, the default) or Wilcoxon on TF-IDF, with "
+     "peaks per group vs the rest or one group vs another (Compare), logistic regression with a depth covariate (Seurat's LR, the default) or Wilcoxon on TF-IDF, with "
      "nearest gene, distance to TSS, class; CSV"),
     ("Unified View > Gene Sets", "AUCell, ssGSEA, GSVA",
      "browse MSigDB sets; score them with AUCell, ssGSEA or GSVA"),

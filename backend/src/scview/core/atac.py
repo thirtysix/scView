@@ -1049,8 +1049,26 @@ class DaResult:
     n_fit: dict[str, dict[str, int]] | None = None  # lr: per group, how many peaks got each kind of p
 
 
-def group_codes(adata, column: str, groups: list[str] | None = None) -> tuple[np.ndarray, list[str], list[str]]:
-    """Each cell's group code (-1 for a missing label), every group, and the ones tested."""
+def group_codes(adata, column: str, groups: list[str] | None = None,
+                vs: str | None = None) -> tuple[np.ndarray, list[str], list[str]]:
+    """Each cell's group code (-1 for a missing label), every group, and the ones tested. With
+    ``vs``, one group against another (Signac's ``FindMarkers(ident.1, ident.2)``): ``groups`` names
+    the one group, every other cell is unlabelled, so "the rest" is ``vs``'s cells alone."""
+    if vs is not None:
+        if not groups or len(groups) != 1:
+            raise AtacError("To compare two groups, name one group and the group to compare it with.", 422)
+        if str(groups[0]) == str(vs):
+            raise AtacError("Pick two different groups to compare.", 422)
+        codes, every, _chosen = group_codes(adata, column, None)
+        code = {g: i for i, g in enumerate(every)}
+        for g in (str(groups[0]), str(vs)):
+            if g not in code:
+                raise AtacError(f"'{column}' has no group '{g}'.", 404)
+        a, b = code[str(groups[0])], code[str(vs)]
+        pair = np.where(codes == a, 0, np.where(codes == b, 1, -1)).astype(np.int32)
+        if min(int((pair == 0).sum()), int((pair == 1).sum())) < MIN_GROUP_CELLS:
+            raise AtacError(f"Each group needs at least {MIN_GROUP_CELLS} cells to compare.", 422)
+        return pair, [str(groups[0]), str(vs)], [str(groups[0])]
     if column not in adata.obs.columns:
         raise AtacError(f"Column '{column}' not found.", 404)
     s = adata.obs[column]
@@ -1341,6 +1359,18 @@ DA_METHOD_LR = ("Logistic regression with the cell's total peak counts as covari
 _DA_LAST: dict[str, DaResult] = {}
 
 
+def da_method(test: str, min_pct: float, max_peaks: int, lrt_peaks: int, pair: tuple[str, str] | None = None) -> str:
+    """The method sentence; ``pair`` (A, B) for one group against another, which drops every other cell."""
+    text = (DA_METHOD_LR.format(min_pct=min_pct, max_peaks=max_peaks, lrt_peaks=lrt_peaks) if test == "lr"
+            else DA_METHOD.format(min_pct=min_pct, max_peaks=max_peaks))
+    if pair is None:
+        return text
+    a, b = pair
+    return (text.replace("each group vs the rest", f"{a} vs {b} (the cells of no other group used)")
+            .replace("of the group or the rest", "of either group").replace("of each group", "")
+            .replace("BH FDR within each group", "BH FDR").replace("within each group across both", "across both"))
+
+
 def da_test(res: DaResult) -> str:
     """The test of a kept result; one saved before the choice existed was a Wilcoxon."""
     return str((res.params or {}).get("test") or "wilcoxon")
@@ -1358,7 +1388,7 @@ def da_payload(res: DaResult, group: str | None = None, offset: int = 0, limit: 
         pages = {g: json.loads(t[t["group"] == g].iloc[:limit][columns].to_json(orient="records", double_precision=15)) for g in res.groups}
     return {"id": res.result_id, "column": res.column, "groups": list(res.groups), "n_tested": dict(res.n_tested),
             "n_significant": dict(res.n_significant), "rows": pages, "params": dict(res.params), "method": res.method,
-            "test": da_test(res), "n_fit": res.n_fit, "kept_per_group": KEEP_PER_GROUP, "created_at": res.created_at}
+            "test": da_test(res), "vs": (res.params or {}).get("vs"), "n_fit": res.n_fit, "kept_per_group": KEEP_PER_GROUP, "created_at": res.created_at}
 
 
 def record_differential(adata, params: dict[str, Any], resources: dict | None = None) -> None:
@@ -1375,8 +1405,17 @@ def remember_da(adaptor, dataset_id: str, res: DaResult) -> None:
     _DA_LAST[res.result_id] = res
     while len(_DA_LAST) > KEEP_RESULTS:
         _DA_LAST.pop(next(iter(_DA_LAST)))
-    results_store.keep(adaptor, RESULT_KIND, res, result_id=res.result_id, key=res.column, params=dict(res.params),
-                       label=f"Differential accessibility by {res.column} ({len(res.groups)} groups)")
+    vs = (res.params or {}).get("vs")
+    key = res.column if vs is None else f"{res.column}|{res.groups[0]}|{vs}"  # a pair never replaces the column's all-groups run
+    results_store.keep(adaptor, RESULT_KIND, res, result_id=res.result_id, key=key, params=dict(res.params),
+                       label=da_label(res))
+
+
+def da_label(res: DaResult) -> str:
+    vs = (res.params or {}).get("vs")
+    if vs is not None:
+        return f"Differential accessibility {res.groups[0]} vs {vs} by {res.column}"
+    return f"Differential accessibility by {res.column} ({len(res.groups)} groups)"
 
 
 def recall_da(dataset_id: str, result_id: str) -> DaResult | None:
@@ -1805,7 +1844,9 @@ def da_grounding_lines(adaptor) -> list[str]:
     name = ("logistic regression with the cell's total peak counts as covariate (Seurat's LR)" if lr
             else "Wilcoxon rank-sum on TF-IDF, no depth covariate")
     parts = [f"{g} {res.n_significant.get(g, 0):,} of {res.n_tested.get(g, 0):,}" for g in res.groups[:12]]
-    line = f"- Differential peaks by {res.column}, test: {name}; peaks at FDR 5% per group: {'; '.join(parts)}"
+    vs = (res.params or {}).get("vs")
+    what = f"{res.groups[0]} vs {vs} (no other cells)" if vs is not None else "each group vs the rest"
+    line = f"- Differential peaks by {res.column}, {what}, test: {name}; peaks at FDR 5% per group: {'; '.join(parts)}"
     if lr and res.n_fit:
         separated = sum(v.get("lrt_separated", 0) for v in res.n_fit.values())
         no_fit = sum(v.get("score_no_fit", 0) + v.get("untestable", 0) for v in res.n_fit.values())

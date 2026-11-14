@@ -13,7 +13,10 @@ import { AtacRunStatus } from "./AtacRunStatus";
 
 const PAGE = 100;
 
-/** Differential peaks per group (Wilcoxon on TF-IDF, or logistic regression with a depth covariate), with the nearest gene of each. */
+/**
+ * Differential peaks per group, each against the rest or one group against another (Signac's FindMarkers ident.1 / ident.2),
+ * by Wilcoxon on TF-IDF or logistic regression with a depth covariate, with the nearest gene of each.
+ */
 export function AtacDifferentialCard({
   datasetId,
   state,
@@ -31,6 +34,10 @@ export function AtacDifferentialCard({
   const elsewhere = !live && !!state.running;
   const [column, setColumn] = useState(defaultColumn);
   const [test, setTest] = useState<AtacDaTest>("lr");
+  const [pair, setPair] = useState(false);
+  const [groupA, setGroupA] = useState("");
+  const [groupB, setGroupB] = useState("");
+  const [groups, setGroups] = useState<string[]>([]);
   const [estimate, setEstimate] = useState<AtacDaEstimate | null>(null);
   const [group, setGroup] = useState("");
   const [rows, setRows] = useState<AtacDaRow[] | null>(null);
@@ -41,6 +48,8 @@ export function AtacDifferentialCard({
   const daId = da?.id;
   const daColumn = da?.column;
   const daTest = da?.test;
+  const daVs = da?.vs ?? null;
+  const daFirst = da?.groups[0] ?? "";
   const daColumnListed = daColumn != null && columns.includes(daColumn);
   useEffect(() => {
     if (daColumnListed) setColumn(daColumn);
@@ -49,6 +58,13 @@ export function AtacDifferentialCard({
   useEffect(() => {
     setTest(daId ? daTest ?? "wilcoxon" : "lr");
   }, [daId, daTest]);
+  useEffect(() => {
+    setPair(daVs != null);
+    if (daVs != null) {
+      setGroupA(daFirst);
+      setGroupB(daVs);
+    }
+  }, [daId, daVs, daFirst]);
 
   // The last result on these cells, when this tab opens with none in hand.
   useEffect(() => {
@@ -70,9 +86,12 @@ export function AtacDifferentialCard({
     let cancelled = false;
     setEstimate(null);
     if (!column) return;
-    getDaEstimate(datasetId, column, test)
+    const ready = pair && groupA && groupB && groupA !== groupB;
+    getDaEstimate(datasetId, column, test, ready ? groupA : "", ready ? groupB : "")
       .then((e) => {
-        if (!cancelled) setEstimate(e);
+        if (cancelled) return;
+        setEstimate(e);
+        setGroups(e.groups ?? []);
       })
       .catch(() => {
         if (!cancelled) setEstimate(null);
@@ -80,7 +99,16 @@ export function AtacDifferentialCard({
     return () => {
       cancelled = true;
     };
-  }, [datasetId, column, test]);
+  }, [datasetId, column, test, pair, groupA, groupB]);
+
+  // A pair names groups of this column: the first two until the user picks.
+  useEffect(() => {
+    if (!groups.length) return;
+    setGroupA((a) => (groups.includes(a) ? a : groups[0] ?? ""));
+    setGroupB((b) => (groups.includes(b) ? b : groups[1] ?? ""));
+  }, [groups]);
+  const pairReady = pair && !!groupA && !!groupB && groupA !== groupB;
+  const body = pairReady ? { column, test, groups: [groupA], vs: groupB } : { column, test };
 
   const shownGroup = da && da.groups.includes(group) ? group : da?.groups[0] ?? "";
   const first = useMemo(() => da?.rows[shownGroup] ?? [], [da, shownGroup]);
@@ -89,6 +117,7 @@ export function AtacDifferentialCard({
   const kept = da ? Math.min(da.kept_per_group, da.n_tested[shownGroup] ?? 0) : 0;
   const isLr = da?.test === "lr";
   const fitText = daFitText(da?.n_fit?.[shownGroup]);
+  const against = da?.vs ?? null;
   const mostPass = da ? daMostPass(da.n_significant[shownGroup] ?? 0, da.n_tested[shownGroup] ?? 0) : false;
 
   const more = async () => {
@@ -107,7 +136,8 @@ export function AtacDifferentialCard({
         <HoverTip
           width={320}
           tip={<>
-            Each group against the rest, for peaks open in at least 5% of either; FDR within each group. Logistic regression, the default:
+            Each group against the rest, or one group against another (the cells of every other group left out, as Signac&rsquo;s
+          FindMarkers with ident.1 and ident.2), for peaks open in at least 5% of either; FDR within each group. Logistic regression, the default:
             what Signac recommends (Seurat&rsquo;s LR test, group ~ peak + the cell&rsquo;s total counts against group ~ total counts).
             Every peak gets a score test against one fit per group, and the 10,000 highest of each group a true likelihood ratio; it costs
             minutes per column, and the line below says how many. Wilcoxon: rank-sum on TF-IDF, no covariate, faster, but in a low-depth
@@ -134,8 +164,30 @@ export function AtacDifferentialCard({
             <option value="wilcoxon">Wilcoxon (fast, no covariate)</option>
           </select>
         </label>
+        <label className="flex items-center gap-1.5 text-[11px] text-slate-600">
+          <Help id="atac.da-compare">Compare</Help>
+          <select value={pair ? "pair" : "rest"} onChange={(e) => setPair(e.target.value === "pair")} aria-label="Compare"
+                  className="rounded border border-slate-300 bg-white px-1 py-0.5 text-[11px] text-slate-700">
+            <option value="rest">Each group vs the rest</option>
+            <option value="pair" disabled={groups.length < 2}>One group vs another</option>
+          </select>
+        </label>
+        {pair && (
+          <span className="flex items-center gap-1 text-[11px] text-slate-600">
+            <select value={groupA} onChange={(e) => setGroupA(e.target.value)} aria-label="Group"
+                    className="max-w-[10rem] rounded border border-slate-300 bg-white px-1 py-0.5 text-[11px] text-slate-700">
+              {groups.map((g) => <option key={g} value={g}>{g}</option>)}
+            </select>
+            vs
+            <select value={groupB} onChange={(e) => setGroupB(e.target.value)} aria-label="Against"
+                    className="max-w-[10rem] rounded border border-slate-300 bg-white px-1 py-0.5 text-[11px] text-slate-700">
+              {groups.map((g) => <option key={g} value={g} disabled={g === groupA}>{g}</option>)}
+            </select>
+          </span>
+        )}
         {!live && (
-          <button type="button" disabled={!column || run.running || elsewhere} onClick={() => void run.runDa(datasetId, { column, test })}
+          <button type="button" disabled={!column || run.running || elsewhere || (pair && !pairReady)}
+                  onClick={() => void run.runDa(datasetId, body)}
                   className="rounded bg-primary px-2.5 py-1 text-xs font-medium text-white hover:bg-primary/90 disabled:opacity-50">
             Find differential peaks
           </button>
@@ -144,7 +196,9 @@ export function AtacDifferentialCard({
       {!live && estimate && (
         <p className="text-[11px] leading-snug text-slate-500" data-testid="atac-da-estimate">
           {estimate.test === "lr" ? "Logistic regression" : "Wilcoxon"}: about {formatDuration(estimate.estimate_seconds)} and{" "}
-          {(estimate.estimate_bytes / 1024 ** 3).toFixed(1)} GB beyond the open dataset for the {estimate.n_groups} groups of this column.
+          {(estimate.estimate_bytes / 1024 ** 3).toFixed(1)} GB beyond the open dataset{" "}
+          {estimate.vs ? `for ${estimate.group} vs ${estimate.vs} (${estimate.n_cells.toLocaleString()} cells).`
+            : `for the ${estimate.n_groups} groups of this column.`}
         </p>
       )}
       <AtacRunStatus datasetId={datasetId} kind="differential" />
@@ -175,7 +229,9 @@ export function AtacDifferentialCard({
                   <th className="pl-2 font-medium" title="Promoter: within 2 kb of a TSS; gene body; distal">Class</th>
                   <th className="text-right font-medium" title="log2 fold change of mean TF-IDF (expm1) + 1">log2FC</th>
                   <th className="text-right font-medium" title="Share of the group's cells with the peak">% in</th>
-                  <th className="text-right font-medium" title="Share of the other cells with the peak">% rest</th>
+                  <th className="text-right font-medium" title={against ? `Share of the ${against} cells with the peak` : "Share of the other cells with the peak"}>
+                    {against ? `% ${against.length > 10 ? "other" : against}` : "% rest"}
+                  </th>
                   <th className="text-right font-medium" title="Benjamini-Hochberg within this group">FDR</th>
                   {isLr && <th className="pl-2 font-medium" title="LRT: a true likelihood ratio. score: the score test, for peaks below the fitted ones. Separated: the peak splits the group, p from the deviance's limit. No fit: the fit did not converge, so the score test.">p from</th>}
                 </tr>
@@ -204,7 +260,7 @@ export function AtacDifferentialCard({
             </button>
           )}
           <Caption n={{ value: da.n_tested[shownGroup] ?? 0, unit: "peaks tested" }}>
-            {shownGroup} against the rest, by {prettyObsLabel(da.column)}. {da.method}
+            {shownGroup} against {against ?? "the rest"}, by {prettyObsLabel(da.column)}. {da.method}
             {fitText && ` ${fitText}`}
             {mostPass && " Most tested peaks pass here: with this many cells small differences reach significance, so read the top of the table, not the count."}
           </Caption>

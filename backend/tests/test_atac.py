@@ -342,6 +342,41 @@ def test_differential_context_columns(world):
     assert "on hg19 (GRCh37)" in note2 and (table2["nearest_gene"] == "").all()
 
 
+def test_one_group_against_another_leaves_every_other_cell_out(world):
+    """FindMarkers(ident.1 = A, ident.2 = C): the B cells take no part; TF-IDF over all cells as Signac's data slot."""
+    a = world["adata"]
+    labels = a.obs["group"].astype(str).to_numpy().copy()
+    b_cells = np.flatnonzero(labels == "B")
+    labels[b_cells[::2]] = "C"
+    a.obs["trio"] = pd.Categorical(labels)
+    codes, every, chosen = atac.group_codes(a, "trio", ["A"], "C")
+    assert every == ["A", "C"] and chosen == ["A"] and (codes == -1).sum() == (labels == "B").sum()
+    out = [i for i in atac.iter_differential(world["store"], world["rows"], codes, every, chosen) if i["type"] == "result"][0]
+    f = out["frame"]
+    assert set(f["group"]) == {"A"}
+    x = _manual_tfidf(world["peaks"])
+    for _, row in f.head(5).iterrows():
+        col = x[:, int(row["peak_index"])]
+        ref = mannwhitneyu(col[labels == "A"], col[labels == "C"], method="asymptotic", use_continuity=False)
+        assert row["pval"] == pytest.approx(ref.pvalue, rel=1e-6)
+        assert row["pct_rest"] == pytest.approx((col[labels == "C"] > 0).mean(), abs=1e-6)
+    # With two groups in the column, A vs B is A vs the rest, under either test.
+    for test in ("wilcoxon", "lr"):
+        pair = [i for i in atac.iter_differential(world["store"], world["rows"], *atac.group_codes(a, "group", ["A"], "B"), test=test)
+                if i["type"] == "result"][0]["frame"]
+        rest = [i for i in atac.iter_differential(world["store"], world["rows"], *atac.group_codes(a, "group", ["A"]), test=test)
+                if i["type"] == "result"][0]["frame"]
+        pd.testing.assert_frame_equal(pair.reset_index(drop=True), rest.reset_index(drop=True))
+    with pytest.raises(atac.AtacError, match="name one group"):
+        atac.group_codes(a, "trio", ["A", "B"], "C")
+    with pytest.raises(atac.AtacError, match="two different groups"):
+        atac.group_codes(a, "trio", ["A"], "A")
+    with pytest.raises(atac.AtacError, match="no group 'Z'"):
+        atac.group_codes(a, "trio", ["A"], "Z")
+    assert "A vs C (the cells of no other group used)" in atac.da_method("lr", 0.05, 100, 10, ("A", "C"))
+    assert "each group" not in atac.da_method("wilcoxon", 0.05, 100, 10, ("A", "C"))
+
+
 def test_group_codes_refuses_what_cannot_be_tested(world):
     a = world["adata"]
     with pytest.raises(atac.AtacError, match="not found"):
