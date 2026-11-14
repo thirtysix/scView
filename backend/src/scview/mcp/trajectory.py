@@ -152,6 +152,13 @@ async def pseudotime(
     out["by_group"] = await _medians(dataset_id, column, root_column, n)
     out["next"] = (f"pseudotime_genes(column='{column}'); plot(kind='violin', value_column='{column}', "
                    f"groupby='{root_column}'); plot(color_by='{column}')")
+    try:  # a wrong root at a tree end passes the checks above when it is the first pseudotime run
+        attached = bool((await _get(f"{_ds(dataset_id)}/trajectory")).get("velocity_layers"))
+    except ToolError:
+        attached = False
+    if attached:
+        out["next"] += (f"; velocity_direction(order_column='{column}') checks this root against the RNA "
+                        "velocity (many backward transitions = the root is probably the wrong end)")
     return dumps(out, _max_chars(limit))
 
 
