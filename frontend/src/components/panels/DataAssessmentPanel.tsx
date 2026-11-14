@@ -141,6 +141,8 @@ interface PipelineResult extends RunOutcomeFields {
   errors: Record<string, string>;
   /** Steps that had nothing to do on this dataset, and why (not errors). */
   notes?: Record<string, string>;
+  /** Steps that ran and found something to check (filtering: % mito on nuclei). */
+  cautions?: Record<string, string>;
   elapsed_seconds: number;
   output_path: string | null;
 }
@@ -315,9 +317,34 @@ const STEP_PARAMS: Record<string, ParamConfig[]> = {
         "No sample's genes cut goes below this, so a sample with many near-empty cells (whose MADs are wide) " +
         "still loses them. Empty: 200 for cells, 100 for spots, none on bins and targeted panels. 0 turns it off.",
     },
+    {
+      param: "qc_pct_mt_floor",
+      label: "Max % mito floor",
+      type: "number",
+      min: 0,
+      max: 100,
+      step: 0.5,
+      default: null,
+      placeholder: "2%",
+      zeroAllowed: true,
+      mode: "mad",
+      help:
+        "No sample's % mito bound goes below this. Nuclei have almost no mito reads, so median + 3 MADs can fall " +
+        "under 0.2% and remove whole cell types. Empty: 2%. 0 turns it off.",
+    },
     { param: "min_genes", label: "Min genes/cell", type: "number", min: 0, max: 5000, step: 50, default: 200, mode: "fixed" },
     { param: "max_genes", label: "Max genes/cell (0 = off)", type: "number", min: 0, max: 20000, step: 100, default: 0, mode: "fixed" },
     { param: "min_counts", label: "Min counts/cell (0 = off)", type: "number", min: 0, max: 100000, step: 100, default: 0, mode: "fixed" },
+    {
+      param: "max_counts",
+      label: "Max counts/cell (0 = off)",
+      type: "number",
+      min: 0,
+      max: 10000000,
+      step: 1000,
+      default: 0,
+      help: "Removes cells with more counts than this, in both modes (Signac's multiome vignette uses 25,000).",
+    },
     { param: "min_cells", label: "Min cells/gene", type: "number", min: 0, max: 100, step: 1, default: 3 },
     { param: "max_pct_mt", label: "Max % mito (ceiling in MAD mode)", type: "number", min: 0, max: 100, step: 1, default: 20 },
     { param: "drop_doublets", label: "Drop predicted doublets", type: "boolean", default: false },
@@ -469,6 +496,14 @@ export function filterThresholds(
     qc_counts_floor: set?.qc_counts_floor != null ? Number(set.qc_counts_floor) : undefined,
     // Likewise the genes floor: unset, the backend picks the data's (200 cells, 100 spots).
     qc_genes_floor: set?.qc_genes_floor != null ? Number(set.qc_genes_floor) : undefined,
+    // And the % mito floor: unset, the backend's 2%.
+    qc_pct_mt_floor: set?.qc_pct_mt_floor != null ? Number(set.qc_pct_mt_floor) : undefined,
+    max_counts: Number(value("max_counts") ?? 0),
+    // The 10x Multiome ATAC cut-offs, set under the cell-loss summary (AtacFilterControl).
+    qc_min_atac_counts: Number(set?.qc_min_atac_counts ?? 0),
+    qc_max_atac_counts: Number(set?.qc_max_atac_counts ?? 0),
+    qc_max_nucleosome_signal: Number(set?.qc_max_nucleosome_signal ?? 0),
+    qc_min_tss_enrichment: Number(set?.qc_min_tss_enrichment ?? 0),
     qc_mito_mode: set?.qc_mito_mode === "per_type" ? "per_type" : "global",
     qc_mito_type_column: String(set?.qc_mito_type_column ?? ""),
     qc_mito_type_floor: Boolean(set?.qc_mito_type_floor ?? false),
@@ -556,6 +591,21 @@ export function StepCaution({ caution }: { caution?: string | null }) {
 
 /** Steps a run skipped because they had nothing to do (e.g. too few signature
  *  genes), with the reason: not errors, so not in red. */
+/** What a step that ran wants checked (the filtering step on nuclei). */
+export function StepCautions({ cautions }: { cautions?: Record<string, string> }) {
+  const entries = Object.entries(cautions ?? {});
+  if (entries.length === 0) return null;
+  return (
+    <div className="mt-2 text-amber-800" data-testid="step-cautions">
+      {entries.map(([step, text]) => (
+        <p key={step}>
+          {STEP_ORDER.find((s) => s.key === step)?.label ?? step}: {text}
+        </p>
+      ))}
+    </div>
+  );
+}
+
 export function SkippedSteps({ notes }: { notes?: Record<string, string> }) {
   const entries = Object.entries(notes ?? {});
   if (entries.length === 0) return null;
@@ -569,6 +619,14 @@ export function SkippedSteps({ notes }: { notes?: Record<string, string> }) {
       ))}
     </div>
   );
+}
+
+/** The confirm question of "Reprocess from Scratch". */
+export function reprocessQuestion(fromOriginal: boolean): string {
+  return fromOriginal
+    ? "This starts again from the cells as uploaded (every cell an earlier filtering removed comes back), " +
+        "resets to raw counts and reprocesses everything. Labels made in scView are not kept. Continue?"
+    : "This will reset to raw counts and reprocess everything from scratch. Continue?";
 }
 
 /** Under the expected doublet rate: where the default comes from. */
@@ -655,6 +713,8 @@ export function DataAssessmentPanel() {
   const [cancelling, setCancelling] = useState(false);
 
   const [suggesting, setSuggesting] = useState(false);
+  // Reprocess from scratch from the cells as uploaded (backend core/reset_original.py), not the cells left.
+  const [fromOriginal, setFromOriginal] = useState(false);
   const [suggestions, setSuggestions] = useState<AdvisorResponse | null>(null);
 
   const [expandedStep, setExpandedStep] = useState<string | null>(null);
@@ -724,7 +784,7 @@ export function DataAssessmentPanel() {
 
   /* ---- Reprocess from scratch ---- */
   const reprocessFromScratch = () => {
-    if (!confirm("This will reset to raw counts and reprocess everything from scratch. Continue?")) return;
+    if (!confirm(reprocessQuestion(fromOriginal))) return;
     // All steps including reset_to_counts
     // Opt-in steps only when ticked (ambient RNA correction); batch correction never.
     const allSteps = [
@@ -733,7 +793,8 @@ export function DataAssessmentPanel() {
         (s) => s.key !== "batch_correction" && (!OPT_IN_STEPS.has(s.key) || selectedSteps.has(s.key)),
       ).map((s) => s.key),
     ];
-    runSteps(allSteps, flattenStepParams(allSteps, stepParams));
+    const params = flattenStepParams(allSteps, stepParams);
+    runSteps(allSteps, fromOriginal ? { ...params, reset_from_original: true } : params);
   };
 
   /* ---- Fetch assessment ---- */
@@ -1213,6 +1274,19 @@ export function DataAssessmentPanel() {
                 <RotateCcw className="h-4 w-4" />
                 Reprocess from Scratch
               </button>
+              <label
+                className="inline-flex items-center gap-1.5 text-xs text-slate-600"
+                title="Start from every cell of the original upload, so cells an earlier filtering removed come back. Off: the cells the dataset has now."
+              >
+                <input
+                  type="checkbox"
+                  checked={fromOriginal}
+                  onChange={(e) => setFromOriginal(e.target.checked)}
+                  disabled={running}
+                  className="h-3.5 w-3.5"
+                />
+                from the cells as uploaded
+              </label>
               <button
                 onClick={getSuggestions}
                 disabled={suggesting}
@@ -1428,6 +1502,7 @@ export function DataAssessmentPanel() {
                   : "No step finished; nothing changed."}
               </p>
               <RunErrors result={runResult} label={stepLabel} />
+              <StepCautions cautions={runResult.cautions} />
               <SkippedSteps notes={runResult.notes} />
               {!running &&
                 runResult.steps_run.length > 0 &&
@@ -1459,6 +1534,7 @@ export function DataAssessmentPanel() {
                   ))}
                 </div>
               )}
+              <StepCautions cautions={runResult.cautions} />
               <SkippedSteps notes={runResult.notes} />
               {!running &&
                 runResult.steps_run.length > 0 &&

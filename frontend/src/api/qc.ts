@@ -404,6 +404,8 @@ export interface FilterThresholds {
   qc_counts_floor?: number;
   /** MAD mode: no sample's genes cut below this (unset: the data's, 200 cells / 100 spots; 0 = off). */
   qc_genes_floor?: number;
+  /** MAD mode: no sample's % mito bound below this (unset: 2%; 0 = off). Nuclei: their bound collapses. */
+  qc_pct_mt_floor?: number;
   /** MADs below the median for counts and genes (log scale); above too with `qc_mad_upper`. */
   qc_mad_k?: number;
   /** MADs above the median for % mito. */
@@ -424,16 +426,46 @@ export interface FilterThresholds {
   qc_doublet_source?: DoubletSource;
   /** Also drop cell hashing's negatives (no tag above background). */
   drop_hash_negatives?: boolean;
+  /** At most this many counts per cell, in both modes (0 / unset = off). */
+  max_counts?: number;
+  /** 10x Multiome ATAC cut-offs (backend qc_filter.ATAC_CRITERIA), both modes, 0 / unset = off. */
+  qc_min_atac_counts?: number;
+  qc_max_atac_counts?: number;
+  qc_max_nucleosome_signal?: number;
+  qc_min_tss_enrichment?: number;
 }
+
+/** The ATAC criteria, and max counts, as the preview names them. */
+export type AtacCriterion =
+  | "max_counts"
+  | "min_atac_counts"
+  | "max_atac_counts"
+  | "max_nucleosome_signal"
+  | "min_tss_enrichment";
 
 export type FilterCriterion =
   | "min_genes"
   | "max_genes"
   | "min_counts"
-  | "max_counts"
   | "max_pct_mt"
   | "doublets"
-  | "hash_negatives";
+  | "hash_negatives"
+  | AtacCriterion;
+
+/** For data with ATAC QC columns: Signac's vignette cuts as a suggestion (backend qc_filter.atac_suggestion). */
+export interface AtacQcSuggestion {
+  columns: string[];
+  /** The cuts the data's columns allow (criterion -> value). */
+  suggested: Partial<Record<AtacCriterion, number>>;
+  n_removed_by: Partial<Record<AtacCriterion, number>>;
+  /** Cells the suggested cuts remove together. */
+  n_removed: number;
+  source: string;
+  missing: AtacCriterion[];
+  missing_note: string | null;
+  /** The cuts on now. */
+  on: AtacCriterion[];
+}
 
 /** A sample's QC medians set it apart from the other samples (backend qc_groups.sample_summary). */
 export type SampleFlag = "few_cells" | "low_genes" | "high_genes" | "low_counts" | "high_counts" | "high_mito";
@@ -489,6 +521,11 @@ export interface MadSampleBounds {
   n_floor?: number;
   /** The floor was not applied: it would have removed this many cells, over half the sample. */
   floor_skipped?: number;
+  /** With a % mito floor: the sample's own bound, which bound applies (max_pct_mt), and the
+   *  cells the floor keeps that the MAD bound removes (backend qc_filter.apply_pct_mt_floor). */
+  max_pct_mt_mad?: number | null;
+  max_pct_mt_by?: "mad" | "floor";
+  n_pct_mt_floor?: number;
 }
 
 /** MAD mode's per-sample thresholds (backend qc_filter.MadBounds.to_dict). */
@@ -509,6 +546,8 @@ export interface MadThresholds {
   reused_from?: string | null;
   /** No sample's genes cut is below this (absent: no floor). */
   genes_floor?: number;
+  /** No sample's % mito bound is below this (absent: no floor). */
+  pct_mt_floor?: number;
 }
 
 /** Removed ~ condition in one group (backend qc_filter.rate_test): over the
@@ -631,8 +670,9 @@ export interface FilterPreview {
   samples: FilterGrouping | null;
   clusters: FilterGrouping | null;
   warnings: {
-    kind: "sample" | "cluster";
-    column: string;
+    /** "nuclei": the data look like nuclei and % mito alone removes over 5% of a sample. */
+    kind: "sample" | "cluster" | "nuclei";
+    column: string | null;
     group: string;
     n_cells: number;
     n_removed: number;
@@ -649,6 +689,8 @@ export interface FilterPreview {
   recorded?: RecordedRemovalAudit | null;
   /** Per-type % mito bounds (per-type mode only): each type's rule and loss. */
   mito_types?: MitoTypesTable | null;
+  /** ATAC QC columns, and Signac's cuts as a suggestion (null: RNA-only data; older backends omit it). */
+  atac_qc?: AtacQcSuggestion | null;
   /** Whose doublets, and hashing negatives (null without doublet calls; older backends omit it). */
   doublets?: DoubletChoices | null;
 }
@@ -668,6 +710,12 @@ export async function getFilterPreview(
   });
   if (t.qc_counts_floor !== undefined) q.set("counts_floor", String(t.qc_counts_floor));
   if (t.qc_genes_floor !== undefined) q.set("genes_floor", String(t.qc_genes_floor));
+  if (t.qc_pct_mt_floor !== undefined) q.set("pct_mt_floor", String(t.qc_pct_mt_floor));
+  if (t.max_counts) q.set("max_counts", String(t.max_counts));
+  if (t.qc_min_atac_counts) q.set("min_atac_counts", String(t.qc_min_atac_counts));
+  if (t.qc_max_atac_counts) q.set("max_atac_counts", String(t.qc_max_atac_counts));
+  if (t.qc_max_nucleosome_signal) q.set("max_nucleosome_signal", String(t.qc_max_nucleosome_signal));
+  if (t.qc_min_tss_enrichment) q.set("min_tss_enrichment", String(t.qc_min_tss_enrichment));
   if (t.qc_mad_k !== undefined) q.set("mad_k", String(t.qc_mad_k));
   if (t.qc_mad_k_mt !== undefined) q.set("mad_k_mt", String(t.qc_mad_k_mt));
   if (t.qc_mad_upper !== undefined) q.set("mad_upper", String(t.qc_mad_upper));

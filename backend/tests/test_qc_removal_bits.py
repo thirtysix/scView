@@ -54,7 +54,7 @@ def test_an_old_uint8_record_reads_as_before():
 
 
 def test_new_records_are_uint16_and_a_ninth_criterion_survives_h5ad(tmp_path):
-    names = [*qc_filter.CRITERIA, "extra_8", "extra_9"]
+    names = [*list(qc_filter.CRITERIA)[:7], "extra_8", "extra_9"]  # 7 of the criteria, then two more
     assert len(names) == 9
     removed = {c: np.zeros(N, dtype=bool) for c in names}
     removed["min_genes"] = _mask(0)

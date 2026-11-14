@@ -75,6 +75,7 @@ OFF_IN_LARGE_MODE = (
     "genes along pseudotime",
     "sub-clustering",
     "re-filtering from the original upload",
+    "resetting to the cells as uploaded",
     "the ambient RNA estimate and ambient RNA correction",
     "copy-number inference",
     "gene programs (consensus NMF)",

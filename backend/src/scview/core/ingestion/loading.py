@@ -142,15 +142,25 @@ def _load_anndata(unit: IngestUnit, options: dict) -> ad.AnnData:
 
 
 def _load_h5mu(unit: IngestUnit, options: dict) -> ad.AnnData:
-    """The RNA modality of an .h5mu (MuData on disk), as an .h5ad's table; the peaks are
-    never read here (``core/atac_import.py`` writes their store from the file)."""
+    """The RNA modality of an .h5mu (MuData on disk), as an .h5ad's table, with its protein,
+    hashtag and guide modalities and obs columns kept (``h5mu_mods``); the peaks are never
+    read here (``core/atac_import.py`` writes their store from the file)."""
     from anndata.io import read_elem
 
+    from scview.core.ingestion import h5mu_mods
+
     with h5py.File(_single(unit), "r") as f:
-        mod = next((m for m in atac_import.RNA_MODS if m in f.get("mod", {})), None)
+        mod = h5mu_mods.rna_mod(f)
         if mod is None:
             raise IngestLoadError(atac_import.ONLY_PEAKS.format(name=unit.files[0].name))
-        return read_elem(f["mod"][mod])
+        adata = read_elem(f["mod"][mod])
+        adata.obs_names = adata.obs_names.astype(str)
+        left = h5mu_mods.adopt(f, adata, mod)
+    if left:  # for the ingest history, beside the validation step's sentence
+        prior = adata.uns.get(atac_import.LEFT_OUT_KEY)
+        adata.uns[atac_import.LEFT_OUT_KEY] = " ".join(
+            str(n) for n in (prior, "Not kept from the .h5mu: " + "; ".join(left) + ".") if n)
+    return adata
 
 
 def _load_loom(unit: IngestUnit, options: dict) -> ad.AnnData:

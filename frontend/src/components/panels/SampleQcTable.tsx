@@ -83,9 +83,32 @@ export function floorSummary(mad: MadThresholds): string | null {
   return text;
 }
 
+/** A % for text: up to two decimals, no trailing zeros (2, 0.14). */
+const pctText = (v: number) => String(+v.toFixed(2));
+
+/** Which % mito bound applies to a row, in words: its own, or the floor and what that kept. */
+export function mitoBoundNote(row: MadRow, floor: number | undefined): string | undefined {
+  if (!floor || row.max_pct_mt_by !== "floor") return undefined;
+  const own = row.max_pct_mt_mad == null ? "none" : `${pctText(row.max_pct_mt_mad)}%`;
+  return `The % mito floor of ${pctText(floor)}% applies: its own bound is ${own}. The floor keeps ${(row.n_pct_mt_floor ?? 0).toLocaleString()} cells that bound removes.`;
+}
+
+/** One line under the table: the % mito floor, only when it set a bound. */
+export function mitoFloorSummary(mad: MadThresholds): string | null {
+  const floor = mad.pct_mt_floor;
+  if (!floor) return null;
+  const rows: MadRow[] = mad.column ? mad.samples : [mad.pooled];
+  const set = rows.filter((r) => r.max_pct_mt_by === "floor");
+  if (!set.length) return null;
+  const kept = set.reduce((n, r) => n + (r.n_pct_mt_floor ?? 0), 0);
+  const where = mad.column ? `in ${set.length} of ${rows.length} samples` : "here";
+  return `% mito floor ${pctText(floor)}%: it set the bound ${where} (their own was lower, as in nuclei) and kept ${kept.toLocaleString()} cells.`;
+}
+
 /** MAD mode: each sample's bounds and what they remove, in the samples' own order. */
 export function SampleThresholds({ mad }: { mad: MadThresholds }) {
   const floorLine = floorSummary(mad);
+  const mitoLine = mitoFloorSummary(mad);
   if (!mad.column) {
     const p = mad.pooled;
     return (
@@ -93,8 +116,10 @@ export function SampleThresholds({ mad }: { mad: MadThresholds }) {
         No sample column found, so all cells are one group: kept with {keptRange(p.min_counts, p.max_counts)} counts
         and {keptRange(p.min_genes, p.max_genes)} genes per cell
         {p.min_genes_by === "floor" ? " (the floor)" : ""}
-        {p.max_pct_mt !== null ? `, under ${bound(p.max_pct_mt, 1)}% mito` : ""}.
+        {p.max_pct_mt !== null ? `, under ${bound(p.max_pct_mt, 1)}% mito` : ""}
+        {p.max_pct_mt_by === "floor" ? " (the % mito floor)" : ""}.
         {floorLine && <span className="block text-slate-500" data-testid="genes-floor">{floorLine}</span>}
+        {mitoLine && <span className="block text-slate-500" data-testid="mito-floor">{mitoLine}</span>}
       </p>
     );
   }
@@ -145,8 +170,9 @@ export function SampleThresholds({ mad }: { mad: MadThresholds }) {
                 {s.min_genes_by === "floor" && <span className="text-slate-400"> (floor)</span>}
               </td>
               {hasMt && (
-                <td className="text-right" title={skipped(s, "pct_mt")}>
+                <td className="text-right" title={skipped(s, "pct_mt") ?? mitoBoundNote(s, mad.pct_mt_floor)}>
                   {s.max_pct_mt === null ? "any" : `< ${bound(s.max_pct_mt, 1)}`}
+                  {s.max_pct_mt_by === "floor" && <span className="text-slate-400"> (floor)</span>}
                 </td>
               )}
               <td className="text-right">
@@ -161,6 +187,11 @@ export function SampleThresholds({ mad }: { mad: MadThresholds }) {
       {floorLine && (
         <p className="text-[11px] text-slate-500" data-testid="genes-floor">
           {floorLine}
+        </p>
+      )}
+      {mitoLine && (
+        <p className="text-[11px] text-slate-500" data-testid="mito-floor">
+          {mitoLine}
         </p>
       )}
       {mad.n_unlabelled > 0 && (

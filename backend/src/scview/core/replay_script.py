@@ -395,6 +395,26 @@ def fixed_drop(qc, min_genes, max_genes, min_counts, max_pct_mt):
             pct = qc["pct_mt"]
             drop |= np.isfinite(pct) & (pct >= max_pct_mt)
     return drop
+
+
+def cut_drop(values, low=0, high=0):
+    """The cells below low or above high (0 turns a side off); a cell without a value stays."""
+    v = np.asarray(values, dtype=np.float64)
+    drop = np.zeros(v.size, dtype=bool)
+    with np.errstate(invalid="ignore"):
+        if low:
+            drop |= np.isfinite(v) & (v < low)
+        if high:
+            drop |= np.isfinite(v) & (v > high)
+    return drop
+
+
+def obs_values(adata, column):
+    """An obs column as numbers, or all NaN (with a note) when this data does not have it."""
+    if column not in adata.obs.columns:
+        print(f"NOTE: obs column {column} is missing here, so its cut-off removes nothing.")
+        return np.full(adata.n_obs, np.nan)
+    return adata.obs[column].to_numpy(dtype=np.float64)
 ''',
     "type_mito_drop": '''
 def mito_only(qc):
@@ -2225,6 +2245,12 @@ def _filtering(p: dict, ctx: _Ctx) -> Snippet:
         if "min_genes" not in p:
             status, note = APPROXIMATE, "fixed cut-offs not recorded"
             code.insert(0, "# NOTE: this record has no cut-offs (an older scView): none applied.")
+    cuts, approx = _cut_lines(p)
+    if cuts:
+        _need(ctx, "fixed_drop")  # defines cut_drop and obs_values too
+        code += cuts
+        if approx and status == EXACT:
+            status, note = APPROXIMATE, "ATAC counts read from obs"
     if p.get("drop_doublets"):
         _need(ctx, "doublet_calls")
         code += [*_doublet_source_code(p), "if calls is not None:", "    drop |= calls"]
@@ -2244,6 +2270,27 @@ def _filtering(p: dict, ctx: _Ctx) -> Snippet:
                  f"    redefine(adata, same_v_gene={_lit(bool(clones.get('same_v_gene')))})"]
     code.append(f"sc.pp.filter_genes(adata, min_cells={_lit(min_cells)})")
     return Snippet(status, code, note)
+
+
+def _cut_lines(p: dict) -> tuple[list[str], bool]:
+    """The filtering's max counts and ATAC cut-offs (core/qc_filter.py ``ATAC_CRITERIA``), as
+    recorded (absent: off), and whether one needs ATAC counts this script does not make."""
+    from scview.core.qc_filter import ATAC_CRITERIA
+
+    lines: list[str] = []
+    if p.get("max_counts"):
+        lines.append(f"drop |= cut_drop(qc[\"total_counts\"], high={_lit(float(p['max_counts']))})  # max counts")
+    approx = False
+    for c, (col, side, what) in ATAC_CRITERIA.items():
+        v = p.get(f"qc_{c}")
+        if not v:
+            continue
+        if col == "atac_total_counts":
+            approx = True
+            lines.append("# ATAC counts in peaks per cell, as scView wrote them at import (Signac's nCount_ATAC).")
+        lines.append(f"drop |= cut_drop(obs_values(adata, {_lit(col)}), {'low' if side == 'min' else 'high'}="
+                     f"{_lit(float(v))})  # {what}")
+    return lines, approx
 
 
 def _doublet_source_code(p: dict) -> list[str]:
