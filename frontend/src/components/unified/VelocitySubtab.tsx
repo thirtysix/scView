@@ -32,6 +32,11 @@ import { choiceFrom, DEFAULT_DIRECTION, directionSpec, VelocityDirection, type D
 
 const GENE_LIMIT = 100;
 
+/** Gene names typed or pasted: separated by spaces, commas, semicolons or new lines. */
+export function geneNames(text: string): string[] {
+  return [...new Set(text.split(/[\s,;]+/).map((g) => g.trim()).filter(Boolean))];
+}
+
 function matchLine(s: VelocitySource): string {
   const cells = s.cells_matched != null && s.cells_in_dataset != null
     ? `${s.cells_matched.toLocaleString()} of ${s.cells_in_dataset.toLocaleString()} cells matched`
@@ -150,6 +155,8 @@ export function VelocitySubtab() {
   const [phase, setPhase] = useState<VelocityPhase | null>(null);
   const [phaseError, setPhaseError] = useState<string | null>(null);
   const [dirChoice, setDirChoice] = useState<DirectionChoice>(DEFAULT_DIRECTION);
+  const [excludeText, setExcludeText] = useState("");
+  const [excludeSets, setExcludeSets] = useState<string[]>([]);
   const abort = useRef<AbortController | null>(null);
 
   const load = async (id: string) => {
@@ -168,6 +175,8 @@ export function VelocitySubtab() {
     setGene(null);
     setPhase(null);
     setDirChoice(DEFAULT_DIRECTION);
+    setExcludeText("");
+    setExcludeSets([]);
     let live = true;
     getVelocity(datasetId)
       .then((s) => {
@@ -180,6 +189,8 @@ export function VelocitySubtab() {
           setNNeighbors(s.run.params.n_neighbors);
           setGroupBy(s.run.group_column ?? "");
           setDirChoice(choiceFrom(s.run.direction));
+          setExcludeSets(s.run.params.exclude_sets ?? []);
+          setExcludeText((s.run.params.exclude_given ?? []).join(" "));
         }
       })
       .catch((e) => live && setLoadError(errorMessage(e)));
@@ -271,6 +282,8 @@ export function VelocitySubtab() {
           group_by: groupBy || null,
           direction: directionSpec(dirChoice, groupBy || null) ?? directionSpec(DEFAULT_DIRECTION, groupBy || null),
           embedding: blocked ? null : embedding,
+          exclude_genes: geneNames(excludeText),
+          exclude_sets: excludeSets,
         },
         { signal: abort.current.signal, onProgress: setProgress, onWatchdog: setMemoryNote },
       );
@@ -425,6 +438,35 @@ export function VelocitySubtab() {
               />
             </label>
           </div>
+          <div className="flex flex-wrap items-start gap-3">
+            <label className="flex min-w-[12rem] flex-1 flex-col gap-0.5">
+              <span className="text-slate-500">
+                <Help id="velocity.exclude">Leave out genes</Help>
+              </span>
+              <textarea
+                aria-label="Genes to leave out"
+                rows={1}
+                value={excludeText}
+                onChange={(e) => setExcludeText(e.target.value)}
+                placeholder="Names, separated by spaces or commas"
+                className="rounded border border-slate-300 bg-white px-1 py-0.5"
+              />
+            </label>
+            {(status.gene_sets ?? []).map((g) => (
+              <label key={g.id} className="flex items-center gap-1 pt-4">
+                <input
+                  type="checkbox"
+                  checked={excludeSets.includes(g.id)}
+                  onChange={(e) => setExcludeSets(e.target.checked ? [...excludeSets, g.id] : excludeSets.filter((x) => x !== g.id))}
+                />
+                {g.id === "murk_barile2021" ? (
+                  <Help id="velocity.murk" align="right">{g.name}, {g.n_genes} {g.species}</Help>
+                ) : (
+                  <span title={g.note}>{g.name}, {g.n_genes} {g.species}</span>
+                )}
+              </label>
+            ))}
+          </div>
           {est && (
             <p className="text-slate-500">
               {est.n_cells.toLocaleString()} cells: {est.note}, {aboutGb(est.peak_bytes)} of memory.
@@ -532,6 +574,14 @@ export function VelocitySubtab() {
               {(run.unspliced_fraction * 100).toFixed(1)}%.
             </Help>{" "}
             {run.neighbours_note} {run.pca_note ? `${run.pca_note}.` : ""}
+            {run.excluded && (
+              <>
+                {" "}Left out: {run.excluded.n_matched.toLocaleString()} genes
+                {run.excluded.sets.length ? ` (with ${run.excluded.sets.map((id) => status.gene_sets?.find((g) => g.id === id)?.name ?? id).join(", ")})` : ""},{" "}
+                {run.excluded.n_passing_filter.toLocaleString()} of them with enough counts to be fitted.
+                {run.excluded.n_unmatched > 0 && ` Not in the counts: ${run.excluded.unmatched.join(", ")}${run.excluded.n_unmatched > run.excluded.unmatched.length ? ", ..." : ""} (${run.excluded.n_unmatched.toLocaleString()}).`}
+              </>
+            )}
           </Caption>
 
           <div className="overflow-x-auto">

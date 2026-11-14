@@ -78,6 +78,10 @@ class RunRequest(BaseModel):
         "The order to check the arrows against after the run (default: scView's pseudotime, if any)."))
     embedding: str | None = Field(default=None, max_length=256, description=(
         "The 2D plot the direction is checked on (default: X_umap)."))
+    exclude_genes: list[str] = Field(default_factory=list, max_length=vel.MAX_EXCLUDE, description=(
+        "Genes to leave out of the fit, by name (before the variable genes are chosen)."))
+    exclude_sets: list[Literal["murk_barile2021"]] = Field(default_factory=list, max_length=5, description=(
+        "Built-in lists to leave out: murk_barile2021 = the 89 mouse erythroid MURK genes of Barile et al. 2021."))
 
 
 class DirectionRequest(DirectionSpec):
@@ -274,7 +278,8 @@ async def run_velocity(dataset_id: str, body: RunRequest, dm: DatasetManager = D
                                   n_neighbors=body.n_neighbors)
     await dm.reserve(dataset_id, est["peak_bytes"], what=_WHAT)
     params = vel.Params(method=body.method, n_top_genes=body.n_top_genes, n_neighbors=body.n_neighbors,
-                        group_by=body.group_by, embedding=body.embedding,
+                        group_by=body.group_by, embedding=body.embedding, exclude_genes=tuple(body.exclude_genes),
+                        exclude_sets=tuple(body.exclude_sets),
                         direction=body.direction.model_dump(exclude_none=True) if body.direction else None)
     del adaptor
 

@@ -194,6 +194,10 @@ export const MODALITIES_HELP: Record<string, string> = {
     "Whether the arrows point the way an order you trust says, such as cell types in order or a pseudotime. Each transition scores the cells at the border between two groups. Confidence cannot catch a backward run: neighbours can agree on the wrong direction.",
   "velocity.direction_against":
     "The order to check against: scView's pseudotime (if you ran it), groups you put in order, a root group with the PAGA tree of the table's column, or a column such as a time point or stage. The table's groups are the ones compared.",
+  "velocity.exclude":
+    "Genes the fit leaves out, as if they were not in the counts (each cell's total too). Use it for genes known to mislead velocity, such as genes whose transcription rate changes along the path; the gene flags below suggest some.",
+  "velocity.murk":
+    "Barile et al. 2021 (Genome Biology, Table S2): 89 mouse erythroid genes whose transcription steps up late. They turn scVelo's erythroid flow backwards; leaving them out restored it. For mouse blood and erythroid data only.",
   "velocity.phase":
     "Each dot is a cell's spliced and unspliced levels for this gene, averaged over the cell and its neighbours. The red line is the fitted steady-state ratio (gamma). Cells above it are read as inducing the gene, cells below as repressing it. A gene with no clear almond shape gives little to fit.",
 };

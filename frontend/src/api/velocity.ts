@@ -102,7 +102,26 @@ export interface VelocityRun {
   result_id: string;
   method: VelocityMethod;
   method_name: string;
-  params: { n_top_genes: number; n_neighbors: number; n_pcs: number; min_shared_counts: number };
+  params: {
+    n_top_genes: number;
+    n_neighbors: number;
+    n_pcs: number;
+    min_shared_counts: number;
+    /** Genes left out (as matched in the counts) and the built-in lists asked for */
+    exclude_genes?: string[];
+    exclude_sets?: string[];
+    /** The names typed in, as typed */
+    exclude_given?: string[];
+  };
+  /** What was asked to be left out and what matched; null when nothing was */
+  excluded?: {
+    sets: string[];
+    n_given: number;
+    n_matched: number;
+    n_unmatched: number;
+    unmatched: string[];
+    n_passing_filter: number;
+  } | null;
   n_cells: number;
   n_dataset_cells: number;
   cells_without: number;
@@ -144,6 +163,18 @@ export interface VelocityStatus {
   n_cells: number;
   estimate: VelocityEstimate | null;
   running: boolean;
+  /** Built-in gene lists a run can leave out */
+  gene_sets?: VelocityGeneSet[];
+}
+
+export interface VelocityGeneSet {
+  id: string;
+  name: string;
+  n_genes: number;
+  species: string;
+  source: string;
+  url: string;
+  note: string;
 }
 
 export interface VelocityGrid {
@@ -207,6 +238,8 @@ export interface VelocityRunBody {
   direction?: VelocityDirectionSpec | null;
   /** The 2D plot the direction is checked on */
   embedding?: string | null;
+  exclude_genes?: string[];
+  exclude_sets?: string[];
 }
 
 export async function runVelocity(

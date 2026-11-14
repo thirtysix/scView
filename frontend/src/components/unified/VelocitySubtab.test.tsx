@@ -174,6 +174,27 @@ describe("VelocitySubtab", () => {
     });
   });
 
+  it("leaves out typed genes and the MURK list, and says what was left out", async () => {
+    const murk = { id: "murk_barile2021", name: "MURK genes (Barile 2021)", n_genes: 89, species: "mouse", source: "", url: "", note: "" };
+    const excluded = { sets: ["murk_barile2021"], n_given: 91, n_matched: 90, n_unmatched: 1, unmatched: ["Nope"], n_passing_filter: 78 };
+    const withRun = { ...run, params: { ...run.params, exclude_sets: ["murk_barile2021"], exclude_given: ["Gata1", "Nope"] }, excluded };
+    api.getVelocity.mockResolvedValue({ ...base, attached: true, source: { file: "x" }, run: withRun, estimate: null, gene_sets: [murk] });
+    api.getVelocityGenes.mockResolvedValue({ genes: [], n_genes: 0, n_velocity_genes: 0, sort: "" });
+    api.runVelocity.mockResolvedValue(withRun);
+    render(<VelocitySubtab />);
+    await screen.findByText(/Left out: 90 genes \(with MURK genes \(Barile 2021\)\), 78 of them with enough counts/);
+    expect(screen.getByText(/Not in the counts: Nope \(1\)/)).toBeTruthy();
+    const box = screen.getByLabelText("Genes to leave out") as HTMLTextAreaElement;
+    expect(box.value).toBe("Gata1 Nope");
+    const murkBox = screen.getByText(/MURK genes \(Barile 2021\), 89 mouse/).closest("label")!.querySelector("input")!;
+    expect(murkBox.checked).toBe(true);
+    fireEvent.change(box, { target: { value: "Gata1, Klf1\nGata1" } });
+    fireEvent.click(screen.getByText("Run again"));
+    await waitFor(() => expect(api.runVelocity).toHaveBeenCalled());
+    expect(api.runVelocity.mock.calls[0]![1]).toMatchObject({ exclude_genes: ["Gata1", "Klf1"], exclude_sets: ["murk_barile2021"] });
+    expect(await hoverTip(screen.getByText(/MURK genes \(Barile 2021\), 89 mouse/))).toMatch(/Barile et al. 2021/);
+  });
+
   it("says when the cells changed and draws nothing, and on 3D says why no arrows", async () => {
     api.getVelocity.mockResolvedValue({ ...base, attached: true, source: { file: "x" }, run, stale: "The cells changed: run velocity again.", estimate: null });
     render(<VelocitySubtab />);
