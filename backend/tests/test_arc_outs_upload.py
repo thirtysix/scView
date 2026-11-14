@@ -64,6 +64,15 @@ def test_the_peak_files_and_report_are_skipped_with_a_reason():
         assert junk_reason(PREFIX + kept) is None, kept
 
 
+def test_arc_summary_gex_metrics_are_read(tmp_path):
+    from scview.core.seq_metrics import parse_metrics
+
+    path = _arc_outs(tmp_path / "outs")[4]
+    vals = parse_metrics(path)["values"]
+    assert vals["estimated_cells"] == 80 and vals["median_genes_per_cell"] == 3525
+    assert vals["mean_reads_per_cell"] == 40000
+
+
 def test_the_whole_outs_set_is_one_multiome_unit_with_its_side_files(tmp_path):
     files = _arc_outs(tmp_path / "outs")
     assert detect_file(tmp_path / "outs" / f"{PREFIX}summary.csv").kind == FileKind.tenx_metrics
