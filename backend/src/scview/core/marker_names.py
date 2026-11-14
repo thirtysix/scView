@@ -22,6 +22,11 @@ Measured coverage of PanglaoDB + CellMarker 2.0 names in modes A/B/C: HPA
 out (it dropped them, so "T-cells" matched "γδ T cell"), ties prefer the head
 noun (it took the alphabetically last key, so "Intestinal goblet cells" matched
 "Intestinal cell"), and "Microglial" reads as "Microglia".
+
+A label of short letter codes only ("IC", "PT": ``is_code``) matches a database name or a
+Cell Ontology term only whole (its exact name, the same CL term), never a longer name holding
+the code ("IC" is not "Type IC spiral ganglion neuron") or a parent term; and no label reaches
+a name that negates it ("PT" is not "Non PT tubular cell").
 """
 
 from __future__ import annotations
@@ -72,15 +77,31 @@ def _greek(s: str) -> str:
     return "".join(f" {GREEK[c]} " if c in GREEK else c for c in s)
 
 
-def toks(name: str, abbr: bool = False) -> list[str]:
+def _words(name: str, abbr: bool = False) -> list[str]:
     s = _greek(str(name).lower())
     if abbr:
         s = re.sub(r"^\d+\s*", "", s)  # paul15-style "14Mo"
         s = re.sub(r"([a-z])\+", r"\1 ", s)
-    t = re.findall(r"[a-z0-9]+", s)
+    return re.findall(r"[a-z0-9]+", s)
+
+
+def toks(name: str, abbr: bool = False) -> list[str]:
+    t = _words(name, abbr)
     if abbr:
         t = " ".join(ABBR.get(x, x) for x in t).split()
     return [ROMAN.get(x, x) for x in t]
+
+
+CODE_MAX_LETTERS = 3
+NEGATIONS = {"non", "not"}
+
+
+def is_code(name: str, abbr: bool = False) -> bool:
+    """A label of short letter codes only ("IC", "PT", "NK T"): each word at most
+    ``CODE_MAX_LETTERS`` letters, no digits, and none a known abbreviation (``ABBR``)."""
+    words = [w for w in _words(name, abbr) if w not in STOP]
+    return bool(words) and all(w.isalpha() and len(w) <= CODE_MAX_LETTERS and not (abbr and w in ABBR)
+                               for w in words)
 
 
 def _stem(t: str) -> str:
@@ -205,10 +226,12 @@ class Matcher:
                 self.by_cl[i].append(name)
         self.type_cl = {n: i for i, ns in self.by_cl.items() for n in ns}
 
-    def _nearest(self, k: frozenset, head_noun: str | None) -> list[str]:
+    def _nearest(self, k: frozenset, head_noun: str | None, wider: bool = True) -> list[str]:
+        """``wider``: names with more words than the label may match (not for codes)."""
         near = [
             (len(k & d) / len(k | d), head_noun in d, tuple(sorted(d)))
-            for d in self.by_key if k <= d or d <= k
+            for d in self.by_key
+            if (wider and k <= d and not (d & NEGATIONS) - k) or d <= k
         ]
         if not near:
             return []
@@ -228,10 +251,11 @@ class Matcher:
         hit = sorted({n for i in ids for n in self.by_cl.get(i, ())})
         if hit:
             return hit, "cl"
-        near = self._nearest(k, head(label, abbr))
+        code = is_code(label, abbr)
+        near = self._nearest(k, head(label, abbr), wider=not code)
         if near:
             return near, "subset"
-        for i in sorted(ids):
+        for i in sorted(ids) if not code else ():
             for step in self.cl.ancestors_by_step(i):
                 hit = sorted({
                     n for a in step if self.cl.n_desc(a) <= GENERIC_DESC for n in self.by_cl.get(a, ())
