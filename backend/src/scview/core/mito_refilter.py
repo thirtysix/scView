@@ -421,6 +421,9 @@ def prepare(dm, dataset_id: str, adaptor, column: str | None, mito_mode: str = "
     if not cur.obs_names.isin(orig.obs_names).all():
         raise RefilterError("Some of this dataset's cells are not in its original upload, so it can't be "
                             "re-filtered from it.", status=409)
+    from scview.core import reset_original
+
+    reset_original.carry_columns(cur, orig)  # fragment QC values, for an ATAC cut-off in the filtering
     if reset:
         orig = _run_reset_to_counts(orig, params)
     kept = np.asarray(orig.obs_names.isin(cur.obs_names))

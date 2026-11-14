@@ -621,6 +621,14 @@ export function SkippedSteps({ notes }: { notes?: Record<string, string> }) {
   );
 }
 
+/** The confirm question of "Reprocess from Scratch". */
+export function reprocessQuestion(fromOriginal: boolean): string {
+  return fromOriginal
+    ? "This starts again from the cells as uploaded (every cell an earlier filtering removed comes back), " +
+        "resets to raw counts and reprocesses everything. Labels made in scView are not kept. Continue?"
+    : "This will reset to raw counts and reprocess everything from scratch. Continue?";
+}
+
 /** Under the expected doublet rate: where the default comes from. */
 export function SuggestedRateNote({ suggestion }: { suggestion: DoubletRateSuggestion | null }) {
   if (!suggestion) return null;
@@ -705,6 +713,8 @@ export function DataAssessmentPanel() {
   const [cancelling, setCancelling] = useState(false);
 
   const [suggesting, setSuggesting] = useState(false);
+  // Reprocess from scratch from the cells as uploaded (backend core/reset_original.py), not the cells left.
+  const [fromOriginal, setFromOriginal] = useState(false);
   const [suggestions, setSuggestions] = useState<AdvisorResponse | null>(null);
 
   const [expandedStep, setExpandedStep] = useState<string | null>(null);
@@ -774,7 +784,7 @@ export function DataAssessmentPanel() {
 
   /* ---- Reprocess from scratch ---- */
   const reprocessFromScratch = () => {
-    if (!confirm("This will reset to raw counts and reprocess everything from scratch. Continue?")) return;
+    if (!confirm(reprocessQuestion(fromOriginal))) return;
     // All steps including reset_to_counts
     // Opt-in steps only when ticked (ambient RNA correction); batch correction never.
     const allSteps = [
@@ -783,7 +793,8 @@ export function DataAssessmentPanel() {
         (s) => s.key !== "batch_correction" && (!OPT_IN_STEPS.has(s.key) || selectedSteps.has(s.key)),
       ).map((s) => s.key),
     ];
-    runSteps(allSteps, flattenStepParams(allSteps, stepParams));
+    const params = flattenStepParams(allSteps, stepParams);
+    runSteps(allSteps, fromOriginal ? { ...params, reset_from_original: true } : params);
   };
 
   /* ---- Fetch assessment ---- */
@@ -1263,6 +1274,19 @@ export function DataAssessmentPanel() {
                 <RotateCcw className="h-4 w-4" />
                 Reprocess from Scratch
               </button>
+              <label
+                className="inline-flex items-center gap-1.5 text-xs text-slate-600"
+                title="Start from every cell of the original upload, so cells an earlier filtering removed come back. Off: the cells the dataset has now."
+              >
+                <input
+                  type="checkbox"
+                  checked={fromOriginal}
+                  onChange={(e) => setFromOriginal(e.target.checked)}
+                  disabled={running}
+                  className="h-3.5 w-3.5"
+                />
+                from the cells as uploaded
+              </label>
               <button
                 onClick={getSuggestions}
                 disabled={suggesting}

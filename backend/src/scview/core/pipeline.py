@@ -107,6 +107,10 @@ class PipelineParams:
     # MAD mode: a sample's % mito bound never below this (nuclei: median + 3 MADs collapses to
     # a fraction of a percent). None: 2% (core/qc_filter.py MITO_FLOOR); 0 = no floor.
     qc_pct_mt_floor: float | None = None
+    # reset_to_counts starts from the cells as uploaded (the stored original), not the cells the
+    # dataset has now: a dataset filtered once gets its cells back (core/reset_original.py; the
+    # run endpoints swap the data in, so a run without them ignores it).
+    reset_from_original: bool = False
     # Used only when % mito can be measured (MT- genes); a ceiling in MAD mode.
     max_pct_mt: float = 20.0
     # Spots and bins: % mito rules are off, they cut tissue out (qc_filter.grid_rules); opt-in.
@@ -411,8 +415,18 @@ ALL_STEPS = [
 def _run_reset_to_counts(adata: ad.AnnData, params: PipelineParams) -> ad.AnnData:
     """Reset adata.X to raw counts, clearing all preprocessing artifacts.
 
-    Returns a fresh AnnData ready for reprocessing from scratch.
+    Returns a fresh AnnData ready for reprocessing from scratch; started from the original
+    upload (``core/reset_original.py``), with what to record: the cells before and as uploaded.
     """
+    from scview.core import reset_original
+
+    mark = reset_original.take_mark(adata)
+    adata = _reset_counts(adata)
+    return (adata, mark) if mark is not None else adata
+
+
+def _reset_counts(adata: ad.AnnData) -> ad.AnnData:
+    """``_run_reset_to_counts`` without the record."""
     # Restore counts from layers or raw; counts an ambient RNA correction replaced come
     # back first (core/ambient.py), so a new run starts from the uncorrected counts.
     if ambient.restore_original(adata):
@@ -2382,8 +2396,13 @@ _PEARSON_TOOLS = {
 
 def _note_caution(result: PipelineResult, step: str, ret: Any) -> None:
     """A step's recorded note the run's result shows beside it (``PipelineResult.cautions``)."""
-    if isinstance(ret, dict) and ret.get("qc_nuclei_note"):
-        result.cautions[step] = str(ret["qc_nuclei_note"])
+    if isinstance(ret, dict) and (ret.get("qc_nuclei_note") or ret.get("from_original")):
+        if ret.get("from_original"):  # reset from the original upload: the cells it brought back
+            text = (f"Started from the {ret.get('n_original', 0):,} cells as uploaded "
+                    f"({ret.get('n_before', 0):,} before). " + str(ret.get("note") or "")).strip()
+        else:
+            text = str(ret["qc_nuclei_note"])
+        result.cautions[step] = text
 
 
 def _record_pipeline_step(

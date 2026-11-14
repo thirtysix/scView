@@ -15,7 +15,7 @@ vi.mock("@/components/panels/MeanVariancePlot", () => ({ MeanVariancePlot: () =>
 vi.mock("@/components/qc/SequencingQc", () => ({ SequencingQc: () => null }));
 vi.mock("@/components/qc/Hashing", () => ({ Hashing: () => null }));
 
-import { DataAssessmentPanel } from "./DataAssessmentPanel";
+import { DataAssessmentPanel, reprocessQuestion } from "./DataAssessmentPanel";
 import { useDatasetStore } from "@/stores/datasetStore";
 
 const STEPS = [
@@ -97,6 +97,22 @@ describe("DataAssessmentPanel filtering mode", () => {
     fireEvent.click(screen.getByRole("button", { name: /re-run this step/i }));
     await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
     expect(JSON.parse(fetchSpy.mock.calls[0]![1].body as string)).toEqual({ steps: ["filtering"], params: null });
+  });
+
+  it("reprocesses from the cells as uploaded when asked, and from the cells left otherwise", async () => {
+    vi.stubGlobal("confirm", vi.fn(() => true));
+    await openFiltering("mad");
+    fireEvent.click(screen.getByRole("button", { name: /reprocess from scratch/i }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+    const plain = JSON.parse(fetchSpy.mock.calls[0]![1].body as string);
+    expect(plain.steps[0]).toBe("reset_to_counts");
+    expect(plain.params?.reset_from_original).toBeUndefined();
+    await waitFor(() => expect(screen.getByRole("button", { name: /reprocess from scratch/i })).not.toBeDisabled());
+    fireEvent.click(screen.getByLabelText("from the cells as uploaded"));
+    fireEvent.click(screen.getByRole("button", { name: /reprocess from scratch/i }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
+    expect(JSON.parse(fetchSpy.mock.calls[1]![1].body as string).params.reset_from_original).toBe(true);
+    expect(reprocessQuestion(true)).toContain("every cell an earlier filtering removed comes back");
   });
 
   it("keeps the fixed cut-offs of a dataset filtered with them before MAD mode", async () => {
