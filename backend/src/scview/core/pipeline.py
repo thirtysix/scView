@@ -1846,7 +1846,7 @@ def _annotate_llm(adata: ad.AnnData, params: PipelineParams, groupby: str, targe
     qc = _annotation_qc_notes(adata, groupby)
     # Damaged cells are decided here, not by the AI; the rest are sent (annotation benchmark arms
     # ox + dq, 2026-11-11), marker lists no better than random ones with a note saying so.
-    decided, decided_record = _annotation_decided(adata, groupby, marker_map)
+    decided, decided_record = _annotation_decided(adata, groupby, marker_map, hint)
     from scview.core.marker_randomness import NOTE as RANDOM_NOTE
 
     for g in decided_record.get(RANDOM_NOTED, []):
@@ -2049,8 +2049,8 @@ def _annotation_qc_notes(adata: ad.AnnData, groupby: str) -> dict[str, str]:
     return out
 
 
-def _annotation_decided(adata: ad.AnnData, groupby: str,
-                        marker_map: dict[str, list[str]]) -> tuple[dict[str, str], dict[str, list[str]]]:
+def _annotation_decided(adata: ad.AnnData, groupby: str, marker_map: dict[str, list[str]],
+                        tissue: str = "") -> tuple[dict[str, str], dict[str, list[str]]]:
     """({cluster: label} that scView gives without the AI, {step-record key: clusters}).
 
     - "Low-quality cells": cluster QC flags it ``low_quality`` (few genes and high mito) or
@@ -2068,7 +2068,7 @@ def _annotation_decided(adata: ad.AnnData, groupby: str,
     from scview.core import cluster_qc, marker_randomness
 
     try:
-        check = marker_randomness.check(adata, marker_map)
+        check = marker_randomness.check(adata, marker_map, tissue=tissue)  # types of the tissue only
     except Exception as exc:
         logger.info("Random-marker check skipped: %s", exc)
         check = marker_randomness.RandomCheck(skipped="check failed")

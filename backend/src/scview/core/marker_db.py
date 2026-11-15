@@ -85,6 +85,11 @@ MIN_DB_GENES = 5  # fewer measured database genes than this: abstain
 SUPPORT_P = 0.05  # an overlap this likely by chance (often one shared gene) is "weak", not "supported"
 MIN_SUPPORT_GENES = 2  # one shared gene is "weak" whatever its p (Kuppe 2022: Adipocyte on MT2A, p 0.035)
 N_SUGGEST = 3
+# The marker-score annotator names a cluster after a type only when the cluster's markers share at
+# least MIN_SUPPORT_GENES of its genes and the overlap beats ANNOTATE_ALPHA / (types competing): the
+# best of a few hundred types reaches p 0.004 by chance. One shared gene (SPP1) named 3,741 injured
+# kidney nuclei "Bone-specific cell" (QA round 6); two (p 0.013) gave "Myeloid cell". Else "Unknown".
+ANNOTATE_ALPHA = 0.05
 MAX_GROUPS = 100
 # Mito, ribosomal (incl. RPLP0-2 and RPSA), immunoglobulin / TCR V segments and unnamed genes
 SKIP_GENE = re.compile(r"^(MT-|RP[LS]\d|RPLP\d|RPSA$|IG[HKL]V|TR[ABDG]V|ENSG)", re.I)
@@ -1198,26 +1203,35 @@ def _species(adata, species: str | None) -> tuple[str, str | None]:
     return "human", "The species could not be told from the gene names; human database rows are used."
 
 
-def tissue_names(db: MarkerDB, sc_: Scorer, adata, tissue: str = "") -> tuple[list[str], dict]:
-    """The types of ``sc_`` that may compete for a dataset of a known tissue, and what that rests
-    on: ``tissue`` (the user's hint), else the data's own (``marker_tissues.dataset_tissue``); the
-    types of that tissue, of every tissue (immune, blood, vessels, stroma) or of no named tissue
-    stay (``core/marker_tissues.py``). Every open type when no tissue is known."""
+def tissue_types(db: MarkerDB, sdb: SpeciesDB, adata, tissue: str = "") -> tuple[frozenset[str] | None, dict]:
+    """The types of ``sdb`` that may compete for a dataset of a known tissue (None: every type), and
+    what that rests on: ``tissue`` (the user's hint), else the data's own
+    (``marker_tissues.dataset_tissue``); the types of that tissue, of every tissue (immune, blood,
+    vessels, stroma) or of no named tissue stay (``core/marker_tissues.py``)."""
     from scview.core import marker_tissues
 
-    names = sc_.open_names
     want, source = marker_tissues.dataset_tissue(adata, tissue)
     info: dict[str, Any] = {"organs": sorted(want), "from": source}
-    if want:
-        index = marker_tissues.load(db.dest)
-        if index:
-            types, sp = sc_.sdb.types, sc_.sdb.species
-            names = [t for t in names
+    if not want:
+        return None, info
+    index = marker_tissues.load(db.dest)
+    if not index:
+        info["note"] = "the databases' raw files are not on disk: no type left out"
+        return None, info
+    types, sp = sdb.types, sdb.species
+    return frozenset(t for t in sdb.names
                      if marker_tissues.allowed(marker_tissues.type_organs(types[t], index, sp), want,
-                                               marker_tissues.everywhere_lineage(types[t]["cl"], db.ontology))]
-            info["n_types_left_out"] = len(sc_.open_names) - len(names)
-        else:
-            info["note"] = "the databases' raw files are not on disk: no type left out"
+                                               marker_tissues.everywhere_lineage(types[t]["cl"], db.ontology))), info
+
+
+def tissue_names(db: MarkerDB, sc_: Scorer, adata, tissue: str = "") -> tuple[list[str], dict]:
+    """The open types of ``sc_`` that may compete for a dataset of a known tissue (``tissue_types``),
+    with what that rests on. Every open type when no tissue is known."""
+    keep, info = tissue_types(db, sc_.sdb, adata, tissue)
+    names = sc_.open_names
+    if keep is not None:
+        names = [t for t in names if t in keep]
+        info["n_types_left_out"] = len(sc_.open_names) - len(names)
     return names, info
 
 
@@ -1324,9 +1338,15 @@ def annotate(adata, groupby: str, species: str | None = None, db: MarkerDB | Non
     names, tissue_info = tissue_names(db, sc_, adata, tissue)
     markers = _markers_for(adata, groupby)
     mapping: dict[str, str] = {}
+    cut = -np.log10(ANNOTATE_ALPHA / max(1, len(names)))
+    unsupported: list[str] = []
     for g in _group_names(adata, groupby):
-        top = sc_.suggest(sc_.query(markers.get(g, [])), n=1, names=names)
-        mapping[g] = top[0]["cell_type"] if top else "Unknown"
+        Q = sc_.query(markers.get(g, []))
+        s, k, _n = sc_.scores(Q, names, full=True) if Q else (np.zeros(0), np.zeros(0), np.zeros(0))
+        ok = np.where((k >= MIN_SUPPORT_GENES) & (s > cut))[0]
+        mapping[g] = names[ok[np.argmax(s[ok])]] if len(ok) else "Unknown"
+        if not len(ok) and Q and len(k) and k.max() > 0:
+            unsupported.append(g)
     return mapping, {
         "marker_source": "database",
         "databases": db.labels(parts),
@@ -1334,6 +1354,11 @@ def annotate(adata, groupby: str, species: str | None = None, db: MarkerDB | Non
         "species": sp,
         "n_db_types": len(names),
         "tissue": tissue_info,
+        # a type needs >= this many shared genes and p below this (ANNOTATE_ALPHA / types competing)
+        "min_genes": MIN_SUPPORT_GENES,
+        "max_p": float(f"{ANNOTATE_ALPHA / max(1, len(names)):.3g}"),
+        # groups whose best type shared genes but too few, or too likely by chance: "Unknown"
+        **({"unknown_weak": unsupported} if unsupported else {}),
     }
 
 
