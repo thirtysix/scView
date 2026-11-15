@@ -165,6 +165,24 @@ class DPTRequest(BaseModel):
                                   description="One cell's name (obs name) to start from, instead of a group")
 
 
+def _velocity_check(adaptor, data_dir, dataset_id: str):
+    """The saved velocity run's arrows checked from a root group along the PAGA tree of its
+    column (core/velocity_direction.py; nothing saved), for the pseudotime's root checks; None
+    when there is no run, or its cells changed since."""
+    from scview.core import velocity as vel
+
+    if vel.saved(adaptor.adata) is None:
+        return None
+
+    def check(column: str, group: str):
+        try:
+            return vel.recheck(adaptor, data_dir, dataset_id, {"root": group, "group_by": column}, None)
+        except vel.VelocityError:  # cells changed since the run, arrows missing: no verdict
+            return None
+
+    return check
+
+
 @router.get("/datasets/{dataset_id}/trajectory/cell-name")
 async def cell_name(
     dataset_id: str,
@@ -220,13 +238,16 @@ async def compute_pseudotime(
     def _run(adaptor):
         work = _light_or_memory(adaptor)  # as for PAGA: DPT reads the graph and obs alone
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
+        check = _velocity_check(adaptor, dm.data_dir, dataset_id)
         if large_run.large_info(adaptor.h5ad_path) is not None:
             # No matrix in hand: the file keeps its own, obs and uns are rewritten.
             before = uns_snapshot(work)
-            params = compute_dpt(work, body.root_column, body.root_value, root_cell=body.root_cell)
+            params = compute_dpt(work, body.root_column, body.root_value, root_cell=body.root_cell,
+                                 velocity_check=check)
             write_derived(work, output_path, adaptor.h5ad_path, before)
             return params
-        params = compute_dpt(work, body.root_column, body.root_value, root_cell=body.root_cell)
+        params = compute_dpt(work, body.root_column, body.root_value, root_cell=body.root_cell,
+                             velocity_check=check)
         # Write beside, then swap in: a backed dataset may be reading this path.
         partial = output_path + ".partial"
         uns_history.before_save(output_path, work)

@@ -40,6 +40,14 @@ MAX_PAGA_GROUPS = 100  # as many as a root-group picker lists
 DETACH_MAX_SHARE = 0.05  # a weakly linked tail left out of DPT holds at most this share of the cells
 DETACH_ROUNDS = 2  # recomputations after leaving one out (a second island can show then)
 REVERSED_RHO = -0.5  # a pseudotime this much against another one: a root warning
+# Root checks (``root_checks``), measured on Bastidas-Ponce's pancreas, Pijuan-Sala's erythroid
+# cells and paul15 with their authors' labels (true root and every other group as a root):
+BRANCH_SHARE = 0.05  # a branch out of the root group holding at least this share of PAGA's cells ...
+BRANCH_POINT = 3  # ... this many of them: a branch point between lineages (paul15's 7MEP: 41/40/8%)
+TOP_GENES = 20  # "specialised": the share of a cell's counts in its 20 most-counted genes
+LESS_SPECIALISED_GENES = 1.1  # another tree end detects at least this many times the genes ...
+LESS_SPECIALISED_TOP = 0.02  # ... or its top-20 share is this much lower (both must point its way)
+POTENCY_SAMPLE = 2000  # cells per group read for those numbers (seeded)
 ROOT_CHOICE = ("Give either root_column and root_value (a start group: its most central cell is the root) "
                "or root_cell (one cell's name), not both.")
 
@@ -254,34 +262,227 @@ def root_group_in(adata, column: str, iroot: int) -> str | None:
     return None if pd.isna(v) else str(v)
 
 
-def root_warnings(adata, pt: np.ndarray, iroot: int, own_column: str) -> list[str]:
-    """Signs that the root is not where the process starts, kept simple: its group sits
-    inside the saved PAGA tree (pseudotime then runs out several ways), or this pseudotime
-    runs against another one the dataset holds (an earlier run from another root, an
-    imported ``latent_time``). The group is the root cell's in PAGA's column, so a
-    single-cell root is checked as its group is. How many genes cells detect
-    (CytoTRACE's signal) was tried and dropped: paul15's MEP root detects the fewest
-    (323 median against 1,175 in erythroid cells), so it flagged the right root."""
+def paga_stale(adata, record: dict[str, Any] | None) -> str | None:
+    """Why a saved PAGA record no longer fits the dataset (its column gone or changed, or
+    its graph replaced), else None."""
+    if not record:
+        return None
+    groupby, groups = record["groupby"], record["groups"]
+    if groupby not in adata.obs.columns:
+        return f"The column '{groupby}' is gone; compute PAGA again."
+    order, labels = _group_labels(adata, groupby)
+    codes = pd.Index(groups).get_indexer(labels)  # -1: no label, or a new group
+    sizes = np.bincount(codes[codes >= 0], minlength=len(groups)).tolist()
+    if order != groups or sizes != record["sizes"]:
+        return f"'{groupby}' has changed since PAGA was computed; compute it again."
+    why = graph_stale(adata, record)
+    return f"{why} Compute PAGA again." if why else None
+
+
+def _tree_adjacency(record: dict[str, Any]) -> dict[int, set[int]]:
+    adj: dict[int, set[int]] = {i: set() for i in range(len(record.get("groups") or []))}
+    for i, j in record.get("tree") or []:
+        adj[int(i)].add(int(j))
+        adj[int(j)].add(int(i))
+    return adj
+
+
+def root_position(record: dict[str, Any], group: str) -> dict[str, Any] | None:
+    """Where a group sits in the PAGA tree: "end" (one tree edge), "inside" or "branch point"
+    (at least ``BRANCH_POINT`` branches out of it each hold ``BRANCH_SHARE`` of the cells), with
+    each branch's share of the cells, largest first; None for a group not in the tree."""
+    groups = record.get("groups") or []
+    if group not in groups:
+        return None
+    g = groups.index(group)
+    adj = _tree_adjacency(record)
+    sizes = [float(x) for x in record.get("sizes") or [1] * len(groups)]
+    total = sum(sizes) or 1.0
+    shares = []
+    for nb in sorted(adj[g]):
+        seen, stack = {g, nb}, [nb]
+        while stack:
+            for y in adj[stack.pop()]:
+                if y not in seen:
+                    seen.add(y)
+                    stack.append(y)
+        shares.append(round(sum(sizes[k] for k in seen - {g}) / total, 3))
+    shares.sort(reverse=True)
+    if len(shares) <= 1:
+        position = "end" if shares else "alone"
+    elif sum(x >= BRANCH_SHARE for x in shares) >= BRANCH_POINT:
+        position = "branch point"
+    else:
+        position = "inside"
+    return {"position": position, "branches": shares}
+
+
+def tree_ends(record: dict[str, Any]) -> list[str]:
+    adj = _tree_adjacency(record)
+    return [g for i, g in enumerate(record.get("groups") or []) if len(adj[i]) == 1]
+
+
+def _row_stats(M, rows: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Per cell: genes detected, and the share of its counts in its ``TOP_GENES`` genes."""
+    block = M[np.sort(rows)]
+    if sp.issparse(block):
+        block = sp.csr_matrix(block)
+        genes = np.diff(block.indptr)
+        top = np.zeros(block.shape[0])
+        for r in range(block.shape[0]):
+            d = block.data[block.indptr[r]:block.indptr[r + 1]]
+            total = d.sum()
+            if total > 0:
+                top[r] = (np.partition(d, -TOP_GENES)[-TOP_GENES:].sum() if d.size > TOP_GENES else total) / total
+        return genes.astype(np.float64), top
+    block = np.asarray(block, dtype=np.float64)
+    genes = (block > 0).sum(axis=1).astype(np.float64)
+    total = block.sum(axis=1)
+    k = min(TOP_GENES, block.shape[1])
+    top_sum = np.partition(block, -k, axis=1)[:, -k:].sum(axis=1)
+    return genes, np.divide(top_sum, total, out=np.zeros_like(total), where=total > 0)
+
+
+def specialisation(adata, column: str, groups: list[str]) -> dict[str, dict[str, Any]] | None:
+    """Per group (at least ``MIN_CELLS`` cells): median genes detected per cell and median
+    share of a cell's counts in its 20 most-counted genes, on raw counts (at most
+    ``POTENCY_SAMPLE`` cells per group, seeded); None without counts."""
+    from scview.core.normalization import find_counts
+
+    try:
+        M, _ = find_counts(adata, read_only=True)
+    except Exception:  # no counts (a light large dataset has no matrix in hand)
+        return None
+    labels = adata.obs[column]
+    labels = labels.astype(str).where(labels.notna()).to_numpy()
+    rng = np.random.default_rng(0)
+    out: dict[str, dict[str, Any]] = {}
+    for g in groups:
+        idx = np.flatnonzero(labels == g)
+        if len(idx) < MIN_CELLS:
+            continue
+        if len(idx) > POTENCY_SAMPLE:
+            idx = rng.choice(idx, POTENCY_SAMPLE, replace=False)
+        genes, top = _row_stats(M, idx)
+        out[g] = {"n_cells": int((labels == g).sum()), "genes": float(np.median(genes)),
+                  "top_share": round(float(np.median(top)), 4)}
+    return out
+
+
+def less_specialised_end(stats: dict[str, dict[str, Any]], root: str, ends: list[str]) -> str | None:
+    """The other tree end that looks least specialised against the root: more genes detected
+    AND a lower top-20 share, clearly so on at least one (``LESS_SPECIALISED_*``); else None."""
+    r = stats.get(root)
+    if r is None:
+        return None
+    best, best_key = None, None
+    for e in ends:
+        o = stats.get(e)
+        if e == root or o is None or o["genes"] <= r["genes"] or o["top_share"] >= r["top_share"]:
+            continue
+        if o["genes"] >= LESS_SPECIALISED_GENES * r["genes"] or o["top_share"] <= r["top_share"] - LESS_SPECIALISED_TOP:
+            key = (o["genes"] / max(r["genes"], 1.0), r["top_share"] - o["top_share"])
+            if best_key is None or key > best_key:
+                best, best_key = e, key
+    return best
+
+
+def velocity_against_root(direction: dict[str, Any] | None, root: str) -> dict[str, Any] | None:
+    """The velocity check from the root along the PAGA tree, read as a root verdict: arrows run
+    against the root when a transition out of the root itself is backward (the arrows flow into
+    it) or backward transitions outnumber forward ones. None when unchecked."""
+    if not direction or not direction.get("checked"):
+        return None
+    rows = direction.get("transitions") or []
+    back = [r for r in rows if r.get("status") == "backward"]
+    own = [r for r in back if r.get("from") == root]
+    n_fwd, n_back = int(direction.get("n_forward") or 0), len(back)
+    return {"n_forward": n_fwd, "n_backward": n_back, "root_edges_backward": [r["to"] for r in own],
+            "against": bool(own) or n_back > n_fwd, "embedding": direction.get("embedding"),
+            "backward": [{k: r.get(k) for k in ("from", "to", "mean_cos", "n_cells")} for r in back]}
+
+
+def root_warnings(adata, pt: np.ndarray, iroot: int, own_column: str,
+                  velocity_check=None) -> tuple[list[str], dict[str, Any]]:
+    """Signs that the root is not where the process starts, and the checks behind them.
+
+    With a current PAGA graph, the root cell's group in PAGA's column (a single-cell root is
+    checked as its group is):
+    - inside the tree, but not a branch point of ``BRANCH_POINT`` or more large branches:
+      pseudotime then runs out both ways along one path. A progenitor between lineages opens
+      three or more (paul15's 7MEP); a group part-way along one lineage does not.
+    - at an end, while another end looks less specialised (more genes detected, a smaller share
+      of the counts in its top 20 genes; CytoTRACE's and StemID's signals): the process may start
+      there. Gene counts alone flagged paul15's right MEP root (323 median vs 1,175 in erythroid
+      cells), which is inside the tree and not checked this way.
+    - ``velocity_check(groupby, group)``: the saved velocity run's direction check from the
+      root along the tree (``velocity_against_root``).
+    Without PAGA, or always: this pseudotime runs against another one the dataset holds."""
     out: list[str] = []
+    checks: dict[str, Any] = {}
     record = read_paga(adata)
-    group = root_group_in(adata, record["groupby"], iroot) if record else None
+    why = paga_stale(adata, record) if record else None
+    group = root_group_in(adata, record["groupby"], iroot) if record and not why else None
+    if record and why:
+        checks["paga"] = {"skipped": why}
     if record and group is not None:
-        nbrs = _tree_neighbours(record, group)
-        if len(nbrs) >= 2:
+        col = record["groupby"]
+        pos = root_position(record, group)
+        checks["paga"] = {"column": col, "root_group": group, **(pos or {})}
+        if pos and pos["position"] == "inside":
+            nbrs = _tree_neighbours(record, group)
             shown = ", ".join(f"'{n}'" for n in nbrs[:3]) + (" and more" if len(nbrs) > 3 else "")
+            big = sum(x >= BRANCH_SHARE for x in pos["branches"])
             out.append(
-                f"'{group}' sits inside the PAGA tree of {record['groupby']} (linked to {shown}), not at an end, "
-                "so pseudotime runs out from it in several directions. Right for a progenitor between lineages; "
-                "otherwise the start state at an end of the tree is the usual root."
+                f"'{group}' sits inside the PAGA tree of {col} (linked to {shown}), not at an end, so pseudotime "
+                f"runs out from it both ways. It opens {big} large branch{'es' if big != 1 else ''} "
+                f"(at least {BRANCH_SHARE:.0%} of the cells each), not the {BRANCH_POINT} or more of a progenitor "
+                "between lineages. The usual root is the start state at an end of the tree."
             )
+        if pos and pos["position"] == "end":
+            ends = tree_ends(record)
+            stats = specialisation(adata, col, ends)
+            if stats is None:
+                checks["specialisation"] = {"skipped": "no raw counts in hand"}
+            else:
+                checks["specialisation"] = stats
+                other = less_specialised_end(stats, group, ends)
+                if other is not None:
+                    o, r = stats[other], stats[group]
+                    out.append(
+                        f"'{other}', another end of the PAGA tree of {col}, looks less specialised than '{group}': "
+                        f"its cells detect more genes (median {o['genes']:,.0f} vs {r['genes']:,.0f}) and their "
+                        f"{TOP_GENES} most-counted genes take less of the counts ({o['top_share']:.0%} vs "
+                        f"{r['top_share']:.0%}). Less specialised cells usually come first. If the process starts "
+                        f"there, pick '{other}' as the root."
+                    )
+        if velocity_check is not None:
+            try:
+                verdict = velocity_against_root(velocity_check(col, group), group)
+            except Exception as e:  # the velocity check must never block the pseudotime
+                logger.warning("Velocity root check failed: %s", e)
+                verdict = None
+            if verdict is not None:
+                checks["velocity"] = verdict
+                if verdict["against"]:
+                    steps = "; ".join(f"{r['from']} -> {r['to']} ({r['mean_cos']:+.2f})"
+                                      for r in verdict["backward"][:4])
+                    into = (f" The arrows flow into '{group}' from {', '.join(repr(t) for t in verdict['root_edges_backward'])}."
+                            if verdict["root_edges_backward"] else "")
+                    out.append(
+                        f"The RNA velocity arrows run against this root along the PAGA tree of {col}: "
+                        f"{verdict['n_backward']} transition{'s' if verdict['n_backward'] != 1 else ''} backward "
+                        f"({steps}), {verdict['n_forward']} forward.{into} The root may be an end state. Velocity "
+                        "can be wrong too (genes whose transcription steps up, MURK genes): read its own warnings."
+                    )
     other = against_other_pseudotimes(adata, pt, {DPT_COLUMN, own_column})
     if other is not None:
-        col, rho, n = other
+        c, rho, n = other
         out.append(
-            f"This pseudotime runs against '{col}' (Spearman rho {rho:.2f}, n = {n:,} cells): one of the two "
+            f"This pseudotime runs against '{c}' (Spearman rho {rho:.2f}, n = {n:,} cells): one of the two "
             "starts at the wrong end. Check which group the process begins in."
         )
-    return out
+    return out, checks
 
 
 def _fmt(v: float) -> str:
@@ -289,7 +490,7 @@ def _fmt(v: float) -> str:
 
 
 def compute_dpt(adata, root_column: str | None = None, root_value: str | None = None, *,
-                root_cell: str | None = None) -> dict[str, Any]:
+                root_cell: str | None = None, velocity_check=None) -> dict[str, Any]:
     """Diffusion pseudotime from a root group (``root_column`` = ``root_value``: the group's
     most central cell, ``root_cell``) or from one cell named by ``root_cell``; writes
     ``DPT_COLUMN`` into ``adata``.
@@ -297,7 +498,9 @@ def compute_dpt(adata, root_column: str | None = None, root_value: str | None = 
     Cells the root cannot reach through the graph get ``inf``. Cells past an extreme gap
     (``detached_tail``: a weakly linked island) are left out with NaN and the pseudotime
     is computed again without them, so they do not set its scale. Returns the parameters
-    (also recorded in ``uns`` and the provenance history), with ``warnings``.
+    (also recorded in ``uns`` and the provenance history), with ``warnings`` and the
+    ``root_checks`` behind them (``root_warnings``; ``velocity_check(column, group)`` gives
+    the saved velocity run's direction check from that group, or None).
     """
     by_cell = root_cell is not None
     if by_cell == (root_column is not None or root_value is not None) or (
@@ -362,7 +565,8 @@ def compute_dpt(adata, root_column: str | None = None, root_value: str | None = 
             "They are left out (grey), and the pseudotime was computed again on the main part."
         )
     named = root_column_name(root_value, root_cell if by_cell else None)
-    warnings.extend(root_warnings(adata, pt, iroot, named))
+    found, checks = root_warnings(adata, pt, iroot, named, velocity_check)
+    warnings.extend(found)
 
     params: dict[str, Any] = {
         "column": DPT_COLUMN,
@@ -379,10 +583,11 @@ def compute_dpt(adata, root_column: str | None = None, root_value: str | None = 
         "n_unreachable": int(np.isinf(pt).sum()),
         "n_detached": n_detached,
         "warnings": warnings,
+        "root_checks": checks,
     }
     adata.obs[DPT_COLUMN] = pt
     adata.obs[named] = pt
-    recorded = dict(params)
+    recorded = {k: v for k, v in params.items() if k != "root_checks"}  # the recipe keeps the warnings
     params["fingerprint"] = graph_fingerprint(adata)  # for graph_stale; not in the recipe
     adata.uns[PARAMS_KEY] = json.dumps(params)
     runs = {c: p for c, p in (read_runs(adata) or {}).items() if c in adata.obs.columns}
@@ -529,14 +734,9 @@ def paga_view(adata, embedding: str | None = None) -> dict[str, Any]:
     if groupby not in adata.obs.columns:
         out["stale"] = f"The column '{groupby}' is gone; compute PAGA again."
         return out
-    order, labels = _group_labels(adata, groupby)
+    _, labels = _group_labels(adata, groupby)
     codes = pd.Index(groups).get_indexer(labels)  # -1: no label, or a new group
-    sizes = np.bincount(codes[codes >= 0], minlength=len(groups)).tolist()
-    if order != groups or sizes != record["sizes"]:
-        out["stale"] = f"'{groupby}' has changed since PAGA was computed; compute it again."
-    else:
-        why = graph_stale(adata, record)
-        out["stale"] = f"{why} Compute PAGA again." if why else None
+    out["stale"] = paga_stale(adata, record)
     if embedding:
         if embedding not in adata.obsm:
             raise KeyError(f"Embedding '{embedding}' not found.")

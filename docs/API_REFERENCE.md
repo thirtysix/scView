@@ -501,8 +501,13 @@ runs; `scview_dpt_cell_<cell>` for a cell root). The record has `root_kind` (gro
 pseudotime (`n_unreachable`). Cells past an extreme gap at the far end (at most 5% of the cells,
 the gap wider than the range below it) are a weakly linked island: they are left out
 (`n_detached`) and DPT is computed again without them. `warnings` says so, and flags a root that
-sits inside the saved PAGA tree of its column or runs against another pseudotime column
-(Spearman rho <= -0.5). 400 when no cell has the root value or there is no graph or PCA.
+runs against another pseudotime column (Spearman rho <= -0.5). With a current PAGA graph, the
+root cell's group in PAGA's column is checked too (`root_checks` has the numbers): inside the
+tree but not a branch point (fewer than 3 branches holding >= 5% of the cells each); at an end
+while another end looks less specialised (more genes detected and a smaller share of the counts
+in its 20 top genes, on raw counts); and, with a saved velocity run, the arrows from the root
+along the tree (a backward edge out of the root, or more backward than forward transitions).
+400 when no cell has the root value or there is no graph or PCA.
 
 ### Cell Name
 
