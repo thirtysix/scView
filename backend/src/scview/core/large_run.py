@@ -96,6 +96,7 @@ from scview.core.pipeline import (
     _finalize_current,
     _halted,
     _new_outcome,
+    _note_caution,
     _record_errors,
     record_skip,
     _record_pipeline_step,
@@ -1502,6 +1503,7 @@ def run_streamed(
                     ret = yield from _in_thread(run, step, control)
                 result.steps_run.append(step)
                 outcome.succeeded.append(step)
+                _note_caution(result, step, ret)  # as in memory (the AI annotation's fallback)
                 recorded = dict(ret) if isinstance(ret, dict) else {}
                 recorded["chunked"] = True
                 _record_pipeline_step(run.light, step, params, recorded,

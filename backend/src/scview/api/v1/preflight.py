@@ -47,6 +47,7 @@ async def dataset_preflight(
     n_neighbors: int | None = Query(default=None, ge=1),
     normalization_method: str | None = None,
     annotation_method: str | None = None,
+    annotation_fallback: str | None = None,
     doublet_channel_key: str | None = None,
     doublet_method: str | None = None,
     chunked: str | None = None,
@@ -83,6 +84,7 @@ async def dataset_preflight(
     overrides = {k: v for k, v in {
         "n_top_genes": n_top_genes, "n_comps": n_comps, "n_neighbors": n_neighbors,
         "normalization_method": normalization_method, "annotation_method": annotation_method,
+        "annotation_fallback": annotation_fallback,  # what runs for the AI without a key
         "doublet_channel_key": doublet_channel_key,  # its largest channel sets the peak
         "doublet_method": doublet_method,  # Scrublet, the classifier or both
         "chunked": chunked,

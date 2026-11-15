@@ -730,7 +730,7 @@ async def preflight(dataset_id: DatasetId, steps: Steps, params: Annotated[dict[
 def _preflight_query(steps: list[str], p: dict[str, Any]) -> dict[str, Any]:
     query: dict[str, Any] = {"steps": ",".join(steps)}
     for k in ("n_top_genes", "n_comps", "n_neighbors", "normalization_method", "annotation_method",
-              "doublet_channel_key", "doublet_method", "chunked", "clustering_method",
+              "annotation_fallback", "doublet_channel_key", "doublet_method", "chunked", "clustering_method",
               "leiden_iterations", "umap_3d", "ambient_rho"):
         if p.get(k) is not None:
             query[k] = p[k]
@@ -742,7 +742,7 @@ def _preflight_query(steps: list[str], p: dict[str, Any]) -> dict[str, Any]:
 def _pipeline_result(job: jobs.Job) -> dict[str, Any]:
     r = job.events.get("complete") or {}
     out = pick(r, "status", "stop_reason", "steps_run", "steps_skipped", "skipped", "errors",
-               "notes", "cleared", "elapsed_seconds", "unknown_steps", "chunked", "mode")
+               "notes", "cautions", "cleared", "elapsed_seconds", "unknown_steps", "chunked", "mode")
     out["dataset_id"] = job.dataset_id
     out["note"] = "Saved: the open browser UI shows the new state after a reload of the dataset."
     return out

@@ -76,8 +76,9 @@ def test_marker_score_assigns_top_cell_type():
     assert "cell_type" in a.obs and a.obs["cell_type"].nunique() == 2
 
 
-def test_llm_requires_clustering():
+def test_llm_requires_clustering(monkeypatch):
     """LLM-from-markers needs clusters to label; with none it errors before any LLM call."""
+    monkeypatch.setattr("scview.config.get_settings", lambda: Settings(DEEPINFRA_API_KEY="k", LLM_BASE_URL=""))
     a = ad.AnnData(X=np.zeros((6, 3), dtype="float32"))
     with pytest.raises(ValueError):
         _run_cell_type_annotation(a, PipelineParams(annotation_method="llm"))
