@@ -213,21 +213,21 @@ export function ConversionNote({ mode, onSkipDoublets }: { mode: RunMode; onSkip
       className="mt-1 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-900"
       data-testid="conversion-note"
     >
-      <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
-        <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
+      <p className="flex items-start gap-1.5">
+        <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden />
         <span>
           <span className="font-medium">Large-dataset mode, for good.</span> Run asks before it converts the dataset.
           {skip && " Doublet detection alone pushes it out of memory."}
+          {skip && onSkipDoublets && (
+            <button
+              type="button"
+              onClick={onSkipDoublets}
+              className="ml-1.5 rounded border border-amber-300 bg-white px-1.5 py-0.5 font-medium text-amber-800 hover:bg-amber-100"
+            >
+              Leave out doublet detection
+            </button>
+          )}
         </span>
-        {skip && onSkipDoublets && (
-          <button
-            type="button"
-            onClick={onSkipDoublets}
-            className="rounded border border-amber-300 bg-white px-1.5 py-0.5 font-medium text-amber-800 hover:bg-amber-100"
-          >
-            Leave out doublet detection
-          </button>
-        )}
       </p>
     </div>
   );
