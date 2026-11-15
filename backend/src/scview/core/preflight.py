@@ -1169,6 +1169,18 @@ def _p(params, name: str, default):
     return getattr(params, name, default) if params is not None else default
 
 
+def _annotation_method(params) -> str:
+    """The annotation method that will run: the AI's named fallback when no language model key
+    is set (``pipeline.annotation_method_plan``; CellTypist peaks far above the AI's call)."""
+    method = str(_p(params, "annotation_method", "llm") or "llm").lower()
+    if method == "llm":
+        from scview.config import get_settings
+
+        if not get_settings().llm_api_key:
+            return str(_p(params, "annotation_fallback", "") or "").lower() or method
+    return method
+
+
 # Each step: (state) -> (transient bytes over the state's resident, state after, seconds at 2 CPUs).
 def _step_reset(s: _State, params) -> tuple[int, _State, float]:
     layers = dict(s.layers)
@@ -1727,7 +1739,7 @@ def _step_scores(s: _State, params) -> tuple[int, _State, float]:
 
 
 def _step_annotation(s: _State, params) -> tuple[int, _State, float]:
-    method = _p(params, "annotation_method", "llm")
+    method = _annotation_method(params)
     ln = s.lognorm()
     if method == "celltypist" and ln is not None:
         # CellTypist scales the model's genes (about 6,000) densely, in float64.
@@ -2088,7 +2100,7 @@ def chunked_step(step: str, sh: ChunkedShape, params, *, write: bool = False,
     elif step == "cell_type_annotation":
         from scview.core import large_scores
 
-        if _p(params, "annotation_method", "llm") == "celltypist":
+        if _annotation_method(params) == "celltypist":
             t = _chunk_pass(sh, params) + large_scores.CELLTYPIST_BLOCK_BYTES
             held = n * CELLTYPIST_LABELS * 4 + n * 3 * 8
             secs = 5.0 + _pass_secs(sh) + 2e-3 * n

@@ -91,17 +91,32 @@ def _seurat_qc_columns(obs_cols: set[str]) -> list[str]:
     return sorted(c for c in obs_cols if _SEURAT_QC.match(str(c)))
 
 
-# % or fraction mitochondrial under the names tools give it: scanpy pct_counts_mt, Seurat
-# percent.mt, CELLxGENE mitochondrial_percent, scater subsets_Mito_percent, mito_frac ...
-_MITO_COLUMN = re.compile(
-    r"^(?:(?:pct|percent|perc|frac|fraction|ratio|prop)(?:[._]counts)?[._]?(?:mt|mito|mitochondrial)"
-    r"|(?:subsets[._])?(?:mt|mito|mitochondrial)[._]?(?:pct|percent|perc|frac|fraction|ratio|prop))$",
-    re.IGNORECASE)
+# % or fraction mitochondrial under the names tools and authors give it: scanpy pct_counts_mt, Seurat
+# percent.mt, CELLxGENE mitochondrial_percent, scater subsets_Mito_percent, mito_frac, PercentMito,
+# and misspelt (Reck 2025's percent_mitochrondrial, missed until v0.80). Read word by word: a word
+# for mitochondrial (mt, mito..., not mitotic / mitosis), a word for a share, and nothing else but
+# words such as "counts" (total_counts_mt is a count, mt_genes a gene list, pct_counts_in_top_50_genes
+# another share).
+_MITO_WORD = re.compile(r"^(?:mt|mito(?!t|s)\w*)$")
+_SHARE_WORD = re.compile(r"^(?:pct|percent|percentage|perc|frac|fraction|ratio|prop|proportion|share)$")
+_MITO_OTHER = frozenset({"counts", "count", "subsets", "of", "reads", "read", "umi", "umis", "rna", "in", "genes"})
+
+
+def _name_words(name: str) -> list[str]:
+    spaced = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", str(name))  # PercentMito
+    return [w for w in re.split(r"[^A-Za-z0-9]+", spaced.lower()) if w]
+
+
+def is_mito_column(name) -> bool:
+    words = _name_words(name)
+    mito = [w for w in words if _MITO_WORD.match(w)]
+    share = [w for w in words if _SHARE_WORD.match(w)]
+    return bool(mito) and bool(share) and all(w in _MITO_OTHER for w in words if w not in mito + share)
 
 
 def mito_columns(obs_cols) -> list[str]:
     """The obs columns that hold a per-cell % (or fraction) mitochondrial, sorted."""
-    return sorted(str(c) for c in obs_cols if _MITO_COLUMN.match(str(c)))
+    return sorted(str(c) for c in obs_cols if is_mito_column(c))
 
 
 def _check_qc_metrics(adata: Any) -> StepStatus:

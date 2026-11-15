@@ -793,6 +793,11 @@ async def test_mcp_tool_runs_the_check_and_gives_the_evidence_its_marker_lines(
     assert rows["B"]["verdict_text"] == "supported" and "CD79A" in rows["B"]["overlap"]
     assert rows["T-cells"]["suggestions"].startswith("NK cells")
     assert r["labels"]["n_total"] == 4
+    # how each label was matched, its type's CL id, the group's markers and every suggestion's genes
+    # (QA round 6 needed the REST reply for these)
+    assert rows["B"]["match"] == "exact" and rows["B"]["cl_id"] == "CL:0000236"
+    assert "CD79A" in rows["B"]["markers"] and "shares " in rows["T-cells"]["suggestions"]
+    assert "NKG7" in rows["T-cells"]["suggestions"] and r["match_kinds"]["subset"] == "partial name match"
     assert r["tissue"]["organs"] == []
     k = await _call("marker_db_check", {"dataset_id": did, "column": "lab", "tissue": "kidney"})
     assert k["tissue"]["organs"] == ["kidney"] and k["tissue"]["from"] == "the tissue given ('kidney')"

@@ -119,6 +119,10 @@ export function paramText(key: string, value: unknown, step?: string): string {
   if (key === "converted" && Array.isArray(value) && value.length && typeof value[0] === "object")
     return convertedText(value as ConvertedEntry[]);
   if (key === "regress_out") return regressOutText(value);
+  // The AI annotation asked for without a language model key, another method run in its place
+  // (annotation_fallback): the note says both, so the asked-for method needs no chip of its own.
+  if (key === "annotation_fallback_note" && typeof value === "string") return value;
+  if (key === "annotation_method_requested") return "";
   const batch = batchParamText(key, value);
   if (batch !== null) return batch;
   // A run that finished with errors (step run_errors): its failed and skipped steps

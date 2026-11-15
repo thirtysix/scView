@@ -55,7 +55,7 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
   const fieldId = useId();
   const [method, setMethod] = useState<"llm" | "celltypist" | "marker_score">("llm");
   const [methodPicked, setMethodPicked] = useState(false);
-  // null until known; without a key the server runs CellTypist for "llm".
+  // null until known; without a key the server refuses "llm" (no silent CellTypist run).
   const [llmAvailable, setLlmAvailable] = useState<boolean | null>(null);
   const [llmProvider, setLlmProvider] = useState<string | null>(null);
   const [tissue, setTissue] = useState("");
@@ -198,6 +198,8 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
   };
 
   const busy = annotating || running;
+  // The server refuses the AI method without a key (422): no silent CellTypist run.
+  const noAi = method === "llm" && llmAvailable === false;
   const tab = (key: "llm" | "celltypist" | "marker_score", label: string) => (
     <button
       type="button"
@@ -327,9 +329,9 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
           {llmAvailable === false && (
             <p className="mt-1 flex items-start gap-1 text-[11px] text-amber-700">
               <AlertTriangle className="mt-px h-3 w-3 shrink-0" />
-              No language model key is set, so this runs CellTypist instead. Add DEEPINFRA_API_KEY
-              (or LLM_API_KEY for another provider) to the .env file in the scView folder and restart
-              scView to use the AI.
+              No language model key is set, so the AI cannot run. Pick CellTypist or Marker score, or add
+              DEEPINFRA_API_KEY (or LLM_API_KEY for another provider) to the .env file in the scView folder
+              and restart scView to use the AI.
             </p>
           )}
         </div>
@@ -387,8 +389,14 @@ export function AnnotationControl({ onAnnotate, running, species }: Props) {
         <button
           type="button"
           onClick={handleAnnotate}
-          disabled={busy || !groupby || (method === "celltypist" && !model)}
-          title={method === "celltypist" && !model ? "Pick a reference model first" : undefined}
+          disabled={busy || !groupby || (method === "celltypist" && !model) || noAi}
+          title={
+            method === "celltypist" && !model
+              ? "Pick a reference model first"
+              : noAi
+                ? "No language model key is set: pick CellTypist or Marker score"
+                : undefined
+          }
           className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary/90 disabled:opacity-50"
         >
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Tags className="h-4 w-4" />}

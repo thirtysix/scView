@@ -10,7 +10,12 @@ Three checks around the CellTypist annotation step (``pipeline._annotate_celltyp
    model genes the dataset has, dropping the rest of the model's weights. With
    under half of them (``MIN_OVERLAP``) the scores rest on a minority of what the
    model learned, and labels drift towards types whose genes happen to be present.
-3. Prediction confidence per label: ``{target}_confidence`` is each cell's highest
+3. Tissue: a model knows the cell types of the tissues it was trained on (``model_organs``, read
+   from its name and description into ``core/marker_tissues.py``'s organs). On a dataset of
+   another known tissue (the hint, else obs ``tissue``) its cells get the nearest class the model
+   has, at high confidence: the immune model on kidney named 25,916 tubule nuclei "Epithelial
+   cells" and podocytes "Alveolar macrophages" (QA round 6, v0.80). ``tissue_caution`` says so.
+4. Prediction confidence per label: ``{target}_confidence`` is each cell's highest
    class probability. CellTypist's probabilities are one-vs-rest (a sigmoid per
    class), and 0.5 (``LOW_CONFIDENCE``) is its own cut for calling a class in
    probability-match mode, so a cell below it fits no class of the model well. A
@@ -74,6 +79,41 @@ def species_warning(model: ModelSpecies | str, dataset: str) -> str:
         "gene symbols are matched exactly (human CD3E, mouse Cd3e), so few genes will be "
         "shared and the labels are unreliable."
     )
+
+
+# Blood and immune tissues hold the same cells; vessels and stroma are found in every tissue.
+_SAME_ORGAN = {"blood": "immune"}
+
+
+def model_organs(name: str, description: str = "") -> list[str]:
+    """The coarse organs (``marker_tissues.ORGANS``) a model's name and description name;
+    [] when they name none (then nothing is said about its tissue)."""
+    from scview.core.marker_tissues import organs
+
+    return sorted(organs(f"{name.replace('_', ' ')} {description}"))
+
+
+def tissue_caution(model: Iterable[str] | None, dataset: Iterable[str] | None, source: str = "") -> str:
+    """A sentence when the dataset's tissue is known and the model was trained on none of it
+    ("" when either is unknown or they share an organ). ``source``: where the dataset's tissue
+    was read (``marker_tissues.dataset_tissue``)."""
+    from scview.core.marker_tissues import EVERYWHERE
+
+    m = {_SAME_ORGAN.get(o, o) for o in model or ()}
+    d = {_SAME_ORGAN.get(o, o) for o in dataset or ()}
+    if not m or not d or m & d:
+        return ""
+    where = f" ({source})" if source else ""
+    tissue = ", ".join(sorted(dataset or ()))
+    if m <= EVERYWHERE:  # immune (or vessel, stromal) cells only
+        kinds = ", ".join(sorted(m))
+        return (f"The model knows only {kinds} cell types, and this dataset is {tissue}{where}: its other "
+                "cells have no class in the model and get the nearest one, often at high confidence "
+                "(kidney podocytes were called alveolar macrophages). Trust only the labels of "
+                f"{kinds} cells; for the rest use a model of this tissue, or the AI or marker-score method.")
+    return (f"The model was trained on {', '.join(sorted(model or ()))} cells, and this dataset is {tissue}{where}: "
+            "cell types the model does not know get the nearest one it has. Pick a model of this "
+            "tissue, or use the AI or marker-score method.")
 
 
 def gene_overlap(model_genes: Iterable[str], dataset_genes: Iterable[str]) -> dict:
@@ -174,6 +214,7 @@ def summarize(adata, column: str) -> dict | None:
     overall = float(np.median(finite)) if finite.size else None
     cautions: list[str] = []
     for text in (
+        tissue_caution(entry.get("model_organs"), entry.get("dataset_organs"), entry.get("dataset_tissue_from", "")),
         species_warning(entry.get("model_species", ""), entry.get("dataset_species", "")),
         overlap_caution(entry.get("gene_overlap"), entry.get("n_shared_genes"),
                         entry.get("n_model_genes")),
@@ -194,6 +235,8 @@ def summarize(adata, column: str) -> dict | None:
         "model": entry.get("model"),
         "model_species": entry.get("model_species"),
         "dataset_species": entry.get("dataset_species"),
+        "model_organs": entry.get("model_organs"),
+        "dataset_organs": entry.get("dataset_organs"),
         "gene_overlap": entry.get("gene_overlap"),
         "n_model_genes": entry.get("n_model_genes"),
         "n_shared_genes": entry.get("n_shared_genes"),

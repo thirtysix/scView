@@ -25,6 +25,7 @@ from tests.test_marker_db import _cells, installed, raw, small_sources  # noqa: 
     ("Bladder organ", {"urinary"}), ("Peripheral blood", {"blood"}), ("Cerebral cortex", {"nervous"}),
     ("Dorsolateral prefrontal cortex", {"nervous"}), ("Cortex", set()), ("Undefined", set()), ("", set()),
     ("Immune system", {"immune"}), ("Placenta", {"placenta"}), ("Umbilical cord blood", {"blood"}),
+    ("Adrenal gland", {"endocrine"}), ("Renal cortex", {"kidney"}), ("Perirenal fat", {"adipose"}),
 ])
 def test_organs_reads_database_and_dataset_tissue_names(text, want):
     assert mt.organs(text) == want
@@ -164,3 +165,60 @@ def test_check_without_raw_files_says_so(installed, monkeypatch):
     res = mdb.check(_cells(), "lab", "human", mdb.load(installed), tissue="kidney")
     assert res["tissue"]["organs"] == ["kidney"] and "no type left out" in res["tissue"]["note"]
     assert "n_types_left_out" not in res["tissue"]
+
+
+def _gut_nk_index(db) -> dict:
+    """NK cells described in the colon only (made up, as Paneth cells), B and T cells immune."""
+    sdb = db.species("human", db.view("annotate", "human"))
+    index: dict = {}
+    for t, organ in (("NK cells", "gut"), ("B cells", "immune"), ("T cells", "immune")):
+        for part, name in sdb.types[t]["members"]:
+            index.setdefault(part, {}).setdefault("human", {})[name] = {organ: 5}
+    return index
+
+
+def test_random_check_and_cluster_evidence_keep_to_the_tissue(installed, monkeypatch):
+    """QA round 6 (v0.80): cluster evidence said kidney clusters matched Paneth cells, Colonocyte and
+    retinal bipolar cells, while the database check's suggestions kept to the kidney."""
+    from scview.core import cluster_evidence as CE
+    from scview.core import marker_randomness as MR
+    from scview.core.cluster_qc import ClusterQC, ClusterQCReport
+
+    db = mdb.load(installed)
+    a = _cells()
+    a.var["n_cells_by_counts"] = a.n_obs // 2
+    lists = {"T-cells": ["NKG7", "GNLY", "KLRD1", "NCAM1", "PRF1", "GZMB"],
+             "B": ["CD79A", "MS4A1", "CD19", "BANK1", "PAX5", "CD79B"]}
+    before = MR.check(a, lists, db)
+    assert before.best["T-cells"] == "NK cells" and before.tissue is None
+    monkeypatch.setattr(mt, "load", lambda dest: _gut_nk_index(db))
+    assert MR.check(a, lists, db).best["T-cells"] == "NK cells"  # no tissue known: every type
+    a.obs["tissue"] = "kidney"
+    after = MR.check(a, lists, db)
+    assert after.tissue == {"organs": ["kidney"], "from": "obs 'tissue' (kidney)"}
+    assert after.best.get("T-cells") != "NK cells" and after.best["B"] == "B cells"
+    assert MR.check(a, lists, db, tissue="colon").best["T-cells"] == "NK cells"  # the hint wins
+
+    monkeypatch.setattr(CE.marker_selection, "group_markers", lambda adata, column, n: lists)
+    rows = [ClusterQC(group=g, n_cells=30, fraction=0.25, median_genes=1000, median_counts=3000, median_pct_mt=2.0)
+            for g in ("B", "T-cells", "Zorblax", "Rare cell")]
+    report = ClusterQCReport(column="lab", n_cells=120, n_groups=4, clusters=rows,
+                             typical={"median_genes": 1000.0, "median_counts": 3000.0, "median_pct_mt": 2.0})
+    rep = CE.build(a, "lab", report, db, None)
+    text = " ".join(ln.text for c in rep.clusters for ln in c.lines)
+    assert "NK cells" not in text and "B cells" in text
+    assert any("only the cell types of kidney" in n and "obs 'tissue'" in n for n in rep.notes)
+
+
+def test_annotator_names_no_type_from_one_shared_gene_or_a_chance_overlap(installed, monkeypatch):
+    """QA round 6: 3,741 injured kidney nuclei were named "Bone-specific cell" from ONE shared gene
+    (SPP1, a 5-gene type, p 0.004). A type now needs >= 2 shared genes and p below 0.05 / types."""
+    db = mdb.load(installed)
+    a = _cells(extra={"Lonely": ["CD22", "QQQ1", "QQQ2", "QQQ3", "QQQ4"]})  # one B-cell gene
+    a.obs["leiden"] = a.obs["lab"].cat.rename_categories([str(i) for i in range(5)])
+    mapping, info = mdb.annotate(a, "leiden", "human", db)
+    assert mapping["0"] == "B cells" and mapping["4"] == "Unknown"
+    assert info["unknown_weak"] == ["4"] and info["min_genes"] == 2
+    assert info["max_p"] == pytest.approx(0.05 / info["n_db_types"], rel=1e-2)
+    monkeypatch.setattr(mdb, "ANNOTATE_ALPHA", 1e-300)  # no overlap beats it
+    assert set(mdb.annotate(a, "leiden", "human", db)[0].values()) == {"Unknown"}

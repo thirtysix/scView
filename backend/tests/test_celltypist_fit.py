@@ -150,7 +150,7 @@ def test_step_records_species_and_overlap_in_uns_and_provenance(monkeypatch):
                               annotation_groupby="cluster")
     ret = P._run_cell_type_annotation(a, params)
     assert calls["model"] is loaded  # loaded once, for the check and the prediction
-    assert ret == {"dataset_species": "human", "model_species": "human",
+    assert ret == {"dataset_species": "human", "model_species": "human", "model_organs": ["immune"],
                    "n_model_genes": 100, "n_shared_genes": 20, "gene_overlap": 0.2, "annotation_target": "ct"}
     s = fit.summarize(a, "ct")
     assert s["model"] == "Immune_All_Low.pkl" and s["gene_overlap"] == 0.2
@@ -230,3 +230,45 @@ async def test_model_catalog_names_each_models_species(client, monkeypatch):
     body = (await client.get("/api/v1/annotation/celltypist-models")).json()
     assert [(m["model"], m["species"]) for m in body["models"]] == [
         ("Immune_All_Low.pkl", "human"), ("Mouse_Whole_Brain.pkl", "mouse")]
+
+
+@pytest.mark.parametrize("name, description, organs", [
+    ("Immune_All_Low.pkl", "immune sub-populations combined from 20 tissues of 18 studies", ["immune"]),
+    ("Healthy_Human_Liver.pkl", "cell types from scRNA-seq and snRNA-seq of the adult human liver", ["liver"]),
+    ("Human_Lung_Atlas.pkl", "integrated Human Lung Cell Atlas (HLCA) combining multiple datasets", ["lung"]),
+    ("Adult_COVID19_PBMC.pkl", "peripheral blood mononuclear cell types from COVID-19 patients", ["blood"]),
+    ("Adult_Human_MTG.pkl", "cell types and subtypes (10x-based) from the adult human middle temporal gyrus", []),
+])
+def test_model_organs_from_the_catalog(name, description, organs):
+    assert fit.model_organs(name, description) == organs
+
+
+def test_tissue_caution_only_when_the_dataset_tissue_is_known_and_not_the_models():
+    immune = fit.model_organs("Immune_All_Low.pkl", "immune sub-populations")
+    text = fit.tissue_caution(immune, ["kidney"], "obs 'tissue' (kidney)")
+    assert "only immune cell types" in text and "kidney (obs 'tissue' (kidney))" in text
+    assert fit.tissue_caution(immune, ["blood"]) == ""  # PBMC: blood is immune
+    assert fit.tissue_caution(immune, []) == "" and fit.tissue_caution([], ["kidney"]) == ""
+    assert "trained on lung cells" in fit.tissue_caution(["lung"], ["kidney"])
+    assert fit.tissue_caution(["lung", "immune"], ["lung"]) == ""
+
+
+def test_step_cautions_an_immune_model_on_a_kidney_dataset(monkeypatch):
+    """QA round 6: the immune model on kidney nuclei said nothing about the tissue."""
+    from scview.core import pipeline as P
+
+    _fake_celltypist(monkeypatch, HUMAN, details="immune sub-populations combined from 20 tissues")
+    monkeypatch.setattr(P, "_markers_for_column", lambda adata, col: None)
+    a = _counts(HUMAN)
+    a.obs["tissue"] = pd.Categorical(["kidney"] * a.n_obs)
+    ret = P._run_cell_type_annotation(a, P.PipelineParams(annotation_method="celltypist", annotation_target="ct",
+                                                          annotation_groupby="cluster"))
+    assert ret["model_organs"] == ["immune"] and ret["dataset_organs"] == ["kidney"]
+    s = fit.summarize(a, "ct")
+    assert s["dataset_organs"] == ["kidney"]
+    assert any("only immune cell types" in c and "kidney" in c for c in s["cautions"])
+    # the user's tissue hint wins over obs; a blood hint: no caution
+    P._run_cell_type_annotation(a, P.PipelineParams(annotation_method="celltypist", annotation_target="ct",
+                                                    annotation_groupby="cluster", annotation_tissue="PBMC",
+                                                    annotation_overwrite=True))
+    assert not any("immune cell types" in c for c in fit.summarize(a, "ct")["cautions"])

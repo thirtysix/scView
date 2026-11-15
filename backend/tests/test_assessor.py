@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import anndata as ad
 import numpy as np
+import pytest
 
 from scview.core import provenance
 from scview.core.assessor import assess_preprocessing
@@ -180,3 +181,30 @@ def test_doublet_id_column_is_read_as_doublet_calls():
     assert "(3 of 60 cells called doublets)" in assess_preprocessing(a).doublet_detection.details
     used = doublet_source.resolve(a.obs)
     assert used is not None and used.n == 3 and used.source == "doublet_id"
+
+
+@pytest.mark.parametrize("name, mito", [
+    # names in CELLxGENE Discover files and other tools' output
+    ("percent_mitochrondrial", True),  # Reck 2025 kidney (the authors' typo): missed until v0.80
+    ("percent_mito", True), ("pct_counts_mt", True), ("percent.mt", True), ("mitochondrial_percent", True),
+    ("fraction_mitochondrial", True), ("mito_frac", True), ("MT_frac", True), ("PercentMito", True),
+    ("percent.mito", True), ("mt_percent", True), ("subsets_Mito_percent", True), ("pct_mito_reads", True),
+    ("percent_mitocondrial", True), ("mitochondria_fraction", True), ("pct_counts_mitochondrial", True),
+    # not a mito share
+    ("total_counts_mt", False), ("log1p_total_counts_mt", False), ("mt_genes", False), ("n_genes", False),
+    ("pct_counts_in_top_50_genes", False), ("mitotic_fraction", False), ("percent_ribo", False),
+    ("is_mito", False), ("mito_score", False), ("pct_counts_ribo", False), ("fraction_mitosis", False),
+    ("development_stage", False), ("mt_doublet_pct_flag", False),
+])
+def test_mito_columns_are_read_word_by_word(name, mito):
+    from scview.core.assessor import is_mito_column
+
+    assert is_mito_column(name) is mito
+
+
+def test_a_misspelt_author_mito_column_counts_as_qc():
+    a = _counts()
+    a.obs["n_genes"] = 5
+    a.obs["percent_mitochrondrial"] = 0.2  # Reck 2025 kidney, CELLxGENE
+    q = assess_preprocessing(a).qc_metrics
+    assert q.done and "percent_mitochrondrial" in q.details and "no MT%" not in q.details

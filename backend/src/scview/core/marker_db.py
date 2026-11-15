@@ -85,6 +85,11 @@ MIN_DB_GENES = 5  # fewer measured database genes than this: abstain
 SUPPORT_P = 0.05  # an overlap this likely by chance (often one shared gene) is "weak", not "supported"
 MIN_SUPPORT_GENES = 2  # one shared gene is "weak" whatever its p (Kuppe 2022: Adipocyte on MT2A, p 0.035)
 N_SUGGEST = 3
+# The marker-score annotator names a cluster after a type only when the cluster's markers share at
+# least MIN_SUPPORT_GENES of its genes and the overlap beats ANNOTATE_ALPHA / (types competing): the
+# best of a few hundred types reaches p 0.004 by chance. One shared gene (SPP1) named 3,741 injured
+# kidney nuclei "Bone-specific cell" (QA round 6); two (p 0.013) gave "Myeloid cell". Else "Unknown".
+ANNOTATE_ALPHA = 0.05
 MAX_GROUPS = 100
 # Mito, ribosomal (incl. RPLP0-2 and RPSA), immunoglobulin / TCR V segments and unnamed genes
 SKIP_GENE = re.compile(r"^(MT-|RP[LS]\d|RPLP\d|RPSA$|IG[HKL]V|TR[ABDG]V|ENSG)", re.I)
@@ -937,10 +942,12 @@ def merge(parts: list[tuple[str, dict[str, dict]]]) -> dict[str, dict]:
             k = norm(name)
             if not k:
                 continue
-            m = merged.setdefault(" ".join(sorted(k)), {"cl": "", "w": defaultdict(float), "label": name, "sources": [],
-                                                        "members": []})
+            m = merged.setdefault(" ".join(sorted(k)), {"cl": "", "cls": [], "w": defaultdict(float), "label": name,
+                                                        "sources": [], "members": []})
             if t["cl"] and not m["cl"]:
                 m["cl"] = t["cl"]
+            if t["cl"] and t["cl"] not in m["cls"]:
+                m["cls"].append(t["cl"])  # every source's id, for vet_cl_ids
             if src not in m["sources"]:
                 m["sources"].append(src)
             m["members"].append((src, name))  # the source types merged here (core/marker_tissues.py)
@@ -949,9 +956,78 @@ def merge(parts: list[tuple[str, dict[str, dict]]]) -> dict[str, dict]:
     out: dict[str, dict] = {}
     for key, m in merged.items():
         name = m["label"] if m["label"] not in out else key
-        out[name] = {"cl": m["cl"], "sources": m["sources"], "members": m["members"],
+        out[name] = {"cl": m["cl"], "cls": m["cls"], "sources": m["sources"], "members": m["members"],
                      "genes": sorted(m["w"], key=lambda g: (-m["w"][g], g))}
     return out
+
+
+# Words Cell Ontology adds to the usual names that a row's name leaves out (as cell_ontology.QUALIFIERS).
+_CL_QUALIFIERS = frozenset({"alpha", "beta", "thymus", "derived"})
+CL_HOW = {
+    "row": "the database row's id; its term has the type's name",
+    "name": "the type's name matched to a term (the row's id names another cell type)",
+    "row_broader": "the database row's id, a broader term the type's name holds",
+    "row_organ": "the database row's id, the type's name with its organ (renal principal cell)",
+    "dropped": "the row's id names another cell type and the name matches no term",
+    "name_no_row_id": "no row id: the type's name matched to a term",
+}
+
+
+# Words the organ names catch that name a cell ("epicardial fat cell" is an adipocyte, not the heart's).
+_CELL_WORDS = frozenset({"fat", "neuron", "neural", "plasma", "lymph", "blood"})
+
+
+def _organ_words(words) -> bool:
+    from scview.core.marker_tissues import organs
+
+    return bool(words) and all(organs(w) and w not in _CELL_WORDS for w in words)
+
+
+def vet_cl_ids(types: dict[str, dict], ontology: Ontology | None) -> Counter:
+    """Each merged type's Cell Ontology id, checked against its name (in place; ``cl_how`` says why).
+
+    CellMarker's rows carry ids of other cell types: "Mait-like cell", "Bone-specific cell" and
+    "Pluripotency cell" CL:0000145 (professional antigen presenting cell), "Lymphatic ECs" a
+    ventricular cardiac myocyte, kidney segments the generic epithelial cell (QA round 6, v0.80).
+    A row's id is kept when its term has the type's name (``Ontology.label_ids``: the name or an
+    exact synonym, normalised, abbreviations spelled out); else the type's own name match when it
+    names one term; else a row's id whose term's words the name holds ("Double-negative B cell" ->
+    B cell), or whose term is the name with an organ ("Principal cells" -> renal principal cell);
+    else none. Without the ontology the ids stay unchecked. Returns how many types took
+    each way."""
+    counts: Counter = Counter()
+    if ontology is None:
+        return counts
+    for name, t in types.items():
+        ids = [i for i in t.get("cls") or ([t["cl"]] if t.get("cl") else []) if i in ontology.terms]
+        own = ontology.label_ids(name) or ontology.label_ids(name, True)
+        if not (t.get("cls") or t.get("cl")):  # no row id: the name's own term, as the matcher reads it
+            if len(own) == 1:
+                t["cl"], t["cl_how"] = next(iter(own)), "name_no_row_id"
+                counts["name_no_row_id"] += 1
+            continue
+        words = norm(name, True) | norm(name)
+        keep = next((i for i in ids if i in own), None)
+        how = "row"
+        if keep is None and len(own) == 1:
+            keep, how = next(iter(own)), "name"
+        terms = [(i, [norm(x, True) - _CL_QUALIFIERS for x in (ontology.terms[i][0], *ontology.terms[i][1])])
+                 for i in ids]
+        if keep is None:
+            keep = next((i for i, ks in terms if any(k and k <= words for k in ks)), None)
+            how = "row_broader"
+        if keep is None:  # "Principal cells" -> renal principal cell: the extra words name an organ
+            mine = norm(name, True)
+            keep = next((i for i, ks in terms if any(mine and mine < k and _organ_words(k - mine) for k in ks)),
+                        None)
+            how = "row_organ"
+        if keep is None:
+            how = "dropped"
+        if keep != t["cl"] or how != "row":
+            t["cl_row"] = t["cl"]
+        t["cl"], t["cl_how"] = keep or "", how
+        counts[how] += 1
+    return counts
 
 
 class SpeciesDB:
@@ -959,6 +1035,7 @@ class SpeciesDB:
 
     def __init__(self, species: str, types: dict[str, dict], ontology: Ontology | None):
         self.species = species
+        self.cl_vetted = vet_cl_ids(types, ontology)
         self.types = types
         self.names = sorted(types)
         self.matcher = Matcher({n: t["cl"] for n, t in types.items()}, ontology)
@@ -1180,6 +1257,7 @@ class Scorer:
         return {
             "cell_type": t,
             "cl_id": info["cl"] or None,
+            **({"cl_how": info["cl_how"]} if info.get("cl_how", "row") != "row" else {}),
             "sources": [PART_LABELS[x] for x in info["sources"]],
             "p": float(10 ** -s) if k else 1.0,
             "overlap": self.genes(Q & sets[t]),
@@ -1198,26 +1276,35 @@ def _species(adata, species: str | None) -> tuple[str, str | None]:
     return "human", "The species could not be told from the gene names; human database rows are used."
 
 
-def tissue_names(db: MarkerDB, sc_: Scorer, adata, tissue: str = "") -> tuple[list[str], dict]:
-    """The types of ``sc_`` that may compete for a dataset of a known tissue, and what that rests
-    on: ``tissue`` (the user's hint), else the data's own (``marker_tissues.dataset_tissue``); the
-    types of that tissue, of every tissue (immune, blood, vessels, stroma) or of no named tissue
-    stay (``core/marker_tissues.py``). Every open type when no tissue is known."""
+def tissue_types(db: MarkerDB, sdb: SpeciesDB, adata, tissue: str = "") -> tuple[frozenset[str] | None, dict]:
+    """The types of ``sdb`` that may compete for a dataset of a known tissue (None: every type), and
+    what that rests on: ``tissue`` (the user's hint), else the data's own
+    (``marker_tissues.dataset_tissue``); the types of that tissue, of every tissue (immune, blood,
+    vessels, stroma) or of no named tissue stay (``core/marker_tissues.py``)."""
     from scview.core import marker_tissues
 
-    names = sc_.open_names
     want, source = marker_tissues.dataset_tissue(adata, tissue)
     info: dict[str, Any] = {"organs": sorted(want), "from": source}
-    if want:
-        index = marker_tissues.load(db.dest)
-        if index:
-            types, sp = sc_.sdb.types, sc_.sdb.species
-            names = [t for t in names
+    if not want:
+        return None, info
+    index = marker_tissues.load(db.dest)
+    if not index:
+        info["note"] = "the databases' raw files are not on disk: no type left out"
+        return None, info
+    types, sp = sdb.types, sdb.species
+    return frozenset(t for t in sdb.names
                      if marker_tissues.allowed(marker_tissues.type_organs(types[t], index, sp), want,
-                                               marker_tissues.everywhere_lineage(types[t]["cl"], db.ontology))]
-            info["n_types_left_out"] = len(sc_.open_names) - len(names)
-        else:
-            info["note"] = "the databases' raw files are not on disk: no type left out"
+                                               marker_tissues.everywhere_lineage(types[t]["cl"], db.ontology))), info
+
+
+def tissue_names(db: MarkerDB, sc_: Scorer, adata, tissue: str = "") -> tuple[list[str], dict]:
+    """The open types of ``sc_`` that may compete for a dataset of a known tissue (``tissue_types``),
+    with what that rests on. Every open type when no tissue is known."""
+    keep, info = tissue_types(db, sc_.sdb, adata, tissue)
+    names = sc_.open_names
+    if keep is not None:
+        names = [t for t in names if t in keep]
+        info["n_types_left_out"] = len(sc_.open_names) - len(names)
     return names, info
 
 
@@ -1246,7 +1333,8 @@ def _label_row(sc_: Scorer, sc_suggest: Scorer, label: str, markers: list[str],
         i = max(range(len(matched)), key=lambda j: (s[j], k[j], n[j], -j))
         best = sc_._type(matched[i], Q, s[i], k[i], n[i])
         row.update(db_type=best["cell_type"], sources=best["sources"], p=best["p"], overlap=best["overlap"],
-                   n_db_genes=best["n_db_genes"], cl_id=best["cl_id"])
+                   n_db_genes=best["n_db_genes"], cl_id=best["cl_id"],
+                   **({"cl_how": best["cl_how"]} if best.get("cl_how") else {}))
         if n[i] < MIN_DB_GENES:
             row["verdict"] = "too_few"
         elif k[i] == 0:
@@ -1324,9 +1412,15 @@ def annotate(adata, groupby: str, species: str | None = None, db: MarkerDB | Non
     names, tissue_info = tissue_names(db, sc_, adata, tissue)
     markers = _markers_for(adata, groupby)
     mapping: dict[str, str] = {}
+    cut = -np.log10(ANNOTATE_ALPHA / max(1, len(names)))
+    unsupported: list[str] = []
     for g in _group_names(adata, groupby):
-        top = sc_.suggest(sc_.query(markers.get(g, [])), n=1, names=names)
-        mapping[g] = top[0]["cell_type"] if top else "Unknown"
+        Q = sc_.query(markers.get(g, []))
+        s, k, _n = sc_.scores(Q, names, full=True) if Q else (np.zeros(0), np.zeros(0), np.zeros(0))
+        ok = np.where((k >= MIN_SUPPORT_GENES) & (s > cut))[0]
+        mapping[g] = names[ok[np.argmax(s[ok])]] if len(ok) else "Unknown"
+        if not len(ok) and Q and len(k) and k.max() > 0:
+            unsupported.append(g)
     return mapping, {
         "marker_source": "database",
         "databases": db.labels(parts),
@@ -1334,6 +1428,11 @@ def annotate(adata, groupby: str, species: str | None = None, db: MarkerDB | Non
         "species": sp,
         "n_db_types": len(names),
         "tissue": tissue_info,
+        # a type needs >= this many shared genes and p below this (ANNOTATE_ALPHA / types competing)
+        "min_genes": MIN_SUPPORT_GENES,
+        "max_p": float(f"{ANNOTATE_ALPHA / max(1, len(names)):.3g}"),
+        # groups whose best type shared genes but too few, or too likely by chance: "Unknown"
+        **({"unknown_weak": unsupported} if unsupported else {}),
     }
 
 
