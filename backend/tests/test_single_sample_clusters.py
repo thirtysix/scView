@@ -1,5 +1,5 @@
 """Clusters that are almost all one sample (core/confounding.py single_sample_clusters): named in
-the MCP run_pipeline reply after a clustering."""
+the MCP run_pipeline reply after a clustering and as a note in the cluster QC report."""
 
 from __future__ import annotations
 
@@ -58,3 +58,57 @@ def test_the_run_reply_carries_the_note():
 
     note = _single_sample_note(Stub())
     assert note and "2 (40 cells, 100% from s1" in note and "crosstab(leiden x sample)" in note
+
+
+def _counts(obs: pd.DataFrame):
+    import anndata as ad
+
+    rng = np.random.default_rng(2)
+    a = ad.AnnData(rng.poisson(2.0, (len(obs), 40)).astype("float32"), obs=obs.reset_index(drop=True))
+    a.obs_names = [f"c{i}" for i in range(a.n_obs)]
+    a.var_names = [f"G{i}" for i in range(a.n_vars)]
+    return a
+
+
+def test_the_cluster_qc_report_carries_the_note_and_flags_nothing():
+    """A dataset-level note (n samples, which clusters, share), never a cluster flag; the co-pilot's
+    cluster QC facts name it."""
+    from scview.core import cluster_qc
+
+    clusters = ["0"] * 100 + ["1"] * 100 + ["2"] * 100 + ["3"] * 40
+    samples = [f"s{i % 4}" for i in range(300)] + ["s1"] * 40
+    a = _counts(_obs(clusters, samples))
+    report = cluster_qc.cluster_qc(a, "leiden")
+    one = report.one_sample
+    assert one is not None and one.sample_column == "sample" and one.n_samples == 4
+    assert [(c["cluster"], c["sample"], c["n_cells"], c["share"]) for c in one.clusters] == [("3", "s1", 40, 1.0)]
+    assert one.text.startswith("1 leiden cluster is almost all one sample (of 4 in all): 3 (40 cells, 100% from s1")
+    assert all("one_sample" not in c.flags for c in report.clusters)
+    lines, _cites = cluster_qc.grounding_block(report)
+    assert any(ln.startswith("- Clusters from one sample: 1 leiden cluster") and "[result:qc:leiden]" in ln
+               for ln in lines)
+    assert report.model_dump()["one_sample"]["clusters"][0]["cluster"] == "3"
+
+
+@pytest.mark.parametrize("case", ["kang_like", "two_samples", "grouped_by_sample"])
+def test_no_note_in_the_report_where_it_does_not_apply(case):
+    from scview.core import cluster_qc
+
+    rng = np.random.default_rng(3)
+    if case == "kang_like":  # 8 donors spread over every cluster
+        obs = _obs([str(i % 5) for i in range(800)], [f"d{rng.integers(8)}" for _ in range(800)])
+    elif case == "two_samples":  # under SINGLE_SAMPLE_MIN_SAMPLES
+        obs = _obs(["0"] * 60 + ["1"] * 60 + ["2"] * 60, ["a"] * 60 + ["b"] * 120)
+    else:  # the grouping is the sample column itself
+        obs = _obs([f"s{i % 4}" for i in range(400)], [f"s{i % 4}" for i in range(400)])
+    a = _counts(obs)
+    report = cluster_qc.cluster_qc(a, "sample" if case == "grouped_by_sample" else "leiden")
+    assert report.one_sample is None
+    assert not any("one sample" in ln for ln in cluster_qc.grounding_block(report)[0])
+
+
+def test_the_router_sends_one_sample_questions_to_the_qc_facts():
+    from scview.core.rag.router import named_result_facets
+
+    assert "qc" in named_result_facets("Is any cluster from a single sample?")
+    assert "qc" in named_result_facets("which clusters are donor-specific")

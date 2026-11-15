@@ -750,15 +750,10 @@ def _pipeline_result(job: jobs.Job) -> dict[str, Any]:
 
 def _single_sample_note(adaptor) -> str | None:
     """The clusters of the active clustering that are almost all one sample (confounding.py)."""
-    from scview.core import confounding, qc_groups
+    from scview.core import confounding
 
-    adata = adaptor.adata
-    cluster_col = adaptor.active_clustering_column()
-    sample_col, _why = qc_groups.sample_grouping(adata)
-    if not cluster_col or not sample_col:
-        return None
-    found = confounding.single_sample_clusters(adata.obs, cluster_col, sample_col)
-    return confounding.single_sample_note(found, cluster_col, sample_col, int(adata.obs[sample_col].nunique()))
+    found = confounding.single_sample_for(adaptor.adata, adaptor.active_clustering_column())
+    return found["text"] if found else None
 
 
 async def _run_result(job: jobs.Job) -> dict[str, Any]:

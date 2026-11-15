@@ -40,6 +40,7 @@ from pydantic import BaseModel
 from scview.core import ambient as ambient_rna
 from scview.core import (
     cell_cycle,
+    confounding,
     doublet_source,
     gene_filters,
     haemoglobin,
@@ -246,6 +247,13 @@ NO_MT_NOTE = ("No mitochondrial (MT-) genes in this dataset, so % mito can't be 
               "(a mito filter had nothing to remove).")
 
 
+class OneSampleNote(BaseModel):
+    sample_column: str
+    n_samples: int
+    clusters: list[dict] = []  # cluster, n_cells, sample, share, sample_share_of_data
+    text: str
+
+
 class ClusterQCReport(BaseModel):
     column: str | None
     n_cells: int
@@ -274,6 +282,9 @@ class ClusterQCReport(BaseModel):
     # Nuclei-like data (typical cluster's median % mito under NUCLEI_MITO_MEDIAN): mito is
     # judged by the share of cells with a mito read (nuclei_mito)
     nuclei_like_mito: bool = False
+    # Clusters almost all from one sample (confounding.single_sample_for): a dataset-level
+    # note, never a flag (flags feed pipeline.decide_clusters). None when no cluster is.
+    one_sample: OneSampleNote | None = None
 
     @property
     def flagged(self) -> list[ClusterQC]:
@@ -584,7 +595,17 @@ def cluster_qc(
         ambient_markers_approximate=amb_approx,
         ambient_markers_help=(ambient_rna.HELP["flag_approximate"] if amb_approx
                               else ambient_rna.HELP["flag"]) if amb else "",
+        one_sample=_one_sample(adata, column),
     )
+
+
+def _one_sample(adata, column: str) -> OneSampleNote | None:
+    try:
+        found = confounding.single_sample_for(adata, column)
+    except Exception as exc:  # pragma: no cover - a note only: the report stands
+        logger.debug("cluster QC: one-sample check failed: %s", exc)
+        return None
+    return OneSampleNote(**found) if found else None
 
 
 def _ambient(adata, column: str) -> tuple[dict[str, list[str]], bool]:
@@ -1061,6 +1082,8 @@ def grounding_block(report: ClusterQCReport) -> tuple[list[str], list[tuple[str,
         lines.append(f"- The other {rest} clusters are within the normal range.")
     if report.ambient_hb:
         lines.append(f"- Ambient haemoglobin: {report.ambient_hb} [{head}]")
+    if report.one_sample:
+        lines.append(f"- Clusters from one sample: {report.one_sample.text} [{head}]")
     if mal := malat1_line(report, head):
         lines.append(mal)
     if report.drivers_n_pcs:
