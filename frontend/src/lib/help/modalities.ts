@@ -137,7 +137,9 @@ export const MODALITIES_HELP: Record<string, string> = {
   "perturbation.posterior":
     "How the probability of being perturbed spreads over this target's cells. Two clear peaks, near 0 and near 1, mean KO and NP cells separate well; many cells in the middle mean the split is uncertain.",
   "perturbation.protein":
-    "Each protein's mean shift (CLR) from the controls, per target: in all its guide cells, its KO cells and its NP cells. A shift counts from 0.1 with adjusted p < 0.05 and, when 'Within' names 3 or more replicates, the same direction in every replicate.",
+    "Each protein's mean shift from the controls, per target: in all its guide cells, its KO cells and its NP cells. A shift counts from 0.1 with adjusted p < 0.05 and, when 'Within' names 3 or more replicates, the same direction in every replicate.",
+  "perturbation.protein_layer":
+    "Which protein values are tested. CLR divides each cell by its own panel: on fewer than 15 proteins a fall in one protein lifts the others, so the default there is log counts, which no other protein can move. DSB needs its own run on the Protein tab.",
   "perturbation.protein_flag":
     "Mixscape calls cells KO only when their transcriptome moves. A guide that changes a protein without moving RNA (CMTM6 keeps PD-L1 at the surface) leaves every cell NP. These targets shift a protein in all their guide cells while at most 10% are called KO.",
   "perturbation.lda":

@@ -128,6 +128,9 @@ class Params:
     # and ``split_by``.
     guide_column: str | None = None
     replicate_column: str | None = None
+    # The protein check's values (core/perturbation_protein.py): auto (by panel size),
+    # protein_clr, protein_counts or protein_dsb.
+    protein_layer: str = "auto"
 
 
 @dataclass
@@ -274,6 +277,13 @@ def plan(adata, params: Params) -> Plan:
     if p.de_genes not in DE_GENE_CHOICES:
         raise MixscapeError(f"de_genes must be '{DE_ALL}' (every gene, Seurat's rule) or '{DE_VARIABLE}' "
                             "(the variable genes, scView 0.77's rule).", 422)
+    from scview.core import perturbation_protein
+
+    if perturbation_protein.has_values(adata):
+        try:
+            perturbation_protein.resolve_layer(adata, p.protein_layer)
+        except perturbation_protein.ProteinLayerError as e:
+            raise MixscapeError(str(e), e.status) from None
     pca = adata.obsm.get("X_pca") if hasattr(adata, "obsm") else None
     if pca is None:
         raise MixscapeError("No PCA: run the pipeline (PCA) first.", 422)
@@ -696,7 +706,7 @@ def iter_mixscape(adata, pl: Plan, *, stop: Callable[[], bool] | None = None) ->
         yield {"type": "progress", "step": "protein", "done": 3 + len(pl.targets), "total": n_steps,
                "message": "Protein shift per target against the controls"}
         prot = perturbation_protein.run(adata, pl.rows, pl.labels, glob.astype(str), p.control, rows_out,
-                                        pl.replicates, pl.replicate_column)
+                                        pl.replicates, pl.replicate_column, p.protein_layer)
     lda = None
     if p.lda:
         check()
@@ -863,9 +873,12 @@ def _protein_words(r: MixscapeResult) -> str:
     flags = (r.protein or {}).get("flags") or []
     if not flags:
         return ""
-    unit = "replicates" if any(f.get("unit") == "replicate" for f in flags) else "cells"
-    return ("; protein effect without an RNA KO class (all guide cells vs the controls, CLR, judged on "
-            f"{unit}): " + ", ".join(f"{f['target']} {f['protein']} {f['diff']:+.2f} ({f['ko_fraction']:.0%} KO)"
+    from scview.core import perturbation_protein as pp
+
+    scale = (r.protein or {}).get("unit_name") or pp.LAYER_UNIT.get(pp.layer_of(r.protein), "CLR")
+    judged = "replicates" if any(f.get("unit") == "replicate" for f in flags) else "cells"
+    return (f"; protein effect without an RNA KO class (all guide cells vs the controls, {scale}, judged on "
+            f"{judged}): " + ", ".join(f"{f['target']} {f['protein']} {f['diff']:+.2f} ({f['ko_fraction']:.0%} KO)"
                                      for f in flags[:8]))
 
 

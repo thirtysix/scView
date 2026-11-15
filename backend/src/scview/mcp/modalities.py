@@ -137,8 +137,9 @@ def _mixscape_reply(r: dict[str, Any], dataset_id: str, n: int) -> dict[str, Any
     out["columns_written"] = ["mixscape_class", "mixscape_class_global", "mixscape_p_ko"]
     out["note"] = ("KO: the guide's cells that moved away from the controls; NP: not perturbed (escapers). "
                    "per_guide / per_replicate: each target's KO share per guide and per replicate. "
-                   + ("protein: each protein's shift (CLR) vs the controls in all / KO / NP cells per target; "
-                      "flags = a protein effect with no RNA KO class. " if r.get("protein") else "")
+                   + (f"protein: each protein's shift ({(r['protein'] or {}).get('layer_label') or 'CLR'}) vs the "
+                      "controls in all / KO / NP cells per target; flags = a protein effect with no RNA KO class; "
+                      "get_mixscape(protein_layer=...) shows it on other values. " if r.get("protein") else "")
                    + "list_results(kind='mixscape') keeps each run.")
     return out
 
@@ -163,9 +164,25 @@ def _protein_reply(pr: dict[str, Any], n: int) -> dict[str, Any]:
         recs.append(rec)
     recs.sort(key=lambda x: (not x["flag"], not x["significant"],
                              1.0 if x["all_padj"] is None else x["all_padj"]))
-    return {**pick(pr, "layer", "proteins", "control", "n_control", "replicate_column", "notes"),
-            "flags": [f["text"] for f in pr.get("flags") or []],
-            "rows": table(recs, list(_PROTEIN_COLUMNS), n)}
+    out = {**pick(pr, "layer", "layer_label", "layer_choice", "default_layer", "proteins", "control", "n_control",
+                  "replicate_column", "notes"),
+           "flags": [f["text"] for f in pr.get("flags") or []],
+           "rows": table(recs, list(_PROTEIN_COLUMNS), n)}
+    out.setdefault("layer", "protein_clr")  # results before v0.80 were CLR
+    if pr.get("layers"):
+        out["other_layers"] = {x["layer"]: ("available" if x["available"] else x.get("reason"))
+                               for x in pr["layers"] if x["layer"] != out["layer"]}
+    if pr.get("reference_shift"):
+        moved = {t: v for t, v in pr["reference_shift"].items() if abs(v) >= 0.05}
+        if moved:
+            out["clr_reference_shift"] = moved
+    return out
+
+
+_PROTEIN_LAYER = Annotated[Literal["auto", "protein_clr", "protein_counts", "protein_dsb"] | None, Field(description=(
+    "Protein check values: auto (default: log counts below 15 proteins, where the per-cell CLR is compositional, "
+    "else CLR), protein_clr (CLR per cell, as Papalexi 2021), protein_counts (log1p antibody counts, not "
+    "compositional) or protein_dsb (DSB values, after the Protein tab's DSB run)."))]
 
 
 @tool(WRITE)
@@ -193,19 +210,21 @@ async def mixscape(
     replicate_column: Annotated[str | None, Field(max_length=256, description=(
         "Obs column of each cell's replicate, for the per-replicate KO table and the protein check's "
         "replicate unit (default: split_by)."))] = None,
+    protein_layer: _PROTEIN_LAYER = None,
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
     """Mixscape (Papalexi 2021): per target, which guide cells are knocked out (KO) and which
     escaped (NP), saved as mixscape_class / mixscape_class_global / mixscape_p_ko; the per-target
     table (cells, KO share, DE genes), each target's KO share per guide and per replicate. With
     protein (CITE / ECCITE-seq): each protein's shift vs the controls per target, and flags for a
-    protein effect with no RNA KO class (judged on replicate_column / split_by when given). Run
+    protein effect with no RNA KO class (judged on replicate_column / split_by when given; on log
+    counts below 15 proteins, where the per-cell CLR is compositional, else CLR). Run
     guide_assignment(save=true) first, or name labels and control. A job: waits up to 20 s,
     else job_id."""
     body = _body(labels=labels, control=control, split_by=split_by, de_genes=de_genes, n_dims=n_dims,
                  n_neighbors=n_neighbors, logfc_threshold=logfc_threshold, pval_cutoff=pval_cutoff,
                  min_de_genes=min_de_genes, iter_num=iter_num, lda=lda, guide_column=guide_column,
-                 replicate_column=replicate_column)
+                 replicate_column=replicate_column, protein_layer=protein_layer)
 
     def finish(job: jobs.Job) -> dict[str, Any]:
         return _mixscape_reply(_result(job), dataset_id, clamp(limit))
@@ -216,9 +235,13 @@ async def mixscape(
 
 
 @tool(READ)
-async def get_mixscape(dataset_id: DatasetId, limit: Limit = DEFAULT_LIMIT) -> str:
-    """The last Mixscape run on the current cells: per target, per guide and per replicate."""
+async def get_mixscape(dataset_id: DatasetId, protein_layer: _PROTEIN_LAYER = None,
+                       limit: Limit = DEFAULT_LIMIT) -> str:
+    """The last Mixscape run on the current cells: per target, per guide and per replicate.
+    protein_layer: its protein check again on other values (not saved; the run keeps its own)."""
     r = await _get(f"{_ds(dataset_id)}/perturbation/mixscape")
+    if protein_layer and r.get("protein") is not None:
+        r["protein"] = await _get(f"{_ds(dataset_id)}/perturbation/mixscape/protein", layer=protein_layer)
     return dumps(_mixscape_reply(r, dataset_id, clamp(limit)), _max_chars(limit))
 
 

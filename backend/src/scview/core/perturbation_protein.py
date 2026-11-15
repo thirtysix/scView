@@ -30,8 +30,40 @@ p 0.046, CD86 on its own protein p 0.065, both 3 of 3).
 
 A target whose ALL-cells shift is significant while Mixscape called (almost) none of its
 cells KO (``ko_fraction`` <= ``KO_SHARE_NONE``) is flagged "protein effect without an
-RNA KO class". With a small panel the per-cell CLR is compositional: a fall in one
-protein lifts the others' values (``SMALL_PANEL``).
+RNA KO class".
+
+**Which values** (``layer``; ``auto`` by panel size):
+
+- ``protein_clr``: the per-cell CLR (Papalexi's and the Seurat Mixscape vignette's
+  ``NormalizeData(method = "CLR", margin = 2)``). Each cell's values are divided by the
+  geometric mean of its OWN panel, so on a small panel it is compositional: a fall in one
+  protein lifts the others. Papalexi (4 proteins; v0.80 measurement): the IFN-gamma pathway
+  KOs "raise" CD86 +0.12 to +0.13 (3 of 3 replicates) and PDCD1LG2's own PD-L2 fall reads
+  -0.07 (not significant). The shift of that reference per target is reported
+  (``reference_shift``: the cells' mean log1p over the panel minus the controls').
+- ``protein_counts``: log1p of the antibody counts, not normalised per cell. Not
+  compositional: one protein's fall cannot move another. Guides are assigned at random, so
+  droplet capture is balanced between a target and its controls, and the replicate unit
+  compares within a replicate. Papalexi: CD86 in the IFN-gamma KOs -0.02 to -0.11, PD-L2
+  falls with them (-0.27 to -0.35: it is IFN-gamma inducible too), PDCD1LG2 PD-L2 -0.31
+  (3 of 3, flagged), CMTM6 PD-L1 -0.43 (flagged). Rejected scales: counts over the cell's
+  total protein (the same compositional problem on 4 proteins, worse here: CD86 +0.33 and
+  CD366 +0.38 in the IFN-gamma KOs) and over its RNA UMIs (not compositional, but the
+  control cells' SD rose on all 4 proteins, +0% to +17%: log RNA and log protein correlate
+  only 0.10 to 0.33 here, and a KO that shrinks the cell, MYC at 0.89x RNA, moves every
+  protein).
+- ``protein_dsb``: DSB values (core/dsb.py) when the dataset has them. Empty droplets give
+  the background; without them dsb's ModelNegativeADTnorm step I is log counts minus a
+  per-protein constant (the same test as ``protein_counts``). Its step II removes a
+  per-cell technical component fitted on the cell's own proteins: compositional on a small
+  panel too (Papalexi, no empty droplets: CD86 +0.24 and CD366 +0.27 in the IFN-gamma KOs).
+
+``auto`` takes ``protein_counts`` below ``SMALL_PANEL`` proteins (when the counts are
+there) and ``protein_clr`` from it. The cut is measured (pbmc_10k_protein_v3, a planted
+-0.9 log fall of one abundant protein in a fifth of the cells, the size of the strongest
+Papalexi shift, JAK2 on PD-L1): the largest CLR shift of an UNCHANGED protein was 0.146
+on 4 proteins, 0.104 on 10, 0.101 on 12 and 0.092 on 14; unchanged proteins were called
+significant on panels of 12 or fewer (9 of 15 on 4, 1 of 55 on 12), none on 14.
 """
 
 from __future__ import annotations
@@ -46,7 +78,13 @@ MIN_REPLICATES = 3  # replicates for a replicate-level test
 ALPHA = 0.05
 MIN_SHIFT = 0.1  # |mean CLR shift| for "significant": about a 10% change against the cell's other proteins
 KO_SHARE_NONE = 0.1  # at most this share called KO: "no RNA KO class" (real KO classes: 22% and up)
-SMALL_PANEL = 10  # proteins: below this the per-cell CLR is noticeably compositional
+SMALL_PANEL = 15  # proteins: below this the per-cell CLR is compositional enough to make shifts (docstring)
+REFERENCE_NOTE = 0.05  # |CLR reference shift| named in the notes: half a shift that counts
+CLR, COUNTS, DSB, AUTO = "protein_clr", "protein_counts", "protein_dsb", "auto"
+LAYERS = (CLR, COUNTS, DSB)
+LAYER_CHOICES = (AUTO, *LAYERS)
+LAYER_LABEL = {CLR: "CLR per cell", COUNTS: "log counts", DSB: "DSB"}
+LAYER_UNIT = {CLR: "CLR", COUNTS: "log1p counts", DSB: "DSB"}
 MAX_PAIRS = 6000  # target x protein rows kept in the result (the significant ones first)
 GROUPS = ("all", "ko", "np")
 
@@ -92,11 +130,14 @@ def _paired_t(d: np.ndarray) -> float:
 
 def check(values: np.ndarray, proteins: list[str], labels: np.ndarray, glob: np.ndarray, control: str,
           targets: list[dict], replicates: np.ndarray | None = None, replicate_column: str | None = None,
-          layer: str = "protein_clr") -> dict[str, Any]:
+          layer: str = CLR, reference: np.ndarray | None = None) -> dict[str, Any]:
     """The protein check (see the module docstring). ``values``: cells x proteins (the
     cells Mixscape used, in its order); ``labels`` each cell's target or ``control``;
-    ``glob`` its KO / NP / NT class; ``targets`` Mixscape's per-target rows."""
+    ``glob`` its KO / NP / NT class; ``targets`` Mixscape's per-target rows. ``reference``
+    (CLR only): each cell's CLR reference, its mean log1p count over the panel."""
     from scview.core.mixscape import KO, NP
+
+    unit_name = LAYER_UNIT.get(layer, layer)
 
     V = np.asarray(values, dtype=np.float64)
     is_ctrl = labels == control
@@ -162,7 +203,7 @@ def check(values: np.ndarray, proteins: list[str], labels: np.ndarray, glob: np.
             r["unit"] = "cell"
             r["significant"] = bool(ok)
         r["flag"] = bool(r["significant"] and r["ko_fraction"] <= KO_SHARE_NONE)
-    flags = [_flag_text(r) for r in sorted((r for r in rows if r["flag"]), key=lambda r: _rank(r))]
+    flags = [_flag_text(r, unit_name) for r in sorted((r for r in rows if r["flag"]), key=lambda r: _rank(r))]
     n_pairs = len(rows)
     if n_pairs > MAX_PAIRS:
         rows = sorted(rows, key=_rank)[:MAX_PAIRS]
@@ -178,14 +219,29 @@ def check(values: np.ndarray, proteins: list[str], labels: np.ndarray, glob: np.
     else:
         notes.append("No replicate column (pick one in 'Within'): significance from cells (Wilcoxon, BH), which "
                      "treats cells as independent; a screen's independent units are its replicates.")
-    notes.append(f"Shift: mean CLR of the target's cells minus the controls'; a shift counts from {MIN_SHIFT}. "
-                 f"Flag: a shift that counts with at most {KO_SHARE_NONE:.0%} of the target's cells called KO.")
-    if len(proteins) < SMALL_PANEL:
-        notes.append(f"CLR per cell over {len(proteins)} proteins: a fall in one protein lifts the others' values, "
-                     "so read shifts of the other proteins with care.")
+    notes.append(f"Shift: mean {unit_name} of the target's cells minus the controls'; a shift counts from "
+                 f"{MIN_SHIFT}. Flag: a shift that counts with at most {KO_SHARE_NONE:.0%} of the target's cells "
+                 "called KO.")
+    ref_shift = _reference_shifts(reference, labels, control, [t["target"] for t in targets]) \
+        if reference is not None and layer == CLR else None
+    if layer == CLR and len(proteins) < SMALL_PANEL:
+        notes.append(f"CLR per cell over {len(proteins)} proteins: each cell is divided by its own panel's mean, so "
+                     "a fall in one protein lifts the others' values (compositional); read shifts of the other "
+                     "proteins with care. Log counts are not compositional.")
+    if ref_shift:
+        moved = sorted(((t, v) for t, v in ref_shift.items() if abs(v) >= REFERENCE_NOTE), key=lambda x: x[1])
+        if moved:
+            notes.append("The CLR reference (each cell's mean log count over the panel) moved in "
+                         + ", ".join(f"{t} {v:+.2f}" for t, v in moved[:8])
+                         + (f" and {len(moved) - 8} more" if len(moved) > 8 else "")
+                         + ": a fall of the reference lifts every protein's CLR in that target, a rise lowers it.")
+    if layer == COUNTS:
+        notes.append("Log counts are not normalised per cell: not compositional, but a target that changes cell "
+                     "size or antibody capture moves every protein the same way.")
     if n_pairs > MAX_PAIRS:
         notes.append(f"{MAX_PAIRS:,} of {n_pairs:,} target x protein rows kept (the strongest).")
-    return {"layer": layer, "proteins": list(proteins), "n_proteins": len(proteins), "control": control,
+    return {"layer": layer, "layer_label": LAYER_LABEL.get(layer, layer), "unit_name": unit_name,
+            "reference_shift": ref_shift, "proteins": list(proteins), "n_proteins": len(proteins), "control": control,
             "n_control": int(is_ctrl.sum()), "replicate_column": replicate_column if reps is not None else None,
             "min_cells": MIN_CELLS, "ko_share_none": KO_SHARE_NONE, "alpha": ALPHA, "n_pairs": n_pairs,
             "rows": rows, "flags": flags, "notes": notes, "default_protein": _default_protein(rows, proteins)}
@@ -206,7 +262,26 @@ def _default_protein(rows: list[dict], proteins: list[str]) -> str | None:
     return max(proteins, key=lambda p: (n[p], -proteins.index(p)))
 
 
-def _flag_text(r: dict) -> dict:
+def _reference_shifts(reference: np.ndarray, labels: np.ndarray, control: str,
+                      targets: list[str]) -> dict[str, float] | None:
+    """Per target: the mean CLR reference (log1p counts averaged over the panel) of its
+    cells minus the controls'. A CLR shift of protein j is about its log-count shift minus
+    this (damped by log1p at low counts), so a target that lowers one abundant protein
+    "raises" the rest (Papalexi: JAK2 -0.36, CD86 +0.13 on CLR, -0.11 on log counts)."""
+    ref = np.asarray(reference, dtype=np.float64)
+    is_ctrl = labels == control
+    if is_ctrl.sum() < MIN_CELLS:
+        return None
+    base = float(ref[is_ctrl].mean())
+    out = {}
+    for t in targets:
+        m = labels == t
+        if m.sum() >= MIN_CELLS:
+            out[t] = round(float(ref[m].mean()) - base, 4)
+    return out
+
+
+def _flag_text(r: dict, unit_name: str = LAYER_UNIT[CLR]) -> dict:
     a = r["all"] or {}
     if r["unit"] == "replicate":
         shifts = ", ".join(f"{y['diff']:+.2f}" for y in r["replicates"])
@@ -214,10 +289,18 @@ def _flag_text(r: dict) -> dict:
                f"{a.get('padj', float('nan')):.2g}")
     else:
         how = f"Wilcoxon on {a.get('n', 0):,} cells, BH p {a.get('padj', float('nan')):.2g}"
-    text = (f"{r['target']}: {r['protein']} {a.get('diff', 0):+.2f} (CLR) in all {a.get('n', 0):,} guide cells, "
+    text = (f"{r['target']}: {r['protein']} {a.get('diff', 0):+.2f} ({unit_name}) in all {a.get('n', 0):,} guide cells, "
             f"{how}; {r['ko_fraction']:.0%} of its cells called KO on RNA.")
     return {"target": r["target"], "protein": r["protein"], "diff": a.get("diff"), "unit": r["unit"],
             "ko_fraction": r["ko_fraction"], "text": text}
+
+
+class ProteinLayerError(ValueError):
+    """A layer the check cannot use here; ``status`` is the HTTP code."""
+
+    def __init__(self, message: str, status: int = 422) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 def has_values(adata) -> bool:
@@ -226,15 +309,144 @@ def has_values(adata) -> bool:
     return protein.has_protein(adata)
 
 
-def run(adata, rows: np.ndarray, labels: np.ndarray, glob: np.ndarray, control: str, targets: list[dict],
-        replicates: np.ndarray | None, replicate_column: str | None) -> dict[str, Any] | None:
-    """The check on a dataset's ``protein_clr`` for the cells Mixscape used (``rows``), or
-    None without a protein modality."""
-    from scview.core import protein
+def _frame(adata, key: str) -> pd.DataFrame | None:
+    m = adata.obsm.get(key) if hasattr(adata, "obsm") else None
+    return m if isinstance(m, pd.DataFrame) and m.shape[1] > 0 else None
 
-    if not protein.has_protein(adata):
+
+def _dsb_compositional(adata, n_proteins: int) -> str | None:
+    from scview.core import dsb
+
+    rec = dsb.read_record(adata) or {}
+    if rec.get("denoise") and n_proteins < SMALL_PANEL:
+        return (f"DSB step II removes a per-cell technical part fitted on the cell's own {n_proteins} proteins: "
+                "on a small panel that is compositional too (a fall in one protein moves the others).")
+    return None
+
+
+def layers(adata) -> list[dict[str, Any]]:
+    """Each layer the check can use on this dataset, with why one cannot be used."""
+    n = len(_frame(adata, CLR).columns) if _frame(adata, CLR) is not None else 0
+    out = [{"layer": CLR, "label": LAYER_LABEL[CLR], "available": _frame(adata, CLR) is not None,
+            "reason": None if _frame(adata, CLR) is not None else "No protein modality.",
+            "compositional": n < SMALL_PANEL}]
+    has_counts = _frame(adata, COUNTS) is not None
+    out.append({"layer": COUNTS, "label": LAYER_LABEL[COUNTS], "available": has_counts,
+                "reason": None if has_counts else "The dataset keeps no antibody counts (obsm 'protein_counts'), "
+                                                  "only normalised values.",
+                "compositional": False})
+    has_dsb = _frame(adata, DSB) is not None
+    if has_dsb:
+        why = _dsb_compositional(adata, n)
+        out.append({"layer": DSB, "label": LAYER_LABEL[DSB], "available": True, "reason": why,
+                    "compositional": why is not None})
+    else:
+        out.append({"layer": DSB, "label": LAYER_LABEL[DSB], "available": False, "compositional": False,
+                    "reason": "No DSB values: compute them under Protein > DSB. DSB measures each antibody's "
+                              "background in empty droplets, so it needs the raw (unfiltered) matrix; without it, "
+                              "dsb's no-empty-droplet mode is log counts minus a constant per protein (the same "
+                              "test as log counts) plus a per-cell step that is compositional on small panels."
+                              if has_counts else "No DSB values, and no antibody counts to compute them from."})
+    return out
+
+
+def default_layer(adata) -> str:
+    """``auto``: log counts below ``SMALL_PANEL`` proteins (when kept), else the CLR."""
+    clr = _frame(adata, CLR)
+    if clr is not None and clr.shape[1] < SMALL_PANEL and _frame(adata, COUNTS) is not None:
+        return COUNTS
+    return CLR
+
+
+def resolve_layer(adata, requested: str | None) -> str:
+    """The layer to use: ``auto`` (or None) by panel size; a named one must be there."""
+    req = (requested or AUTO).strip()
+    if req not in LAYER_CHOICES:
+        raise ProteinLayerError(f"Unknown protein layer '{req}': use one of {', '.join(LAYER_CHOICES)}.")
+    if req == AUTO:
+        return default_layer(adata)
+    for lay in layers(adata):
+        if lay["layer"] == req and not lay["available"]:
+            raise ProteinLayerError(lay["reason"])
+    return req
+
+
+def _values(adata, layer: str, rows: np.ndarray) -> tuple[np.ndarray, list[str], np.ndarray | None]:
+    """(cells x proteins values, protein names, the CLR reference or None) for ``rows``."""
+    m = _frame(adata, layer)
+    names = [str(c) for c in m.columns]
+    vals = np.asarray(m.to_numpy(dtype=np.float64))[rows]
+    if layer == COUNTS:
+        vals = np.log1p(np.clip(vals, 0, None))
+    ref = None
+    counts = _frame(adata, COUNTS)
+    if layer == CLR and counts is not None and [str(c) for c in counts.columns] == names:
+        ref = np.log1p(np.clip(np.asarray(counts.to_numpy(dtype=np.float64))[rows], 0, None)).mean(axis=1)
+    return vals, names, ref
+
+
+def _with_layer_info(out: dict[str, Any], adata, requested: str | None, layer: str) -> dict[str, Any]:
+    out["layer_choice"] = (requested or AUTO)
+    out["default_layer"] = default_layer(adata)
+    out["layers"] = layers(adata)
+    n = out["n_proteins"]
+    if (requested or AUTO) == AUTO:
+        why = (f"{n} proteins, fewer than {SMALL_PANEL}: log counts by default, as the per-cell CLR is "
+               "compositional on a small panel." if layer == COUNTS else
+               f"{n} proteins: CLR per cell by default." if n >= SMALL_PANEL else
+               f"{n} proteins: CLR per cell, as the dataset keeps no antibody counts.")
+        out["notes"].insert(0, why)
+    if layer == DSB:
+        why = _dsb_compositional(adata, n)
+        if why:
+            out["notes"].append(why)
+    return out
+
+
+def run(adata, rows: np.ndarray, labels: np.ndarray, glob: np.ndarray, control: str, targets: list[dict],
+        replicates: np.ndarray | None, replicate_column: str | None, layer: str | None = AUTO) -> dict[str, Any] | None:
+    """The check on ``layer`` (``auto``: by panel size) for the cells Mixscape used
+    (``rows``), or None without a protein modality."""
+    if not has_values(adata):
         return None
-    m = adata.obsm[protein.CLR_KEY]
-    vals = np.asarray(m.to_numpy(dtype=np.float32))[rows]
-    return check(vals, [str(c) for c in m.columns], labels, glob, control, targets, replicates,
-                 replicate_column, layer=protein.CLR_KEY)
+    use = resolve_layer(adata, layer)
+    vals, names, ref = _values(adata, use, rows)
+    out = check(vals, names, labels, glob, control, targets, replicates, replicate_column, layer=use,
+                reference=ref)
+    return _with_layer_info(out, adata, layer, use)
+
+
+def recheck(adata, result: dict[str, Any], layer: str | None) -> dict[str, Any]:
+    """The check of a saved Mixscape run (its record: ``labels``, ``control``, ``targets``,
+    ``replicate_column``) again on another layer, from the class column it wrote. Changes nothing."""
+    from scview.core import mixscape
+
+    if not has_values(adata):
+        raise ProteinLayerError("This dataset has no protein modality.", 404)
+    obs = adata.obs
+    lab_col, rep_col = result.get("labels"), result.get("replicate_column")
+    if mixscape.GLOBAL not in obs.columns or lab_col not in obs.columns:
+        raise ProteinLayerError("No Mixscape classes on these cells: run Mixscape again.", 404)
+    if rep_col and rep_col not in obs.columns:
+        rep_col = None
+    g = obs[mixscape.GLOBAL]
+    rows = np.flatnonzero(g.notna().to_numpy())
+    glob = g.astype(object).to_numpy()[rows].astype(str)
+    labels = obs[lab_col].astype(object).to_numpy()[rows].astype(str)
+    reps = mixscape._text(obs[rep_col], rows) if rep_col else None
+    return run(adata, rows, labels, glob, str(result.get("control")), list(result.get("targets") or []), reps,
+               rep_col, layer)
+
+
+def with_current_layers(result: dict[str, Any] | None, adata) -> dict[str, Any] | None:
+    """A Mixscape result dict whose protein check lists the layers the dataset has NOW
+    (DSB computed after the run is then offered); the check itself is unchanged."""
+    if not result or not isinstance(result.get("protein"), dict) or not has_values(adata):
+        return result
+    result["protein"] = {**result["protein"], "layers": layers(adata), "default_layer": default_layer(adata)}
+    return result
+
+
+def layer_of(check_result: dict | None) -> str:
+    """The layer a stored check used: results before v0.80 without one were CLR."""
+    return str((check_result or {}).get("layer") or CLR)
