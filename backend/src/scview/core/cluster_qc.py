@@ -644,7 +644,8 @@ def _flag_doublet_like(adata, column: str, rows: list["ClusterQC"]) -> bool:
     False when the column has none (nothing to judge by). Never fails the table."""
     try:
         # Unnamed genes kept: the doublet-like rule was measured on the full lists.
-        top = marker_selection.group_markers(adata, column, n=DOUBLET_LIKE_MARKERS, skip_unnamed=False)
+        top = marker_selection.group_markers(adata, column, n=DOUBLET_LIKE_MARKERS, skip_unnamed=False,
+                                                 skip_pseudogenes=False)
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("cluster QC: no markers for doublet-like clusters: %s", exc)
         return False
@@ -694,7 +695,8 @@ def _flag_marker_makeup(adata, column: str, rows: list[ClusterQC], small_cut: fl
 
     try:
         named = marker_selection.group_markers(adata, column, n=DOUBLET_LIKE_MARKERS)
-        full = marker_selection.group_markers(adata, column, n=DOUBLET_LIKE_MARKERS, skip_unnamed=False)
+        full = marker_selection.group_markers(adata, column, n=DOUBLET_LIKE_MARKERS, skip_unnamed=False,
+                                                 skip_pseudogenes=False)
         sex_ids = sex_check.sex_linked_ids(adata)  # Ensembl-id names -> symbols
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("cluster QC: no markers for the marker checks: %s", exc)
