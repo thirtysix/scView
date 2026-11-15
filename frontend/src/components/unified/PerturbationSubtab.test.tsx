@@ -8,6 +8,7 @@ const api = vi.hoisted(() => ({
   previewAssignment: vi.fn(),
   saveAssignment: vi.fn(),
   runMixscape: vi.fn(),
+  getMixscapeProtein: vi.fn(),
 }));
 vi.mock("@/api/perturbation", async (orig) => ({ ...(await orig<typeof import("@/api/perturbation")>()), ...api }));
 const refresh = vi.hoisted(() => vi.fn());
@@ -208,6 +209,69 @@ describe("PerturbationSubtab", () => {
     expect(within(box).getByTestId("mixscape-protein-row-A")).toHaveTextContent("+0.01");
     fireEvent.click(within(box).getByTestId("mixscape-protein-row-B")); // opens the target's detail
     expect(screen.getByTestId("mixscape-detail")).toBeInTheDocument();
+  });
+
+  it("shows the protein check on another layer when asked, and says which the run used", async () => {
+    const row = (target: string, protein: string, diff: number, sig: boolean, flag: boolean) => ({
+      target, protein, ko_fraction: target === "A" ? 0.7 : 0, unit: "cell" as const, significant: sig, flag,
+      all: { n: 100, diff, p: 1e-10, padj: 1e-9 }, ko: null, np: null,
+    });
+    const layers = [
+      { layer: "protein_clr" as const, label: "CLR per cell", available: true, reason: null, compositional: true },
+      { layer: "protein_counts" as const, label: "log counts", available: true, reason: null, compositional: false },
+      { layer: "protein_dsb" as const, label: "DSB", available: false, reason: "No DSB values: it needs empty droplets.", compositional: false },
+    ];
+    const base = {
+      proteins: ["PDL1", "PDL2"], n_proteins: 2, control: "NT", n_control: 150, replicate_column: null, min_cells: 5,
+      ko_share_none: 0.1, alpha: 0.05, n_pairs: 4, default_protein: "PDL2", layers, default_layer: "protein_counts" as const,
+    };
+    const counts = {
+      ...base, layer: "protein_counts", layer_label: "log counts", unit_name: "log1p counts", layer_choice: "auto",
+      rows: [row("B", "PDL2", -0.31, true, true), row("B", "PDL1", -0.05, false, false)],
+      flags: [{ target: "B", protein: "PDL2", diff: -0.31, unit: "cell", ko_fraction: 0, text: "B: PDL2 -0.31 (log1p counts)" }],
+      notes: ["2 proteins, fewer than 15: log counts by default, as the per-cell CLR is compositional on a small panel."],
+    };
+    const clr = {
+      ...counts, layer: "protein_clr", layer_label: "CLR per cell", unit_name: "CLR", layer_choice: "protein_clr",
+      rows: [row("B", "PDL2", -0.07, false, false), row("B", "PDL1", 0.12, true, false)], flags: [],
+      notes: ["CLR per cell over 2 proteins: each cell is divided by its own panel's mean (compositional)."],
+      reference_shift: { B: -0.14 },
+    };
+    api.getPerturbation.mockResolvedValue({ ...BASE, call: CALL, mixscape: { ...RESULT, protein: counts } });
+    api.getMixscapeProtein.mockResolvedValue(clr);
+    render(<PerturbationSubtab />);
+    const box = await screen.findByTestId("mixscape-protein");
+    const chips = within(box).getByTestId("mixscape-protein-layers");
+    expect(within(chips).getByRole("button", { name: /log counts/ })).toHaveAttribute("aria-pressed", "true");
+    expect(within(chips).getByRole("button", { name: /log counts/ })).toHaveTextContent("(run)");
+    const dsb = within(chips).getByRole("button", { name: "DSB" });
+    expect(dsb).toBeDisabled();
+    expect(dsb).toHaveAttribute("title", "No DSB values: it needs empty droplets.");
+    expect(box).toHaveTextContent("PDL2 per target against the controls, on log counts.");
+    expect(within(box).getByTestId("mixscape-protein-flags")).toHaveTextContent("B: PDL2 -0.31 (log1p counts)");
+    expect(screen.queryByTestId("mixscape-protein-view-note")).toBeNull();
+    fireEvent.click(within(chips).getByRole("button", { name: /CLR per cell/ }));
+    await waitFor(() => expect(within(box).getByTestId("mixscape-protein-view-note")).toHaveTextContent(
+      "Shown on CLR per cell; the saved run used log counts."));
+    expect(api.getMixscapeProtein).toHaveBeenCalledWith("d1", "protein_clr");
+    expect(within(box).queryByTestId("mixscape-protein-flags")).toBeNull();
+    expect(box).toHaveTextContent("on CLR per cell. CLR per cell over 2 proteins");
+    fireEvent.click(within(chips).getByRole("button", { name: /log counts/ })); // back to the run's own
+    expect(screen.queryByTestId("mixscape-protein-view-note")).toBeNull();
+    expect(api.getMixscapeProtein).toHaveBeenCalledTimes(1);
+  });
+
+  it("says why another layer cannot be shown", async () => {
+    const check = {
+      layer: "protein_clr", proteins: ["PDL1"], n_proteins: 1, control: "NT", n_control: 150, replicate_column: null,
+      min_cells: 5, ko_share_none: 0.1, alpha: 0.05, n_pairs: 1, rows: [], flags: [], notes: [], default_protein: "PDL1",
+    };
+    api.getPerturbation.mockResolvedValue({ ...BASE, call: CALL, mixscape: { ...RESULT, protein: check } });
+    api.getMixscapeProtein.mockRejectedValue(new Error("The dataset keeps no antibody counts (obsm 'protein_counts'), only normalised values."));
+    render(<PerturbationSubtab />);
+    const box = await screen.findByTestId("mixscape-protein");
+    fireEvent.click(within(box).getByRole("button", { name: /log counts/ })); // an older result: no layer list
+    expect(await within(box).findByRole("alert")).toHaveTextContent("keeps no antibody counts");
   });
 
   it("has no protein section without a protein check", async () => {

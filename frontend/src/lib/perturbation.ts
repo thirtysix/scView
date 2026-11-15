@@ -8,6 +8,8 @@ import type {
   PosteriorHist,
   ProteinCheck,
   ProteinCheckRow,
+  ProteinLayer,
+  ProteinLayerOption,
 } from "@/api/perturbation";
 
 /** obs columns Mixscape writes (backend core/mixscape.py). */
@@ -110,6 +112,36 @@ export function mappingChanges(mapping: Record<string, string>, auto: Record<str
 export function proteinRowsFor(check: ProteinCheck | null | undefined, protein: string): ProteinCheckRow[] {
   const rows = (check?.rows ?? []).filter((r) => r.protein === protein);
   return rows.sort((a, b) => (a.all?.diff ?? Infinity) - (b.all?.diff ?? Infinity) || a.target.localeCompare(b.target));
+}
+
+const LAYER_LABELS: Record<ProteinLayer, string> = {
+  protein_clr: "CLR per cell",
+  protein_counts: "log counts",
+  protein_dsb: "DSB",
+};
+const LAYER_UNITS: Record<ProteinLayer, string> = { protein_clr: "CLR", protein_counts: "log1p counts", protein_dsb: "DSB" };
+
+/** The layer a stored check used: results before v0.80 have none and were CLR. */
+export function proteinLayerOf(check: ProteinCheck | null | undefined): ProteinLayer {
+  const layer = check?.layer;
+  return layer && layer in LAYER_LABELS ? (layer as ProteinLayer) : "protein_clr";
+}
+
+/** The shift's unit in words, for axis titles and captions. */
+export const proteinUnit = (check: ProteinCheck | null | undefined): string =>
+  check?.unit_name ?? LAYER_UNITS[proteinLayerOf(check)];
+
+/** The layer chips: the check's own list (v0.80+), else CLR and log counts (an older result
+ *  does not say which the dataset has; the server answers a missing one with its reason). */
+export function proteinLayerOptions(check: ProteinCheck | null | undefined): ProteinLayerOption[] {
+  if (check?.layers?.length) return check.layers;
+  return (["protein_clr", "protein_counts"] as ProteinLayer[]).map((layer) => ({
+    layer,
+    label: LAYER_LABELS[layer],
+    available: true,
+    reason: null,
+    compositional: layer === "protein_clr" && (check?.n_proteins ?? 0) < 15,
+  }));
 }
 
 /** A signed shift as text: "+0.21", "-0.19" ("–" without one). */

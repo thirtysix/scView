@@ -405,3 +405,31 @@ async def test_mixscape_reply_carries_the_protein_check(client, dataset_manager)
     first = dict(zip(pr["rows"]["columns"], pr["rows"]["rows"][0]))
     assert first["target"] == "B" and first["flag"] is True and first["unit"] == "replicate"
     assert "protein effect with no RNA KO class" in r["note"]
+    assert pr["layer"] == "protein_clr" and pr["layer_choice"] == "auto"  # CLR only: no counts kept
+    assert "no antibody counts" in pr["other_layers"]["protein_counts"]
+
+
+async def test_mixscape_protein_layer_argument_and_get_mixscape_on_another_layer(client, dataset_manager):
+    from tests.test_perturbation_protein import _compositional
+
+    a, _ko = _compositional(4)
+    lab = a.obs.pop("perturbation").astype(str).to_numpy()  # assigned from guide counts, as a screen would be
+    guides = ["Ag1", "Bg1", "NTg1"]
+    counts = np.zeros((a.n_obs, 3))
+    counts[np.arange(a.n_obs), [guides.index(f"{x}g1") for x in lab]] = 30
+    from scview.core import crispr
+
+    crispr.attach_counts(a, counts, guides)
+    did = _register(dataset_manager, a, "mpl")
+    await _call("guide_assignment", {"dataset_id": did, "save": True})
+    r = await _done(await _call("mixscape", {"dataset_id": did, "replicate_column": "rep3", "lda": False,
+                                             "protein_layer": "protein_clr"}))
+    pr = r["protein"]
+    assert pr["layer"] == "protein_clr" and pr["layer_choice"] == "protein_clr" and pr["default_layer"] == "protein_counts"
+    assert pr["clr_reference_shift"]["B"] < -0.1 and pr["other_layers"]["protein_counts"] == "available"
+    assert "CLR per cell" in r["note"]
+    g = await _call("get_mixscape", {"dataset_id": did, "protein_layer": "protein_counts"})
+    assert g["protein"]["layer"] == "protein_counts" and g["protein"]["flags"][0].startswith("B: P0 -0.")
+    assert "clr_reference_shift" not in g["protein"]
+    plain = await _call("get_mixscape", {"dataset_id": did})
+    assert plain["protein"]["layer"] == "protein_clr"  # the run keeps the layer it was made with

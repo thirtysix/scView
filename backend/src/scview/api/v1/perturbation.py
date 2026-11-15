@@ -6,7 +6,9 @@ guide-like obs columns), the saved assignment and the last Mixscape run;
 ``POST /perturbation/assign`` saves ``guide_call`` / ``perturbation`` /
 ``n_guides``; ``POST /perturbation/mixscape/run-stream`` runs Mixscape and
 streams it (SSE), then saves ``mixscape_class`` / ``mixscape_class_global`` /
-``mixscape_p_ko``; ``GET /perturbation/mixscape`` gives the last run.
+``mixscape_p_ko``; ``GET /perturbation/mixscape`` gives the last run;
+``GET /perturbation/mixscape/protein?layer=`` its protein check on another layer
+(not saved).
 
 Mixscape reads the dataset (no copy beyond the tested genes of the used cells)
 in worker threads; only the final save holds the edit lock. A client that goes
@@ -25,7 +27,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from scview.core import crispr, mixscape, working_copy
+from scview.core import crispr, mixscape, perturbation_protein, working_copy
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import dataset_edit, edit_room, editable, save_edit, uns_snapshot
 from scview.core.sse import keepalive
@@ -63,6 +65,9 @@ class MixscapeRequest(BaseModel):
     de_genes: str = mixscape.DE_ALL
     guide_column: str | None = None  # per-guide KO table; default: the assignment's guide column
     replicate_column: str | None = None  # per-replicate KO table; default: split_by
+    # The protein check's values: auto (log counts below 15 proteins, else CLR) | protein_clr |
+    # protein_counts | protein_dsb (core/perturbation_protein.py)
+    protein_layer: str = "auto"
 
 
 def _sse(event: str, data: dict[str, Any]) -> str:
@@ -86,8 +91,10 @@ async def _adaptor(dm: DatasetManager, dataset_id: str):
 def _overview(adaptor) -> dict[str, Any]:
     out = crispr.summary(adaptor.adata)
     r = mixscape.last_result(adaptor)
-    out["mixscape"] = r.to_dict() if r is not None else None
-    out["mixscape_saved"] = mixscape.saved_record(adaptor.adata) if r is None else None
+    adata = adaptor.adata
+    out["mixscape"] = perturbation_protein.with_current_layers(r.to_dict() if r is not None else None, adata)
+    out["mixscape_saved"] = perturbation_protein.with_current_layers(
+        mixscape.saved_record(adata) if r is None else None, adata)
     out["mixscape_defaults"] = {"n_neighbors": mixscape.N_NEIGHBORS, "n_dims": mixscape.N_DIMS,
                                 "logfc_threshold": mixscape.LOGFC, "pval_cutoff": mixscape.PVAL,
                                 "min_de_genes": mixscape.MIN_DE_GENES, "iter_num": mixscape.ITER_NUM,
@@ -160,7 +167,8 @@ def _params(adata, body: MixscapeRequest) -> mixscape.Params:
                            n_neighbors=body.n_neighbors, n_dims=body.n_dims, logfc_threshold=body.logfc_threshold,
                            pval_cutoff=body.pval_cutoff, min_de_genes=body.min_de_genes,
                            iter_num=body.iter_num, lda=body.lda, de_genes=body.de_genes,
-                           guide_column=body.guide_column or None, replicate_column=body.replicate_column or None)
+                           guide_column=body.guide_column or None, replicate_column=body.replicate_column or None,
+                           protein_layer=body.protein_layer or "auto")
 
 
 async def _save(dm: DatasetManager, dataset_id: str, result: mixscape.MixscapeResult, columns: dict,
@@ -276,4 +284,25 @@ async def get_mixscape(dataset_id: str, dm: DatasetManager = Depends(get_dataset
     r = await asyncio.to_thread(mixscape.last_result, adaptor)
     if r is None:
         raise HTTPException(status_code=404, detail="No Mixscape run for these cells: run it again.")
-    return r.to_dict()
+    return perturbation_protein.with_current_layers(r.to_dict(), adaptor.adata)
+
+
+@router.get("/datasets/{dataset_id}/perturbation/mixscape/protein")
+async def get_mixscape_protein(dataset_id: str, layer: str = "auto",
+                               dm: DatasetManager = Depends(get_dataset_manager)):
+    """The last Mixscape run's protein check on ``layer`` (auto | protein_clr | protein_counts |
+    protein_dsb), from the classes it saved. Nothing is changed or stored: the run keeps the
+    layer it was made with."""
+    adaptor = await _adaptor(dm, dataset_id)
+
+    def _run():
+        r = mixscape.last_result(adaptor)
+        rec = r.to_dict() if r is not None else mixscape.saved_record(adaptor.adata)
+        if rec is None:
+            raise perturbation_protein.ProteinLayerError("No Mixscape run for these cells: run it first.", 404)
+        return perturbation_protein.recheck(adaptor.adata, rec, layer)
+
+    try:
+        return await asyncio.to_thread(_run)
+    except perturbation_protein.ProteinLayerError as e:
+        raise HTTPException(status_code=e.status, detail=str(e))
