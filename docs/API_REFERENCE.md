@@ -580,6 +580,18 @@ natural cubic spline of pseudotime order and tested against a constant (F); gene
 by F. Returns `genes` (`f_stat`, `pval`, `pval_adj`, `r2`, `amplitude`, `peak_pseudotime`,
 `pattern` rising | falling | transient, binned `mean` and `fitted`) and `bins`.
 
+`"rank_by": "branch_specific"` (with `groups_column` + `groups`: a path of the PAGA tree of
+`groups_column`, start to end) ranks the genes HIGHER on that branch than on the tree's other
+branches instead: every cell of the tree is fitted along the shared pseudotime order with one
+spline (null) and with that spline plus a spline only the branch's own groups take (its groups
+not on the paths from its start to the other ends), compared by F (after tradeSeq's
+patternTest; least squares on log values, this branch against the others pooled). Genes are
+ranked by F among those with a positive `branch_diff` (log units above the common curve); each
+also has `mean_branch` and `mean_others`. The response adds `n_higher` and `branch` (`start`,
+`end`, `trunk`, `own`, `others`, cell counts); `mean` / `fitted` / `bins` run along the branch's
+cells. 400 without a current PAGA graph of `groups_column`, for groups that are not one path,
+or with fewer than 30 cells in the branch's own groups or in the other branches.
+
 ---
 
 ## Export

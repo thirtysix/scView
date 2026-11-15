@@ -183,6 +183,8 @@ async def pseudotime(
 # --- genes along pseudotime --------------------------------------------------------------------
 
 _TREND_COLUMNS = ["gene", "f_stat", "pval", "pval_adj", "r2", "amplitude", "peak_pseudotime", "pattern", "n_detected"]
+_BRANCH_COLUMNS = ["gene", "f_stat", "pval_adj", "branch_diff", "mean_branch", "mean_others", "peak_pseudotime",
+                   "pattern", "n_detected"]
 
 
 @tool(READ)
@@ -201,12 +203,18 @@ async def pseudotime_genes(
     groups: Annotated[list[str] | None, Field(max_length=200, description=(
         "Ranking on one branch only: the groups of groups_column on it, e.g. the PAGA tree path from the "
         "root to one end."))] = None,
+    rank_by: Annotated[Literal["trend", "branch_specific"] | None, Field(description=(
+        "trend (default): genes that change most along the cells used. branch_specific: genes HIGHER on the "
+        "branch (groups_column + groups, a PAGA tree path) than on the tree's other branches at the same "
+        "pseudotime, as tradeSeq's patternTest compares lineages: the branch's markers, not the shared early "
+        "genes every branch repeats. Needs the PAGA graph of groups_column."))] = None,
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
     """The genes whose log-normalised expression changes most along a pseudotime (spline F-test,
     Benjamini-Hochberg), each with its pattern (rising, falling, transient), peak and amplitude;
-    the first 5 with their binned trend. On one branch with groups_column + groups. With genes:
-    those genes' trends instead. Bins hold equal numbers of cells, each at its median pseudotime.
+    the first 5 with their binned trend. On one branch with groups_column + groups; with
+    rank_by='branch_specific' the genes higher on that branch than on the other branches
+    (branch_diff, mean_branch, mean_others). With genes: those genes' trends instead. Bins hold equal numbers of cells, each at its median pseudotime.
     Changes nothing."""
     n = clamp(limit)
     if genes:
@@ -225,16 +233,27 @@ async def pseudotime_genes(
         return dumps(out, _max_chars(limit))
     if (groups_column is None) != (not groups):
         raise ToolError("Give both groups_column and groups for one branch, or neither.")
-    body = _body(n_top=n_top or max(n, 50), n_bins=n_bins, groups_column=groups_column, groups=groups)
+    if rank_by == "branch_specific" and not groups:
+        raise ToolError("rank_by='branch_specific' needs a branch: groups_column and the groups on it (a PAGA "
+                        "tree path from the root to one end).")
+    body = _body(n_top=n_top or max(n, 50), n_bins=n_bins, groups_column=groups_column, groups=groups,
+                 rank_by=rank_by)
     r = await _post(f"{_ds(dataset_id)}/trajectory/{column}/trend-genes", body)
     ranked = r.get("genes") or []
-    out = {"dataset_id": dataset_id, **pick(r, "column", "n_cells", "n_genes_tested", "min_detected", "expression",
-                                            "method", "restrict"),
-           "genes": table(ranked, _TREND_COLUMNS, n),
+    branch = r.get("rank_by") == "branch_specific"
+    out = {"dataset_id": dataset_id, **pick(r, "column", "n_cells", "n_genes_tested", "n_higher", "min_detected",
+                                            "expression", "method", "restrict", "rank_by"),
+           "genes": table(ranked, _BRANCH_COLUMNS if branch else _TREND_COLUMNS, n),
            "bins": pick(r.get("bins") or {}, "binning", "pseudotime", "n_cells"),
            "trends": {g["gene"]: g.get("mean") for g in ranked[:min(TRENDS_SHOWN, n)]}}
+    if branch:
+        out["branch"] = pick(r.get("branch") or {}, "start", "end", "own", "trunk", "others", "n_own_cells",
+                             "n_trunk_cells", "n_other_cells")
     out["note"] = ("trends: each bin's mean expression (log-normalised) at bins.pseudotime. "
-                   "pseudotime_genes(column, genes=[...]) gives any gene's trend.")
+                   "pseudotime_genes(column, genes=[...]) gives any gene's trend."
+                   + (" branch_diff: how far the branch's own cells sit above the other branches' curve at the same "
+                      "pseudotime (log units); mean_branch / mean_others: mean expression of the branch's own cells "
+                      "and of the other branches' cells." if branch else ""))
     if any(g.get("pval") == 0 for g in ranked[:n]):
         out["p_note"] = P0_NOTE
     return dumps(out, _max_chars(limit))

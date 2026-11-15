@@ -187,3 +187,107 @@ async def test_endpoint_ranks_genes_and_changes_nothing(client, dataset_manager)
     assert r.status_code == 404
     # A read: no derived file is written.
     assert not (Path(dataset_manager.data_dir) / "derived" / did).exists()
+
+
+def _two_branch_adata(seed: int = 0) -> ad.AnnData:
+    """A stem, a shared middle, then two branches A and B (PCA: the trunk along x, A up, B
+    down). 'Switch' turns on in the middle and stays on in both branches (the shared early
+    switch every branch list repeated); 'AMark' rises along A only, 'BMark' along B only."""
+    rng = np.random.default_rng(seed)
+    n_stem, n_mid, n_branch = 150, 100, 175
+    t = np.r_[np.linspace(0, 0.3, n_stem), np.linspace(0.3, 0.5, n_mid), np.linspace(0.5, 1, n_branch),
+              np.linspace(0.5, 1, n_branch)]
+    group = ["stem"] * n_stem + ["mid"] * n_mid + ["A"] * n_branch + ["B"] * n_branch
+    side = np.r_[np.zeros(n_stem + n_mid), np.ones(n_branch), -np.ones(n_branch)]
+    n = len(t)
+    pca = rng.normal(0, 0.05, (n, 10))
+    pca[:, 0] += 10 * t
+    pca[:, 1] += 10 * side * np.clip(t - 0.5, 0, None)
+    on_a, on_b = side > 0, side < 0
+    late = np.clip((t - 0.5) / 0.5, 0, 1)
+
+    def noisy(signal):
+        return np.clip(signal + rng.normal(0, 0.3, n), 0, None)
+
+    cols = {
+        "Switch": noisy(3.0 / (1 + np.exp(-(t - 0.4) * 40))),
+        "AMark": noisy(2.0 * late * on_a),
+        "BMark": noisy(2.0 * late * on_b),
+        **{f"Flat{i}": noisy(np.full(n, 0.5)) for i in range(30)},
+    }
+    a = ad.AnnData(np.column_stack(list(cols.values())).astype("float32"))
+    a.var_names = list(cols)
+    a.obs_names = [f"c{i}" for i in range(n)]
+    a.obs["group"] = pd.Categorical(group, categories=["stem", "mid", "A", "B"])
+    a.obs["dpt_pseudotime"] = t
+    a.obsm["X_pca"] = pca
+    return a
+
+
+def test_branch_specific_genes_lead_with_the_branchs_own_markers():
+    from scview.core.trajectory import compute_paga
+
+    a = _two_branch_adata()
+    rec = compute_paga(a, "group")
+    assert sorted(tuple(sorted((rec["groups"][i], rec["groups"][j]))) for i, j in rec["tree"]) == [
+        ("A", "mid"), ("B", "mid"), ("mid", "stem")]
+    path = ["stem", "mid", "A"]
+    within = trend_genes(a, "dpt_pseudotime", groups_column="group", groups=path, n_top=10)
+    assert within["rank_by"] == "trend" and _ranked(within)[0] == "Switch"  # the shared switch leads
+
+    res = trend_genes(a, "dpt_pseudotime", groups_column="group", groups=path, n_top=10, rank_by="branch_specific")
+    ranked = _ranked(res)
+    assert res["rank_by"] == "branch_specific" and ranked[0] == "AMark"
+    assert "BMark" not in ranked  # lower on A: B's marker, not A's
+    genes = {g["gene"]: g for g in res["genes"]}
+    assert genes["AMark"]["branch_diff"] > 0.5 and genes["AMark"]["mean_branch"] > genes["AMark"]["mean_others"] + 0.5
+    assert "Switch" not in ranked[:3] and (
+        "Switch" not in genes or genes["Switch"]["f_stat"] < genes["AMark"]["f_stat"] / 10)
+    assert genes["AMark"]["pattern"] == "rising"
+    b = res["branch"]
+    assert (b["start"], b["end"], b["trunk"], b["own"], b["others"]) == ("stem", "A", ["stem", "mid"], ["A"], ["B"])
+    assert (b["n_own_cells"], b["n_trunk_cells"], b["n_other_cells"]) == (175, 250, 175)
+    assert res["n_cells"] == a.n_obs and sum(res["bins"]["n_cells"]) == 425  # the branch's cells, binned
+    # The other branch, given end first: the same split mirrored.
+    other = trend_genes(a, "dpt_pseudotime", groups_column="group", groups=["B", "mid", "stem"],
+                        rank_by="branch_specific", n_top=5)
+    assert _ranked(other)[0] == "BMark" and other["branch"]["own"] == ["B"] and other["branch"]["start"] == "stem"
+
+
+def test_branch_specific_ranking_refuses_what_it_cannot_split():
+    from scview.core.trajectory import compute_paga
+
+    a = _two_branch_adata()
+    with pytest.raises(TrendError, match="PAGA graph of 'group'"):
+        trend_genes(a, "dpt_pseudotime", groups_column="group", groups=["stem", "mid", "A"], rank_by="branch_specific")
+    compute_paga(a, "group")
+    with pytest.raises(TrendError, match="one path of the PAGA tree"):
+        trend_genes(a, "dpt_pseudotime", groups_column="group", groups=["stem", "A"], rank_by="branch_specific")
+    with pytest.raises(TrendError, match="one path of the PAGA tree"):
+        trend_genes(a, "dpt_pseudotime", groups_column="group", groups=["A", "mid", "B", "stem"],
+                    rank_by="branch_specific")
+    with pytest.raises(TrendError, match="lies on another branch too"):
+        trend_genes(a, "dpt_pseudotime", groups_column="group", groups=["stem", "mid"], rank_by="branch_specific")
+    with pytest.raises(TrendError, match="need a branch"):
+        trend_genes(a, "dpt_pseudotime", rank_by="branch_specific")
+    with pytest.raises(TrendError, match="rank_by is one of"):
+        trend_genes(a, "dpt_pseudotime", rank_by="nope")
+    a.obs["group"] = a.obs["group"].cat.rename_categories({"A": "A2"})
+    with pytest.raises(TrendError, match="out of date"):
+        trend_genes(a, "dpt_pseudotime", groups_column="group", groups=["stem", "mid", "A2"], rank_by="branch_specific")
+
+
+async def test_endpoint_ranks_branch_specific_genes(client, dataset_manager):
+    from scview.core.trajectory import compute_paga
+
+    a = _two_branch_adata()
+    compute_paga(a, "group")
+    did = _register(dataset_manager, a)
+    url = f"{API}/datasets/{did}/trajectory/dpt_pseudotime/trend-genes"
+    body = {"groups_column": "group", "groups": ["stem", "mid", "A"], "n_top": 5}
+    r = await client.post(url, json={**body, "rank_by": "branch_specific"})
+    assert r.status_code == 200, r.text
+    assert _ranked(r.json())[0] == "AMark" and r.json()["branch"]["own"] == ["A"]
+    assert (await client.post(url, json={**body, "rank_by": "nope"})).status_code == 422
+    r = await client.post(url, json={"rank_by": "branch_specific"})
+    assert r.status_code == 400 and "need a branch" in r.json()["detail"]

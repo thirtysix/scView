@@ -53,7 +53,31 @@ export interface TrendGene {
   mean: number[];
   /** The spline's fitted mean per bin */
   fitted: number[];
+  /** Branch-specific ranking: how far the branch's own cells sit above the other branches' curve (log) */
+  branch_diff?: number | null;
+  /** Mean expression of the branch's own cells, and of the other branches' cells */
+  mean_branch?: number | null;
+  mean_others?: number | null;
 }
+
+/** How a branch was split for the branch-specific ranking (core/pseudotime_genes.branch_split). */
+export interface BranchSplit {
+  column: string;
+  path: string[];
+  start: string;
+  end: string;
+  /** Groups the branch shares with the paths to the tree's other ends */
+  trunk: string[];
+  /** The branch's own groups */
+  own: string[];
+  /** The other branches' groups */
+  others: string[];
+  n_own_cells: number;
+  n_trunk_cells: number;
+  n_other_cells: number;
+}
+
+export type RankBy = "trend" | "branch_specific";
 
 export interface TrendGenesResult {
   column: string;
@@ -64,6 +88,10 @@ export interface TrendGenesResult {
   expression: string;
   method: string;
   restrict: { column: string; groups: string[] } | null;
+  rank_by?: RankBy;
+  /** Branch-specific ranking: genes tested that sit higher on the branch, and the split */
+  n_higher?: number;
+  branch?: BranchSplit;
   /** Equal-count bins along pseudotime: each bin's median pseudotime and size */
   bins: { pseudotime: number[]; n_cells: number[] };
   /** Most changing first */
@@ -76,6 +104,8 @@ export interface TrendGenesRequest {
   /** Only the cells in `groups` of this column (a branch) */
   groups_column?: string;
   groups?: string[];
+  /** trend (default): change along the cells; branch_specific: higher on the branch than the others */
+  rank_by?: RankBy;
 }
 
 export function rankTrendGenes(

@@ -172,3 +172,18 @@ async def test_without_counts_the_tools_say_how_to_attach_them(client, dataset_m
     assert r["status"] == "error" and "attach them first" in r["error"]
     text = await _call("plot", {"dataset_id": did, "overlay": ["velocity"]}, error=True)
     assert "Run velocity" in text
+
+
+async def test_pseudotime_genes_ranks_a_branchs_own_genes(client, dataset_manager):
+    from tests.test_pseudotime_genes import _two_branch_adata
+
+    did = _register(dataset_manager, _two_branch_adata(), "mbranch")
+    await _call("paga", {"dataset_id": did, "groupby": "group"})
+    r = await _call("pseudotime_genes", {"dataset_id": did, "column": "dpt_pseudotime", "groups_column": "group",
+                                         "groups": ["stem", "mid", "A"], "rank_by": "branch_specific", "limit": 5})
+    assert r["rank_by"] == "branch_specific" and r["genes"]["rows"][0][0] == "AMark"
+    assert r["genes"]["columns"][:6] == ["gene", "f_stat", "pval_adj", "branch_diff", "mean_branch", "mean_others"]
+    assert r["branch"]["own"] == ["A"] and r["branch"]["others"] == ["B"] and "branch_diff" in r["note"]
+    text = await _call("pseudotime_genes", {"dataset_id": did, "column": "dpt_pseudotime",
+                                            "rank_by": "branch_specific"}, error=True)
+    assert "needs a branch" in text

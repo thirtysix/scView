@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from typing import Literal
 
 import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -416,6 +417,9 @@ class TrendGenesRequest(BaseModel):
     # Only the cells in these groups of this column (a branch: the groups on a PAGA path).
     groups_column: str | None = None
     groups: list[str] | None = Field(default=None, max_length=200)
+    # trend: change along the cells used; branch_specific: higher on this branch (groups) than
+    # on the other branches of the PAGA tree of groups_column (core/pseudotime_genes.branch_genes).
+    rank_by: Literal["trend", "branch_specific"] = "trend"
 
 
 @router.post("/datasets/{dataset_id}/trajectory/{column}/trend-genes")
@@ -426,8 +430,9 @@ async def rank_trend_genes(
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """The genes whose log-normalised expression changes most along the
-    pseudotime ``column`` (spline F-test, core/pseudotime_genes.py), each with
-    its binned trend. Changes nothing."""
+    pseudotime ``column`` (spline F-test, core/pseudotime_genes.py), or with
+    ``rank_by=branch_specific`` the genes higher on one branch than on the others,
+    each with its binned trend. Changes nothing."""
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
@@ -442,11 +447,14 @@ async def rank_trend_genes(
 
     def _run() -> dict:
         return ptg.trend_genes(adata, column, n_top=body.n_top, n_bins=body.n_bins,
-                               groups_column=body.groups_column, groups=body.groups)
+                               groups_column=body.groups_column, groups=body.groups, rank_by=body.rank_by)
 
     try:
         # A backed dataset's tested cells are read: room for them held until the fit ends.
-        idx, _ = ptg.cells_used(adata, column, body.groups_column, body.groups)
+        if body.rank_by == "branch_specific":  # the whole tree's cells: at most every cell with a pseudotime
+            idx, _ = ptg.cells_used(adata, column)
+        else:
+            idx, _ = ptg.cells_used(adata, column, body.groups_column, body.groups)
         try:
             need = await asyncio.to_thread(activity.lognorm_bytes, adaptor, len(idx))
         except ValueError:  # nothing to test: trend_genes says so

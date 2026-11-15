@@ -126,6 +126,7 @@ describe("TrajectoryPanel: PAGA graph and genes along pseudotime", () => {
     expect(screen.getByTestId("velocity-note")).toHaveTextContent("run it in Unified View > Velocity");
 
     await waitFor(() => expect(rankTrendGenes).toHaveBeenCalledWith("d1", "scview_dpt_pseudotime", {}, expect.anything()));
+    expect(screen.getByLabelText("Rank:")).toBeDisabled();
     // Heatmap rows: ordered by where each trend peaks (Apoe early, Hba-a2 late).
     const rows = await screen.findAllByRole("button", { name: /^row / });
     expect(rows.map((r) => r.textContent)).toEqual(["row Apoe", "row Hba-a2"]);
@@ -141,6 +142,32 @@ describe("TrajectoryPanel: PAGA graph and genes along pseudotime", () => {
       ),
     );
     expect(screen.getByTestId("trend-path")).toHaveTextContent("MEP → Ery1 → Ery2");
+    // On a branch, genes higher there than on the other branches.
+    rankTrendGenes.mockImplementationOnce(() =>
+      Promise.resolve({
+        ...trendResult(100),
+        rank_by: "branch_specific",
+        n_higher: 1500,
+        genes: trendResult(100).genes.map((g) => ({ ...g, branch_diff: 1.2, mean_branch: 2.5, mean_others: 0.3 })),
+        branch: {
+          column: "cluster", path: ["MEP", "Ery1", "Ery2"], start: "MEP", end: "Ery2", trunk: ["MEP"],
+          own: ["Ery1", "Ery2"], others: ["GMP"], n_own_cells: 50, n_trunk_cells: 10, n_other_cells: 40,
+        },
+      }),
+    );
+    fireEvent.change(screen.getByLabelText("Rank:"), { target: { value: "branch_specific" } });
+    await waitFor(() =>
+      expect(rankTrendGenes).toHaveBeenLastCalledWith(
+        "d1",
+        "scview_dpt_pseudotime",
+        { groups_column: "cluster", groups: ["MEP", "Ery1", "Ery2"], rank_by: "branch_specific" },
+        expect.anything(),
+      ),
+    );
+    expect(await screen.findByTestId("trend-branch-caption")).toHaveTextContent(
+      "Top 2 of 1,500 genes higher on the branch's own groups (Ery1, Ery2, n = 50) than on the other branches (GMP, n = 40)",
+    );
+    fireEvent.change(screen.getByLabelText("Rank:"), { target: { value: "trend" } });
     // The branch is what the graph highlights.
     const edges = (scatterProps.current!.overlayLayers as { id: string; props: { data: { onPath: boolean }[] } }[])[1]!;
     expect(edges.props.data.filter((e) => e.onPath)).toHaveLength(2);

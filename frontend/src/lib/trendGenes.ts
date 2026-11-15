@@ -40,12 +40,18 @@ export function tickBins(nBins: number, n = 6): number[] {
   return [...out];
 }
 
-/** The ranked list as a CSV table (headers + rows), most changing first. */
+/** The ranked list as a CSV table (headers + rows), most changing first; a branch-specific
+ *  ranking adds how far each gene sits above the other branches. */
 export function trendGenesCsv(result: TrendGenesResult): { headers: string[]; rows: CsvCell[][] } {
+  const branch = result.rank_by === "branch_specific";
   return {
-    headers: ["rank", "gene", "pattern", "peak_pseudotime", "amplitude", "f_stat", "pval", "pval_adj", "r2", "n_detected"],
+    headers: [
+      "rank", "gene", "pattern", "peak_pseudotime", "amplitude", "f_stat", "pval", "pval_adj", "r2", "n_detected",
+      ...(branch ? ["branch_diff", "mean_branch", "mean_others"] : []),
+    ],
     rows: result.genes.map((g, i) => [
       i + 1, g.gene, g.pattern, g.peak_pseudotime, g.amplitude, g.f_stat, g.pval, g.pval_adj, g.r2, g.n_detected,
+      ...(branch ? [g.branch_diff ?? null, g.mean_branch ?? null, g.mean_others ?? null] : []),
     ]),
   };
 }

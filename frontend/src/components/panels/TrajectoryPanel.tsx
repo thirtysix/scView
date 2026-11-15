@@ -10,7 +10,7 @@ import { useSelectionStore } from "@/stores/selectionStore";
 import { useEmbedding } from "@/hooks/useEmbedding";
 import { apiFetch, apiFetchBinary } from "@/api/client";
 import { getDataset } from "@/api/datasets";
-import { computePaga, getPaga, rankTrendGenes } from "@/api/trajectory";
+import { computePaga, getPaga, rankTrendGenes, type RankBy } from "@/api/trajectory";
 import { EmbeddingScatter } from "@/components/plots/EmbeddingScatter";
 import { Panel } from "@/components/common/Panel";
 import { Help } from "@/components/common/Help";
@@ -301,6 +301,7 @@ export function TrajectoryPanel() {
   // ---- Genes changing along pseudotime, on all cells or one PAGA branch ----
   const [rightTab, setRightTab] = useState<"changing" | "trends">("changing");
   const [branchEnd, setBranchEnd] = useState("");
+  const [rankBy, setRankBy] = useState<RankBy>("trend");
   const rootGroup = pagaView?.root_group ?? null;
   const ends = useMemo(
     () => (paga && pagaUsable && rootGroup ? pagaBranchEnds(paga, rootGroup) : []),
@@ -321,13 +322,16 @@ export function TrajectoryPanel() {
         ? "Compute pseudotime from a start group to pick a branch from it."
         : null;
 
+  const rankOn: RankBy = branchPath && paga ? rankBy : "trend";
   const trendQuery = useQuery({
-    queryKey: ["trend-genes", datasetId, selectedColumn, branchPath && paga ? [paga.groupby, ...branchPath] : null, refreshKey],
+    queryKey: ["trend-genes", datasetId, selectedColumn, branchPath && paga ? [paga.groupby, ...branchPath] : null, rankOn, refreshKey],
     queryFn: ({ signal }) =>
       rankTrendGenes(
         datasetId!,
         selectedColumn,
-        branchPath && paga ? { groups_column: paga.groupby, groups: branchPath } : {},
+        branchPath && paga
+          ? { groups_column: paga.groupby, groups: branchPath, ...(rankOn === "branch_specific" ? { rank_by: rankOn } : {}) }
+          : {},
         signal,
       ),
     enabled: !!datasetId && !!selectedColumn && rightTab === "changing",
@@ -816,6 +820,8 @@ export function TrajectoryPanel() {
                 path={branchPath}
                 branchNote={branchNote}
                 groupby={paga?.groupby ?? null}
+                rankBy={rankBy}
+                onRankByChange={setRankBy}
                 exportName={selectedColumn}
               />
             ) : selectedGenes.length === 0 ? (
