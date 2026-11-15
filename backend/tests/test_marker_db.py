@@ -263,6 +263,23 @@ def test_kidney_codes_are_spelled_out_and_ambiguous_ones_only_in_kidney_labels()
     assert m.match("PC", "A", kidney=True) == ([], "none")  # spelling is mode C only
 
 
+def test_a_state_word_never_wins_over_the_type_and_accents_are_read():
+    """Reck 2025 kidney labels: "PT Inflammatory" matched "Inflammatory cell", "Naïve Th Cell" the
+    B-cell row "Naïve cell" ("Naïve" read as "na ve"), "PC Injured" plasma cells."""
+    m = mn.Matcher({"Inflammatory cell": "CL:0009002", "Naïve cell": "CL:0000236", "Plasma cells": "CL:0000786",
+                    "Principal cells": "CL:0005009", "Proximal tubule cells": "", "B cells naive": "CL:0000788",
+                    "Naive cytotoxic T cell": "", "Activated macrophage": "", "Macrophages": ""})
+    assert m.match("PT Inflammatory") == ([], "none")
+    assert m.match("PT Inflammatory", kidney=True) == (["Proximal tubule cells"], "subset")
+    assert m.match("PC Injured", kidney=True) == (["Principal cells"], "subset")
+    assert m.match("Naïve Th Cell") == ([], "none")  # was the B-cell "Naïve cell"
+    assert m.match("Naïve B Cell") == (["B cells naive"], "exact")
+    assert m.match("Naïve Tc Cell") == (["Naive cytotoxic T cell"], "exact")  # Tc: cytotoxic T
+    assert m.match("Inflammatory") == (["Inflammatory cell"], "exact")  # a state alone still matches
+    assert m.match("Macrophage Activated") == (["Activated macrophage"], "exact")
+    assert mn.norm("Naïve") == mn.norm("Naive") == frozenset({"naive"})
+
+
 def test_the_check_reads_nephron_codes_in_a_kidney_dataset(monkeypatch):
     """``check`` passes the dataset's tissue on: in a kidney dataset "PC" is the principal cell."""
     import types

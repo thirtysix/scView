@@ -109,6 +109,17 @@ def test_strict_match(index, label, cid, how):
     assert co.match_label(label, index)[0::2] == (cid, how)
 
 
+def test_a_kidney_ic_label_is_not_the_inferior_cardiac_neuron():
+    """CL lists "IC" as an exact synonym of the inferior cardiac neuron; a kidney "IC" cluster is
+    intercalated cells, so the label gets no id rather than that one (v0.80 kidney codes)."""
+    obo = ("[Term]\nid: CL:4070012\nname: inferior cardiac neuron\nsynonym: \"IC\" EXACT []\n\n"
+           "[Term]\nid: CL:0005010\nname: renal intercalated cell\n")
+    idx = co.Index(co.parse(obo))
+    assert co.match_label("IC", idx) == (None, None, "none")
+    assert co.match_label("inferior cardiac neuron", idx)[0] == "CL:4070012"
+    assert co.resolve(idx, "IC", "CL:4070012")["cl_id"] is None
+
+
 AMBIGUOUS = """format-version: 1.2
 
 [Term]

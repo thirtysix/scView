@@ -41,6 +41,7 @@ caller knows the dataset is kidney (``Matcher.match(kidney=True)``). Else "PC" s
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections import defaultdict
 from dataclasses import dataclass, field
 
@@ -64,6 +65,7 @@ ABBR = {  # label token -> expansion (mode C)
     "mpp": "multipotent progenitor", "ilc": "innate lymphoid", "plt": "platelet",
     "pc": "plasma", "smc": "smooth muscle", "nkt": "natural killer t",
     "opc": "oligodendrocyte precursor", "ec": "endothelial", "microglial": "microglia",
+    "tc": "cytotoxic t",  # not "th": TH+ dopaminergic neurons
 }
 # CL keeps "DC1" / "DC2" as legacy exact synonyms of conventional / plasmacytoid DC;
 # single-cell DC1 / DC2 (CellTypist, Villani 2017) are cDC1 / cDC2, CL's CD141+ and CD1c+
@@ -140,7 +142,11 @@ def spell_kidney(name: str, kidney: bool = False) -> str:
 
 
 def _greek(s: str) -> str:
-    return "".join(f" {GREEK[c]} " if c in GREEK else c for c in s)
+    """Greek letters spelled out and accents dropped ("Naïve" -> "Naive"; it read as "na ve")."""
+    s = "".join(f" {GREEK[c]} " if c in GREEK else c for c in s)
+    if s.isascii():
+        return s
+    return "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
 
 
 def _words(name: str, abbr: bool = False) -> list[str]:
@@ -158,6 +164,13 @@ def toks(name: str, abbr: bool = False) -> list[str]:
     return [ROMAN.get(x, x) for x in t]
 
 
+# Words that name a state, not a type ("Inflammatory cell", "Naive cell" are database names): a
+# label with a type word is never matched to a name of state words only ("PT Inflammatory" was
+# "Inflammatory cell", "Naïve Th Cell" a B-cell "Naive cell"; Reck 2025 kidney labels).
+STATE_WORDS = frozenset({"naive", "injured", "inflammatory", "cycling", "proliferating", "dividing",
+                         "degenerative", "degenerating", "adaptive", "activated", "resident",
+                         "transitioning", "transitional", "stressed", "damaged", "effector", "memory",
+                         "mature", "immature", "early", "late"})
 CODE_MAX_LETTERS = 3
 NEGATIONS = {"non", "not"}
 
@@ -297,7 +310,8 @@ class Matcher:
         near = [
             (len(k & d) / len(k | d), head_noun in d, tuple(sorted(d)))
             for d in self.by_key
-            if (wider and k <= d and not (d & NEGATIONS) - k) or d <= k
+            if ((wider and k <= d and not (d & NEGATIONS) - k) or d <= k)
+            and not (d <= STATE_WORDS and not k <= STATE_WORDS)
         ]
         if not near:
             return []
