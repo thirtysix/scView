@@ -422,7 +422,7 @@ def velocity_against_root(direction: dict[str, Any] | None, root: str) -> dict[s
 
 
 def root_warnings(adata, pt: np.ndarray, iroot: int, own_column: str,
-                  velocity_check=None) -> tuple[list[str], dict[str, Any]]:
+                  velocity_check=None, lineage_of=None) -> tuple[list[str], dict[str, Any]]:
     """Signs that the root is not where the process starts, and the checks behind them.
 
     With a current PAGA graph, the root cell's group in PAGA's column (a single-cell root is
@@ -433,7 +433,10 @@ def root_warnings(adata, pt: np.ndarray, iroot: int, own_column: str,
     - at an end, while another end looks less specialised (more genes detected, a smaller share
       of the counts in its top 20 genes; CytoTRACE's and StemID's signals): the process may start
       there. Gene counts alone flagged paul15's right MEP root (323 median vs 1,175 in erythroid
-      cells), which is inside the tree and not checked this way.
+      cells), which is inside the tree and not checked this way. Only ends on the root's own
+      lineage are compared (``lineage_of(column, group)``: the group names, or None when it
+      cannot be read): an end of another lineage is not a candidate start (Reck 2025 kidney
+      from PT S1: medullary IC-A, off the PT lineage, detects more genes).
     - ``velocity_check(groupby, group)``: the saved velocity run's direction check from the
       root along the tree (``velocity_against_root``).
     Without PAGA, or always: this pseudotime runs against another one the dataset holds."""
@@ -466,6 +469,12 @@ def root_warnings(adata, pt: np.ndarray, iroot: int, own_column: str,
             )
         if pos and pos["position"] == "end":
             ends = tree_ends(record)
+            same = lineage_of(col, group) if lineage_of is not None else None
+            if same is not None:
+                left_out = [e for e in ends if e not in same]
+                if left_out:
+                    checks["paga"]["ends_off_lineage"] = left_out
+                ends = [e for e in ends if e in same]
             stats = specialisation(adata, col, ends)
             if stats is None:
                 checks["specialisation"] = {"skipped": "no raw counts to read"}
@@ -662,11 +671,22 @@ def compute_dpt(adata, root_column: str | None = None, root_value: str | None = 
             "They are left out (grey), and the pseudotime was computed again on the main part."
         )
     named = root_column_name(root_value, root_cell if by_cell else None)
-    found, checks = root_warnings(adata, pt, iroot, named, velocity_check)
+    lineages: dict[str, dict[str, Any] | None] = {}
+
+    def _lineage(col: str) -> dict[str, Any] | None:
+        if col not in lineages:
+            lineages[col] = lineage_check(adata, work, pt, col, root_group_in(adata, col, iroot))
+        return lineages[col]
+
+    def lineage_of(col: str, group: str) -> set[str] | None:
+        found = _lineage(col)
+        return set(found["lineage"]) if found is not None else None
+
+    found, checks = root_warnings(adata, pt, iroot, named, velocity_check, lineage_of)
     warnings.extend(found)
     lineage_col = root_column if not by_cell else (checks.get("paga") or {}).get("column")
     if lineage_col:
-        lineage = lineage_check(adata, work, pt, lineage_col, root_group_in(adata, lineage_col, iroot))
+        lineage = _lineage(lineage_col)
         if lineage is not None:
             checks["lineage"] = lineage
             if lineage.get("warning"):

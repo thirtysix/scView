@@ -267,6 +267,24 @@ def test_a_root_at_the_more_specialised_end_is_flagged():
     assert "root_checks" not in provenance.read_provenance(a)["history"][-1]["params"]
 
 
+def test_an_end_of_another_lineage_is_not_a_candidate_start():
+    """Only ends on the root's own lineage are compared (Reck 2025 kidney: from PT S1, medullary
+    IC-A off the PT lineage detects more genes but is not where the PT process starts)."""
+    from scview.core.trajectory import root_warnings
+
+    a = _specialising_path()
+    compute_paga(a, "stage")
+    params = compute_dpt(a, "stage", "late")
+    assert set(params["root_checks"]["lineage"]["lineage"]) >= {"early", "mid", "late"}
+    pt = a.obs[DPT_COLUMN].to_numpy()
+    iroot = int(a.obs_names.get_loc(params["root_cell"]))
+    found, checks = root_warnings(a, pt, iroot, "x", lineage_of=lambda col, group: {"mid", "late"})
+    assert not any("looks less specialised" in w for w in found)
+    assert checks["paga"]["ends_off_lineage"] == ["early"]
+    found, _ = root_warnings(a, pt, iroot, "x", lineage_of=lambda col, group: None)  # unreadable: all ends
+    assert any(w.startswith("'early', another end") for w in found)
+
+
 def test_specialisation_without_readable_counts_is_skipped_not_fatal(monkeypatch):
     from scview.core import normalization, trajectory
 
