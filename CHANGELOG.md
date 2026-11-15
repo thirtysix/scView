@@ -6,6 +6,86 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.80.0] - 2026-11-15
+
+Kidney labels match marker databases and Cell Ontology; AI annotation no longer runs another method in its place;
+pseudotime can start from one cell, checks its start along the lineage and ranks genes per branch; PAGA ties are
+broken and named; Mixscape's protein check avoids the compositional artefact of small panels. Found by re-analysing
+Reck et al. 2025 (human kidney, ureteric obstruction, 46,957 nuclei, 59 author labels) through scView's MCP, plus
+follow-ups from v0.79.
+
+### Added
+- Pseudotime can start from one cell: pick it on the plot or type its name (Trajectory, MCP
+  `pseudotime(root_cell)`). It gets its own `scview_dpt_cell_<cell>` column and replays from that cell.
+- Genes along a branch can be ranked against the other branches (Rank: Higher on this branch; MCP
+  `rank_by='branch_specific'`): a spline per branch on the shared pseudotime, compared by an F-test. The pancreas
+  alpha branch now leads with Irx2, Irx1 and Gcg (Gcg was outside the top 200), the beta branch has Ins2 #2 (was
+  #111), instead of the early genes every branch shared.
+- Pseudotime names the groups that are not on a path from the start group: on the kidney atlas from PT S1, 38 groups
+  (49% of nuclei: immune, endothelial, stromal, intercalated cells). Their pseudotime is distance from the root, not
+  progress along a process.
+- Mixscape protein check: choose the values tested (CLR per cell, log counts, DSB) and view a run on another without
+  running it again. On panels under 15 proteins, where the per-cell CLR is compositional, the default is log counts.
+  Papalexi 2021: PDCD1LG2's own PD-L2 fall is now found (-0.31, 3 of 3 replicates; -0.07 on CLR), and the
+  IFN-gamma knockouts' CD86 "rise" (+0.12 on CLR) is gone. MCP `protein_layer`.
+- Cluster QC notes clusters made almost entirely of one sample, with the sample, cell count and share (erythroid
+  atlas: cluster 6, 1,078 cells, 97% from one of 27 samples). Also a co-pilot fact.
+- MCP: `celltypist_models` (filter by species and tissue; says when no model covers a tissue) and
+  `annotation_crosscheck` (ARI/AMI and overlap-mapped agreement). `marker_db_check` shows each label's match, Cell
+  Ontology id, markers and shared genes. 73 tools in all.
+
+### Changed
+- Kidney cell labels match marker-database types: TAL, DCT, CNT, the thin limbs and podocytes everywhere; PT, PC,
+  IC (A/B), MD, PEC and mesangial codes in kidney data or next to another kidney code, so "PC" stays a plasma cell in
+  immune data. Database matches: Wilson 2022 kidney 3 -> 14 of 16 labels, Reck 2025 36 -> 55 of 59; 77 immune and
+  brain labels unchanged.
+- A state word in a label (Injured, Inflammatory, Naive, Cycling) no longer outranks the cell type: "PC Injured" is
+  a principal cell, not a plasma cell; "PT/TAL Inflammatory" is proximal tubule / TAL, not "Inflammatory cell".
+- Pseudogenes (FTH1P20, MTND1P23) leave the marker lists the AI annotator, co-pilot and enrichment use. They are
+  found by GENCODE gene type from a 24,374-name list shipped with scView, so it works offline. When most of a group's
+  genes are pseudogenes they are all kept. HSPA7, a GENCODE pseudogene, leaves the lists too; the stress check still
+  reads it.
+- Cluster evidence and the annotator's random-marker check keep to the dataset's tissue (no more Paneth cells or
+  colonocytes on kidney). Marker-score annotation names a type only from 2 or more shared genes and a p that beats
+  chance across all types, else Unknown (kidney: injured TAL was "Bone-specific cell" on SPP1 alone). Kang and
+  paul15 labels unchanged.
+- Marker-database Cell Ontology ids are used only when the term names the row's type, a broader type, or the type in
+  its organ: 829 of 1,814 human rows change ("Bone-specific cell" and "MAIT-like" no longer carry the
+  antigen-presenting cell id). Kidney codes get kidney terms in Cell Ontology suggestions (PT: epithelial cell of
+  proximal tubule, not the L5 PT neuron). A bare "IC" label gets no id (it was the inferior cardiac neuron).
+- Pseudotime start checks: no "inside the PAGA tree" warning at a branch point between lineages (paul15's MEP); a
+  start at a tree end is flagged when another end of its lineage looks less specialised (more genes detected, less
+  dominated by its top 20) or when saved RNA velocity flows into it. Over 31 start groups on three datasets: false
+  alarms on true starts 1 -> 0 of 3, wrong starts flagged 16 -> 19 of 28.
+- PAGA ties at connectivity 1 (PAGA caps it) are broken by the uncapped ratio instead of the order edges happen to
+  be listed in, and close ties are named as uncertain steps. Kidney: PT Inflammatory now joins PT Injured directly,
+  not through the descending thin limb.
+- A run that would switch a dataset to large-dataset mode asks first in the app, and says when leaving out doublet
+  detection keeps it in memory. Doublet time estimate counts Scrublet's variable genes (134 s measured on 47k
+  nuclei, estimated 41 s before, 131 s now).
+- MCP: `qc_filter_preview` takes `pct_mt_floor` and every filtering parameter; `library_concordance` reads libraries
+  that pool several donors (per donor x library); the pseudobulk "donors on both sides" warning says how to pair;
+  `get_markers` leaves out genes with an id but no name (`include_unnamed` keeps them).
+
+### Fixed
+- AI annotation without a language model key ran CellTypist's immune model in its place and recorded "llm" (kidney
+  podocytes came out as alveolar macrophages). It is now refused with the reason; `annotation_fallback` runs another
+  method on purpose, and the recipe records the method that ran. CellTypist warns when its model does not cover the
+  dataset's tissue.
+- The memory estimate for a fallback annotation assumed the AI call (0.1 GB); CellTypist on 47k nuclei then ran out
+  of memory. The estimate follows the method that will run.
+- A misspelt CellTypist model name is refused at once with close names (it failed after 68 s).
+- Composition test explains why a covariate is refused and what it accepts.
+- The assessment finds misspelt % mito columns such as `percent_mitochrondrial`.
+- "Adrenal" and "suprarenal" tissues no longer count as kidney.
+
+### Known limitations
+- CellMarker's "Descending thin limb of LOH cell" row lists thick ascending limb genes (SLC12A1, UMOD), so TAL
+  clusters can score as descending thin limb in marker-score annotation and suggestions. It is the source's row;
+  scView does not edit database rows.
+- There is no subset tool yet: a pseudotime on one lineage of a multi-lineage dataset needs the dataset subset
+  outside scView.
+
 ## [0.79.0] - 2026-11-14
 
 RNA velocity checks its own direction and can leave genes out; pseudotime warns about a wrong start and stray
