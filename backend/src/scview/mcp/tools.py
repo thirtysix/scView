@@ -925,8 +925,8 @@ async def get_markers(
     log fold change, adjusted p and the share of cells expressing in and out. Computed and
     saved with the dataset the first time a column is asked for. Genes with an id but no name
     are left out unless most genes are ids (unnamed_skipped says which ranked in the top n).
-    The current markers live in the dataset itself, one set per column, so they have no
-    result_id and list_results does not show them (it lists earlier markers a re-run
+    The current markers live in the dataset itself, one set per column, so they have
+    no result_id and list_results does not show them (it lists earlier markers a re-run
     replaced): call this again to read them."""
     from scview.core.gene_filters import is_unnamed
 
