@@ -39,7 +39,7 @@ from typing import Any
 import pandas as pd
 
 from scview.core import marker_db as mdb
-from scview.core.marker_names import HOW_TEXT, Matcher, Ontology, _greek, norm, toks
+from scview.core.marker_names import HOW_TEXT, Matcher, Ontology, _greek, norm, spell_kidney, toks
 
 logger = logging.getLogger(__name__)
 
@@ -313,13 +313,17 @@ class Index:
                 best[cid] = rank
         return sorted(best, key=best.__getitem__)
 
-    def suggest(self, label: str, n: int = N_SUGGEST) -> list[dict[str, Any]]:
+    def suggest(self, label: str, n: int = N_SUGGEST, kidney: bool = False) -> list[dict[str, Any]]:
         """Up to ``n`` terms for a free-text label, best first, each with how it matched:
         the same words (with the abbreviation table: "CD14 Mono", "Mk", "pDC"), else
         terms holding every word of the label ("CD4 Naive T" -> naive thymus-derived
-        CD4-positive, alpha-beta T cell), then ``marker_names.Matcher``'s nearest names."""
+        CD4-positive, alpha-beta T cell), then ``marker_names.Matcher``'s nearest names.
+        ``kidney``: the dataset is kidney, so "PT", "PC", "IC" are nephron codes
+        (``marker_names.spell_kidney``); a bare "PT" was offered the L5 PT neuron."""
         if not isinstance(label, str) or _flat(label) in _NO_TYPE or not toks(label):
             return []
+        if kidney:
+            label = spell_kidney(label, kidney=True)
         own = clean_id(label)
         if own:
             return [{**self.describe(own), "how": "id", "how_text": "the label is the id"}] if own in self.terms else []
@@ -829,12 +833,17 @@ def term_ids(adata, column: str) -> pd.Series | None:
 
 
 def suggest(adata, column: str, index: Index) -> dict[str, Any]:
+    """Each label's terms (``Index.suggest``), reading kidney codes as nephron segments when the
+    dataset is kidney (``marker_tissues.dataset_tissue``: obs tissue, else the title)."""
+    from scview.core import marker_tissues
+
     labels, counts, _ = labels_of(adata, column)
     m = stored(adata, column)
     model = annotator_record(adata, column)
+    kidney = "kidney" in marker_tissues.dataset_tissue(adata)[0]
     rows = []
     for label in labels:
-        found = index.suggest(label)
+        found = index.suggest(label, kidney=kidney)
         mine = resolve(index, label, (model.get(label) or {}).get("model_cl_id")) if model else None
         if mine and mine["source"] == "model":  # the AI annotator's id, checked against the label
             found = [{**index.describe(mine["cl_id"]), "how": "annotator",
