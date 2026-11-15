@@ -825,11 +825,7 @@ def _covariate_columns(cov: dict[str, np.ndarray], nuisance: np.ndarray, cond_co
                 "out or merge its rare values.")
         with_cond = np.column_stack([base, block, cond_cols])
         if rank(with_cond) < rank(np.column_stack([base, block])) + cond_cols.shape[1]:
-            side = {k: sorted(set(s.astype(str)[s_cond == k]))[:4] for k in dict.fromkeys(s_cond)}
-            shown = "; ".join(f"{k}: {', '.join(v)}" for k, v in side.items())
-            raise CompositionError(
-                f"Covariate '{name}' is confounded with the condition ({shown}): the two cannot "
-                "be separated, so it cannot be in the design.")
+            raise CompositionError(_confounded_text(name, s, s_cond, numeric))
         base = np.column_stack([base, block])
         cols.append(block)
         used.append(name)
@@ -840,6 +836,36 @@ def _covariate_columns(cov: dict[str, np.ndarray], nuisance: np.ndarray, cond_co
                              "estimated as if that sample were left out.")
     C = np.column_stack(cols) if cols else np.zeros((len(s_cond), 0))
     return C, used, notes
+
+
+_ACCEPTED = ("A covariate is a category with fewer values than samples, each value in more than one "
+             "condition (sex, batch), or a numeric column (age in years), fitted as one slope.")
+
+
+def _confounded_text(name: str, s: pd.Series, s_cond: np.ndarray, numeric: bool) -> str:
+    """Why ``name`` cannot be in the design. As a category with about one value per sample (an age
+    as CELLxGENE's "79-year-old stage" text) every value sits in one condition: that is the reason
+    to give, with what is accepted, not "confounded with the condition" and a cut list (QA round 6)."""
+    from scview.core.pseudobulk import PseudobulkError, numeric_values
+
+    values = s.astype(str)
+    n, k = len(values), values.nunique()
+    side = {c: sorted(set(values[s_cond == c])) for c in dict.fromkeys(s_cond)}
+    if not numeric and k * 2 > n:  # as many values as samples, nearly
+        try:
+            reads = numeric_values(s, name).notna().all()
+        except PseudobulkError:
+            reads = False
+        hint = (f" Its values are text with a number in each (such as '{values.iloc[0]}'): as text they are "
+                "categories; a column of those numbers would be used as one slope." if reads else "")
+        return (f"Covariate '{name}' is read as a category, and its {k} values over {n} samples each "
+                f"belong to one condition ({'; '.join(f'{c}: {len(v)} values' for c, v in side.items())}): "
+                "as a category it stands in for the samples themselves, so no condition effect is left to "
+                f"test. {_ACCEPTED}{hint}")
+    shown = "; ".join(f"{c}: {', '.join(v[:8])}" + (f" and {len(v) - 8} more" if len(v) > 8 else "")
+                      for c, v in side.items())
+    return (f"Covariate '{name}' is confounded with the condition ({shown}): the two cannot be separated, so "
+            f"it cannot be in the design. {_ACCEPTED}")
 
 
 def _finite(v) -> float | None:

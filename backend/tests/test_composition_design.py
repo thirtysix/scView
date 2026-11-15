@@ -124,3 +124,38 @@ def test_unpaired_without_covariates_is_unchanged():
     assert r.covariates == [] and r.covariate_notes == []
     d = r.to_dict()
     assert d["covariates"] == [] and "adjusted" not in d["comparison"]
+
+
+def _donors(n_per_side: int = 6, seed: int = 1) -> pd.DataFrame:
+    """One sample per donor, each donor in one condition (control or UUO), CELLxGENE-style ages."""
+    rng = np.random.default_rng(seed)
+    rows = []
+    for d in range(2 * n_per_side):
+        cond = "normal" if d < n_per_side else "obstructed"
+        age = 60 + 2 * d
+        n0 = rng.binomial(200, 0.3 if cond == "normal" else 0.5)
+        rows += [{"sample": f"d{d}", "disease": cond, "development_stage": f"{age}-year-old stage",
+                  "age": float(age), "sex": "F" if d % 2 else "M",
+                  "group": "g0" if i < n0 else ("g1" if i % 2 else "g2")} for i in range(200)]
+    obs = pd.DataFrame(rows)
+    obs.index = obs.index.astype(str)
+    return obs
+
+
+def test_an_age_text_column_is_refused_with_the_true_reason():
+    """QA round 6: development_stage ("79-year-old stage") was refused as "confounded with the condition"
+    with a cut list; as a category each age is one donor, which is the reason to give."""
+    obs = _donors()
+    with pytest.raises(CompositionError) as e:
+        composition_test(obs, "disease", "sample", "group", covariates=["development_stage"])
+    msg = str(e.value)
+    assert "read as a category" in msg and "12 values over 12 samples" in msg
+    assert "normal: 6 values; obstructed: 6 values" in msg
+    assert "numeric column (age in years)" in msg and "'60-year-old stage'" in msg
+    # the same ages as numbers: one slope, accepted
+    r = composition_test(obs, "disease", "sample", "group", covariates=["age"])
+    assert r.covariates == ["age"] and r.tested
+    # a few-valued category confounded with the condition keeps the plain reason, with what is accepted
+    obs["site"] = obs["disease"].map({"normal": "a", "obstructed": "b"})
+    with pytest.raises(CompositionError, match="confounded with the condition .*A covariate is a category"):
+        composition_test(obs, "disease", "sample", "group", covariates=["site"])
