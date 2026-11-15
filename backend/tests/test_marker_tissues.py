@@ -25,6 +25,7 @@ from tests.test_marker_db import _cells, installed, raw, small_sources  # noqa: 
     ("Bladder organ", {"urinary"}), ("Peripheral blood", {"blood"}), ("Cerebral cortex", {"nervous"}),
     ("Dorsolateral prefrontal cortex", {"nervous"}), ("Cortex", set()), ("Undefined", set()), ("", set()),
     ("Immune system", {"immune"}), ("Placenta", {"placenta"}), ("Umbilical cord blood", {"blood"}),
+    ("Adrenal gland", {"endocrine"}), ("Renal cortex", {"kidney"}), ("Perirenal fat", {"adipose"}),
 ])
 def test_organs_reads_database_and_dataset_tissue_names(text, want):
     assert mt.organs(text) == want
