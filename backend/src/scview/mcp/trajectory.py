@@ -70,12 +70,21 @@ def _paga_reply(view: dict[str, Any], dataset_id: str, n: int) -> dict[str, Any]
         "tree_ends": [g for g, d in zip(groups, degree) if d == 1],
         "edges": table(edges, ["from", "to", "connectivity", "in_tree"], n),
     }
+    if rec.get("warnings"):
+        out["warnings"] = rec["warnings"]
+    if rec.get("ties"):
+        out["ties"] = [{"kept": f"{groups[t['kept'][0]]} - {groups[t['kept'][1]]}",
+                        "instead_of": f"{groups[t['instead_of'][0]]} - {groups[t['instead_of'][1]]}",
+                        **pick(t, "connectivity", "ratio_kept", "ratio_instead_of", "close")} for t in rec["ties"][:n]]
     if view.get("stale"):
         out["stale"] = view["stale"]
     if view.get("root_group"):
         out["pseudotime_root_group"] = view["root_group"]
     out["note"] = ("connectivity: PAGA's (0-1; edges between the groups against random wiring of the same cells), "
-                   "highest first; tree: PAGA's maximum spanning tree. A process usually starts at one of tree_ends: "
+                   "highest first; tree: PAGA's maximum spanning tree, a tie at the same connectivity broken by "
+                   "the uncapped ratio (ties: each tree edge kept over an edge it tied with, closest first; close: kept "
+                   "by under 1.5 times, an uncertain step). "
+                   "A process usually starts at one of tree_ends: "
                    "pseudotime(root_column=groupby, root_value=<that group>). Draw it: "
                    "plot(embedding=..., overlay=['paga']).")
     return out
@@ -133,7 +142,7 @@ async def pseudotime(
     column scview_dpt_pseudotime and as one column per root (root_named_column, kept when another
     root runs; scview_dpt_cell_<name> for a cell). The reply has the route's warnings word for word
     (a root inside the PAGA tree, a pseudotime that runs against another one, weakly linked cells
-    left out), n_detached and n_unreachable, and each group's median pseudotime, earliest first
+    left out, groups not on a path from the root: their value is distance, not progress), n_detached and n_unreachable, and each group's median pseudotime, earliest first
     (root_column's groups, or PAGA's for a cell root). Without a root: the pseudotime columns the
     dataset holds and how each was made."""
     n = clamp(limit)

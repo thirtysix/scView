@@ -317,6 +317,21 @@ def root_position(record: dict[str, Any], group: str) -> dict[str, Any] | None:
     return {"position": position, "branches": shares}
 
 
+def tied_links(record: dict[str, Any], group: str) -> list[str]:
+    """The close ties (``tree_ties``) that touch ``group``, "kept over instead_of" in words:
+    empty when PAGA settles the tree around it."""
+    groups = record.get("groups") or []
+    if group not in groups:
+        return []
+    g = groups.index(group)
+
+    def name(e) -> str:
+        return f"{groups[e[0]]} - {groups[e[1]]}"
+
+    return [f"{name(t['kept'])} over {name(t['instead_of'])}" for t in record.get("ties") or []
+            if t.get("close") and g in (*t["kept"], *t["instead_of"])]
+
+
 def tree_ends(record: dict[str, Any]) -> list[str]:
     adj = _tree_adjacency(record)
     return [g for i, g in enumerate(record.get("groups") or []) if len(adj[i]) == 1]
@@ -433,7 +448,13 @@ def root_warnings(adata, pt: np.ndarray, iroot: int, own_column: str,
         col = record["groupby"]
         pos = root_position(record, group)
         checks["paga"] = {"column": col, "root_group": group, **(pos or {})}
-        if pos and pos["position"] == "inside":
+        tied = tied_links(record, group)
+        if tied:
+            # PAGA cannot tell the tree around this group from another one: its position is not
+            # settled, so it is not judged (paul15's 7MEP: a branch point in scanpy's tie order,
+            # inside between the erythroid and myeloid sides when the ratio breaks the ties).
+            checks["paga"]["close_ties"] = tied
+        if pos and pos["position"] == "inside" and not tied:
             nbrs = _tree_neighbours(record, group)
             shown = ", ".join(f"'{n}'" for n in nbrs[:3]) + (" and more" if len(nbrs) > 3 else "")
             big = sum(x >= BRANCH_SHARE for x in pos["branches"])
@@ -487,6 +508,78 @@ def root_warnings(adata, pt: np.ndarray, iroot: int, own_column: str,
             "starts at the wrong end. Check which group the process begins in."
         )
     return out, checks
+
+
+# Lineage check (``lineage_check``): a group whose best route from the root crosses a link
+# where under this share of the smaller group's kNN edges reach the other group is not on a
+# path from the root. Widest route from the true root, lowest group: paul15 (7MEP) 0.022
+# (19Lymph), Bastidas-Ponce pancreas (Ductal) 0.038 (Delta), Pijuan-Sala erythroid (Blood
+# progenitors 1) 0.126. Reck 2025 kidney from PT S1: immune, endothelial, stromal, IC and
+# glomerular groups 0.002-0.007 (38 of 59 groups), distal nephron 0.024, PT 0.042 and up.
+LINEAGE_MIN_SHARE = 0.01
+LINEAGE_MIN_CELLS = 0.05  # warn when the groups off the root's lineage hold this share of the cells
+LINEAGE_NAMED = 6
+
+
+def edge_shares(distances, codes: np.ndarray, n_groups: int) -> np.ndarray:
+    """Between each pair of groups: their kNN edges (both ways) as a share of the smaller
+    group's own edges, ``codes`` -1 for a cell in no group (left out)."""
+    keep = codes >= 0
+    D = sp.csr_matrix(distances)[keep][:, keep]
+    c = codes[keep]
+    both, _ = group_links(D, c, n_groups)
+    out_edges = np.bincount(c, weights=np.diff(D.indptr), minlength=n_groups)
+    smaller = np.minimum.outer(out_edges, out_edges)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        share = np.where(smaller > 0, both / (2 * smaller), 0.0)
+    np.fill_diagonal(share, 0)
+    return share
+
+
+def lineage_check(adata, work: ad.AnnData, pt: np.ndarray, column: str,
+                  root: str | None) -> dict[str, Any] | None:
+    """The groups of ``column`` that DPT orders (finite pseudotime) but that sit off the root's
+    lineage: the widest route to them from the root group (most shared kNN edges at its weakest
+    link, ``edge_shares``) falls under ``LINEAGE_MIN_SHARE``. Their pseudotime is distance from
+    the root through a weak link, not progress along a process. None when it cannot be read."""
+    if root is None or column not in adata.obs.columns or "distances" not in work.obsp:
+        return None
+    order, labels = _group_labels(adata, column)
+    if root not in order or len(order) < 2:
+        return None
+    finite = np.isfinite(pt)
+    codes = np.where(finite, pd.Index(order).get_indexer(labels), -1)
+    share = edge_shares(work.obsp["distances"], codes, len(order))
+    tree = spanning_tree(len(order), share, share)
+    r = order.index(root)
+    n = np.bincount(codes[codes >= 0], minlength=len(order))
+    widest = {}
+    for j in range(len(order)):
+        if n[j] and j != r:
+            path = _tree_path(tree, r, j)
+            widest[j] = min((share[e] for e in path), default=0.0)
+    off = [j for j, w in widest.items() if w < LINEAGE_MIN_SHARE]
+    on = [order[j] for j in sorted((j for j, w in widest.items() if w >= LINEAGE_MIN_SHARE),
+                                   key=lambda j: -widest[j])]  # closest first
+    rows = [{"group": order[j], "n_cells": int(n[j]), "widest_share": round(float(widest[j]), 4),
+             "median_pseudotime": round(float(np.median(pt[codes == j])), 4)} for j in off]
+    rows.sort(key=lambda x: -x["median_pseudotime"])  # the ones DPT puts latest first
+    out: dict[str, Any] = {"column": column, "root_group": root, "min_share": LINEAGE_MIN_SHARE,
+                           "lineage": [root, *on], "off_lineage": rows}
+    n_off, n_all = int(n[off].sum()) if off else 0, int(n.sum())
+    if off and n_off >= LINEAGE_MIN_CELLS * n_all:
+        named = ", ".join(f"'{x['group']}' ({x['median_pseudotime']:.2g})" for x in rows[:LINEAGE_NAMED])
+        more = f" and {len(rows) - LINEAGE_NAMED} more" if len(rows) > LINEAGE_NAMED else ""
+        lineage = ", ".join(f"'{g}'" for g in out["lineage"][:LINEAGE_NAMED + 2]) + (
+            " and more" if len(out["lineage"]) > LINEAGE_NAMED + 2 else "")
+        out["warning"] = (
+            f"{len(rows)} groups of {column} ({n_off:,} of {n_all:,} cells, {n_off / n_all:.0%}) are not on a path "
+            f"from '{root}': every route to them crosses a link where under {LINEAGE_MIN_SHARE:.0%} of the smaller "
+            f"group's neighbours are in the other. DPT still gives them a pseudotime, latest first (median "
+            f"shown): {named}{more}. "
+            "That value is distance from the root, not progress along a process. Read the pseudotime within the "
+            f"root's lineage ({lineage}), or compute it on those groups' cells alone.")
+    return out
 
 
 def _fmt(v: float) -> str:
@@ -571,6 +664,13 @@ def compute_dpt(adata, root_column: str | None = None, root_value: str | None = 
     named = root_column_name(root_value, root_cell if by_cell else None)
     found, checks = root_warnings(adata, pt, iroot, named, velocity_check)
     warnings.extend(found)
+    lineage_col = root_column if not by_cell else (checks.get("paga") or {}).get("column")
+    if lineage_col:
+        lineage = lineage_check(adata, work, pt, lineage_col, root_group_in(adata, lineage_col, iroot))
+        if lineage is not None:
+            checks["lineage"] = lineage
+            if lineage.get("warning"):
+                warnings.append(lineage.pop("warning"))
 
     params: dict[str, Any] = {
         "column": DPT_COLUMN,
@@ -665,7 +765,9 @@ def compute_paga(adata, groupby: str) -> dict[str, Any]:
     wiring of the same cells would give, capped at 1. Cells without a label are
     left out. Returns the record: the groups in order, their sizes, every edge
     with a non-zero connectivity (``[i, j, w]``, i < j) and the edges of PAGA's
-    maximum spanning tree (``[i, j]``).
+    maximum spanning tree (``[i, j]``). Connectivities saturate at 1, so several can tie:
+    the tree breaks a tie by the uncapped ratio (``spanning_tree``); ``ties`` lists each tie
+    the tree depends on (``tree_ties``), and ``warnings`` names the close ones.
     """
     import scanpy as sc
 
@@ -696,13 +798,28 @@ def compute_paga(adata, groupby: str) -> dict[str, Any]:
     edges = sorted(
         [int(i), int(j), round(float(w), 4)] for i, j, w in zip(conn.row, conn.col, conn.data)
     )
-    tree = sp.coo_matrix(work.uns["paga"]["connectivities_tree"])
+    capped = sp.csr_matrix(work.uns["paga"]["connectivities"]).toarray()
+    _, ratio = group_links(work.obsp["distances"], work.obs["group"].cat.codes.to_numpy(), len(order))
+    ties: list[dict[str, Any]] = []
+    if np.allclose(np.minimum(ratio, 1.0), capped, rtol=0, atol=1e-6):
+        tree_edges = spanning_tree(len(order), capped, ratio)
+        ties = tree_ties(tree_edges, capped, ratio)
+        tie_break = "uncapped ratio"
+    else:  # another PAGA than the one group_links mirrors: scanpy's own tree, ties unread
+        logger.warning("PAGA connectivities differ from group_links; scanpy's tree kept")
+        tree = sp.coo_matrix(work.uns["paga"]["connectivities_tree"])
+        tree_edges = sorted({(min(int(i), int(j)), max(int(i), int(j))) for i, j in zip(tree.row, tree.col)})
+        tie_break = "scanpy"
+    warning = ties_warning(order, ties)
     record: dict[str, Any] = {
         "groupby": groupby,
         "groups": order,
         "sizes": np.bincount(work.obs["group"].cat.codes, minlength=len(order)).tolist(),
         "edges": [e for e in edges if e[2] > 0],
-        "tree": sorted({(min(int(i), int(j)), max(int(i), int(j))) for i, j in zip(tree.row, tree.col)}),
+        "tree": tree_edges,
+        "tie_break": tie_break,
+        "ties": ties,
+        "warnings": [warning] if warning else [],
         "graph": _graph_label(adata, source),
         "model": "v1.2",
         "n_cells": int(labelled.sum()),
@@ -718,6 +835,124 @@ def compute_paga(adata, groupby: str) -> dict[str, Any]:
     except Exception as e:  # provenance must never block the result
         logger.warning("Could not record PAGA provenance: %s", e)
     return record
+
+
+def group_links(distances, codes: np.ndarray, n_groups: int) -> tuple[np.ndarray, np.ndarray]:
+    """PAGA's group links (scanpy 1.11 ``PAGA._compute_connectivities_v1_2``) as numbers:
+    (kNN edges between each pair of groups both ways, ratio to random wiring of the same
+    cells), both n_groups x n_groups with zeros on the diagonal. PAGA's connectivity is the
+    ratio capped at 1; uncapped, it still tells two saturated links apart. ``distances``:
+    the cells' kNN distances (every stored entry is an edge), ``codes``: each cell's group."""
+    D = sp.csr_matrix(distances, copy=True)
+    D.data = np.ones_like(D.data, dtype=np.float64)
+    n = len(codes)
+    M = sp.csr_matrix((np.ones(n), (np.arange(n), codes)), shape=(n, n_groups))
+    C = (M.T @ D @ M).toarray()
+    inner = np.diag(C).copy()
+    np.fill_diagonal(C, 0)
+    sizes = np.bincount(codes, minlength=n_groups).astype(np.float64)
+    out_edges = inner + C.sum(axis=1)  # a group's edges: within it, and out of it
+    both = C + C.T
+    expected = (out_edges[:, None] * sizes[None, :] + out_edges[None, :] * sizes[:, None]) / max(1, n - 1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ratio = np.where(both > 0, np.where(expected > 0, both / expected, 1.0), 0.0)
+    np.fill_diagonal(ratio, 0)
+    return both, ratio
+
+
+TIE = 1e-9  # two capped connectivities this close are a tie (in practice both saturate at 1)
+# A tie the uncapped ratio breaks by less than this factor is still close: worth a warning.
+# Reck 2025's kidney nuclei (59 author groups): 78 tied pairs, 10 under 1.5x, among them
+# DTL - PT Injured (1.35) over DTL - PT Inflammatory (1.07); most others 2-20x apart.
+CLOSE_TIE = 1.5
+
+
+def spanning_tree(n_groups: int, capped: np.ndarray, ratio: np.ndarray) -> list[tuple[int, int]]:
+    """PAGA's maximum spanning tree (forest for a split graph) on the capped connectivity,
+    ties broken by the uncapped ratio (then by group order: the same tree every time).
+    scanpy's tree breaks a tie by scipy's edge order instead."""
+    edges = sorted(((i, j) for i in range(n_groups) for j in range(i + 1, n_groups) if capped[i, j] > 0),
+                   key=lambda e: (-capped[e], -ratio[e], e))
+    parent = list(range(n_groups))
+
+    def root(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    tree = []
+    for i, j in edges:
+        a, b = root(i), root(j)
+        if a != b:
+            parent[a] = b
+            tree.append((i, j))
+    return sorted(tree)
+
+
+def _tree_path(tree: list[tuple[int, int]], a: int, b: int) -> list[tuple[int, int]]:
+    """The tree edges from group a to group b (empty when they are not linked)."""
+    adj: dict[int, list[int]] = {}
+    for i, j in tree:
+        adj.setdefault(i, []).append(j)
+        adj.setdefault(j, []).append(i)
+    back = {a: a}
+    stack = [a]
+    while stack:
+        x = stack.pop()
+        for y in adj.get(x, []):
+            if y not in back:
+                back[y] = x
+                stack.append(y)
+    if b not in back:
+        return []
+    path = []
+    while b != a:
+        path.append((min(b, back[b]), max(b, back[b])))
+        b = back[b]
+    return path
+
+
+def tree_ties(tree: list[tuple[int, int]], capped: np.ndarray, ratio: np.ndarray) -> list[dict[str, Any]]:
+    """The tree edges that tie with an edge left out of the tree: swapping them gives another
+    maximum spanning tree on PAGA's capped connectivity. Each: the tree edge kept, the edge it
+    beat, their shared connectivity and both uncapped ratios; largest connectivity first."""
+    in_tree = set(tree)
+    out = []
+    n = capped.shape[0]
+    for u in range(n):
+        for v in range(u + 1, n):
+            w = capped[u, v]
+            if w <= 0 or (u, v) in in_tree:
+                continue
+            for e in _tree_path(tree, u, v):
+                if abs(capped[e] - w) <= TIE:
+                    r_in, r_out = float(ratio[e]), float(ratio[u, v])
+                    out.append({"kept": list(e), "instead_of": [u, v], "connectivity": round(float(w), 4),
+                                "ratio_kept": round(r_in, 3), "ratio_instead_of": round(r_out, 3),
+                                "close": r_in < CLOSE_TIE * r_out})
+    out.sort(key=lambda t: (t["ratio_kept"] / max(t["ratio_instead_of"], 1e-12), t["kept"], t["instead_of"]))
+    return out
+
+
+TIES_NAMED = 3  # close ties a warning names
+
+
+def ties_warning(groups: list[str], ties: list[dict[str, Any]]) -> str | None:
+    """Says where the tree depends on a close tie (``CLOSE_TIE``): which edges were kept over
+    which, closest first; None when every tie was broken by a clear margin, or there is none."""
+    close = [t for t in ties if t["close"]]
+    if not close:
+        return None
+    shown = "; ".join(
+        f"'{groups[t['kept'][0]]} - {groups[t['kept'][1]]}' over '{groups[t['instead_of'][0]]} - "
+        f"{groups[t['instead_of'][1]]}' ({t['ratio_kept']:.2f} vs {t['ratio_instead_of']:.2f} times "
+        f"random wiring)" for t in close[:TIES_NAMED])
+    more = f", and {len(close) - TIES_NAMED} more" if len(close) > TIES_NAMED else ""
+    return (f"The tree depends on {len(close)} close tie{'s' if len(close) != 1 else ''}: each tied pair "
+            "has the same connectivity (PAGA caps it at 1), so another tree fits PAGA as well. "
+            f"The edge with more links against random wiring was kept, by under {CLOSE_TIE:g} times: "
+            f"{shown}{more}. Read those steps of the tree as uncertain.")
 
 
 def paga_view(adata, embedding: str | None = None) -> dict[str, Any]:

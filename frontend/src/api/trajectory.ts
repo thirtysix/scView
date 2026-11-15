@@ -13,6 +13,8 @@ export interface PagaRecord {
   /** Which neighbour graph it was computed on */
   graph: string;
   n_cells: number;
+  /** Where the tree depends on a tie (connectivities saturate at 1); missing before v0.80 */
+  warnings?: string[];
 }
 
 export interface PagaView {
