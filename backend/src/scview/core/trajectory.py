@@ -363,7 +363,11 @@ def specialisation(adata, column: str, groups: list[str]) -> dict[str, dict[str,
             continue
         if len(idx) > POTENCY_SAMPLE:
             idx = rng.choice(idx, POTENCY_SAMPLE, replace=False)
-        genes, top = _row_stats(M, idx)
+        try:
+            genes, top = _row_stats(M, idx)
+        except Exception as e:  # a counts file that cannot be read this way: no check, never a failed run
+            logger.warning("Root check: counts not read (%s)", e)
+            return None
         out[g] = {"n_cells": int((labels == g).sum()), "genes": float(np.median(genes)),
                   "top_share": round(float(np.median(top)), 4)}
     return out
@@ -443,7 +447,7 @@ def root_warnings(adata, pt: np.ndarray, iroot: int, own_column: str,
             ends = tree_ends(record)
             stats = specialisation(adata, col, ends)
             if stats is None:
-                checks["specialisation"] = {"skipped": "no raw counts in hand"}
+                checks["specialisation"] = {"skipped": "no raw counts to read"}
             else:
                 checks["specialisation"] = stats
                 other = less_specialised_end(stats, group, ends)

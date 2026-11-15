@@ -267,6 +267,22 @@ def test_a_root_at_the_more_specialised_end_is_flagged():
     assert "root_checks" not in provenance.read_provenance(a)["history"][-1]["params"]
 
 
+def test_specialisation_without_readable_counts_is_skipped_not_fatal(monkeypatch):
+    from scview.core import normalization, trajectory
+
+    a = _specialising_path()
+    assert set(trajectory.specialisation(a, "stage", ["early", "late"])) == {"early", "late"}
+
+    class Unreadable:
+        def __getitem__(self, rows):
+            raise OSError("row reads failed")
+
+    monkeypatch.setattr(normalization, "find_counts", lambda adata, read_only=False: (Unreadable(), "x"))
+    assert trajectory.specialisation(a, "stage", ["early", "late"]) is None
+    compute_paga(a, "stage")
+    assert compute_dpt(a, "stage", "late")["root_checks"]["specialisation"] == {"skipped": "no raw counts to read"}
+
+
 def test_velocity_against_root_reads_the_direction_check():
     def check(*rows):
         return {"checked": True, "n_forward": sum(r[2] == "forward" for r in rows), "embedding": "X_umap",
