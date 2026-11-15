@@ -35,6 +35,9 @@ async def test_celltypist_models_lists_species_tissues_and_cell_types(client):
     mouse = await _call("celltypist_models", {"species": "mouse"})
     assert [row[0] for row in mouse["models"]["rows"]] == ["Healthy_Mouse_Liver.pkl"]
     assert "names no tissue" in await _call("celltypist_models", {"tissue": "zzz"}, error=True)
+    kidney = await _call("celltypist_models", {"tissue": "kidney"})  # QA round 6: none, said in words
+    assert kidney["n_models"] == 0 and "No CellTypist model covers kidney" in kidney["note"]
+    assert "note" not in blood
 
 
 async def test_a_misspelt_model_is_refused_before_any_job(client, dataset_manager, monkeypatch):

@@ -1068,6 +1068,10 @@ async def celltypist_models(
            "models": table(rows_, ["model", "species", "organs", "n_types", "description"], 200)}
     if not cat.get("complete", True):
         out["note"] = "The CellTypist catalog could not be read (offline?): only the default model is listed."
+    elif not models and want is not None:
+        out["note"] = (f"No CellTypist model covers {tissue}{' in ' + species if species else ''}. An immune "
+                       "model labels only its immune cells; annotate the rest with annotation_method "
+                       "marker_score or the AI, and check them with marker_db_check.")
     return dumps(out, _max_chars(200))
 
 
