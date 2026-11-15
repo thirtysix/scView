@@ -70,3 +70,19 @@ async def test_run_pipeline_passes_the_opt_in_to_the_route(client, dataset_manag
     r = await _call("run_pipeline", {"dataset_id": did, "steps": ["neighbors"], "allow_large_mode": True})
     await _finish(r["job_id"])
     assert bodies[-1]["allow_large_mode"] is True
+
+
+async def test_a_refusal_caused_by_the_doublet_step_says_to_leave_it_out(client, dataset_manager, monkeypatch):
+    from scview.core import preflight as pf
+
+    did = _register(dataset_manager)
+    steps = ["qc_metrics", "doublet_detection", "normalization"]
+
+    async def need(s):
+        return (await _call("preflight", {"dataset_id": did, "steps": s}))["verdict"]["need_bytes"]
+
+    cut = (await need(steps) + await need([s for s in steps if s != "doublet_detection"])) / 2
+    monkeypatch.setattr(pf, "_would_chunk", lambda req, n, *a, **k: (req != "off" and n > cut, "Too big."))
+    text = await _call("run_pipeline", {"dataset_id": did, "steps": steps}, error=True)
+    assert "Not run:" in text and "Without doublet detection the run fits in memory" in text
+    assert "Leave doublet_detection out" in text and "allow_large_mode=true" in text

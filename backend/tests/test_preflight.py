@@ -266,6 +266,25 @@ def test_doublet_time_follows_each_channel_and_its_neighbour_search():
     assert 43 / 2 <= wells <= 43 * 2 and 688 / 2 <= whole <= 688 * 2
 
 
+def test_doublet_time_grows_with_the_channels_variable_genes():
+    sizes = [13756, 13109, 9222, 4996, 3232, 2642]
+
+    def est(plan):
+        n = sum(sizes)
+        state = pf._State(n, 29702, pf.Matrix("X", n, 29702, True, n * 1100), {}, None, 0)
+        return pf._step_doublet(state, None, plan)[2]
+
+    fixed = 3.0 + pf.DBL_SECONDS_PER_CHANNEL * len(sizes)
+    few = est(pf.DoubletPlan(sizes, 900, [(13756, 900)]))
+    assert few == est(pf.DoubletPlan(sizes, pf.DBL_SECONDS_HVG, [(13756, pf.DBL_SECONDS_HVG)]))  # as fitted
+    assert few == est(pf.DoubletPlan(sizes, None))  # not counted: as fitted
+    three = est(pf.DoubletPlan(sizes, 3 * pf.DBL_SECONDS_HVG, [(13756, 3 * pf.DBL_SECONDS_HVG)]))
+    assert three - fixed == pytest.approx(3 * (few - fixed))
+    # Reck 2025's kidney nuclei by library: the step took 134 s (2 CPUs); 41 s before the term
+    kidney = est(pf.DoubletPlan(sizes, 4002, [(13756, 4002), (13109, 4111), (9222, 3335)]))
+    assert abs(kidney / 134 - 1) <= 0.2
+
+
 def test_doublet_estimate_leaves_out_channels_too_small_to_score():
     plan = pf.DoubletPlan([5000, 80, 120], 1500)
     t = pf.estimate_step_peak("doublet_detection", (5200, 20000), 10_000_000, False, doublets=plan)
@@ -562,6 +581,36 @@ async def test_dataset_preflight_takes_the_doublet_channels(client, dataset_mana
                  if s["step"] == "doublet_detection")["transient_bytes"]
             for k in ("", "__all__")]
         assert per < whole, loaded
+
+
+async def test_a_conversion_only_the_doublet_step_causes_says_the_run_fits_without_it(
+        client, dataset_manager, monkeypatch):
+    from tests.test_doublet_channels import _dataset
+
+    d = Path(dataset_manager.data_dir) / "uploads" / "pf3"
+    d.mkdir(parents=True)
+    (d / "metadata.json").write_text(json.dumps({"id": "pf3", "name": "pf3", "status": "ready"}))
+    _dataset([150, 260, 200]).write_h5ad(d / "data.h5ad")
+    steps = "qc_metrics,doublet_detection,normalization,log_transform"
+
+    async def need(s):
+        r = await client.get(f"{API}/datasets/pf3/preflight", params={"steps": s})
+        return r.json()["verdict"]["need_bytes"]
+
+    with_dbl, without = await need(steps), await need(steps.replace("doublet_detection,", ""))
+    assert without < with_dbl
+    cut = (with_dbl + without) / 2  # memory for the run without doublets, not with them
+    monkeypatch.setattr(pf, "_would_chunk", lambda req, n, *a, **k: (req != "off" and n > cut, "Too big."))
+    body = (await client.get(f"{API}/datasets/pf3/preflight", params={"steps": steps})).json()
+    assert body["mode"]["converts"] is True
+    assert body["mode"]["without_doublets"]["fits_in_memory"] is True
+    sentence = body["verdict"]["sentence"]
+    assert "switch the dataset to large-dataset mode for good" in sentence
+    assert "Without doublet detection the run fits in memory" in sentence
+    # The doublet step alone is not the cause: no such hint.
+    monkeypatch.setattr(pf, "_would_chunk", lambda req, n, *a, **k: (True, "Too big."))
+    body = (await client.get(f"{API}/datasets/pf3/preflight", params={"steps": steps})).json()
+    assert body["mode"]["converts"] is True and "without_doublets" not in body["mode"]
 
 
 async def test_dataset_preflight_uses_the_cached_dataset(client, dataset_manager):
