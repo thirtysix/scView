@@ -90,6 +90,11 @@ async def test_paga_pseudotime_from_the_right_and_a_wrong_root_and_genes(client,
 
     text = await _call("pseudotime", {"dataset_id": did, "root_column": "stage"}, error=True)
     assert "both root_column and root_value" in text
+    cell = await _call("pseudotime", {"dataset_id": did, "root_cell": "c0"})
+    assert cell["root_kind"] == "cell" and cell["root_cell"] == "c0" and cell["root_named_column"] == "scview_dpt_cell_c0"
+    assert cell["by_group"]["columns"][0] == "stage"  # PAGA's groups for a cell root
+    text = await _call("pseudotime", {"dataset_id": did, "root_cell": "c0", "root_value": "early"}, error=True)
+    assert "not both" in text
 
     g = await _call("pseudotime_genes", {"dataset_id": did, "column": "scview_dpt_early", "n_bins": 10, "limit": 5})
     top = [row[0] for row in g["genes"]["rows"][:2]]

@@ -102,7 +102,7 @@ async def paga(
 # --- diffusion pseudotime ----------------------------------------------------------------------
 
 def _run_record(p: dict[str, Any]) -> dict[str, Any]:
-    return pick(p, "column", "root_named_column", "root_column", "root_value", "root_cell", "graph",
+    return pick(p, "column", "root_named_column", "root_kind", "root_column", "root_value", "root_cell", "graph",
                 "n_unreachable", "n_detached", "warnings", "stale")
 
 
@@ -124,16 +124,20 @@ async def pseudotime(
     root_value: Annotated[str | None, Field(max_length=256, description=(
         "The start group's value in root_column: the cell state the process begins in (an end of the PAGA "
         "tree, a progenitor, the earliest stage). The root cell is the group's most central cell."))] = None,
+    root_cell: Annotated[str | None, Field(max_length=512, description=(
+        "Instead of a group: one cell's name (obs name) to start from, e.g. a cell at the tip of the start "
+        "state. Give root_cell, or root_column with root_value, not both."))] = None,
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
-    """Diffusion pseudotime (scanpy's DPT) from a root group, saved as the obs column
-    scview_dpt_pseudotime and as one column per root (root_named_column, kept when another
-    root runs). The reply has the route's warnings word for word (a root inside the PAGA tree,
-    a pseudotime that runs against another one, weakly linked cells left out), n_detached and
-    n_unreachable, and each root_column group's median pseudotime, earliest first. Without
-    root_column and root_value: the pseudotime columns the dataset holds and how each was made."""
+    """Diffusion pseudotime (scanpy's DPT) from a root group or one root cell, saved as the obs
+    column scview_dpt_pseudotime and as one column per root (root_named_column, kept when another
+    root runs; scview_dpt_cell_<name> for a cell). The reply has the route's warnings word for word
+    (a root inside the PAGA tree, a pseudotime that runs against another one, weakly linked cells
+    left out), n_detached and n_unreachable, and each group's median pseudotime, earliest first
+    (root_column's groups, or PAGA's for a cell root). Without a root: the pseudotime columns the
+    dataset holds and how each was made."""
     n = clamp(limit)
-    if root_column is None and root_value is None:
+    if root_column is None and root_value is None and root_cell is None:
         d = await _get(f"{_ds(dataset_id)}/trajectory")
         out = {"dataset_id": dataset_id, "pseudotime_columns": d.get("pseudotime_columns") or [],
                "runs": {c: _run_record(p) for c, p in (d.get("runs") or {}).items()},
@@ -141,17 +145,31 @@ async def pseudotime(
         if d.get("computed"):
             out["latest"] = _run_record(d["computed"])
         if not out["pseudotime_columns"]:
-            out["note"] = "No pseudotime yet: pseudotime(root_column, root_value) computes one."
+            out["note"] = "No pseudotime yet: pseudotime(root_column, root_value) or pseudotime(root_cell) computes one."
         return dumps(out, _max_chars(limit))
-    if not root_column or root_value is None:
-        raise ToolError("Give both root_column and root_value (or neither, to list the pseudotime columns).")
-    r = await _post(f"{_ds(dataset_id)}/trajectory/dpt", {"root_column": root_column, "root_value": root_value})
+    if root_cell is not None:
+        if root_column is not None or root_value is not None:
+            raise ToolError("Give root_cell, or root_column with root_value, not both.")
+        body: dict[str, Any] = {"root_cell": root_cell}
+    elif not root_column or root_value is None:
+        raise ToolError("Give both root_column and root_value (or root_cell, or none to list the pseudotime columns).")
+    else:
+        body = {"root_column": root_column, "root_value": root_value}
+    r = await _post(f"{_ds(dataset_id)}/trajectory/dpt", body)
     out = {"dataset_id": dataset_id, "warnings": r.get("warnings") or [], **_run_record(r),
            **pick(r, "root_rule", "diffmap_n_comps", "n_dcs")}
     column = r.get("root_named_column") or r.get("column")
-    out["by_group"] = await _medians(dataset_id, column, root_column, n)
-    out["next"] = (f"pseudotime_genes(column='{column}'); plot(kind='violin', value_column='{column}', "
-                   f"groupby='{root_column}'); plot(color_by='{column}')")
+    groupby = root_column
+    if groupby is None:  # a cell root: PAGA's groups, when a graph is saved
+        try:
+            groupby = ((await _get(f"{_ds(dataset_id)}/trajectory/paga")).get("paga") or {}).get("groupby")
+        except ToolError:
+            groupby = None
+    if groupby:
+        out["by_group"] = await _medians(dataset_id, column, groupby, n)
+    out["next"] = (f"pseudotime_genes(column='{column}'); "
+                   + (f"plot(kind='violin', value_column='{column}', groupby='{groupby}'); " if groupby else "")
+                   + f"plot(color_by='{column}')")
     try:  # a wrong root at a tree end passes the checks above when it is the first pseudotime run
         attached = bool((await _get(f"{_ds(dataset_id)}/trajectory")).get("velocity_layers"))
     except ToolError:

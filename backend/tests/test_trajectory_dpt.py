@@ -21,6 +21,8 @@ from scview.core.trajectory import (
     compute_dpt,
     detached_tail,
     root_cell,
+    root_column_name,
+    root_label,
 )
 
 API = "/api/v1"
@@ -247,9 +249,9 @@ async def test_endpoint_runs_with_the_dataset_to_itself(client, dataset_manager,
     seen = {}
     real = traj_api.compute_dpt
 
-    def spy(adata, column, value):
+    def spy(adata, column, value, **kw):
         seen["busy"] = dataset_manager.is_busy(did)
-        return real(adata, column, value)
+        return real(adata, column, value, **kw)
 
     monkeypatch.setattr(traj_api, "compute_dpt", spy)
     r = await client.post(
@@ -258,3 +260,84 @@ async def test_endpoint_runs_with_the_dataset_to_itself(client, dataset_manager,
     assert r.status_code == 200, r.text
     assert seen["busy"] is True
     assert not dataset_manager.is_busy(did)
+
+
+def test_dpt_from_one_cell_keeps_its_own_column_and_record():
+    a, t = _path_adata()
+    tip = str(a.obs_names[int(np.argmin(t))])  # the first cell along the path
+    group = compute_dpt(a, "stage", "early")
+    p = compute_dpt(a, root_cell=tip)
+    assert p["root_kind"] == "cell" and p["root_cell"] == tip and p["root_rule"] == "the cell given"
+    assert p["root_column"] is None and p["root_value"] is None
+    assert p["root_named_column"] == root_column_name(root_cell=tip) == f"scview_dpt_cell_{tip}"
+    assert group["root_kind"] == "group" and group["root_cell"] != tip  # the group's central cell
+    pt = a.obs[DPT_COLUMN].to_numpy()
+    assert pt[a.obs_names.get_loc(tip)] == 0.0
+    assert spearmanr(pt[:N_PATH], t).statistic > 0.95  # from the very start, every cell in order
+    runs = json.loads(a.uns[RUNS_KEY])
+    assert set(runs) == {"scview_dpt_early", f"scview_dpt_cell_{tip}"}
+    assert runs[f"scview_dpt_cell_{tip}"]["root_kind"] == "cell"
+    assert provenance.read_provenance(a)["history"][-1]["params"]["root_cell"] == tip
+    assert root_label(p) == f"cell '{tip}'" and root_label(group) == "stage = early"
+    # A group named like a cell's column cannot take the cell root's column.
+    assert root_column_name("cell x") != root_column_name(root_cell="x")
+
+
+def test_dpt_root_choice_is_one_group_or_one_cell():
+    a, _ = _path_adata()
+    for kw in ({}, {"root_column": "stage"}, {"root_column": "stage", "root_value": "early", "root_cell": "c1"},
+               {"root_value": "early", "root_cell": "c1"}):
+        with pytest.raises(TrajectoryError, match="not both"):
+            compute_dpt(a, **kw)
+    with pytest.raises(TrajectoryError, match="No cell is named 'nope'"):
+        compute_dpt(a, root_cell="nope")
+    with pytest.raises(TrajectoryError, match="cell 'c310' sit in a disconnected part"):
+        compute_dpt(a, root_cell=f"c{N_PATH + 10}")  # on the island
+
+
+def test_a_cell_root_inside_the_paga_tree_is_checked_as_its_group():
+    a, t = _path_adata()
+    a.uns[PAGA_KEY] = json.dumps({"groupby": "stage", "groups": ["early", "mid", "late"],
+                                  "tree": [[0, 1], [1, 2]], "edges": [], "sizes": [1, 1, 1]})
+    mid = str(a.obs_names[int(np.argmin(np.abs(t - 0.5)))])
+    got = compute_dpt(a, root_cell=mid)["warnings"]
+    assert any("'mid' sits inside the PAGA tree of stage" in w for w in got)
+
+
+def test_a_cell_root_replays_from_that_cell():
+    from scview.core import replay_script
+
+    a, t = _path_adata()
+    tip = str(a.obs_names[int(np.argmin(t))])
+    compute_dpt(a, "stage", "late")
+    compute_dpt(a, root_cell=tip)
+    script = replay_script.build_script(a)
+    compile(script, "replay.py", "exec")
+    assert f"get_loc('{tip}')" in script and f"adata.obs['scview_dpt_cell_{tip}']" in script
+    assert "# Root: the cell picked by hand." in script
+    assert "# Root: the most central cell of stage = late in diffusion space." in script
+
+
+async def test_endpoint_takes_one_cell_as_the_root(client, dataset_manager):
+    a, t = _path_adata()
+    did, _ = _register(dataset_manager, a)
+    url = f"{API}/datasets/{did}/trajectory/dpt"
+    for body in ({}, {"root_column": "stage"}, {"root_column": "stage", "root_value": "early", "root_cell": "c0"},
+                 {"root_value": "early"}):
+        r = await client.post(url, json=body)
+        assert r.status_code == 422, body
+        assert "root_cell (one cell's name)" in r.json()["detail"]
+    r = await client.post(url, json={"root_cell": "nope"})
+    assert r.status_code == 404 and "No cell is named 'nope'" in r.json()["detail"]
+
+    tip = int(np.argmin(t))
+    named = (await client.get(f"{API}/datasets/{did}/trajectory/cell-name", params={"index": tip})).json()
+    assert named["name"] == f"c{tip}"
+    r = await client.get(f"{API}/datasets/{did}/trajectory/cell-name", params={"index": 10_000})
+    assert r.status_code == 404
+    r = await client.post(url, json={"root_cell": named["name"]})
+    assert r.status_code == 200, r.text
+    assert r.json()["root_kind"] == "cell" and r.json()["root_named_column"] == f"scview_dpt_cell_c{tip}"
+    listed = (await client.get(f"{API}/datasets/{did}/trajectory")).json()
+    assert listed["computed"]["root_cell"] == f"c{tip}" and f"scview_dpt_cell_c{tip}" in listed["runs"]
+    assert f"scview_dpt_cell_c{tip}" in listed["pseudotime_columns"]

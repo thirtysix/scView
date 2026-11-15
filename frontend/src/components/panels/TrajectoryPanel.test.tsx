@@ -205,4 +205,58 @@ describe("TrajectoryPanel: PAGA graph and genes along pseudotime", () => {
     fireEvent.change(screen.getByLabelText("Pseudotime"), { target: { value: "scview_dpt_MEP" } });
     expect(await screen.findByTestId("dpt-computed")).toHaveTextContent("Current scview_dpt_MEP: started from MEP");
   });
+
+  it("starts pseudotime from one cell, typed or picked on the plot", async () => {
+    const posted: unknown[] = [];
+    apiFetch.mockImplementation((path: string, init?: { body?: string }) => {
+      if (path.endsWith("/trajectory")) {
+        return Promise.resolve({ pseudotime_columns: ["scview_dpt_pseudotime"], n_columns: 1, computed: null });
+      }
+      if (path.includes("/trajectory/cell-name?index=2")) return Promise.resolve({ index: 2, name: "AAAC-1" });
+      if (path === "/datasets/d1") return Promise.resolve(useDatasetStore.getState().currentDataset);
+      if (path.endsWith("/trajectory/dpt")) {
+        posted.push(JSON.parse(init!.body!));
+        return Promise.resolve({ column: "scview_dpt_pseudotime", root_kind: "cell", root_cell: "AAAC-1" });
+      }
+      if (path.endsWith("/trajectory/scview_dpt_pseudotime")) {
+        return Promise.resolve({ column: "scview_dpt_pseudotime", n_cells: 3, values: [0, 0.5, 1], min: 0, max: 1 });
+      }
+      return Promise.resolve([]);
+    });
+    renderPanel();
+    fireEvent.click(await screen.findByRole("radio", { name: "one cell" }));
+    const compute = screen.getByRole("button", { name: "Compute" });
+    expect(compute).toBeDisabled();
+    // Clicks on the plot pick nothing until pick mode is on.
+    expect(scatterProps.current!.onClick).toBeUndefined();
+    fireEvent.click(screen.getByRole("button", { name: "Pick on the plot" }));
+    await waitFor(() => expect(scatterProps.current!.onClick).toBeTypeOf("function"));
+    (scatterProps.current!.onClick as (i: number | null) => void)(2);
+    await waitFor(() => expect(screen.getByLabelText("Root cell")).toHaveValue("AAAC-1"));
+    expect(scatterProps.current!.onClick).toBeUndefined(); // one pick, then off
+    fireEvent.click(compute);
+    await waitFor(() => expect(posted).toEqual([{ root_cell: "AAAC-1" }]));
+    // Typed by hand works too.
+    fireEvent.change(screen.getByLabelText("Root cell"), { target: { value: " TTTG-1 " } });
+    fireEvent.click(screen.getByRole("button", { name: "Compute" }));
+    await waitFor(() => expect(posted).toEqual([{ root_cell: "AAAC-1" }, { root_cell: "TTTG-1" }]));
+  });
+
+  it("says which cell a run started from", async () => {
+    const run = {
+      column: "scview_dpt_pseudotime", root_kind: "cell", root_column: null, root_value: null, root_cell: "AAAC-1",
+      graph: "existing neighbour graph (use_rep=X_pca, k=15)", n_unreachable: 0, warnings: [], stale: null,
+    };
+    apiFetch.mockImplementation((path: string) => {
+      if (path.endsWith("/trajectory")) {
+        return Promise.resolve({ pseudotime_columns: ["scview_dpt_pseudotime"], n_columns: 1, computed: run, runs: {} });
+      }
+      if (path.includes("/trajectory/scview_dpt_")) {
+        return Promise.resolve({ column: "x", n_cells: 3, values: [0, 0.5, 1], min: 0, max: 1 });
+      }
+      return Promise.resolve([]);
+    });
+    renderPanel();
+    expect(await screen.findByTestId("dpt-computed")).toHaveTextContent("started from cell AAAC-1,");
+  });
 });

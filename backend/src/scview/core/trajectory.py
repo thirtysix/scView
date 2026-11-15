@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 DPT_COLUMN = "scview_dpt_pseudotime"  # the latest run
 DPT_PREFIX = "scview_dpt_"  # + the root group: each root's run kept (root_column_name)
+CELL_ROOT_PREFIX = "cell_"  # after DPT_PREFIX: a single-cell root's own column
 RUNS_KEY = "scview_dpt_runs"  # uns: JSON {column: params} of each root's column
 PARAMS_KEY = "scview_dpt_params"  # uns: JSON record of how DPT_COLUMN was made
 PAGA_KEY = "scview_paga"  # uns: JSON record of the last PAGA graph (compute_paga)
@@ -39,6 +40,8 @@ MAX_PAGA_GROUPS = 100  # as many as a root-group picker lists
 DETACH_MAX_SHARE = 0.05  # a weakly linked tail left out of DPT holds at most this share of the cells
 DETACH_ROUNDS = 2  # recomputations after leaving one out (a second island can show then)
 REVERSED_RHO = -0.5  # a pseudotime this much against another one: a root warning
+ROOT_CHOICE = ("Give either root_column and root_value (a start group: its most central cell is the root) "
+               "or root_cell (one cell's name), not both.")
 
 
 class TrajectoryError(ValueError):
@@ -211,10 +214,16 @@ def pseudotime_columns(adata) -> list[str]:
             if any(w in str(c).lower() for w in PSEUDOTIME_WORDS) and pd.api.types.is_numeric_dtype(adata.obs[c])]
 
 
-def root_column_name(root_value: str) -> str:
+def root_column_name(root_value: str | None = None, root_cell: str | None = None) -> str:
     """The obs column a run from this root also writes (one per root, kept beside the
-    latest in ``DPT_COLUMN``)."""
+    latest in ``DPT_COLUMN``): ``scview_dpt_<group>``, or ``scview_dpt_cell_<cell>`` for
+    a single-cell root."""
+    if root_cell is not None:
+        slug = re.sub(r"[^0-9A-Za-z]+", "_", str(root_cell)).strip("_")[:40] or "root"
+        return f"{DPT_PREFIX}{CELL_ROOT_PREFIX}{slug}"
     slug = re.sub(r"[^0-9A-Za-z]+", "_", str(root_value)).strip("_")[:40] or "root"
+    if slug.startswith(CELL_ROOT_PREFIX):  # a group called "cell ...": never a cell root's column
+        slug = f"group_{slug}"
     return f"{DPT_PREFIX}{slug}"
 
 
@@ -237,25 +246,35 @@ def against_other_pseudotimes(adata, pt: np.ndarray, skip: set[str]) -> tuple[st
     return worst
 
 
-def root_warnings(adata, pt: np.ndarray, root_column: str, root_value: str) -> list[str]:
-    """Signs that the root group is not where the process starts, kept simple: it sits
-    inside the saved PAGA tree of its own column (pseudotime then runs out several
-    ways), or this pseudotime runs against another one the dataset holds (an earlier
-    run from another root, an imported ``latent_time``). How many genes cells detect
+def root_group_in(adata, column: str, iroot: int) -> str | None:
+    """The root cell's group in ``column`` (str), or None when it has none."""
+    if column not in adata.obs.columns:
+        return None
+    v = adata.obs[column].iloc[iroot]
+    return None if pd.isna(v) else str(v)
+
+
+def root_warnings(adata, pt: np.ndarray, iroot: int, own_column: str) -> list[str]:
+    """Signs that the root is not where the process starts, kept simple: its group sits
+    inside the saved PAGA tree (pseudotime then runs out several ways), or this pseudotime
+    runs against another one the dataset holds (an earlier run from another root, an
+    imported ``latent_time``). The group is the root cell's in PAGA's column, so a
+    single-cell root is checked as its group is. How many genes cells detect
     (CytoTRACE's signal) was tried and dropped: paul15's MEP root detects the fewest
     (323 median against 1,175 in erythroid cells), so it flagged the right root."""
     out: list[str] = []
     record = read_paga(adata)
-    if record and record.get("groupby") == root_column:
-        nbrs = _tree_neighbours(record, root_value)
+    group = root_group_in(adata, record["groupby"], iroot) if record else None
+    if record and group is not None:
+        nbrs = _tree_neighbours(record, group)
         if len(nbrs) >= 2:
             shown = ", ".join(f"'{n}'" for n in nbrs[:3]) + (" and more" if len(nbrs) > 3 else "")
             out.append(
-                f"'{root_value}' sits inside the PAGA tree of {root_column} (linked to {shown}), not at an end, "
+                f"'{group}' sits inside the PAGA tree of {record['groupby']} (linked to {shown}), not at an end, "
                 "so pseudotime runs out from it in several directions. Right for a progenitor between lineages; "
                 "otherwise the start state at an end of the tree is the usual root."
             )
-    other = against_other_pseudotimes(adata, pt, {DPT_COLUMN, root_column_name(root_value)})
+    other = against_other_pseudotimes(adata, pt, {DPT_COLUMN, own_column})
     if other is not None:
         col, rho, n = other
         out.append(
@@ -269,22 +288,37 @@ def _fmt(v: float) -> str:
     return f"{v:.2g}" if v < 0.1 else f"{v:.2f}"
 
 
-def compute_dpt(adata, root_column: str, root_value: str) -> dict[str, Any]:
-    """Diffusion pseudotime from a root group; writes ``DPT_COLUMN`` into ``adata``.
+def compute_dpt(adata, root_column: str | None = None, root_value: str | None = None, *,
+                root_cell: str | None = None) -> dict[str, Any]:
+    """Diffusion pseudotime from a root group (``root_column`` = ``root_value``: the group's
+    most central cell, ``root_cell``) or from one cell named by ``root_cell``; writes
+    ``DPT_COLUMN`` into ``adata``.
 
     Cells the root cannot reach through the graph get ``inf``. Cells past an extreme gap
     (``detached_tail``: a weakly linked island) are left out with NaN and the pseudotime
     is computed again without them, so they do not set its scale. Returns the parameters
     (also recorded in ``uns`` and the provenance history), with ``warnings``.
     """
+    by_cell = root_cell is not None
+    if by_cell == (root_column is not None or root_value is not None) or (
+            not by_cell and (root_column is None or root_value is None)):
+        raise TrajectoryError(ROOT_CHOICE)
     if adata.n_obs < MIN_CELLS:
         raise TrajectoryError(f"Pseudotime needs at least {MIN_CELLS} cells.")
-    if root_column not in adata.obs.columns:
-        raise TrajectoryError(f"Column '{root_column}' not found.")
-    col = adata.obs[root_column]
-    in_group = (col.astype(str).where(col.notna()) == root_value).to_numpy()
-    if not in_group.any():
-        raise TrajectoryError(f"No cells have {root_column} = '{root_value}'.")
+    if by_cell:
+        in_group = np.asarray(adata.obs_names == str(root_cell))
+        if not in_group.any():
+            raise TrajectoryError(f"No cell is named '{root_cell}'.")
+        in_group[np.flatnonzero(in_group)[1:]] = False  # a repeated name: its first cell
+        what = f"cell '{root_cell}'"
+    else:
+        if root_column not in adata.obs.columns:
+            raise TrajectoryError(f"Column '{root_column}' not found.")
+        col = adata.obs[root_column]
+        in_group = (col.astype(str).where(col.notna()) == root_value).to_numpy()
+        if not in_group.any():
+            raise TrajectoryError(f"No cells have {root_column} = '{root_value}'.")
+        what = f"'{root_value}' cells"
 
     source = graph_source(adata)
     work = _scratch_with_graph(adata, source)
@@ -297,8 +331,8 @@ def compute_dpt(adata, root_column: str, root_value: str) -> dict[str, Any]:
     reach = comp == np.bincount(comp[in_group]).argmax()
     if reach.sum() < MIN_CELLS:
         raise TrajectoryError(
-            f"The '{root_value}' cells sit in a disconnected part of the neighbour graph "
-            f"with only {int(reach.sum())} cells; pick a root group in the main data."
+            f"The {what} sit in a disconnected part of the neighbour graph "
+            f"with only {int(reach.sum())} cells; pick a root in the main data."
         )
     n_reach = int(reach.sum())
     detached = np.zeros(adata.n_obs, dtype=bool)
@@ -327,16 +361,18 @@ def compute_dpt(adata, root_column: str, root_value: str) -> dict[str, Any]:
             f"{_fmt(tail_lo)}-{_fmt(tail_hi)} while the other {n_reach - n_detached:,} took 0-{_fmt(main_max)}. "
             "They are left out (grey), and the pseudotime was computed again on the main part."
         )
-    warnings.extend(root_warnings(adata, pt, root_column, root_value))
+    named = root_column_name(root_value, root_cell if by_cell else None)
+    warnings.extend(root_warnings(adata, pt, iroot, named))
 
-    named = root_column_name(root_value)
     params: dict[str, Any] = {
         "column": DPT_COLUMN,
         "root_named_column": named,  # the same values, kept when another root runs
+        "root_kind": "cell" if by_cell else "group",
         "root_column": root_column,
         "root_value": root_value,
         "root_cell": str(adata.obs_names[iroot]),
-        "root_rule": "most central root-group cell in DPT-weighted diffusion space",
+        "root_rule": ("the cell given" if by_cell
+                      else "most central root-group cell in DPT-weighted diffusion space"),
         "graph": _graph_label(adata, source),
         "diffmap_n_comps": DIFFMAP_COMPS,
         "n_dcs": N_DCS,
@@ -357,6 +393,13 @@ def compute_dpt(adata, root_column: str, root_value: str) -> dict[str, Any]:
     except Exception as e:  # provenance must never block the result
         logger.warning("Could not record pseudotime provenance: %s", e)
     return params
+
+
+def root_label(params: dict[str, Any]) -> str:
+    """Where a pseudotime run started, in words: "celltype = Ductal" or "cell 'AAAC-1'"."""
+    if params.get("root_kind") == "cell":
+        return f"cell '{params.get('root_cell')}'"
+    return f"{params.get('root_column')} = {params.get('root_value')}"
 
 
 def _read_json(adata, key: str) -> dict[str, Any] | None:

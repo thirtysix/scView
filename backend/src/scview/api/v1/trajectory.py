@@ -23,6 +23,7 @@ from scview.core.dataset_manager import DatasetManager, DatasetMemoryError
 from scview.core.obs_writes import uns_snapshot, write_derived
 from scview.core.processing import run_exclusive
 from scview.core.trajectory import (
+    ROOT_CHOICE,
     TrajectoryError,
     compute_dpt,
     compute_paga,
@@ -157,8 +158,27 @@ async def compute_paga_graph(
 
 
 class DPTRequest(BaseModel):
-    root_column: str  # obs column holding the start group (cluster / cell type)
-    root_value: str
+    # The start: a group (root_column = root_value; its most central cell) or one cell.
+    root_column: str | None = Field(default=None, description="Obs column holding the start group")
+    root_value: str | None = Field(default=None, description="The start group's value in root_column")
+    root_cell: str | None = Field(default=None, max_length=512,
+                                  description="One cell's name (obs name) to start from, instead of a group")
+
+
+@router.get("/datasets/{dataset_id}/trajectory/cell-name")
+async def cell_name(
+    dataset_id: str,
+    index: int = Query(..., ge=0, description="The cell's row in the dataset (as the plots order cells)"),
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """The name of the cell at a row: a cell clicked on a plot, picked as a pseudotime root."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail="Dataset not found.")
+    names = adaptor.adata.obs_names
+    if index >= len(names):
+        raise HTTPException(status_code=404, detail=f"The dataset has {len(names):,} cells; no row {index}.")
+    return {"dataset_id": dataset_id, "index": index, "name": str(names[index])}
 
 
 @router.post("/datasets/{dataset_id}/trajectory/dpt")
@@ -167,26 +187,35 @@ async def compute_pseudotime(
     body: DPTRequest,
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
-    """Compute diffusion pseudotime rooted in one group, save it as an obs
+    """Compute diffusion pseudotime rooted in one group or one cell, save it as an obs
     column of the dataset's derived file, and reload the dataset."""
+    by_cell = body.root_cell is not None
+    if by_cell == (body.root_column is not None or body.root_value is not None) or (
+            not by_cell and (not body.root_column or body.root_value is None)):
+        raise HTTPException(status_code=422, detail=ROOT_CHOICE)
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
     adata = adaptor.adata
-    if body.root_column not in adata.obs.columns:
-        raise HTTPException(status_code=404, detail=f"Column '{body.root_column}' not found.")
     # Cheap checks first, so a bad request costs no copy, write or reload.
-    col = adata.obs[body.root_column]
-    if not (col.astype(str).where(col.notna()) == body.root_value).any():
-        raise HTTPException(
-            status_code=400,
-            detail=f"No cells have {body.root_column} = '{body.root_value}'.",
-        )
+    if by_cell:
+        if body.root_cell not in adata.obs_names:
+            raise HTTPException(status_code=404, detail=f"No cell is named '{body.root_cell}'.")
+    else:
+        if body.root_column not in adata.obs.columns:
+            raise HTTPException(status_code=404, detail=f"Column '{body.root_column}' not found.")
+        col = adata.obs[body.root_column]
+        if not (col.astype(str).where(col.notna()) == body.root_value).any():
+            raise HTTPException(
+                status_code=400,
+                detail=f"No cells have {body.root_column} = '{body.root_value}'.",
+            )
+        del col
     try:
         graph_source(adata)
     except TrajectoryError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    del adaptor, adata, col  # no hold on the cached copy through run_exclusive's reload
+    del adaptor, adata  # no hold on the cached copy through run_exclusive's reload
 
     def _run(adaptor):
         work = _light_or_memory(adaptor)  # as for PAGA: DPT reads the graph and obs alone
@@ -194,10 +223,10 @@ async def compute_pseudotime(
         if large_run.large_info(adaptor.h5ad_path) is not None:
             # No matrix in hand: the file keeps its own, obs and uns are rewritten.
             before = uns_snapshot(work)
-            params = compute_dpt(work, body.root_column, body.root_value)
+            params = compute_dpt(work, body.root_column, body.root_value, root_cell=body.root_cell)
             write_derived(work, output_path, adaptor.h5ad_path, before)
             return params
-        params = compute_dpt(work, body.root_column, body.root_value)
+        params = compute_dpt(work, body.root_column, body.root_value, root_cell=body.root_cell)
         # Write beside, then swap in: a backed dataset may be reading this path.
         partial = output_path + ".partial"
         uns_history.before_save(output_path, work)

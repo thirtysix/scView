@@ -491,15 +491,27 @@ POST /datasets/{dataset_id}/trajectory/dpt
 Content-Type: application/json
 ```
 
-**Request body:** `{"root_column": "celltype", "root_value": "Blood progenitors 1"}`
+**Request body:** `{"root_column": "celltype", "root_value": "Blood progenitors 1"}` (a start
+group: its most central cell in diffusion space is the root), or `{"root_cell": "GGACCCGATGTCGA"}`
+(one cell by name). Give one of the two: 422 otherwise, 404 for an unknown cell.
 
 Writes `scview_dpt_pseudotime` (the latest run) and `scview_dpt_<root>` (kept when another root
-runs). The response is the run record above, without `stale`. Cells the root cannot reach get no
+runs; `scview_dpt_cell_<cell>` for a cell root). The record has `root_kind` (group | cell),
+`root_cell` (the cell used either way) and `root_rule`. The response is the run record above, without `stale`. Cells the root cannot reach get no
 pseudotime (`n_unreachable`). Cells past an extreme gap at the far end (at most 5% of the cells,
 the gap wider than the range below it) are a weakly linked island: they are left out
 (`n_detached`) and DPT is computed again without them. `warnings` says so, and flags a root that
 sits inside the saved PAGA tree of its column or runs against another pseudotime column
 (Spearman rho <= -0.5). 400 when no cell has the root value or there is no graph or PCA.
+
+### Cell Name
+
+```
+GET /datasets/{dataset_id}/trajectory/cell-name?index=2041
+```
+
+`{"index": 2041, "name": "AAACCTGAGCGTTCTC-1"}`: the cell at a row (a cell clicked on a plot,
+picked as a root). 404 past the last row.
 
 ### PAGA
 

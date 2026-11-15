@@ -3116,10 +3116,17 @@ def _pseudotime(p: dict, ctx: _Ctx) -> Snippet:
     also = f'adata.obs[{_lit(str(named))}] = adata.obs["dpt_pseudotime"].to_numpy()\n' if named else ""
     detached = (f"# scView also left out {int(p['n_detached'])} weakly linked cells (NaN) and diffused again\n"
                 "# without them; this keeps them in.\n") if p.get("n_detached") else ""
+    if p.get("root_kind") == "cell":
+        where = "# Root: the cell picked by hand.\n"
+    elif p.get("root_column") is not None:
+        group = f"{p.get('root_column')} = {p.get('root_value')}".replace("\n", " ")
+        where = f"# Root: the most central cell of {group} in diffusion space.\n"
+    else:
+        where = ""
     return Snippet(APPROXIMATE, _block(f'''
 # NOTE: scView runs DPT on the cells its graph connects to the root and gives the
 # others an infinite pseudotime; this runs it on every cell of the main graph.
-{detached}sc.tl.diffmap(adata, n_comps={_lit(p.get("diffmap_n_comps", DIFFMAP_COMPS))})
+{where}{detached}sc.tl.diffmap(adata, n_comps={_lit(p.get("diffmap_n_comps", DIFFMAP_COMPS))})
 adata.uns["iroot"] = int(adata.obs_names.get_loc({_lit(str(root))}))
 sc.tl.dpt(adata, n_dcs={_lit(p.get("n_dcs", N_DCS))})
 adata.obs[{_lit(str(p.get("column") or DPT_COLUMN))}] = adata.obs["dpt_pseudotime"].to_numpy()
