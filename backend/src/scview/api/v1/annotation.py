@@ -52,35 +52,48 @@ class CellTypistModel(BaseModel):
     description: str
     # human | mouse | other, from the name and description (core/celltypist_fit.py)
     species: str = "human"
+    # the coarse organs its name and description name (celltypist_fit.model_organs; [] none named)
+    organs: list[str] = []
+    # cell types the model knows (the catalog's No_celltypes); None when the catalog does not say
+    n_types: int | None = None
 
 
 class CellTypistModelsResponse(BaseModel):
     default: str
     models: list[CellTypistModel]
+    # False: the catalog could not be read (offline), only the default is listed
+    complete: bool = True
 
 
 @lru_cache(maxsize=1)
-def _model_catalog() -> list[tuple[str, str]]:
-    """(name, description) for every available CellTypist model. Cached; may hit the
-    network once to fetch the model index, then reads the local copy."""
+def _model_catalog() -> list[tuple[str, str, int | None]]:
+    """(name, description, number of cell types) for every available CellTypist model. Cached;
+    may hit the network once to fetch the model index, then reads the local copy."""
     from celltypist import models as ct_models
 
-    df = ct_models.models_description()
-    return [(str(r["model"]), str(r["description"])) for _, r in df.iterrows()]
+    out = []
+    for m in ct_models.get_models_index()["models"]:
+        n = m.get("No_celltypes")
+        out.append((str(m["filename"]), str(m.get("details") or ""), int(n) if str(n).isdigit() else None))
+    return out
 
 
 @router.get("/annotation/celltypist-models", response_model=CellTypistModelsResponse)
 def list_celltypist_models() -> CellTypistModelsResponse:
-    """List CellTypist models (name + description) for the annotation picker."""
+    """List CellTypist models (name, description, species, organs, number of cell types) for the
+    annotation picker and the MCP ``celltypist_models`` tool."""
     try:
-        items = [CellTypistModel(model=m, description=d, species=fit.model_species(m, d))
-                 for m, d in _model_catalog()]
+        items = [CellTypistModel(model=m, description=d, species=fit.model_species(m, d),
+                                 organs=fit.model_organs(m, d), n_types=rest[0] if rest else None)
+                 for m, d, *rest in _model_catalog()]
     except Exception as e:  # offline / celltypist unavailable: still return the default
         logger.warning("Could not list CellTypist models (%s); returning default only.", e)
         items = [CellTypistModel(
             model=DEFAULT_CELLTYPIST_MODEL,
             description="immune sub-populations combined from 20 tissues of 18 studies",
+            organs=["immune"], n_types=98,
         )]
+        return CellTypistModelsResponse(default=DEFAULT_CELLTYPIST_MODEL, models=items, complete=False)
     return CellTypistModelsResponse(default=DEFAULT_CELLTYPIST_MODEL, models=items)
 
 

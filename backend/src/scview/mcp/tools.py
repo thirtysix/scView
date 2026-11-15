@@ -26,6 +26,7 @@ from mcp.types import TextContent, ToolAnnotations
 from pydantic import Field
 
 from scview.core.cell_filter import CellFilter
+from scview.core.marker_names import HOW_TEXT
 from scview.mcp import api, compact, jobs, params, plots
 from scview.mcp.compact import DEFAULT_LIMIT, clamp, dumps, num, pick, rows, table
 
@@ -798,6 +799,8 @@ async def run_pipeline(dataset_id: DatasetId, steps: Steps, params: Params = Non
     refused."""
     _check_steps(steps)
     p = _check_params(params)
+    if "cell_type_annotation" in steps:
+        await _check_annotation(p)
     if not allow_large_mode:
         mode = (await _get(f"{_ds(dataset_id)}/preflight", **_preflight_query(steps, p))).get("mode") or {}
         if mode.get("converts"):
@@ -898,7 +901,7 @@ async def get_markers(
 @tool(WRITE)
 async def annotate_celltypist(
     dataset_id: DatasetId,
-    model: Annotated[str, Field(description="CellTypist model, e.g. Immune_All_Low.pkl (default), "
+    model: Annotated[str, Field(description="CellTypist model (celltypist_models lists them), e.g. Immune_All_Low.pkl (default), "
                                             "Immune_All_High.pkl, Healthy_COVID19_PBMC.pkl.")] = "Immune_All_Low.pkl",
     groupby: Annotated[str, Field(description="Clusters for the majority vote (default: the active clustering).")] = "",
     target_column: Annotated[str, Field(description="Obs column to write.")] = "celltypist",
@@ -909,6 +912,7 @@ async def annotate_celltypist(
     """Label cells with a CellTypist reference model (the pipeline's cell_type_annotation step;
     a job). The result names the labels' confidence and the model's gene overlap. The model is
     downloaded on first use."""
+    model = await _known_celltypist_model(model)
     p = {"annotation_method": "celltypist", "celltypist_model": model, "annotation_groupby": groupby,
          "annotation_target": target_column, "annotation_overwrite": overwrite}
 
@@ -924,6 +928,108 @@ async def annotate_celltypist(
     job = await _start_run(dataset_id, ["cell_type_annotation"], p, "celltypist", finish)
     return dumps({"job_id": job.id, "status": job.status, "dataset_id": dataset_id,
                   "target_column": target_column, "next": "job_status(job_id, wait_seconds=50)"})
+
+
+async def _check_annotation(p: dict[str, Any]) -> None:
+    """Before the job: the AI method without a language model key (the routes' 422, which a job would
+    only report later), and a CellTypist model the catalog does not have."""
+    from scview.core.pipeline import AnnotationMethodError, PipelineParams, annotation_method_plan
+
+    try:
+        method, _ = annotation_method_plan(PipelineParams(**{k: v for k, v in p.items() if k.startswith("annotation_")}))
+    except AnnotationMethodError as e:
+        raise ToolError(str(e)) from None
+    if method == "celltypist":
+        p["celltypist_model"] = await _known_celltypist_model(str(p.get("celltypist_model") or ""))
+
+
+async def _known_celltypist_model(model: str) -> str:
+    """``model`` with ".pkl", or a ToolError naming the close catalog names before any job starts:
+    a misspelt model ran 68 s (the dataset loaded) before failing with no list (QA round 6). An
+    unreadable catalog (offline) checks nothing: CellTypist's own load says why."""
+    import difflib
+
+    name = (model or "").strip() or "Immune_All_Low.pkl"
+    name = name if name.endswith(".pkl") else f"{name}.pkl"
+    cat = await _get("/annotation/celltypist-models")
+    names = [m["model"] for m in cat.get("models") or []]
+    if not cat.get("complete", True) or name in names:
+        return name
+    by_lower = {n.lower(): n for n in names}
+    if name.lower() in by_lower:
+        return by_lower[name.lower()]
+    close = difflib.get_close_matches(name, names, n=3, cutoff=0.4)
+    raise ToolError(f"No CellTypist model '{model}'" + (f"; close names: {', '.join(close)}" if close else "")
+                    + f". celltypist_models lists all {len(names)} with their tissue, species and cell types.")
+
+
+@tool(READ)
+async def celltypist_models(
+    species: Annotated[Literal["human", "mouse", "other"] | None, Field(description=(
+        "Only models of this species (default: all)."))] = None,
+    tissue: Annotated[str, Field(max_length=200, description=(
+        "Only models whose name or description names this tissue, e.g. 'lung' or 'blood' "
+        "(blood and immune count as one; default: all)."))] = "",
+) -> str:
+    """The CellTypist reference models annotate_celltypist can use: name, species, the tissues its
+    name and description name (organs), the number of cell types it knows, and its description.
+    A model knows only its tissue's cell types: on another tissue every cell gets the nearest
+    one (an immune model called kidney podocytes alveolar macrophages)."""
+    from scview.core.marker_tissues import organs
+
+    cat = await _get("/annotation/celltypist-models")
+    same = {"blood": "immune"}
+    want = {same.get(o, o) for o in organs(tissue)} if tissue.strip() else None
+    if want == set():
+        raise ToolError(f"'{tissue}' names no tissue known here (e.g. kidney, lung, brain, blood, liver, gut).")
+    models = [m for m in cat.get("models") or []
+              if (species is None or m.get("species") == species)
+              and (want is None or {same.get(o, o) for o in m.get("organs") or []} & want)]
+    rows_ = [{**m, "organs": ", ".join(m.get("organs") or []), "description": (m.get("description") or "")[:120]}
+             for m in models]
+    out = {"default": cat.get("default"), "n_models": len(models),
+           "models": table(rows_, ["model", "species", "organs", "n_types", "description"], 200)}
+    if not cat.get("complete", True):
+        out["note"] = "The CellTypist catalog could not be read (offline?): only the default model is listed."
+    return dumps(out, _max_chars(200))
+
+
+@tool(READ)
+async def annotation_crosscheck(
+    dataset_id: DatasetId,
+    columns: Annotated[list[str], Field(min_length=2, max_length=6, description=(
+        "2 to 6 label columns to compare: an author annotation, scView's annotations (AI, CellTypist, "
+        "marker scores), a clustering."))],
+    reference: Annotated[str, Field(description=(
+        "The column the others are mapped onto, e.g. the author labels (default: the first of columns)."))] = "",
+    limit: Limit = DEFAULT_LIMIT,
+) -> str:
+    """Do annotation methods agree? ARI and AMI between every pair of columns (they compare the
+    groupings, not the names), and against the reference: each other column's labels mapped to the
+    reference label most of their cells carry, the share of cells that then agree, and the exact-name
+    agreement. Per reference label: its cells, mean agreement, the columns that disagree and what
+    each calls it. Changes nothing (the UI's Annotation cross-check can save a consensus)."""
+    d = await _post(f"{_ds(dataset_id)}/annotation/crosscheck", {"columns": columns, "reference": reference or None})
+    ref = d.get("reference")
+    vs = {o: {"ari": c.get("ari"), "ami": c.get("ami"), "mapped_agreement": c.get("mapped_agreement"),
+              "exact_name_agreement": (c.get("exact_name") or {}).get("agreement"), "n_cells": c.get("n_cells")}
+          for o, c in (d.get("comparisons") or {}).items()}
+    labels = []
+    for name in d.get("reference_labels") or []:
+        lab = (d.get("labels") or {}).get(name)
+        if not lab:
+            continue
+        calls = {o: ", ".join(f"{c['label']} ({num(c['share'])})" for c in a.get("calls") or [])
+                 for o, a in (lab.get("annotators") or {}).items()}
+        labels.append({"label": name, "n_cells": lab.get("n_cells"), "mean_agreement": lab.get("mean_agreement"),
+                       "disagreeing": ", ".join(lab.get("disagreeing") or []),
+                       "calls": "; ".join(f"{o}: {c}" for o, c in calls.items())})
+    n = clamp(limit)
+    return dumps({"dataset_id": dataset_id, "reference": ref,
+                  **pick(d, "columns", "n_compared", "mean_agreement", "exact_name_agreement", "n_unresolved", "note"),
+                  "ari": (d.get("pairwise") or {}).get("ari"), "vs_reference": vs,
+                  "labels": table(labels, ["label", "n_cells", "mean_agreement", "disagreeing", "calls"], n)},
+                 _max_chars(2 * n))
 
 
 @tool(READ)
@@ -969,14 +1075,26 @@ async def marker_db_check(
     d = await _post(f"{_ds(dataset_id)}/annotation/marker-db/check",
                     {"column": column, "species": species, "retry": retry, "tissue": tissue})
     n = clamp(limit)
-    labels = [{**r, "overlap": ", ".join(r.get("overlap") or []),
-               "suggestions": "; ".join(f"{s['cell_type']} (p {num(s['p'])})" for s in r.get("suggestions") or [])}
+
+    def suggestion(s: dict) -> str:
+        return (f"{s['cell_type']} (p {num(s['p'])}" + (f", {s['cl_id']}" if s.get("cl_id") else "")
+                + f"; shares {', '.join(s.get('overlap') or [])})")
+
+    # How each label was matched, its type's CL id, the group's markers and the genes behind every
+    # p: QA round 6 needed the REST reply to see why "PC Injured" was judged as plasma cells.
+    labels = [{**r, "match": (r.get("match") or {}).get("how"), "overlap": ", ".join(r.get("overlap") or []),
+               "markers": ", ".join((r.get("markers") or [])[:MARKER_DB_MARKERS_SHOWN]),
+               "suggestions": "; ".join(suggestion(s) for s in r.get("suggestions") or [])}
               for r in d.get("labels") or []]
     return dumps({"dataset_id": dataset_id,
                   **pick(d, "column", "species", "species_note", "verdict_counts", "cellmarker",
                          "verdict_sources", "suggestion_sources", "tissue", "note"),
-                  "labels": table(labels, ["label", "verdict_text", "db_type", "p", "overlap", "n_db_genes",
-                                           "suggestions"], n)}, _max_chars(n))
+                  "match_kinds": HOW_TEXT,
+                  "labels": table(labels, ["label", "verdict_text", "match", "db_type", "cl_id", "p", "overlap",
+                                           "n_db_genes", "markers", "suggestions"], n)}, _max_chars(2 * n))
+
+
+MARKER_DB_MARKERS_SHOWN = 10  # of the group's 25 markers the check used
 
 
 @tool(READ)
