@@ -78,6 +78,7 @@ describe("DataAssessmentPanel normalisation method", () => {
     expect(body).toEqual({
       steps: ["highly_variable_genes"],
       params: { normalization_method: "pearson_residuals" },
+      allow_large_mode: false,
     });
   });
 

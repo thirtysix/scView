@@ -85,7 +85,7 @@ describe("DataAssessmentPanel: the Leiden optimisation setting", () => {
     fireEvent.click(screen.getByRole("button", { name: /re-run this step/i }));
     await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
     const body = JSON.parse(fetchSpy.mock.calls[0]![1].body as string);
-    expect(body).toEqual({ steps: ["clustering"], params: { leiden_iterations: 2 } });
+    expect(body).toEqual({ steps: ["clustering"], params: { leiden_iterations: 2 }, allow_large_mode: false });
   });
 
   it("is not used with Louvain", async () => {
