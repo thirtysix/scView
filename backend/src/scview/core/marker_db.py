@@ -1222,9 +1222,11 @@ def tissue_names(db: MarkerDB, sc_: Scorer, adata, tissue: str = "") -> tuple[li
 
 
 def _label_row(sc_: Scorer, sc_suggest: Scorer, label: str, markers: list[str],
-               suggest_names: list[str] | None = None) -> dict:
+               suggest_names: list[str] | None = None, kidney: bool = False) -> dict:
+    """``kidney``: the dataset is kidney, so "PT", "PC", "IC" name nephron cells
+    (``marker_names.spell_kidney``)."""
     Q = sc_.query(markers)
-    matched, how = sc_.sdb.matcher.match(label, "C")
+    matched, how = sc_.sdb.matcher.match(label, "C", kidney=kidney)
     row: dict[str, Any] = {
         "label": label,
         "markers": markers,
@@ -1282,7 +1284,8 @@ def check(adata, column: str, species: str | None = None, db: MarkerDB | None = 
     sc_suggest = sc_ if suggest_from == verdict_from else Scorer(db.species(sp, suggest_from), measured)
     suggest_names, tissue_info = tissue_names(db, sc_suggest, adata, tissue)
     markers = _markers_for(adata, column)
-    labels = [_label_row(sc_, sc_suggest, g, markers.get(g, []), suggest_names) for g in groups]
+    kidney = "kidney" in tissue_info.get("organs", ())
+    labels = [_label_row(sc_, sc_suggest, g, markers.get(g, []), suggest_names, kidney) for g in groups]
     counts = Counter(r["verdict"] for r in labels)
     return {
         "column": column,

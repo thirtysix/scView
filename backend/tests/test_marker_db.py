@@ -233,6 +233,65 @@ def test_a_code_label_matches_only_whole_names():
     assert m.match("Proximal tubule") == (["Proximal tubule cells"], "exact")
 
 
+
+def test_kidney_codes_are_spelled_out_and_ambiguous_ones_only_in_kidney_labels():
+    """KPMP / Wilson 2022 nephron codes: TAL, DCT, CNT ... anywhere; PT, PC, IC, MD, PEC, MES only in
+    a kidney label or dataset (PC stays plasma, "L5 PT" stays a neuron label elsewhere)."""
+    assert mn.spell_kidney("aTAL1").split() == ["thick", "ascending", "limb", "1"]
+    assert mn.spell_kidney("dC-TAL").split() == ["-", "thick", "ascending", "limb"]  # state prefixes go
+    assert mn.spell_kidney("Podo").split() == ["podocyte"]
+    assert mn.spell_kidney("PC") == "PC" and mn.spell_kidney("L5 PT") == "L5 PT"
+    assert mn.spell_kidney("PC", kidney=True).split() == ["principal"]
+    assert mn.spell_kidney("CNT-PC").split() == ["connecting", "tubule", "-", "principal"]  # two codes: kidney
+    assert mn.spell_kidney("CD-IC").split() == ["CD-", "intercalated"]  # CD alone: collecting duct
+    assert mn.spell_kidney("CD8 PC") == "CD8 PC"  # CD4 / CD8 are not collecting ducts
+    assert mn.spell_kidney("MES-like") == "MES-like" and mn.spell_kidney("DC") == "DC"
+    m = mn.Matcher({"Plasma cells": "CL:0000786", "Principal cells": "CL:0005009", "Thick ascending limb cell": "",
+                    "Proximal tubule cells": "", "Non PT tubular cell": "", "Type A intercalated cell": "",
+                    "Intercalated cells": "", "Dendritic cells": "", "Podocytes": "", "Mesangial cells": "",
+                    "Pyramidal tract neuron": ""})
+    assert m.match("PC") == (["Plasma cells"], "exact")
+    assert m.match("PC", kidney=True) == (["Principal cells"], "exact")
+    assert m.match("PT") == ([], "none") and m.match("L5 PT") == ([], "none")
+    assert m.match("PT", kidney=True) == (["Proximal tubule cells"], "exact")  # never the negated name
+    assert m.match("aTAL1") == (["Thick ascending limb cell"], "subset")
+    assert m.match("dC-TAL") == (["Thick ascending limb cell"], "exact")  # was "Dendritic cells" (dc)
+    assert m.match("ICA", kidney=True) == (["Type A intercalated cell"], "exact")
+    assert m.match("CCD-IC-A") == (["Type A intercalated cell"], "subset")
+    assert m.match("MES") == ([], "none") and m.match("MES", kidney=True) == (["Mesangial cells"], "exact")
+    assert m.match("PODO") == (["Podocytes"], "exact")
+    assert m.match("PC", "A", kidney=True) == ([], "none")  # spelling is mode C only
+
+
+def test_the_check_reads_nephron_codes_in_a_kidney_dataset(monkeypatch):
+    """``check`` passes the dataset's tissue on: in a kidney dataset "PC" is the principal cell."""
+    import types
+
+    seen = []
+    monkeypatch.setattr(mdb, "_label_row", lambda *a, **k: seen.append(a[-1]) or {"verdict": "not_in_db"})
+    monkeypatch.setattr(mdb, "tissue_names", lambda db, sc_, adata, tissue="": ([], {"organs": ["kidney"]}))
+    monkeypatch.setattr(mdb, "_markers_for", lambda adata, column: {})
+    monkeypatch.setattr(mdb, "measured_genes", lambda adata: ["A"])
+    monkeypatch.setattr(mdb, "status", lambda dest: {"sources": []})
+
+    class _Db:
+        cellmarker, ontology, dest = None, None, None
+
+        def view(self, kind, sp):
+            return ("panglao",)
+
+        def species(self, sp, frm=None):
+            return types.SimpleNamespace(types={"x": {}}, species=sp)
+
+        def labels(self, frm):
+            return []
+
+    monkeypatch.setattr(mdb, "Scorer", lambda sdb, measured: types.SimpleNamespace(U=["A"], sdb=sdb))
+    ad_ = ad.AnnData(np.zeros((4, 1)), obs=pd.DataFrame({"lab": ["PC", "PC", "PT", "PT"]},
+                                                             index=[f"c{i}" for i in range(4)]))
+    mdb.check(ad_, "lab", species="human", db=_Db())
+    assert seen == [True, True]
+
 # --- fetch and store -------------------------------------------------------------
 
 
