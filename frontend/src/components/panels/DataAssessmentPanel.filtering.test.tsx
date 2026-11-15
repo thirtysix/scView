@@ -96,7 +96,7 @@ describe("DataAssessmentPanel filtering mode", () => {
     // Untouched params send nothing: the backend's default is MAD too.
     fireEvent.click(screen.getByRole("button", { name: /re-run this step/i }));
     await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
-    expect(JSON.parse(fetchSpy.mock.calls[0]![1].body as string)).toEqual({ steps: ["filtering"], params: null });
+    expect(JSON.parse(fetchSpy.mock.calls[0]![1].body as string)).toEqual({ steps: ["filtering"], params: null, allow_large_mode: false });
   });
 
   it("reprocesses from the cells as uploaded when asked, and from the cells left otherwise", async () => {
@@ -127,6 +127,7 @@ describe("DataAssessmentPanel filtering mode", () => {
     expect(JSON.parse(fetchSpy.mock.calls[0]![1].body as string)).toEqual({
       steps: ["filtering"],
       params: { qc_threshold_mode: "fixed" },
+      allow_large_mode: false,
     });
   });
 
@@ -139,6 +140,7 @@ describe("DataAssessmentPanel filtering mode", () => {
     expect(JSON.parse(fetchSpy.mock.calls[0]![1].body as string)).toEqual({
       steps: ["filtering"],
       params: { qc_mito_mode: "per_type" },
+      allow_large_mode: false,
     });
   });
 
@@ -150,6 +152,7 @@ describe("DataAssessmentPanel filtering mode", () => {
     expect(JSON.parse(fetchSpy.mock.calls[0]![1].body as string)).toEqual({
       steps: ["filtering"],
       params: { qc_threshold_mode: "mad", qc_mito_mode: "per_type", qc_mito_type_column: "scview_mito_type" },
+      allow_large_mode: false,
     });
   });
 

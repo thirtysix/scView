@@ -92,6 +92,52 @@ def test_pooled_lanes_are_not_libraries_of_a_sample():
     assert r["status"] == "none" and "nested in 'donor'" in r["reason"] and r["samples"] == []
 
 
+def _pooled_design(plant: bool = True, seed: int = 0) -> tuple[ad.AnnData, dict]:
+    """Reck 2025's kidney layout: libraries pool 2-3 donors (SNP-demultiplexed) and most donors
+    sits in two libraries; ``plant``: D0's cells in L2 come from another mix."""
+    rng = np.random.default_rng(seed)
+    pools = {"L1": ["D0", "D1", "D2"], "L2": ["D0", "D3", "D4"], "L3": ["D1", "D3", "D5"],
+             "L4": ["D2", "D4", "D5", "D6"], "L5": ["D6", "D7"], "L6": ["D7"]}
+    mixes = {f"D{d}": rng.dirichlet(np.array(BASE["ctrl" if d % 2 == 0 else "stim"]) * 200) for d in range(8)}
+    obs, depth = [], []
+    for lib, donors in pools.items():
+        for d in donors:
+            p = PLANT if (plant and (lib, d) == ("L2", "D0")) else mixes[d]
+            for t in rng.choice(TYPES, size=400, p=p):
+                obs.append({"donor": d, "library_id": lib, "condition": "ctrl" if int(d[1]) % 2 == 0 else "stim",
+                            "cell_type": t})
+            depth.append(rng.lognormal(np.log(3000), 0.3, 400))
+    frame = pd.DataFrame(obs).astype("category")
+    frame.index = [f"c{i}" for i in range(len(frame))]
+    a = ad.AnnData(sp.csr_matrix((len(frame), 1), dtype=np.float32), obs=frame)
+    a.var_names = ["G0"]
+    total = np.concatenate(depth)
+    return a, {"total_counts": total, "n_genes": total * 0.4, "pct_mt": np.zeros(len(total)), "has_mt": True}
+
+
+def test_pooled_libraries_are_compared_per_donor_and_library():
+    a, cells = _pooled_design()
+    for named in ("", "library_id"):  # found by its name, or given
+        r = lc.library_concordance(a, cells, library_column=named or None)
+        assert r["status"] == "checked" and r["pooled"] is True and r["library_column"] == "library_id"
+        assert r["note"].startswith("'library_id' pools several samples per library")
+        assert r["n_checked"] == 8 and r["flagged"] == ["D0"]  # every donor is in two libraries
+        row = next(x for x in r["samples"] if x["name"] == "D0")
+        assert [lib["name"] for lib in row["libraries"]] == ["L1", "L2"]
+        assert row["pair"]["differing"][0]["group"] == "D"
+    clean, cells = _pooled_design(plant=False)
+    assert lc.library_concordance(clean, cells)["n_flagged"] == 0
+
+
+def test_lanes_that_each_hold_every_donor_split_by_condition_say_so():
+    """Kang 2018's real layout: lane 1 = ctrl, lane 2 = stim, every donor in both."""
+    a, cells = _design(n_donors=8)
+    a.obs["condition"] = pd.Categorical(np.where(np.arange(a.n_obs) % 2 == 0, "ctrl", "stim"))
+    a.obs["library_id"] = a.obs["condition"]
+    r = lc.library_concordance(a, cells)
+    assert r["status"] == "none" and "differ in 'condition'" in r["reason"]
+
+
 def test_one_library_per_sample_and_no_samples_say_so():
     a, cells = _design(two_libs=())
     r = lc.library_concordance(a, cells)

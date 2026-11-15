@@ -113,6 +113,11 @@ export function PagaCard({
           {unplaced && " This embedding has no positions for it."}
         </p>
       )}
+      {record?.warnings?.map((w) => (
+        <p key={w} className="mt-1 text-xs text-amber-700" data-testid="paga-warning">
+          {w}
+        </p>
+      ))}
       {view?.stale && <p className="mt-1 text-xs text-amber-700">{view.stale}</p>}
       {error && <p className="mt-1.5 text-xs text-red-600">{error}</p>}
     </div>

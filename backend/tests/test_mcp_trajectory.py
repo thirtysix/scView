@@ -59,6 +59,17 @@ def _path_with_genes():
     return out
 
 
+async def test_paga_names_the_tied_tree_edges_it_kept(client, dataset_manager):
+    from tests.test_trajectory_paga import _tie_adata
+
+    did = _register(dataset_manager, _tie_adata(), "mties")
+    p = await _call("paga", {"dataset_id": did, "groupby": "grp"})
+    assert p["warnings"][0].startswith("The tree depends on 1 close tie")
+    assert {(t["kept"], t["instead_of"]) for t in p["ties"]} == {("A - C", "A - B"), ("B - C", "A - B")}
+    assert all(t["connectivity"] == 1.0 and t["ratio_kept"] > t["ratio_instead_of"] for t in p["ties"])
+    assert "uncapped ratio" in p["note"]
+
+
 async def test_paga_pseudotime_from_the_right_and_a_wrong_root_and_genes(client, dataset_manager):
     did = _register(dataset_manager, _path_with_genes(), "mtraj")
     empty = await _call("paga", {"dataset_id": did})
@@ -67,6 +78,7 @@ async def test_paga_pseudotime_from_the_right_and_a_wrong_root_and_genes(client,
     assert p["groupby"] == "stage" and p["n_groups"] == 4
     assert {"early", "late"} <= set(p["tree_ends"]) and "mid" not in p["tree_ends"]
     assert p["edges"]["columns"] == ["from", "to", "connectivity", "in_tree"] and "early - mid" in p["tree"]
+    assert "warnings" not in p and "ties" not in p
 
     right = await _call("pseudotime", {"dataset_id": did, "root_column": "stage", "root_value": "early"})
     assert right["warnings"] == [] and right["root_named_column"] == "scview_dpt_early"

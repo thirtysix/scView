@@ -13,7 +13,9 @@ The columns:
   (``qc_groups.sample_grouping``; only a donor-like column, never a batch).
 - **libraries**: the column named, else the first obs column, in this order, whose
   values nest in the samples (each library one sample, ``NEST_SHARE`` of its cells)
-  with some sample holding two or more: one named like a capture channel
+  with some sample holding two or more (a named or channel-like column whose libraries
+  pool several samples, as SNP-demultiplexed pools do, is read per sample x library,
+  ``pooled``): one named like a capture channel
   (``doublets._named_columns``: library_id, lane, gem_well ...), a batch-like one, a
   sample-like one that does not name a person (biosample_id), then the cell
   barcodes' prefix or ``-N`` suffix (``doublets.barcode_channels``).
@@ -107,6 +109,24 @@ def _nesting(lib: np.ndarray, samp: np.ndarray, n_lib: int) -> np.ndarray | None
             return None
         out[int(li)] = int(top)
     return out
+
+
+def _pooled(l_names: list[str], l_codes: np.ndarray, s_codes: np.ndarray
+            ) -> tuple[list[str], np.ndarray, np.ndarray] | None:
+    """Libraries that pool samples, read per sample x library: (each part's library name, each
+    cell's part, each part's sample). None unless some sample has ``MIN_LIBRARY_CELLS`` cells in
+    two or more libraries (else nothing to compare)."""
+    keep = (l_codes >= 0) & (s_codes >= 0)
+    pair = np.where(keep, s_codes.astype(np.int64) * len(l_names) + l_codes, -1)
+    found, codes = np.unique(pair[keep], return_inverse=True)
+    sizes = np.bincount(codes, minlength=len(found))
+    owner = found // len(l_names)
+    big = owner[sizes >= MIN_LIBRARY_CELLS]
+    if big.size == 0 or np.bincount(big).max() < 2:
+        return None
+    part = np.full(len(l_codes), -1)
+    part[keep] = codes
+    return [l_names[int(k % len(l_names))] for k in found], part, owner.astype(int)
 
 
 def _library_candidates(adata, sample: str) -> list[tuple[str, str]]:
@@ -275,17 +295,25 @@ def library_concordance(adata, cells: dict | None = None, *, sample_column: str 
     s_names, s_codes = qc_groups.group_codes(obs[sample])
     s_codes = np.asarray(s_codes)
 
-    # The library column: the one named, else the first candidate nesting in the samples.
+    # The library column: the one named, else the first candidate nesting in the samples. A
+    # named or channel-like column whose libraries pool several samples (SNP- or hashtag-
+    # demultiplexed pools) is read per sample x library: each sample's cells in each library.
     tried = [(library_column, "requested")] if library_column else _library_candidates(adata, sample)
     lib = None
+    pooled = False
     for col, source in tried:
         if col == sample:
             continue
         coded = _codes_of(adata, col, source)
-        if coded is None or len(coded[0]) <= len(s_names):
+        if coded is None:
             continue
         l_names, l_codes = coded
-        owner = _nesting(l_codes, s_codes, len(l_names))
+        owner = _nesting(l_codes, s_codes, len(l_names)) if len(l_names) > len(s_names) else None
+        if owner is None and source in ("requested", "channel_column"):
+            parts = _pooled(l_names, l_codes, s_codes)
+            if parts is not None:
+                lib, pooled = (col, source, *parts), True
+                break
         if owner is None or np.bincount(owner[owner >= 0], minlength=len(s_names)).max() < 2:
             continue
         lib = (col, source, l_names, l_codes, owner)
@@ -293,7 +321,8 @@ def library_concordance(adata, cells: dict | None = None, *, sample_column: str 
     if lib is None:
         if library_column:
             return _none(f"'{library_column}' does not nest in '{sample}' with two or more of its "
-                         f"values in one sample (each value must lie within one '{sample}').",
+                         f"values in one sample, and no '{sample}' has {MIN_LIBRARY_CELLS} or more cells "
+                         f"in two of its values (as a pooled library would).",
                          sample=sample, library=library_column, source="requested")
         return _none(f"No column of libraries nested in '{sample}' with two or more libraries in one "
                      "sample: each sample was sequenced once, or libraries pool several samples.",
@@ -379,6 +408,10 @@ def library_concordance(adata, cells: dict | None = None, *, sample_column: str 
                 f"{MIN_REF_PAIRS} needed): a fixed cut of {RULE_CUT:.2f} was used.")
     if t_codes is None:
         note += " No cell-type or cluster column, so only depth was compared."
+    if pooled:
+        note = (f"'{l_col}' pools several samples per library (as SNP- or hashtag-demultiplexed pools do), "
+                f"so each '{sample}''s cells in each library are compared as that sample's library. "
+                + note)
 
     rows = []
     for u, unit in enumerate(units):
@@ -448,7 +481,7 @@ def library_concordance(adata, cells: dict | None = None, *, sample_column: str 
         flagged = []
     return {
         "status": "checked", "reason": None,
-        "sample_column": sample, "library_column": l_col, "library_source": l_source,
+        "sample_column": sample, "library_column": l_col, "library_source": l_source, "pooled": pooled,
         "celltype_column": celltype, "split_by": split_by,
         "n_libraries": n_lib, "n_samples": len(s_names),
         "samples": rows, "n_checked": sum(r["status"] == "checked" for r in rows),

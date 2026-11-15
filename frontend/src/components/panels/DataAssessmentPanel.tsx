@@ -48,6 +48,8 @@ import {
   cancelPipelineRun,
   FINISHED_WITH_ERRORS,
   runErrorMessage,
+  conversionQuestion,
+  isConversionRefusal,
   type RunOutcomeFields,
   type WatchdogEvent,
 } from "@/api/pipelineRun";
@@ -964,8 +966,12 @@ export function DataAssessmentPanel() {
   const deselectAll = () => setSelectedSteps(new Set());
 
   /* ---- Run steps (core) — uses SSE for progress ---- */
-  const runSteps = async (steps: string[], params: Record<string, unknown> | null = null) => {
+  // allowLarge: the user said yes to converting the dataset to large-dataset layout. Without
+  // it the backend refuses such a run before it starts, and the user is asked here.
+  const runSteps = async (steps: string[], params: Record<string, unknown> | null = null,
+                          allowLarge = false) => {
     if (!datasetId || !state || steps.length === 0) return;
+    let retryLarge = false;
 
     setRunning(true);
     setPipelineRunning(true);
@@ -987,7 +993,7 @@ export function DataAssessmentPanel() {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ steps, params }),
+          body: JSON.stringify({ steps, params, allow_large_mode: allowLarge }),
         }
       );
 
@@ -1074,7 +1080,8 @@ export function DataAssessmentPanel() {
       queryClient.invalidateQueries({ queryKey: ["embedding", datasetId] });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Pipeline run failed";
-      setError(msg);
+      if (!allowLarge && isConversionRefusal(msg) && window.confirm(conversionQuestion(msg))) retryLarge = true;
+      else setError(msg);
     } finally {
       setPipelineRunning(false);
       setRunning(false);
@@ -1083,6 +1090,7 @@ export function DataAssessmentPanel() {
       // Note: runProgress is intentionally kept so the completed bar remains
       // visible until the next run starts (cleared in runSteps initialisation).
     }
+    if (retryLarge) await runSteps(steps, params, true);
   };
 
   /* ---- Cancel the run in progress (it stops before its next step, saving nothing) ---- */
@@ -1309,6 +1317,13 @@ export function DataAssessmentPanel() {
                   params={flattenStepParams(STEP_ORDER.filter((s) => selectedSteps.has(s.key)).map((s) => s.key), stepParams)}
                   onLeidenIterations={(n) => setStepParam("clustering", "leiden_iterations", n)}
                   onUmap3d={(v) => setStepParam("embeddings", "umap_3d", v)}
+                  onSkipDoublets={() =>
+                    setSelectedSteps((prev) => {
+                      const next = new Set(prev);
+                      next.delete("doublet_detection");
+                      return next;
+                    })
+                  }
                 />
               </div>
             )}
