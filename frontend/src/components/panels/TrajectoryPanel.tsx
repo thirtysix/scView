@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { GitBranch, Loader2, AlertCircle, Play, X } from "lucide-react";
+import { GitBranch, Loader2, AlertCircle, MousePointerClick, Play, X } from "lucide-react";
 import Plot from "@/components/plots/Plot";
 import { plotConfig } from "@/lib/plotConfig";
 import { useDatasetStore } from "@/stores/datasetStore";
@@ -10,9 +10,10 @@ import { useSelectionStore } from "@/stores/selectionStore";
 import { useEmbedding } from "@/hooks/useEmbedding";
 import { apiFetch, apiFetchBinary } from "@/api/client";
 import { getDataset } from "@/api/datasets";
-import { computePaga, getPaga, rankTrendGenes } from "@/api/trajectory";
+import { computePaga, getPaga, rankTrendGenes, type RankBy } from "@/api/trajectory";
 import { EmbeddingScatter } from "@/components/plots/EmbeddingScatter";
 import { Panel } from "@/components/common/Panel";
+import { Help } from "@/components/common/Help";
 import { GeneSearch } from "@/components/common/GeneSearch";
 import { ColorLegend } from "@/components/plots/ColorLegend";
 import { PagaCard } from "@/components/trajectory/PagaCard";
@@ -26,8 +27,10 @@ import { errorMessage } from "@/lib/errorMessage";
 /** How the in-app pseudotime column was computed (POST /trajectory/dpt). */
 interface DPTParams {
   column: string;
-  root_column: string;
-  root_value: string;
+  /** "group": the root group's most central cell; "cell": one cell picked by hand */
+  root_kind?: "group" | "cell";
+  root_column: string | null;
+  root_value: string | null;
   root_cell: string;
   graph: string;
   n_unreachable: number;
@@ -116,6 +119,24 @@ export function TrajectoryPanel() {
   const rootCols = useMemo(() => rootGroupColumns(dataset?.obs_columns), [dataset]);
   const [rootColumn, setRootColumn] = useState("");
   const [rootValue, setRootValue] = useState("");
+  // Or one cell as the root: typed, or clicked on the plot in "pick" mode.
+  const [rootMode, setRootMode] = useState<"group" | "cell">("group");
+  const [rootCell, setRootCell] = useState("");
+  const [pickingRoot, setPickingRoot] = useState(false);
+  useEffect(() => {
+    setRootCell("");
+    setPickingRoot(false);
+  }, [datasetId]);
+  const pickRootCell = useCallback(
+    (index: number | null) => {
+      if (!pickingRoot || index == null || !datasetId) return;
+      setPickingRoot(false);
+      apiFetch<{ name: string }>(`/datasets/${datasetId}/trajectory/cell-name?index=${index}`)
+        .then((r) => setRootCell(r.name))
+        .catch((err) => setComputeError(errorMessage(err)));
+    },
+    [pickingRoot, datasetId],
+  );
   const rootValues = useMemo(
     () => rootCols.find((c) => c.name === rootColumn)?.values ?? [],
     [rootCols, rootColumn],
@@ -204,14 +225,17 @@ export function TrajectoryPanel() {
   }, [datasetId, selectedColumn, refreshKey]);
 
   // Compute diffusion pseudotime from the chosen root group, then show it.
+  const byCell = rootMode === "cell";
   const computePseudotime = useCallback(async () => {
-    if (!datasetId || !rootColumn || !rootValue) return;
+    if (!datasetId || (byCell ? !rootCell.trim() : !rootColumn || !rootValue)) return;
     setIsComputing(true);
     setComputeError(null);
     try {
       const res = await apiFetch<DPTParams>(`/datasets/${datasetId}/trajectory/dpt`, {
         method: "POST",
-        body: JSON.stringify({ root_column: rootColumn, root_value: rootValue }),
+        body: JSON.stringify(
+          byCell ? { root_cell: rootCell.trim() } : { root_column: rootColumn, root_value: rootValue },
+        ),
       });
       // The new obs column joins the colour-by lists, and any cached colouring
       // by it is stale. Skip if the user has moved to another dataset meanwhile.
@@ -226,7 +250,7 @@ export function TrajectoryPanel() {
     } finally {
       setIsComputing(false);
     }
-  }, [datasetId, rootColumn, rootValue, setCurrentDataset, queryClient]);
+  }, [datasetId, byCell, rootCell, rootColumn, rootValue, setCurrentDataset, queryClient]);
 
   // ---- PAGA: a graph of one column's groups, drawn over the embedding ----
   const [pagaGroupby, setPagaGroupby] = useState("");
@@ -277,6 +301,7 @@ export function TrajectoryPanel() {
   // ---- Genes changing along pseudotime, on all cells or one PAGA branch ----
   const [rightTab, setRightTab] = useState<"changing" | "trends">("changing");
   const [branchEnd, setBranchEnd] = useState("");
+  const [rankBy, setRankBy] = useState<RankBy>("trend");
   const rootGroup = pagaView?.root_group ?? null;
   const ends = useMemo(
     () => (paga && pagaUsable && rootGroup ? pagaBranchEnds(paga, rootGroup) : []),
@@ -297,13 +322,16 @@ export function TrajectoryPanel() {
         ? "Compute pseudotime from a start group to pick a branch from it."
         : null;
 
+  const rankOn: RankBy = branchPath && paga ? rankBy : "trend";
   const trendQuery = useQuery({
-    queryKey: ["trend-genes", datasetId, selectedColumn, branchPath && paga ? [paga.groupby, ...branchPath] : null, refreshKey],
+    queryKey: ["trend-genes", datasetId, selectedColumn, branchPath && paga ? [paga.groupby, ...branchPath] : null, rankOn, refreshKey],
     queryFn: ({ signal }) =>
       rankTrendGenes(
         datasetId!,
         selectedColumn,
-        branchPath && paga ? { groups_column: paga.groupby, groups: branchPath } : {},
+        branchPath && paga
+          ? { groups_column: paga.groupby, groups: branchPath, ...(rankOn === "branch_specific" ? { rank_by: rankOn } : {}) }
+          : {},
         signal,
       ),
     enabled: !!datasetId && !!selectedColumn && rightTab === "changing",
@@ -411,44 +439,96 @@ export function TrajectoryPanel() {
   const selectCls =
     "rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-700 shadow-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100";
 
+  const computeButton = (
+    <button
+      onClick={computePseudotime}
+      disabled={isComputing || (byCell ? !rootCell.trim() : !rootValue)}
+      className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-white transition hover:bg-primary/90 disabled:opacity-50"
+    >
+      {isComputing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+      {isComputing ? "Computing..." : "Compute"}
+    </button>
+  );
   const computeCard = (
     <div className="flex-shrink-0 rounded-xl border border-slate-200 bg-white px-4 py-3 text-left shadow-sm">
-      {rootCols.length === 0 ? (
-        <p className="text-xs text-slate-500">
-          No categorical column (cluster or cell type) to pick a start group from.
-        </p>
-      ) : (
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-sm font-medium text-slate-600">Compute pseudotime from</span>
-          <select value={rootColumn} onChange={(e) => setRootColumn(e.target.value)} aria-label="Root column" className={selectCls}>
-            {rootCols.map((c) => (
-              <option key={c.name} value={c.name}>
-                {prettyObsLabel(c.name)}
-              </option>
-            ))}
-          </select>
-          <select value={rootValue} onChange={(e) => setRootValue(e.target.value)} aria-label="Root group" className={selectCls}>
-            {rootValues.map((v) => (
-              <option key={v} value={v}>
-                {v}
-              </option>
-            ))}
-          </select>
-          <button
-            onClick={computePseudotime}
-            disabled={isComputing || !rootValue}
-            className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-white transition hover:bg-primary/90 disabled:opacity-50"
-          >
-            {isComputing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
-            {isComputing ? "Computing..." : "Compute"}
-          </button>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm font-medium text-slate-600">Compute pseudotime from</span>
+        <div className="flex rounded-lg border border-slate-300 p-0.5" role="radiogroup" aria-label="Root kind">
+          {(
+            [
+              ["group", "a group"],
+              ["cell", "one cell"],
+            ] as const
+          ).map(([mode, label]) => (
+            <button
+              key={mode}
+              role="radio"
+              aria-checked={rootMode === mode}
+              onClick={() => {
+                setRootMode(mode);
+                setPickingRoot(false);
+              }}
+              className={`rounded-md px-2 py-1 text-xs font-medium transition ${
+                rootMode === mode ? "bg-slate-200 text-slate-800" : "text-slate-500 hover:bg-slate-100"
+              }`}
+            >
+              <Help id="trajectory.root-kind">{label}</Help>
+            </button>
+          ))}
         </div>
-      )}
+        {byCell ? (
+          <>
+            <input
+              value={rootCell}
+              onChange={(e) => setRootCell(e.target.value)}
+              placeholder="Cell name"
+              aria-label="Root cell"
+              className={`${selectCls} w-56`}
+            />
+            <button
+              onClick={() => setPickingRoot((v) => !v)}
+              aria-pressed={pickingRoot}
+              className={`flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-sm transition ${
+                pickingRoot
+                  ? "border-blue-400 bg-blue-50 text-blue-700"
+                  : "border-slate-300 text-slate-600 hover:bg-slate-50"
+              }`}
+            >
+              <MousePointerClick className="h-3.5 w-3.5" />
+              {pickingRoot ? "Click a cell on the plot..." : "Pick on the plot"}
+            </button>
+            {computeButton}
+          </>
+        ) : rootCols.length === 0 ? (
+          <span className="text-xs text-slate-500">
+            No categorical column (cluster or cell type) to pick a start group from.
+          </span>
+        ) : (
+          <>
+            <select value={rootColumn} onChange={(e) => setRootColumn(e.target.value)} aria-label="Root column" className={selectCls}>
+              {rootCols.map((c) => (
+                <option key={c.name} value={c.name}>
+                  {prettyObsLabel(c.name)}
+                </option>
+              ))}
+            </select>
+            <select value={rootValue} onChange={(e) => setRootValue(e.target.value)} aria-label="Root group" className={selectCls}>
+              {rootValues.map((v) => (
+                <option key={v} value={v}>
+                  {v}
+                </option>
+              ))}
+            </select>
+            {computeButton}
+          </>
+        )}
+      </div>
       <p className="mt-1.5 text-xs text-slate-500">
         Diffusion pseudotime (scanpy DPT) on the neighbour graph, measured from the start
-        group&apos;s most central cell. Saved to the dataset as <code>{DPT_COLUMN}</code> (the latest)
-        and <code>scview_dpt_</code> plus the start group (kept when you start from another one);
-        cells the start group cannot reach, or that hang on the rest by weak links, are left grey.
+        group&apos;s most central cell, or from the one cell you pick. Saved to the dataset as{" "}
+        <code>{DPT_COLUMN}</code> (the latest) and <code>scview_dpt_</code> plus the start group or{" "}
+        <code>cell_</code> plus the cell (kept when you start from another one); cells the start
+        cannot reach, or that hang on the rest by weak links, are left grey.
       </p>
       {computeError && <p className="mt-1.5 text-xs text-red-600">{computeError}</p>}
     </div>
@@ -566,8 +646,11 @@ export function TrajectoryPanel() {
       {shownRun && (
         <div className="-mt-2 flex flex-shrink-0 flex-col gap-1.5" data-testid="dpt-computed">
           <p className="text-xs text-slate-500">
-            Current <code>{selectedColumn}</code>: started from {shownRun.root_value} (
-            {prettyObsLabel(shownRun.root_column)}), {shownRun.graph}.
+            Current <code>{selectedColumn}</code>: started from{" "}
+            {shownRun.root_kind === "cell"
+              ? `cell ${shownRun.root_cell}`
+              : `${shownRun.root_value} (${prettyObsLabel(shownRun.root_column ?? "")}, its cell ${shownRun.root_cell})`}
+            , {shownRun.graph}.
             {shownRun.n_unreachable > 0 &&
               ` ${formatNumber(shownRun.n_unreachable)} cells are unreachable from it (grey).`}
           </p>
@@ -679,6 +762,7 @@ export function TrajectoryPanel() {
                 }
                 overlayLayers={overlayLayers}
                 embedding={embedding}
+                onClick={pickingRoot ? pickRootCell : undefined}
               />
             )}
           </Panel>
@@ -736,6 +820,8 @@ export function TrajectoryPanel() {
                 path={branchPath}
                 branchNote={branchNote}
                 groupby={paga?.groupby ?? null}
+                rankBy={rankBy}
+                onRankByChange={setRankBy}
                 exportName={selectedColumn}
               />
             ) : selectedGenes.length === 0 ? (

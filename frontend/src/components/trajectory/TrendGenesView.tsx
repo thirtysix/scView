@@ -2,7 +2,8 @@ import { useMemo } from "react";
 import { Download, Loader2 } from "lucide-react";
 import Plot from "@/components/plots/Plot";
 import { plotConfig } from "@/lib/plotConfig";
-import type { TrendGenesResult } from "@/api/trajectory";
+import type { RankBy, TrendGenesResult } from "@/api/trajectory";
+import { Help } from "@/components/common/Help";
 import { downloadCsv } from "@/lib/csv";
 import { prettyObsLabel } from "@/lib/formatting";
 import { PATTERN_LABEL, heatmapOrder, scaleRow, tickBins, trendGenesCsv } from "@/lib/trendGenes";
@@ -24,6 +25,9 @@ interface TrendGenesViewProps {
   branchNote: string | null;
   /** The PAGA grouping the branch groups belong to */
   groupby: string | null;
+  /** On a branch: genes changing along it, or genes higher on it than on the other branches */
+  rankBy: RankBy;
+  onRankByChange: (rankBy: RankBy) => void;
   exportName: string;
 }
 
@@ -44,8 +48,11 @@ export function TrendGenesView({
   path,
   branchNote,
   groupby,
+  rankBy,
+  onRankByChange,
   exportName,
 }: TrendGenesViewProps) {
+  const branchRanked = result?.rank_by === "branch_specific";
   const ordered = useMemo(() => (result ? heatmapOrder(result.genes) : []), [result]);
   const focus = result?.genes.find((g) => g.gene === focusGene) ?? null;
   const bins = useMemo(() => result?.bins.pseudotime ?? [], [result]);
@@ -100,6 +107,19 @@ export function TrendGenesView({
             </option>
           ))}
         </select>
+        <label className="font-medium text-slate-600" htmlFor="trend-rank">
+          <Help id="trajectory.rank-by">Rank:</Help>
+        </label>
+        <select
+          id="trend-rank"
+          value={path ? rankBy : "trend"}
+          onChange={(e) => onRankByChange(e.target.value as RankBy)}
+          disabled={!path}
+          className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm text-slate-700 shadow-sm disabled:opacity-60"
+        >
+          <option value="trend">Changing along pseudotime</option>
+          <option value="branch_specific">Higher on this branch than the others</option>
+        </select>
         {loading && <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500" />}
         {result && result.genes.length > 0 && (
           <button
@@ -122,12 +142,23 @@ export function TrendGenesView({
       {!path && branchNote && <p className="text-xs text-slate-400">{branchNote}</p>}
       {error && <p className="text-xs text-red-600">{error}</p>}
 
-      {result && (
+      {result && !branchRanked && (
         <p className="text-xs text-slate-500">
           Top {result.genes.length} of {result.n_genes_tested.toLocaleString()} genes tested on{" "}
           {result.n_cells.toLocaleString()} cells ({result.expression}; genes detected in &ge;{" "}
           {result.min_detected} cells). Ranked by a spline F-test along the cells&apos; pseudotime
           order; p-values are indicative only. Click a gene to plot it and colour the embedding.
+        </p>
+      )}
+      {result && branchRanked && result.branch && (
+        <p className="text-xs text-slate-500" data-testid="trend-branch-caption">
+          Top {result.genes.length} of {(result.n_higher ?? 0).toLocaleString()} genes higher on the
+          branch&apos;s own groups ({result.branch.own.join(", ")}, n = {result.branch.n_own_cells.toLocaleString()})
+          than on the other branches ({result.branch.others.join(", ")}, n ={" "}
+          {result.branch.n_other_cells.toLocaleString()}) at the same pseudotime; the trunk (
+          {result.branch.trunk.join(", ")}) is shared. Ranked by an F-test of a branch-only spline
+          (after tradeSeq&apos;s patternTest); p-values are indicative only. The heatmap runs along
+          the branch&apos;s cells.
         </p>
       )}
 
@@ -137,6 +168,8 @@ export function TrendGenesView({
             <b>{focus.gene}</b> {PATTERN_LABEL[focus.pattern]}, peak at pseudotime{" "}
             {fmt(focus.peak_pseudotime, 3)}; change {fmt(focus.amplitude)} (log), F {fmt(focus.f_stat, 1)},
             R² {fmt(focus.r2)}
+            {branchRanked &&
+              `; ${fmt(focus.branch_diff ?? null)} (log) above the other branches, mean ${fmt(focus.mean_branch ?? null)} on this branch vs ${fmt(focus.mean_others ?? null)} on the others`}
           </p>
           <Plot
             data={[

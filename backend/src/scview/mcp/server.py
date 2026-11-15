@@ -46,7 +46,7 @@ scView: single-cell RNA-seq analysis running locally; these tools call the same 
 - Multiome (atac_status first): atac_fragment_qc, atac_lsi, wnn, atac_gene_activity, atac_differential, atac_links,
   atac_motif_enrichment, atac_chromvar. CRISPR: guide_assignment, mixscape. Hashing: hashing_demux, hashing_samples.
   CITE-seq: differential_expression / per_donor_expression with layer="protein"; wnn(modality="protein").
-- Trajectory: paga(groupby), pseudotime(root_column, root_value; its warnings flag a wrong root), pseudotime_genes.
+- Trajectory: paga(groupby), pseudotime(root_column + root_value, or root_cell; its warnings flag a wrong root), pseudotime_genes.
   Velocity: velocity (a job; order/root check the direction), get_velocity, velocity_direction; plot(overlay=...).
 - The server cannot read your disk: upload a file (curl -F "file=@data.h5ad" http://127.0.0.1:8080/api/v1/datasets/upload);
   upload_instructions has folder and side-file recipes; import_server_path reads server paths when allowed.
