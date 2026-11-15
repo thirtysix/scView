@@ -152,13 +152,49 @@ def on_both_sides(obs, key: str, mask_a, mask_b, min_cells: int) -> list[str]:
     return sorted(set(a[a >= min_cells].index) & set(b[b >= min_cells].index))
 
 
-def partly_paired(shared: Sequence[str], key: str, design: str) -> str:
-    """The warning for donors on both sides of an unpaired design (not every donor is)."""
+def paired_subset(obs, key: str, shared: Sequence[str], mask, skip: set[str] | frozenset = frozenset(),
+                  max_values: int = 20) -> tuple[str, str, int] | None:
+    """A column with one value per donor (among the cells compared, ``mask``) whose value holds
+    only donors on both sides, two or more: ``(column, value, donors)``, the value with most,
+    or None. Restricting to it (within_column / within_value) makes the comparison paired:
+    Reck 2025's kidney, disease = obstructive nephropathy (the 5 UUO donors)."""
+    m = np.asarray(mask, bool)
+    donors = obs[key][m].astype(str)
+    both = set(map(str, shared))
+    best = None
+    for col in obs.columns:
+        if col == key or col in skip:
+            continue
+        vals = obs[col][m]
+        if vals.nunique(dropna=True) > max_values or pd.api.types.is_float_dtype(vals):
+            continue
+        frame = pd.DataFrame({"d": donors.to_numpy(), "v": vals.astype(str).where(vals.notna()).to_numpy()}).dropna()
+        per = frame.groupby("d")["v"].nunique()
+        if frame.empty or (per > 1).any():
+            continue
+        for value, ds in frame.drop_duplicates().groupby("v")["d"]:
+            ds = set(ds)
+            if len(ds) >= 2 and ds <= both and (best is None or len(ds) > best[2]):
+                best = (str(col), str(value), len(ds))
+    return best
+
+
+def partly_paired(shared: Sequence[str], key: str, design: str,
+                  subset: tuple[str, str, int] | None = None) -> str:
+    """The warning for donors on both sides of an unpaired design (not every donor is), with
+    how to compare only those donors (``subset``: ``paired_subset``'s column and value)."""
     shown = ", ".join(list(shared)[:MAX_NAMED]) + (" ..." if len(shared) > MAX_NAMED else "")
+    listed = ", ".join(f"'{d}'" for d in shared)
+    how = (f" Paired: restrict to them with within_column '{key}' and within_value [{listed}] "
+           f"(replicate_key '{key}')")
+    if subset:
+        col, value, n = subset
+        how += f", or with within_column '{col}' = '{value}' (its {n} donors are all on both sides)"
     return (f"{len(shared)} '{key}' value{'s are' if len(shared) != 1 else ' is'} on both sides "
             f"({shown}) but not every one, so the design cannot block on them ({design}): each "
             "one's two samples count as independent and p values are optimistic. Compare only the "
-            "donors on both sides (paired), or keep one sample per donor.")
+            f"donors on both sides, or keep one sample per donor.{how}: the design then blocks on "
+            f"'{key}'.")
 
 
 def few_donors(counts: dict[str, int], unit: str) -> str | None:
