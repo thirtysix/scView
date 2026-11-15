@@ -233,7 +233,7 @@ def resolve(adata, spec: dict[str, Any] | None, default_group: str | None) -> tu
         raise DirectionError(f"'{order_column}' does not order the cells (one value).")
     if kind == "pseudotime":
         p = trajectory.read_params(adata) or {}
-        label = f"scView's diffusion pseudotime from {p.get('root_column')} = {p.get('root_value')}"
+        label = f"scView's diffusion pseudotime from {trajectory.root_label(p)}"
     else:
         label = f"{order_column} ({how})"
     out = {**base, "column": order_column}

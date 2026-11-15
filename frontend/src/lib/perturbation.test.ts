@@ -6,8 +6,11 @@ import {
   ldaTraces,
   mappingChanges,
   posteriorTraces,
+  proteinLayerOf,
+  proteinLayerOptions,
   proteinRowsFor,
   proteinShiftTraces,
+  proteinUnit,
   replicateText,
   shiftText,
   sortTargets,
@@ -81,5 +84,21 @@ describe("perturbation helpers", () => {
     expect(shiftText(0.2)).toBe("+0.20");
     expect(shiftText(null)).toBe("–");
     expect(replicateText({ ...r("A", 1), n_replicates: 3, same_sign: 2 })).toBe("2/3");
+  });
+
+  it("reads a check's layer: older results without one were CLR", () => {
+    expect(proteinLayerOf(null)).toBe("protein_clr");
+    expect(proteinLayerOf({ layer: undefined } as never)).toBe("protein_clr");
+    expect(proteinLayerOf({ layer: "protein_counts" } as never)).toBe("protein_counts");
+    expect(proteinUnit({ layer: "protein_counts" } as never)).toBe("log1p counts");
+    expect(proteinUnit({ layer: "protein_clr", unit_name: "CLR" } as never)).toBe("CLR");
+    // An older result lists no layers: CLR and log counts, CLR compositional on a small panel.
+    const old = proteinLayerOptions({ layer: "protein_clr", n_proteins: 4 } as never);
+    expect(old.map((o) => [o.layer, o.available, o.compositional])).toEqual([
+      ["protein_clr", true, true],
+      ["protein_counts", true, false],
+    ]);
+    const listed = [{ layer: "protein_dsb", label: "DSB", available: false, reason: "No DSB values", compositional: false }];
+    expect(proteinLayerOptions({ layer: "protein_counts", layers: listed } as never)).toBe(listed);
   });
 });

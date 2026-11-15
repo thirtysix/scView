@@ -667,7 +667,7 @@ export function PerturbationSubtab() {
             </div>
           )}
           {(result ?? saved)?.protein && (
-            <MixscapeProteinCheck check={(result ?? saved)!.protein!} onPickTarget={setShown} />
+            <MixscapeProteinCheck check={(result ?? saved)!.protein!} datasetId={datasetId} onPickTarget={setShown} />
           )}
           {result?.lda && (
             <div data-testid="mixscape-lda">

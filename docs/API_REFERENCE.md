@@ -491,15 +491,32 @@ POST /datasets/{dataset_id}/trajectory/dpt
 Content-Type: application/json
 ```
 
-**Request body:** `{"root_column": "celltype", "root_value": "Blood progenitors 1"}`
+**Request body:** `{"root_column": "celltype", "root_value": "Blood progenitors 1"}` (a start
+group: its most central cell in diffusion space is the root), or `{"root_cell": "GGACCCGATGTCGA"}`
+(one cell by name). Give one of the two: 422 otherwise, 404 for an unknown cell.
 
 Writes `scview_dpt_pseudotime` (the latest run) and `scview_dpt_<root>` (kept when another root
-runs). The response is the run record above, without `stale`. Cells the root cannot reach get no
+runs; `scview_dpt_cell_<cell>` for a cell root). The record has `root_kind` (group | cell),
+`root_cell` (the cell used either way) and `root_rule`. The response is the run record above, without `stale`. Cells the root cannot reach get no
 pseudotime (`n_unreachable`). Cells past an extreme gap at the far end (at most 5% of the cells,
 the gap wider than the range below it) are a weakly linked island: they are left out
 (`n_detached`) and DPT is computed again without them. `warnings` says so, and flags a root that
-sits inside the saved PAGA tree of its column or runs against another pseudotime column
-(Spearman rho <= -0.5). 400 when no cell has the root value or there is no graph or PCA.
+runs against another pseudotime column (Spearman rho <= -0.5). With a current PAGA graph, the
+root cell's group in PAGA's column is checked too (`root_checks` has the numbers): inside the
+tree but not a branch point (fewer than 3 branches holding >= 5% of the cells each); at an end
+while another end looks less specialised (more genes detected and a smaller share of the counts
+in its 20 top genes, on raw counts); and, with a saved velocity run, the arrows from the root
+along the tree (a backward edge out of the root, or more backward than forward transitions).
+400 when no cell has the root value or there is no graph or PCA.
+
+### Cell Name
+
+```
+GET /datasets/{dataset_id}/trajectory/cell-name?index=2041
+```
+
+`{"index": 2041, "name": "AAACCTGAGCGTTCTC-1"}`: the cell at a row (a cell clicked on a plot,
+picked as a root). 404 past the last row.
 
 ### PAGA
 
@@ -562,6 +579,18 @@ Content-Type: application/json
 natural cubic spline of pseudotime order and tested against a constant (F); genes are ranked
 by F. Returns `genes` (`f_stat`, `pval`, `pval_adj`, `r2`, `amplitude`, `peak_pseudotime`,
 `pattern` rising | falling | transient, binned `mean` and `fitted`) and `bins`.
+
+`"rank_by": "branch_specific"` (with `groups_column` + `groups`: a path of the PAGA tree of
+`groups_column`, start to end) ranks the genes HIGHER on that branch than on the tree's other
+branches instead: every cell of the tree is fitted along the shared pseudotime order with one
+spline (null) and with that spline plus a spline only the branch's own groups take (its groups
+not on the paths from its start to the other ends), compared by F (after tradeSeq's
+patternTest; least squares on log values, this branch against the others pooled). Genes are
+ranked by F among those with a positive `branch_diff` (log units above the common curve); each
+also has `mean_branch` and `mean_others`. The response adds `n_higher` and `branch` (`start`,
+`end`, `trunk`, `own`, `others`, cell counts); `mean` / `fitted` / `bins` run along the branch's
+cells. 400 without a current PAGA graph of `groups_column`, for groups that are not one path,
+or with fewer than 30 cells in the branch's own groups or in the other branches.
 
 ---
 

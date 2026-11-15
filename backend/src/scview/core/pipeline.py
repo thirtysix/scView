@@ -213,9 +213,13 @@ class PipelineParams:
     annotation_overwrite: bool = False           # allow writing over a column scView did not write
     annotation_llm_model: str = ""               # chat model id for method="llm" (provider's name)
     # optional tissue hint for method llm, and for marker_score on the databases (types of other
-    # tissues left out; without it the data's own obs 'tissue' column is read)
+    # tissues left out; without it the data's own obs 'tissue' column is read); for celltypist the
+    # tissue its model is checked against (celltypist_fit.tissue_caution)
     annotation_tissue: str = ""
     annotation_marker_sets: str = "databases"    # marker_score: databases (core/marker_db.py) | builtin (14 immune sets)
+    # method llm without a language model key: "" refuses the step (422 at the routes); celltypist
+    # or marker_score runs that instead, recorded as the method that ran (annotation_method_plan)
+    annotation_fallback: str = ""
 
     # Large-dataset mode (core/large_run.py): "auto" runs the steps with the matrices on
     # disk, in row blocks, when the run would not fit the memory budget in memory; "on"
@@ -1557,6 +1561,41 @@ class AnnotationTargetError(ValueError):
     """An annotation would write over a column scView did not create (a 422 at the routes)."""
 
 
+class AnnotationMethodError(ValueError):
+    """The AI annotation was asked for without a language model key and no fallback named
+    (a 422 at the routes; a skipped step with this note in a run that got past them)."""
+
+
+ANNOTATION_FALLBACKS = ("celltypist", "marker_score")
+_METHOD_WORDS = {"llm": "the AI annotation", "celltypist": "CellTypist", "marker_score": "the marker-score annotation"}
+NO_LLM_KEY = (
+    "The AI annotation needs a language model key and none is set (DEEPINFRA_API_KEY, or LLM_API_KEY for "
+    "another provider, in the .env file; then restart scView). Nothing was annotated. Pick annotation_method "
+    "celltypist or marker_score, or set annotation_fallback to one of them to run it in place of the AI.")
+
+
+def annotation_method_plan(params: PipelineParams) -> tuple[str, str | None]:
+    """(the method that will run, a note when it is not the one asked for). Until v0.80 the AI method
+    without a key ran CellTypist's immune model silently while the recipe said "llm" (QA round 6: kidney
+    podocytes became "Alveolar macrophages"). Now it is refused unless ``annotation_fallback`` names
+    the method to run instead; raises ``AnnotationMethodError``."""
+    method = (params.annotation_method or "llm").lower()
+    fallback = (params.annotation_fallback or "").strip().lower()
+    if fallback and fallback not in ANNOTATION_FALLBACKS:
+        raise AnnotationMethodError(
+            f"annotation_fallback '{params.annotation_fallback}' is not one of: {', '.join(ANNOTATION_FALLBACKS)}.")
+    if method != "llm":
+        return method, None
+    from scview.config import get_settings
+
+    if get_settings().llm_api_key:
+        return method, None
+    if not fallback:
+        raise AnnotationMethodError(NO_LLM_KEY)
+    return fallback, (f"The AI annotation was asked for, but no language model key is set: "
+                      f"{_METHOD_WORDS[fallback]} ran instead (annotation_fallback).")
+
+
 def default_annotation_target(groupby: str) -> str:
     """scView's own column for an annotation of ``groupby`` (the UI suggests the same)."""
     return f"{groupby}_celltypeAnno" if groupby else "celltypeAnno"
@@ -1654,17 +1693,23 @@ def _annotate_celltypist(
 
     # How well the model suits the data (core/celltypist_fit.py): its species
     # against the dataset's, and the share of its genes the dataset has.
-    from scview.core import celltypist_fit
+    from scview.core import celltypist_fit, marker_tissues
     from scview.core.species import detect_species
 
     dataset_species = detect_species(adata).species
     model: Any = model_name
+    # and its tissues against the dataset's (the hint, else obs 'tissue'), when known
+    organs, tissue_from = marker_tissues.dataset_tissue(adata, params.annotation_tissue)
     run: dict[str, Any] = {"model": model_name, "dataset_species": dataset_species,
-                           "model_species": celltypist_fit.model_species(model_name)}
+                           "model_species": celltypist_fit.model_species(model_name),
+                           "model_organs": celltypist_fit.model_organs(model_name)}
+    if organs:
+        run.update(dataset_organs=sorted(organs), dataset_tissue_from=tissue_from)
     try:
         model = models.Model.load(model=model_name)
         details = str((getattr(model, "description", None) or {}).get("details", ""))
         run["model_species"] = celltypist_fit.model_species(model_name, details)
+        run["model_organs"] = celltypist_fit.model_organs(model_name, details)
         run.update(celltypist_fit.gene_overlap(model.features, input_genes))
     except Exception as e:  # no local copy: CellTypist's own load below says why
         logger.warning("CellTypist model %s not loaded for the overlap check: %s", model_name, e)
@@ -1801,7 +1846,7 @@ def _annotate_llm(adata: ad.AnnData, params: PipelineParams, groupby: str, targe
     qc = _annotation_qc_notes(adata, groupby)
     # Damaged cells are decided here, not by the AI; the rest are sent (annotation benchmark arms
     # ox + dq, 2026-11-11), marker lists no better than random ones with a note saying so.
-    decided, decided_record = _annotation_decided(adata, groupby, marker_map)
+    decided, decided_record = _annotation_decided(adata, groupby, marker_map, hint)
     from scview.core.marker_randomness import NOTE as RANDOM_NOTE
 
     for g in decided_record.get(RANDOM_NOTED, []):
@@ -2004,8 +2049,8 @@ def _annotation_qc_notes(adata: ad.AnnData, groupby: str) -> dict[str, str]:
     return out
 
 
-def _annotation_decided(adata: ad.AnnData, groupby: str,
-                        marker_map: dict[str, list[str]]) -> tuple[dict[str, str], dict[str, list[str]]]:
+def _annotation_decided(adata: ad.AnnData, groupby: str, marker_map: dict[str, list[str]],
+                        tissue: str = "") -> tuple[dict[str, str], dict[str, list[str]]]:
     """({cluster: label} that scView gives without the AI, {step-record key: clusters}).
 
     - "Low-quality cells": cluster QC flags it ``low_quality`` (few genes and high mito) or
@@ -2023,7 +2068,7 @@ def _annotation_decided(adata: ad.AnnData, groupby: str,
     from scview.core import cluster_qc, marker_randomness
 
     try:
-        check = marker_randomness.check(adata, marker_map)
+        check = marker_randomness.check(adata, marker_map, tissue=tissue)  # types of the tissue only
     except Exception as exc:
         logger.info("Random-marker check skipped: %s", exc)
         check = marker_randomness.RandomCheck(skipped="check failed")
@@ -2243,21 +2288,15 @@ def _run_cell_type_annotation(
     (reference-based, tissue-specific model), and 'marker_score' (offline curated
     marker scoring). See docs/CELLTYPE_ANNOTATION.md.
     """
-    method = (params.annotation_method or "llm").lower()
+    try:  # never a silent fallback: the routes refuse this first (422), a run that got past them skips
+        method, fell_back = annotation_method_plan(params)
+    except AnnotationMethodError as e:
+        raise StepSkipped(str(e)) from e
     groupby = _resolve_annotation_groupby(adata, params)
     target = resolve_annotation_target(adata, params)
     check_annotation_target(adata, target, params.annotation_overwrite)
-
-    # Default method is the any-tissue LLM; degrade to CellTypist when no LLM key is set.
-    if method == "llm":
-        from scview.config import get_settings
-
-        if not get_settings().llm_api_key:
-            logger.warning(
-                "LLM annotation requested but no language model key is set; "
-                "falling back to CellTypist (%s).", params.celltypist_model,
-            )
-            method = "celltypist"
+    if fell_back:
+        logger.warning("Annotation: %s", fell_back)
 
     fit: dict[str, Any] | None = None
     if method == "celltypist":
@@ -2293,7 +2332,10 @@ def _run_cell_type_annotation(
         label_qualifiers.drop(adata, target)
     # Recorded with the step: the column written (so a later run may write it again), the
     # model's species and gene overlap (CellTypist only).
-    return {**{k: v for k, v in (fit or {}).items() if k != "model"}, **qual,
+    # The method that ran is the one recorded (History, replay script, methods text), with the one asked.
+    ran = {"annotation_method": method, "annotation_method_requested": params.annotation_method,
+           "annotation_fallback_note": fell_back} if fell_back else {}
+    return {**{k: v for k, v in (fit or {}).items() if k != "model"}, **qual, **ran,
             "annotation_target": target,
             **({"annotation_overwrite": True} if params.annotation_overwrite else {})}
 
@@ -2420,6 +2462,8 @@ _PEARSON_TOOLS = {
 
 def _note_caution(result: PipelineResult, step: str, ret: Any) -> None:
     """A step's recorded note the run's result shows beside it (``PipelineResult.cautions``)."""
+    if isinstance(ret, dict) and ret.get("annotation_fallback_note"):
+        result.cautions[step] = str(ret["annotation_fallback_note"])
     if isinstance(ret, dict) and (ret.get("qc_nuclei_note") or ret.get("from_original")):
         if ret.get("from_original"):  # reset from the original upload: the cells it brought back
             text = (f"Started from the {ret.get('n_original', 0):,} cells as uploaded "

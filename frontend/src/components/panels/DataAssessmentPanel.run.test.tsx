@@ -192,6 +192,45 @@ describe("DataAssessmentPanel run progress: watchdog, Cancel, outcome", () => {
     expect(await screen.findByText("All 2 steps complete")).toBeTruthy();
   });
 
+  const REFUSAL =
+    "In memory the run needs about 8.2 GB more at its peak, more than scView can give it with its working " +
+    "reserve, so it runs in large-dataset mode: the matrices stay on disk, read in blocks. Large-dataset mode " +
+    "converts the dataset for good: X stays log-normalised. Nothing was run: run it again allowing " +
+    "large-dataset mode to convert it, or free memory first.";
+
+  it("asks before a run converts the dataset, and on yes runs it again allowing it", async () => {
+    const second = controlledStream();
+    fetchSpy.mockImplementationOnce(async () => stream.response).mockImplementationOnce(async () => second.response);
+    const confirm = vi.fn<(question: string) => boolean>(() => true);
+    vi.stubGlobal("confirm", confirm);
+    await startRun();
+    const body = (call: number) => JSON.parse(String((fetchSpy.mock.calls[call]?.[1] as RequestInit).body));
+    expect(body(0).allow_large_mode).toBe(false);
+    stream.send("error", { error: REFUSAL });
+    stream.close();
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
+    const question = String(confirm.mock.calls[0]?.[0]);
+    expect(question).toContain("converts the dataset for good");
+    expect(question).toContain("Run it in large-dataset mode anyway?");
+    expect(question).not.toContain("Nothing was run");
+    expect(body(1).allow_large_mode).toBe(true);
+    second.send("complete", { ...RESULT, steps_run: ["qc_metrics", "doublet_detection"], status: "complete" });
+    second.close();
+    expect(await screen.findByText(/Pipeline completed in 1s/)).toBeTruthy();
+    expect(screen.queryByText(REFUSAL)).toBeNull();
+  });
+
+  it("on no, nothing runs and the refusal stays on screen", async () => {
+    const confirm = vi.fn<(question: string) => boolean>(() => false);
+    vi.stubGlobal("confirm", confirm);
+    await startRun();
+    stream.send("error", { error: REFUSAL });
+    stream.close();
+    expect(await screen.findByText(REFUSAL)).toBeTruthy();
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("shows a refused run's reason through readError, not its JSON", async () => {
     const detail = "Unknown pipeline step 'umap' (did you mean 'embeddings'?). Valid steps: qc_metrics, embeddings.";
     fetchSpy.mockImplementation(async () => new Response(JSON.stringify({ detail }), { status: 422 }));

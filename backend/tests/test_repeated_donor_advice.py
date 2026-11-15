@@ -75,3 +75,34 @@ def test_blocked_returns_no_message():
     assert rep["blocked"] is True and rep["message"] is None and rep["within"] is True
     rep = repeated_donors(obs, "s", sides)
     assert rep["blocked"] is False and "block on it" in rep["message"]
+
+
+@pytest.mark.asyncio
+async def test_partly_paired_says_how_to_compare_only_the_donors_on_both_sides():
+    # Reck 2025's kidney: UUO donors on both sides (inflammatory vs injured PT), some controls
+    # on one side only; disease = UUO holds only donors on both sides.
+    part = _counts(["u1", "u2", "u3", "c1"], ["u1", "u2", "u3", "c2", "c3"], seed=10)
+    part.obs["disease"] = part.obs["donor"].astype(str).str[0].map({"u": "UUO", "c": "normal"}).astype("category")
+    res = await differential_expression_compare("x", _req(pb_method="voom"), _DM(part))
+    (w,) = [x for x in res.replicate_warnings if "on both sides" in x]
+    assert "Paired: restrict to them with within_column 'donor' and within_value ['u1', 'u2', 'u3'] " \
+           "(replicate_key 'donor')" in w
+    assert "or with within_column 'disease' = 'UUO' (its 3 donors are all on both sides)" in w
+    # Doing what it says: a paired design, and the warning is gone.
+    res = await differential_expression_compare(
+        "x", _req(pb_method="voom", within_column="disease", within_value="UUO"), _DM(part))
+    assert res.design == "~donor + condition" and not any("on both sides" in x for x in res.replicate_warnings)
+    res = await differential_expression_compare(
+        "x", _req(pb_method="voom", within_column="donor", within_value=["u1", "u2", "u3"],
+                  replicate_key="donor"), _DM(part))
+    assert res.design == "~donor + condition"
+
+
+def test_paired_subset_needs_a_value_with_only_shared_donors():
+    from scview.core.replicates import paired_subset
+
+    obs = pd.DataFrame({"donor": ["a", "a", "b", "b", "c", "d"], "grp": ["x", "x", "x", "x", "y", "y"],
+                        "mixed": ["p", "q", "p", "p", "p", "p"]})
+    mask = [True] * 6
+    assert paired_subset(obs, "donor", ["a", "b"], mask) == ("grp", "x", 2)
+    assert paired_subset(obs, "donor", ["a"], mask) is None  # x also holds b; one donor is not a pair

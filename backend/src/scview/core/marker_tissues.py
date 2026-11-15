@@ -31,7 +31,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 INDEX_FILE = "tissues.json.gz"
-VERSION = 2
+VERSION = 3  # 3: "adrenal" / "suprarenal" no longer read as kidney ("renal" inside them)
 
 # Phrases taken first and removed, so their words do not also count ("bone marrow" is not bone,
 # "smooth muscle" not skeletal muscle).
@@ -43,7 +43,7 @@ _FIRST: tuple[tuple[str, str], ...] = (
     (r"adrenal medulla", "endocrine"),
 )
 ORGANS: dict[str, str] = {
-    "kidney": r"kidney|renal|nephr|glomerul",
+    "kidney": r"kidney|(?<![a-z])renal|nephr|glomerul",  # not adrenal, suprarenal, perirenal
     "urinary": r"(?<!gall )(?<!gall)bladder|ureter|urethra|urine|urinary",
     "liver": r"liver|hepat|bile|biliary|gall ?bladder",
     "pancreas": r"pancrea|islet",

@@ -40,4 +40,14 @@ describe("pseudotime gene heatmap", () => {
     expect(headers.slice(0, 3)).toEqual(["rank", "gene", "pattern"]);
     expect(rows[1]!.slice(0, 3)).toEqual([2, "Apoe", "falling"]);
   });
+
+  it("adds the branch columns to a branch-specific CSV", () => {
+    const g = { ...gene("Gcg", 0.9, 300), branch_diff: 1.5, mean_branch: 3.2, mean_others: 0.1 };
+    const { headers, rows } = trendGenesCsv({
+      column: "x", n_cells: 10, n_genes_tested: 5, min_detected: 10, expression: "", method: "", restrict: null,
+      rank_by: "branch_specific", bins: { pseudotime: [], n_cells: [] }, genes: [g],
+    });
+    expect(headers.slice(-3)).toEqual(["branch_diff", "mean_branch", "mean_others"]);
+    expect(rows[0]!.slice(-3)).toEqual([1.5, 3.2, 0.1]);
+  });
 });

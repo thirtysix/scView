@@ -5,7 +5,7 @@ const api = vi.hoisted(() => ({ getRunPreflight: vi.fn(), getIngestPreflight: vi
 vi.mock("@/api/preflight", () => api);
 
 import type { LeidenChoice, PreflightVerdict, Umap3dChoice } from "@/api/preflight";
-import { FastLeidenOffer, PreflightIngestNotes, PreflightNote, PreflightRunNote, Umap3dNote } from "./PreflightNote";
+import { ConversionNote, FastLeidenOffer, PreflightIngestNotes, PreflightNote, PreflightRunNote, Umap3dNote } from "./PreflightNote";
 import { hoverTip } from "@/test/hoverTip";
 
 const GB = 1024 ** 3;
@@ -269,6 +269,36 @@ describe("Umap3dNote", () => {
 
   it("in memory and quick: no note", () => {
     const { container } = render(<Umap3dNote choice={umap3d({ on: true, default_on: true, offer: false })} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe("ConversionNote", () => {
+  const mode = { chunked: true, converts: true, turns_off: ["sub-clustering"] };
+
+  it("says the run converts for good and that Run asks first", () => {
+    render(<ConversionNote mode={mode} />);
+    expect(screen.getByTestId("conversion-note")).toHaveTextContent(
+      "Large-dataset mode, for good. Run asks before it converts the dataset.",
+    );
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("offers to leave out doublet detection when that alone causes it", () => {
+    const onSkip = vi.fn();
+    render(
+      <ConversionNote
+        mode={{ ...mode, without_doublets: { fits_in_memory: true, text: "Without doublet detection ..." } }}
+        onSkipDoublets={onSkip}
+      />,
+    );
+    expect(screen.getByTestId("conversion-note")).toHaveTextContent("Doublet detection alone pushes it out of memory.");
+    fireEvent.click(screen.getByRole("button", { name: "Leave out doublet detection" }));
+    expect(onSkip).toHaveBeenCalledTimes(1);
+  });
+
+  it("nothing for a run in memory or a dataset already in large layout", () => {
+    const { container } = render(<ConversionNote mode={{ chunked: true }} />);
     expect(container).toBeEmptyDOMElement();
   });
 });

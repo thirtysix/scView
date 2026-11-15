@@ -98,8 +98,32 @@ export interface ProteinCheckRow {
   flag: boolean;
 }
 
+/** The protein check's values (backend perturbation_protein.LAYERS); auto picks by panel size. */
+export type ProteinLayer = "protein_clr" | "protein_counts" | "protein_dsb";
+
+/** One layer the check can use on this dataset, with why it cannot. */
+export interface ProteinLayerOption {
+  layer: ProteinLayer;
+  label: string;
+  available: boolean;
+  reason: string | null;
+  /** Compositional on this panel (per-cell CLR or DSB step II on a small panel) */
+  compositional: boolean;
+}
+
 export interface ProteinCheck {
+  /** The values tested; results before v0.80 have no other than protein_clr */
   layer: string;
+  layer_label?: string;
+  /** The shift's unit in words ("CLR", "log1p counts", "DSB") */
+  unit_name?: string;
+  /** What was asked: auto or a named layer (v0.80+) */
+  layer_choice?: string;
+  /** auto's pick on this dataset (v0.80+) */
+  default_layer?: ProteinLayer;
+  layers?: ProteinLayerOption[];
+  /** CLR only: each target's shift of the per-cell CLR reference (mean log count over the panel) */
+  reference_shift?: Record<string, number> | null;
   proteins: string[];
   n_proteins: number;
   control: string;
@@ -196,6 +220,8 @@ export interface MixscapeBody {
   lda?: boolean;
   /** all: every gene, Seurat RunMixscape's DE rule (default); variable: the variable genes (scView 0.77) */
   de_genes?: MixscapeDeGenes;
+  /** The protein check's values; auto (default) by panel size */
+  protein_layer?: "auto" | ProteinLayer;
 }
 
 export interface MixscapeProgress {
@@ -215,6 +241,11 @@ export function previewAssignment(datasetId: string, body: AssignBody): Promise<
 
 export function saveAssignment(datasetId: string, body: AssignBody): Promise<PerturbationSummary> {
   return apiFetch(`/datasets/${datasetId}/perturbation/assign`, { method: "POST", body: JSON.stringify(body) });
+}
+
+/** The last Mixscape run's protein check on another layer (not saved: the run keeps its own). */
+export function getMixscapeProtein(datasetId: string, layer: ProteinLayer | "auto"): Promise<ProteinCheck> {
+  return apiFetch(`/datasets/${datasetId}/perturbation/mixscape/protein?layer=${encodeURIComponent(layer)}`);
 }
 
 /** Run Mixscape (streamed); resolves with the saved result. Aborting `signal` stops

@@ -193,7 +193,7 @@ describe("AnnotationControl (CellTypist)", () => {
     expect(onAnnotate.mock.calls[1]![0]).toMatchObject({ annotation_marker_sets: "builtin" });
   });
 
-  it("starts on marker scores without an API key and says what the AI tab would do", async () => {
+  it("starts on marker scores without an API key; the AI tab says it cannot run and does not send", async () => {
     getLlmStatus.mockResolvedValue({ available: false });
     const onAnnotate = vi.fn().mockResolvedValue(undefined);
     render(<AnnotationControl onAnnotate={onAnnotate} running={false} species="human" />);
@@ -204,7 +204,13 @@ describe("AnnotationControl (CellTypist)", () => {
     await waitFor(() => expect(onAnnotate).toHaveBeenCalledTimes(1));
     expect(onAnnotate.mock.calls[0]![0]).toMatchObject({ annotation_method: "marker_score" });
     fireEvent.click(screen.getByText("AI (needs an API key)"));
-    expect(screen.getByText(/runs CellTypist instead/)).toBeTruthy();
+    // No silent CellTypist run: the AI tab says it cannot run, and its button is off.
+    expect(screen.getByText(/the AI cannot run/)).toBeTruthy();
+    expect(screen.queryByText(/runs CellTypist instead/)).toBeNull();
+    const button = screen.getByText("Annotate cell types").closest("button")!;
+    expect(button.disabled).toBe(true);
+    fireEvent.click(button);
+    expect(onAnnotate).toHaveBeenCalledTimes(1);
   });
 
   it("sends a tissue with the database marker scores, so types of other tissues are left out", async () => {

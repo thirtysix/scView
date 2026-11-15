@@ -549,11 +549,23 @@ def _run_params(raw: dict[str, Any] | None) -> PipelineParams:
 
 
 def _check_annotation_target(adaptor, steps: list[str], params: PipelineParams) -> None:
-    """422 before a run whose annotation would write over a column scView did not create."""
-    if "cell_type_annotation" not in steps or not (params.annotation_target or "").strip():
-        return  # scView's own column by default (checked again by the step)
-    from scview.core.pipeline import AnnotationTargetError, check_annotation_target
+    """422 before a run whose annotation would write over a column scView did not create, or
+    asks for the AI annotation with no language model key and no fallback named."""
+    if "cell_type_annotation" not in steps:
+        return
+    from scview.core.pipeline import (
+        AnnotationMethodError,
+        AnnotationTargetError,
+        annotation_method_plan,
+        check_annotation_target,
+    )
 
+    try:
+        annotation_method_plan(params)
+    except AnnotationMethodError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    if not (params.annotation_target or "").strip():
+        return  # scView's own column by default (checked again by the step)
     try:
         check_annotation_target(adaptor.adata, params.annotation_target.strip(),
                                 bool(params.annotation_overwrite))

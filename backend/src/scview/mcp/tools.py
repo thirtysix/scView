@@ -26,6 +26,7 @@ from mcp.types import TextContent, ToolAnnotations
 from pydantic import Field
 
 from scview.core.cell_filter import CellFilter
+from scview.core.marker_names import HOW_TEXT
 from scview.mcp import api, compact, jobs, params, plots
 from scview.mcp.compact import DEFAULT_LIMIT, clamp, dumps, num, pick, rows, table
 
@@ -567,22 +568,64 @@ async def qc_filter_preview(
         "MAD mode: a sample's genes cut is never below this many genes per cell (default: the data's "
         "own, 200 for cells; 0 = none). It is not applied where it would remove more than half a "
         "sample's cells (floor_skipped)."))] = None,
+    pct_mt_floor: Annotated[float | None, Field(ge=0, description=(
+        "MAD mode: a sample's % mito bound is never below this (default 2; 0 = none). Nuclei keep little "
+        "mito RNA, so median + k MADs can fall to a fraction of a percent: raise it (or max_pct_mt) when the "
+        "nuclei warning says % mito removes many cells. The run takes it as qc_pct_mt_floor."))] = None,
+    mad_upper: Annotated[bool | None, Field(description=(
+        "MAD mode: also cut counts and genes above median + k MADs (default no)."))] = None,
+    counts_floor: Annotated[float | None, Field(ge=0, description=(
+        "Fewest counts per cell in both modes (default 0 = none; a targeted panel's is 10)."))] = None,
+    max_counts: Annotated[float | None, Field(ge=0, description=(
+        "Most counts per cell in both modes (default 0 = no cap)."))] = None,
+    mito_mode: Annotated[Literal["global", "per_type"] | None, Field(description=(
+        "global (default): one % mito rule for every cell; per_type: each cell type's own bound (median + "
+        "mad_k_mt MADs), for types that hold more mitochondria (mito_types in the reply)."))] = None,
+    mito_type_column: Annotated[str, Field(max_length=256, description=(
+        "per_type: the cell-type column (default: the one the step picks)."))] = "",
+    mito_type_floor: Annotated[bool | None, Field(description=(
+        "per_type: a type's bound is never stricter than the global rule (default no)."))] = None,
+    doublet_source: Annotated[Literal["auto", "hashing", "scrublet", "classifier", "consensus", "either"] | None,
+                              Field(description=(
+        "Whose doublet calls drop_doublets drops (default auto: cell hashing when run, else the detectors' "
+        "consensus, else the one that ran)."))] = None,
+    drop_hash_negatives: Annotated[bool | None, Field(description=(
+        "Also drop cell hashing's negatives (default no)."))] = None,
+    min_atac_counts: Annotated[float | None, Field(ge=0, description=(
+        "Multiome: fewest ATAC counts in peaks per cell (0 = off; Signac's vignette uses 1,800)."))] = None,
+    max_atac_counts: Annotated[float | None, Field(ge=0, description=(
+        "Multiome: most ATAC counts in peaks per cell (0 = off; Signac's vignette 100,000)."))] = None,
+    max_nucleosome_signal: Annotated[float | None, Field(ge=0, description=(
+        "Multiome: highest nucleosome signal (0 = off; Signac's vignette 2). Needs the fragment QC."))] = None,
+    min_tss_enrichment: Annotated[float | None, Field(ge=0, description=(
+        "Multiome: lowest TSS enrichment (0 = off; Signac's vignette 1). Needs the fragment QC."))] = None,
+    grid_mito: Annotated[bool, Field(description=(
+        "Spots and bins: apply the % mito rules too (off by default: they cut tissue out)."))] = False,
     drop_doublets: Annotated[bool | None, Field(description="Also drop the cells called doublets (default no).")] = None,
     sample_column: Annotated[str, Field(description="The samples (default: detected).")] = "",
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
     """The cells the filtering step would remove with these thresholds (nothing is changed):
     overall, per rule, per sample and per cluster, with warnings for a sample or cluster
-    mostly lost. Thresholds left out take the pipeline's defaults. In MAD mode each sample's
-    cuts are in mad_thresholds, with the genes cut's source (its MAD bound or the floor)."""
+    mostly lost. Thresholds left out take the pipeline's defaults; every filtering parameter
+    run_pipeline takes can be previewed here, named without its qc_ prefix (qc_pct_mt_floor ->
+    pct_mt_floor). In MAD mode each sample's cuts are in mad_thresholds, with the genes cut's
+    and the % mito bound's source (the MAD bound or the floor)."""
     d = await _get(f"{_ds(dataset_id)}/qc/filter-preview", mode=mode, min_genes=min_genes,
                    max_genes=max_genes, min_counts=min_counts, max_pct_mt=max_pct_mt, mad_k=mad_k,
-                   mad_k_mt=mad_k_mt, genes_floor=genes_floor, drop_doublets=drop_doublets,
-                   sample_column=sample_column)
+                   mad_k_mt=mad_k_mt, genes_floor=genes_floor, pct_mt_floor=pct_mt_floor,
+                   mad_upper=mad_upper, counts_floor=counts_floor, max_counts=max_counts,
+                   mito_mode=mito_mode, mito_type_column=mito_type_column, mito_type_floor=mito_type_floor,
+                   doublet_source=doublet_source, drop_hash_negatives=drop_hash_negatives,
+                   min_atac_counts=min_atac_counts, max_atac_counts=max_atac_counts,
+                   max_nucleosome_signal=max_nucleosome_signal, min_tss_enrichment=min_tss_enrichment,
+                   grid_mito=grid_mito or None, drop_doublets=drop_doublets, sample_column=sample_column)
     n = clamp(limit)
     out = {"dataset_id": dataset_id, **pick(d, "n_cells", "n_removed", "n_kept", "fraction_removed",
                                             "thresholds", "has_mt", "by_criterion", "warnings", "doublets",
-                                            "grid_note", "tissue_cells_note")}
+                                            "grid_note", "tissue_cells_note", "atac_qc")}
+    if d.get("mito_types"):
+        out["mito_types"] = d["mito_types"]
     samples = d.get("samples") or {}
     if samples.get("groups"):
         out["samples"] = {"column": samples.get("column"), **table(
@@ -670,9 +713,10 @@ async def library_concordance(
         "The samples / donors whose libraries are compared (default: the donor column the QC "
         "table uses)."))] = "",
     library_column: Annotated[str, Field(description=(
-        "The libraries: one value per sequencing library, each within one sample (default: "
-        "detected: a library / lane / channel column, a non-person sample column such as "
-        "biosample_id, or the barcodes' prefix or -N suffix)."))] = "",
+        "The libraries: one value per sequencing library (default: detected: a library / lane / "
+        "channel column, a non-person sample column such as biosample_id, or the barcodes' prefix or "
+        "-N suffix). A library may pool several samples (SNP- or hashtag-demultiplexed pools): each "
+        "sample's cells in each library are then compared (pooled true)."))] = "",
     celltype_column: Annotated[str, Field(description=(
         "The cell types the libraries' mixes are compared over (default: an author cell-type "
         "column, else the clustering)."))] = "",
@@ -682,7 +726,8 @@ async def library_concordance(
     genes, and a flag when two libraries of one sample differ in cell-type mix (or depth)
     more than different samples alike in condition, tissue and sex do (90% quantile of those
     distances, floor 0.15, chi-square p < 1e-3). A flagged library may hold another sample's
-    cells or a failed capture. A sample's libraries from different tissues or conditions are
+    cells or a failed capture. Pooled libraries (several donors each, demultiplexed) are read
+    per donor x library. A sample's libraries from different tissues or conditions are
     compared only within one (``split_by``). ``reason`` says why nothing was checked."""
     d = await _get(f"{_ds(dataset_id)}/qc/libraries", sample_column=sample_column,
                    library_column=library_column, celltype_column=celltype_column)
@@ -697,7 +742,7 @@ async def library_concordance(
                         **({"message": s["message"]} if s.get("message") else {})})
     n = clamp(limit)
     out = {"dataset_id": dataset_id,
-           **pick(d, "status", "reason", "sample_column", "library_column", "library_source",
+           **pick(d, "status", "reason", "sample_column", "library_column", "library_source", "pooled",
                   "celltype_column", "split_by", "n_checked", "n_flagged", "flagged", "reference", "note"),
            "samples": samples[:n]}
     if len(samples) > n:
@@ -730,7 +775,7 @@ async def preflight(dataset_id: DatasetId, steps: Steps, params: Annotated[dict[
 def _preflight_query(steps: list[str], p: dict[str, Any]) -> dict[str, Any]:
     query: dict[str, Any] = {"steps": ",".join(steps)}
     for k in ("n_top_genes", "n_comps", "n_neighbors", "normalization_method", "annotation_method",
-              "doublet_channel_key", "doublet_method", "chunked", "clustering_method",
+              "annotation_fallback", "doublet_channel_key", "doublet_method", "chunked", "clustering_method",
               "leiden_iterations", "umap_3d", "ambient_rho"):
         if p.get(k) is not None:
             query[k] = p[k]
@@ -742,7 +787,7 @@ def _preflight_query(steps: list[str], p: dict[str, Any]) -> dict[str, Any]:
 def _pipeline_result(job: jobs.Job) -> dict[str, Any]:
     r = job.events.get("complete") or {}
     out = pick(r, "status", "stop_reason", "steps_run", "steps_skipped", "skipped", "errors",
-               "notes", "cleared", "elapsed_seconds", "unknown_steps", "chunked", "mode")
+               "notes", "cautions", "cleared", "elapsed_seconds", "unknown_steps", "chunked", "mode")
     out["dataset_id"] = job.dataset_id
     out["note"] = "Saved: the open browser UI shows the new state after a reload of the dataset."
     return out
@@ -750,15 +795,10 @@ def _pipeline_result(job: jobs.Job) -> dict[str, Any]:
 
 def _single_sample_note(adaptor) -> str | None:
     """The clusters of the active clustering that are almost all one sample (confounding.py)."""
-    from scview.core import confounding, qc_groups
+    from scview.core import confounding
 
-    adata = adaptor.adata
-    cluster_col = adaptor.active_clustering_column()
-    sample_col, _why = qc_groups.sample_grouping(adata)
-    if not cluster_col or not sample_col:
-        return None
-    found = confounding.single_sample_clusters(adata.obs, cluster_col, sample_col)
-    return confounding.single_sample_note(found, cluster_col, sample_col, int(adata.obs[sample_col].nunique()))
+    found = confounding.single_sample_for(adaptor.adata, adaptor.active_clustering_column())
+    return found["text"] if found else None
 
 
 async def _run_result(job: jobs.Job) -> dict[str, Any]:
@@ -803,13 +843,18 @@ async def run_pipeline(dataset_id: DatasetId, steps: Steps, params: Params = Non
     refused."""
     _check_steps(steps)
     p = _check_params(params)
+    if "cell_type_annotation" in steps:
+        await _check_annotation(p)
     if not allow_large_mode:
         mode = (await _get(f"{_ds(dataset_id)}/preflight", **_preflight_query(steps, p))).get("mode") or {}
         if mode.get("converts"):
+            skip = (mode.get("without_doublets") or {}).get("text")
             raise ToolError(
                 f"Not run: {mode.get('reason')} That converts the dataset for good: "
                 f"{mode.get('layout_after')}; no longer available on it: "
-                f"{'; '.join(mode.get('turns_off') or [])}. Run cell-level DE and the other tools first, free "
+                f"{'; '.join(mode.get('turns_off') or [])}. "
+                + (f"{skip} Leave doublet_detection out, or " if skip else "")
+                + ("run" if skip else "Run") + " cell-level DE and the other tools first, free "
                 "memory, or pass allow_large_mode=true to convert it.")
     job = await _start_run(dataset_id, steps, p, "pipeline", allow_large_mode=allow_large_mode)
     return dumps({"job_id": job.id, "status": job.status, "dataset_id": dataset_id, "steps": steps,
@@ -874,23 +919,53 @@ async def get_markers(
     column: Annotated[str, Field(description="Obs column of the groups (e.g. the clustering).")],
     group: Annotated[str | None, Field(description="One group only (default: every group).")] = None,
     n_genes: Annotated[int, Field(ge=1, le=100, description="Top genes per group.")] = 10,
+    include_unnamed: Annotated[bool, Field(description=(
+        "Keep genes with an id but no name (Ensembl ids such as ENSG00000236283, clone names such as "
+        "AC012345.1). Default false: left out, as scView's own marker choice does (annotator, "
+        "enrichment), and listed per group in unnamed_skipped."))] = False,
 ) -> str:
     """Marker genes of each group of a column vs the rest (Wilcoxon), top n per group with
     log fold change, adjusted p and the share of cells expressing in and out. Computed and
-    saved with the dataset the first time a column is asked for. The current markers live in
-    the dataset itself, one set per column, so they have no result_id and list_results does not
-    show them (it lists earlier markers a re-run replaced): call this again to read them."""
+    saved with the dataset the first time a column is asked for. Genes with an id but no name
+    are left out unless most genes are ids (unnamed_skipped says which ranked in the top n).
+    The current markers live in the dataset itself, one set per column, so they have
+    no result_id and list_results does not show them (it lists earlier markers a re-run
+    replaced): call this again to read them."""
+    from scview.core.gene_filters import is_unnamed
+
+    # More than asked: the nameless ones are left out after.
+    fetch = n_genes if include_unnamed else min(5000, 3 * n_genes + 20)
     d = await _get(f"{_ds(dataset_id)}/markers", groupby_column=column, groupby=group or "",
-                   format="json", n_genes=n_genes)
+                   format="json", n_genes=fetch)
     if not d.get("groups"):
         return dumps({"dataset_id": dataset_id, "column": column, "groups": [],
                       "reason": d.get("reason")})
     sample = next(iter(d["markers"].values()))[0]
     cols = [c for c in ("gene", "logfoldchange", "pval_adj", "pct_in", "pct_out", "pct_nz_group",
                         "pct_nz_reference", "pts", "pts_rest", "specificity") if c in sample]
-    out = {g: [[num(r.get(c)) for c in cols] for r in recs[:n_genes]] for g, recs in d["markers"].items()}
+    ranked = [str(r.get("gene")) for recs in d["markers"].values() for r in recs]
+    # A dataset named by ids keeps them (marker_selection's rule: most genes are ids).
+    skip = not include_unnamed and sum(map(is_unnamed, ranked)) <= len(ranked) / 2
+    out, skipped = {}, {}
+    for g, recs in d["markers"].items():
+        kept, gone = [], []
+        for r in recs:
+            if len(kept) == n_genes:
+                break
+            (gone if skip and is_unnamed(str(r.get("gene"))) else kept).append(r)
+        out[g] = [[num(r.get(c)) for c in cols] for r in kept]
+        if gone:
+            skipped[g] = [str(r.get("gene")) for r in gone]
     extra = {"note": P0_NOTE} if "pval_adj" in cols and any(
         r[cols.index("pval_adj")] == 0 for rs in out.values() for r in rs) else {}
+    if skipped:
+        extra["unnamed_skipped"] = skipped
+        k = sum(map(len, skipped.values()))
+        extra["unnamed_note"] = (
+            f"{k} gene{'s' if k != 1 else ''} with an id but no name ranked in the top {n_genes} of "
+            f"{len(skipped)} group{'s' if len(skipped) != 1 else ''} and {'were' if k != 1 else 'was'} left out "
+            "(unnamed_skipped), as scView's marker choice for the annotator and enrichment does; "
+            "include_unnamed=true keeps them.")
     if d.get("skipped_groups"):
         extra["skipped_groups"] = d["skipped_groups"]
         extra["skipped_reason"] = d.get("skipped_reason")
@@ -903,7 +978,7 @@ async def get_markers(
 @tool(WRITE)
 async def annotate_celltypist(
     dataset_id: DatasetId,
-    model: Annotated[str, Field(description="CellTypist model, e.g. Immune_All_Low.pkl (default), "
+    model: Annotated[str, Field(description="CellTypist model (celltypist_models lists them), e.g. Immune_All_Low.pkl (default), "
                                             "Immune_All_High.pkl, Healthy_COVID19_PBMC.pkl.")] = "Immune_All_Low.pkl",
     groupby: Annotated[str, Field(description="Clusters for the majority vote (default: the active clustering).")] = "",
     target_column: Annotated[str, Field(description="Obs column to write.")] = "celltypist",
@@ -914,6 +989,7 @@ async def annotate_celltypist(
     """Label cells with a CellTypist reference model (the pipeline's cell_type_annotation step;
     a job). The result names the labels' confidence and the model's gene overlap. The model is
     downloaded on first use."""
+    model = await _known_celltypist_model(model)
     p = {"annotation_method": "celltypist", "celltypist_model": model, "annotation_groupby": groupby,
          "annotation_target": target_column, "annotation_overwrite": overwrite}
 
@@ -929,6 +1005,112 @@ async def annotate_celltypist(
     job = await _start_run(dataset_id, ["cell_type_annotation"], p, "celltypist", finish)
     return dumps({"job_id": job.id, "status": job.status, "dataset_id": dataset_id,
                   "target_column": target_column, "next": "job_status(job_id, wait_seconds=50)"})
+
+
+async def _check_annotation(p: dict[str, Any]) -> None:
+    """Before the job: the AI method without a language model key (the routes' 422, which a job would
+    only report later), and a CellTypist model the catalog does not have."""
+    from scview.core.pipeline import AnnotationMethodError, PipelineParams, annotation_method_plan
+
+    try:
+        method, _ = annotation_method_plan(PipelineParams(**{k: v for k, v in p.items() if k.startswith("annotation_")}))
+    except AnnotationMethodError as e:
+        raise ToolError(str(e)) from None
+    if method == "celltypist":
+        p["celltypist_model"] = await _known_celltypist_model(str(p.get("celltypist_model") or ""))
+
+
+async def _known_celltypist_model(model: str) -> str:
+    """``model`` with ".pkl", or a ToolError naming the close catalog names before any job starts:
+    a misspelt model ran 68 s (the dataset loaded) before failing with no list (QA round 6). An
+    unreadable catalog (offline) checks nothing: CellTypist's own load says why."""
+    import difflib
+
+    name = (model or "").strip() or "Immune_All_Low.pkl"
+    name = name if name.endswith(".pkl") else f"{name}.pkl"
+    cat = await _get("/annotation/celltypist-models")
+    names = [m["model"] for m in cat.get("models") or []]
+    if not cat.get("complete", True) or name in names:
+        return name
+    by_lower = {n.lower(): n for n in names}
+    if name.lower() in by_lower:
+        return by_lower[name.lower()]
+    close = difflib.get_close_matches(name, names, n=3, cutoff=0.4)
+    raise ToolError(f"No CellTypist model '{model}'" + (f"; close names: {', '.join(close)}" if close else "")
+                    + f". celltypist_models lists all {len(names)} with their tissue, species and cell types.")
+
+
+@tool(READ)
+async def celltypist_models(
+    species: Annotated[Literal["human", "mouse", "other"] | None, Field(description=(
+        "Only models of this species (default: all)."))] = None,
+    tissue: Annotated[str, Field(max_length=200, description=(
+        "Only models whose name or description names this tissue, e.g. 'lung' or 'blood' "
+        "(blood and immune count as one; default: all)."))] = "",
+) -> str:
+    """The CellTypist reference models annotate_celltypist can use: name, species, the tissues its
+    name and description name (organs), the number of cell types it knows, and its description.
+    A model knows only its tissue's cell types: on another tissue every cell gets the nearest
+    one (an immune model called kidney podocytes alveolar macrophages)."""
+    from scview.core.marker_tissues import organs
+
+    cat = await _get("/annotation/celltypist-models")
+    same = {"blood": "immune"}
+    want = {same.get(o, o) for o in organs(tissue)} if tissue.strip() else None
+    if want == set():
+        raise ToolError(f"'{tissue}' names no tissue known here (e.g. kidney, lung, brain, blood, liver, gut).")
+    models = [m for m in cat.get("models") or []
+              if (species is None or m.get("species") == species)
+              and (want is None or {same.get(o, o) for o in m.get("organs") or []} & want)]
+    rows_ = [{**m, "organs": ", ".join(m.get("organs") or []), "description": (m.get("description") or "")[:120]}
+             for m in models]
+    out = {"default": cat.get("default"), "n_models": len(models),
+           "models": table(rows_, ["model", "species", "organs", "n_types", "description"], 200)}
+    if not cat.get("complete", True):
+        out["note"] = "The CellTypist catalog could not be read (offline?): only the default model is listed."
+    elif not models and want is not None:
+        out["note"] = (f"No CellTypist model covers {tissue}{' in ' + species if species else ''}. An immune "
+                       "model labels only its immune cells; annotate the rest with annotation_method "
+                       "marker_score or the AI, and check them with marker_db_check.")
+    return dumps(out, _max_chars(200))
+
+
+@tool(READ)
+async def annotation_crosscheck(
+    dataset_id: DatasetId,
+    columns: Annotated[list[str], Field(min_length=2, max_length=6, description=(
+        "2 to 6 label columns to compare: an author annotation, scView's annotations (AI, CellTypist, "
+        "marker scores), a clustering."))],
+    reference: Annotated[str, Field(description=(
+        "The column the others are mapped onto, e.g. the author labels (default: the first of columns)."))] = "",
+    limit: Limit = DEFAULT_LIMIT,
+) -> str:
+    """Do annotation methods agree? ARI and AMI between every pair of columns (they compare the
+    groupings, not the names), and against the reference: each other column's labels mapped to the
+    reference label most of their cells carry, the share of cells that then agree, and the exact-name
+    agreement. Per reference label: its cells, mean agreement, the columns that disagree and what
+    each calls it. Changes nothing (the UI's Annotation cross-check can save a consensus)."""
+    d = await _post(f"{_ds(dataset_id)}/annotation/crosscheck", {"columns": columns, "reference": reference or None})
+    ref = d.get("reference")
+    vs = {o: {"ari": c.get("ari"), "ami": c.get("ami"), "mapped_agreement": c.get("mapped_agreement"),
+              "exact_name_agreement": (c.get("exact_name") or {}).get("agreement"), "n_cells": c.get("n_cells")}
+          for o, c in (d.get("comparisons") or {}).items()}
+    labels = []
+    for name in d.get("reference_labels") or []:
+        lab = (d.get("labels") or {}).get(name)
+        if not lab:
+            continue
+        calls = {o: ", ".join(f"{c['label']} ({num(c['share'])})" for c in a.get("calls") or [])
+                 for o, a in (lab.get("annotators") or {}).items()}
+        labels.append({"label": name, "n_cells": lab.get("n_cells"), "mean_agreement": lab.get("mean_agreement"),
+                       "disagreeing": ", ".join(lab.get("disagreeing") or []),
+                       "calls": "; ".join(f"{o}: {c}" for o, c in calls.items())})
+    n = clamp(limit)
+    return dumps({"dataset_id": dataset_id, "reference": ref,
+                  **pick(d, "columns", "n_compared", "mean_agreement", "exact_name_agreement", "n_unresolved", "note"),
+                  "ari": (d.get("pairwise") or {}).get("ari"), "vs_reference": vs,
+                  "labels": table(labels, ["label", "n_cells", "mean_agreement", "disagreeing", "calls"], n)},
+                 _max_chars(2 * n))
 
 
 @tool(READ)
@@ -974,14 +1156,26 @@ async def marker_db_check(
     d = await _post(f"{_ds(dataset_id)}/annotation/marker-db/check",
                     {"column": column, "species": species, "retry": retry, "tissue": tissue})
     n = clamp(limit)
-    labels = [{**r, "overlap": ", ".join(r.get("overlap") or []),
-               "suggestions": "; ".join(f"{s['cell_type']} (p {num(s['p'])})" for s in r.get("suggestions") or [])}
+
+    def suggestion(s: dict) -> str:
+        return (f"{s['cell_type']} (p {num(s['p'])}" + (f", {s['cl_id']}" if s.get("cl_id") else "")
+                + f"; shares {', '.join(s.get('overlap') or [])})")
+
+    # How each label was matched, its type's CL id, the group's markers and the genes behind every
+    # p: QA round 6 needed the REST reply to see why "PC Injured" was judged as plasma cells.
+    labels = [{**r, "match": (r.get("match") or {}).get("how"), "overlap": ", ".join(r.get("overlap") or []),
+               "markers": ", ".join((r.get("markers") or [])[:MARKER_DB_MARKERS_SHOWN]),
+               "suggestions": "; ".join(suggestion(s) for s in r.get("suggestions") or [])}
               for r in d.get("labels") or []]
     return dumps({"dataset_id": dataset_id,
                   **pick(d, "column", "species", "species_note", "verdict_counts", "cellmarker",
                          "verdict_sources", "suggestion_sources", "tissue", "note"),
-                  "labels": table(labels, ["label", "verdict_text", "db_type", "p", "overlap", "n_db_genes",
-                                           "suggestions"], n)}, _max_chars(n))
+                  "match_kinds": HOW_TEXT,
+                  "labels": table(labels, ["label", "verdict_text", "match", "db_type", "cl_id", "p", "overlap",
+                                           "n_db_genes", "markers", "suggestions"], n)}, _max_chars(2 * n))
+
+
+MARKER_DB_MARKERS_SHOWN = 10  # of the group's 25 markers the check used
 
 
 @tool(READ)

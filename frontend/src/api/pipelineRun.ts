@@ -95,6 +95,20 @@ export async function runErrorMessage(res: Response): Promise<string> {
   return `API error ${res.status}: ${text}`;
 }
 
+/** The words of the backend's refusal of a run that would convert the dataset to
+ *  large-dataset layout without the user's yes (core/processing.py, allow_large_mode false). */
+export const CONVERSION_REFUSAL_PHRASE = "run it again allowing large-dataset mode";
+
+export function isConversionRefusal(message: string): boolean {
+  return message.includes(CONVERSION_REFUSAL_PHRASE);
+}
+
+/** The question before a run converts the dataset: the backend's reason, and what it turns off. */
+export function conversionQuestion(message: string): string {
+  const reason = (message.split(" Nothing was run:")[0] ?? message).trim();
+  return `${reason}\n\nRun it in large-dataset mode anyway? The dataset stays in that layout.`;
+}
+
 const gb = (n: number) => (n >= 10 ? n.toFixed(0) : n.toFixed(1));
 
 /** One watchdog event as a plain sentence. */

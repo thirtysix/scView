@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from typing import Literal
 
 import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -23,6 +24,7 @@ from scview.core.dataset_manager import DatasetManager, DatasetMemoryError
 from scview.core.obs_writes import uns_snapshot, write_derived
 from scview.core.processing import run_exclusive
 from scview.core.trajectory import (
+    ROOT_CHOICE,
     TrajectoryError,
     compute_dpt,
     compute_paga,
@@ -157,8 +159,45 @@ async def compute_paga_graph(
 
 
 class DPTRequest(BaseModel):
-    root_column: str  # obs column holding the start group (cluster / cell type)
-    root_value: str
+    # The start: a group (root_column = root_value; its most central cell) or one cell.
+    root_column: str | None = Field(default=None, description="Obs column holding the start group")
+    root_value: str | None = Field(default=None, description="The start group's value in root_column")
+    root_cell: str | None = Field(default=None, max_length=512,
+                                  description="One cell's name (obs name) to start from, instead of a group")
+
+
+def _velocity_check(adaptor, data_dir, dataset_id: str):
+    """The saved velocity run's arrows checked from a root group along the PAGA tree of its
+    column (core/velocity_direction.py; nothing saved), for the pseudotime's root checks; None
+    when there is no run, or its cells changed since."""
+    from scview.core import velocity as vel
+
+    if vel.saved(adaptor.adata) is None:
+        return None
+
+    def check(column: str, group: str):
+        try:
+            return vel.recheck(adaptor, data_dir, dataset_id, {"root": group, "group_by": column}, None)
+        except vel.VelocityError:  # cells changed since the run, arrows missing: no verdict
+            return None
+
+    return check
+
+
+@router.get("/datasets/{dataset_id}/trajectory/cell-name")
+async def cell_name(
+    dataset_id: str,
+    index: int = Query(..., ge=0, description="The cell's row in the dataset (as the plots order cells)"),
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """The name of the cell at a row: a cell clicked on a plot, picked as a pseudotime root."""
+    adaptor = await dm.get_or_load_dataset(dataset_id)
+    if adaptor is None:
+        raise HTTPException(status_code=404, detail="Dataset not found.")
+    names = adaptor.adata.obs_names
+    if index >= len(names):
+        raise HTTPException(status_code=404, detail=f"The dataset has {len(names):,} cells; no row {index}.")
+    return {"dataset_id": dataset_id, "index": index, "name": str(names[index])}
 
 
 @router.post("/datasets/{dataset_id}/trajectory/dpt")
@@ -167,37 +206,49 @@ async def compute_pseudotime(
     body: DPTRequest,
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
-    """Compute diffusion pseudotime rooted in one group, save it as an obs
+    """Compute diffusion pseudotime rooted in one group or one cell, save it as an obs
     column of the dataset's derived file, and reload the dataset."""
+    by_cell = body.root_cell is not None
+    if by_cell == (body.root_column is not None or body.root_value is not None) or (
+            not by_cell and (not body.root_column or body.root_value is None)):
+        raise HTTPException(status_code=422, detail=ROOT_CHOICE)
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
     adata = adaptor.adata
-    if body.root_column not in adata.obs.columns:
-        raise HTTPException(status_code=404, detail=f"Column '{body.root_column}' not found.")
     # Cheap checks first, so a bad request costs no copy, write or reload.
-    col = adata.obs[body.root_column]
-    if not (col.astype(str).where(col.notna()) == body.root_value).any():
-        raise HTTPException(
-            status_code=400,
-            detail=f"No cells have {body.root_column} = '{body.root_value}'.",
-        )
+    if by_cell:
+        if body.root_cell not in adata.obs_names:
+            raise HTTPException(status_code=404, detail=f"No cell is named '{body.root_cell}'.")
+    else:
+        if body.root_column not in adata.obs.columns:
+            raise HTTPException(status_code=404, detail=f"Column '{body.root_column}' not found.")
+        col = adata.obs[body.root_column]
+        if not (col.astype(str).where(col.notna()) == body.root_value).any():
+            raise HTTPException(
+                status_code=400,
+                detail=f"No cells have {body.root_column} = '{body.root_value}'.",
+            )
+        del col
     try:
         graph_source(adata)
     except TrajectoryError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    del adaptor, adata, col  # no hold on the cached copy through run_exclusive's reload
+    del adaptor, adata  # no hold on the cached copy through run_exclusive's reload
 
     def _run(adaptor):
         work = _light_or_memory(adaptor)  # as for PAGA: DPT reads the graph and obs alone
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
+        check = _velocity_check(adaptor, dm.data_dir, dataset_id)
         if large_run.large_info(adaptor.h5ad_path) is not None:
             # No matrix in hand: the file keeps its own, obs and uns are rewritten.
             before = uns_snapshot(work)
-            params = compute_dpt(work, body.root_column, body.root_value)
+            params = compute_dpt(work, body.root_column, body.root_value, root_cell=body.root_cell,
+                                 velocity_check=check)
             write_derived(work, output_path, adaptor.h5ad_path, before)
             return params
-        params = compute_dpt(work, body.root_column, body.root_value)
+        params = compute_dpt(work, body.root_column, body.root_value, root_cell=body.root_cell,
+                             velocity_check=check)
         # Write beside, then swap in: a backed dataset may be reading this path.
         partial = output_path + ".partial"
         uns_history.before_save(output_path, work)
@@ -366,6 +417,9 @@ class TrendGenesRequest(BaseModel):
     # Only the cells in these groups of this column (a branch: the groups on a PAGA path).
     groups_column: str | None = None
     groups: list[str] | None = Field(default=None, max_length=200)
+    # trend: change along the cells used; branch_specific: higher on this branch (groups) than
+    # on the other branches of the PAGA tree of groups_column (core/pseudotime_genes.branch_genes).
+    rank_by: Literal["trend", "branch_specific"] = "trend"
 
 
 @router.post("/datasets/{dataset_id}/trajectory/{column}/trend-genes")
@@ -376,8 +430,9 @@ async def rank_trend_genes(
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """The genes whose log-normalised expression changes most along the
-    pseudotime ``column`` (spline F-test, core/pseudotime_genes.py), each with
-    its binned trend. Changes nothing."""
+    pseudotime ``column`` (spline F-test, core/pseudotime_genes.py), or with
+    ``rank_by=branch_specific`` the genes higher on one branch than on the others,
+    each with its binned trend. Changes nothing."""
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
@@ -392,11 +447,14 @@ async def rank_trend_genes(
 
     def _run() -> dict:
         return ptg.trend_genes(adata, column, n_top=body.n_top, n_bins=body.n_bins,
-                               groups_column=body.groups_column, groups=body.groups)
+                               groups_column=body.groups_column, groups=body.groups, rank_by=body.rank_by)
 
     try:
         # A backed dataset's tested cells are read: room for them held until the fit ends.
-        idx, _ = ptg.cells_used(adata, column, body.groups_column, body.groups)
+        if body.rank_by == "branch_specific":  # the whole tree's cells: at most every cell with a pseudotime
+            idx, _ = ptg.cells_used(adata, column)
+        else:
+            idx, _ = ptg.cells_used(adata, column, body.groups_column, body.groups)
         try:
             need = await asyncio.to_thread(activity.lognorm_bytes, adaptor, len(idx))
         except ValueError:  # nothing to test: trend_genes says so

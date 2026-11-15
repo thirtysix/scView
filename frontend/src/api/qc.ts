@@ -114,6 +114,24 @@ export interface ClusterQcReport {
   ambient_markers_help?: string;
   /** The typical cluster's median cell has under 1% mito (nuclei): mito judged by its share of cells. */
   nuclei_like_mito?: boolean;
+  /** Clusters almost all from one sample: a dataset-level note, never a flag. Null when none is. */
+  one_sample?: OneSampleNote | null;
+}
+
+/** A cluster made almost all of one sample (backend confounding.single_sample_for). */
+export interface OneSampleCluster {
+  cluster: string;
+  n_cells: number;
+  sample: string;
+  share: number;
+  sample_share_of_data: number;
+}
+
+export interface OneSampleNote {
+  sample_column: string;
+  n_samples: number;
+  clusters: OneSampleCluster[];
+  text: string;
 }
 
 export async function getClusterQc(datasetId: string, groupby?: string): Promise<ClusterQcReport> {

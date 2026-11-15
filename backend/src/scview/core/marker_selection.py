@@ -26,6 +26,11 @@ group 68%), the author cell types 6.3% (hepatocytes 28%), kidney 6%; 10x PBMC se
 (research/unnamed-markers). LINC/-AS1 names stay. A dataset whose genes are mostly ids
 (Ensembl ids as var names) keeps them all, or nothing would be left.
 
+Pseudogenes (``gene_filters.is_pseudogene``: FTH1P20, ACSL3P1, MTND1P23, by GENCODE gene
+type, never by name) are dropped too (``skip_pseudogenes``), with the same keep-all rule
+when most ranked genes are pseudogenes. Ribosomal-protein pseudogenes (RPL13AP5) went
+already with the ribosomal genes.
+
 The order is a choice (``order``):
 
 - ``logfc``: log fold change, highest first (the default);
@@ -47,7 +52,7 @@ import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 
-from scview.core.gene_filters import is_ribo_mito, is_unnamed
+from scview.core.gene_filters import is_pseudogene, is_ribo_mito, is_unnamed
 from scview.core.ora_background import resolve_markers_key
 
 logger = logging.getLogger(__name__)
@@ -73,6 +78,7 @@ def group_markers(
     exclude_ribo_mito: bool = True,
     max_padj: float | None = MAX_PADJ,
     skip_unnamed: bool = True,
+    skip_pseudogenes: bool = True,
 ) -> dict[str, list[str]]:
     """Per group of ``groupby`` (by label, in the stored group order): up to ``n``
     marker genes, best first.
@@ -86,7 +92,8 @@ def group_markers(
     under ``max_padj`` (None turns that off); a result without p-values (logreg)
     is not filtered by them. ``skip_unnamed`` drops genes with an id but no name
     (``gene_filters.is_unnamed``), unless most of the ranked genes are ids (a dataset
-    named by Ensembl id keeps them all).
+    named by Ensembl id keeps them all). ``skip_pseudogenes`` drops pseudogenes
+    (``gene_filters.is_pseudogene``) on the same terms.
     """
     if order not in ORDERS:
         raise ValueError(f"Unknown marker order '{order}' (expected one of {', '.join(ORDERS)}).")
@@ -106,7 +113,9 @@ def group_markers(
 
     has_lfc = "logfoldchanges" in rgg and rgg["logfoldchanges"] is not None
     has_padj = max_padj is not None and _stored(rgg, "pvals_adj") is not None
-    skip_unnamed = skip_unnamed and bool(groups) and not _named_by_id(np.asarray(names[groups[0]]).astype(str))
+    first = np.asarray(names[groups[0]]).astype(str) if groups else np.array([], dtype=str)
+    skip_unnamed = skip_unnamed and bool(groups) and not _mostly(first, is_unnamed)
+    skip_pseudogenes = skip_pseudogenes and bool(groups) and not _mostly(first, is_pseudogene)
     out: dict[str, list[str]] = {}
     for group in groups:
         genes = np.asarray(names[group]).astype(str)
@@ -115,6 +124,8 @@ def group_markers(
             keep &= np.fromiter((not is_ribo_mito(g) for g in genes), dtype=bool, count=genes.size)
         if skip_unnamed:
             keep &= np.fromiter((not is_unnamed(g) for g in genes), dtype=bool, count=genes.size)
+        if skip_pseudogenes:
+            keep &= np.fromiter((not is_pseudogene(g) for g in genes), dtype=bool, count=genes.size)
         frac = _lookup(pts, group, genes)
         if frac is not None:
             keep &= frac >= min_pts  # NaN compares False
@@ -157,10 +168,10 @@ def ora_query_genes(
     ).get(str(group), [])
 
 
-def _named_by_id(genes: np.ndarray) -> bool:
-    """Most of the ranked genes are ids (a dataset whose genes are Ensembl ids)."""
+def _mostly(genes: np.ndarray, kind) -> bool:
+    """Most of the ranked genes are of ``kind`` (a dataset whose genes are Ensembl ids)."""
     sample = genes[:5000]
-    return bool(sample.size) and sum(is_unnamed(g) for g in sample) > sample.size / 2
+    return bool(sample.size) and sum(kind(g) for g in sample) > sample.size / 2
 
 
 def _stored(rgg, field: str):

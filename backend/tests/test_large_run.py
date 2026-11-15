@@ -972,3 +972,25 @@ def test_large_mode_estimate_costs_the_doublet_step_with_the_counted_genes(tmp_p
                         lambda *a, **k: seen.append(k.get("doublets")) or real(*a, **k))
     large_run._run_estimate(p, ["doublet_detection"], PipelineParams())
     assert seen[0].costed == plan.costed  # not the channels alone (_file_doublet_plan)
+
+
+def test_a_step_s_caution_reaches_the_result_as_in_memory(large_copy, monkeypatch):
+    """The AI annotation's named fallback (no language model key): the live kidney run went to large
+    mode and its result said nothing of the method that ran."""
+    from scview.config import Settings
+
+    from scview.core import pipeline as P
+
+    monkeypatch.setattr("scview.config.get_settings", lambda: Settings(DEEPINFRA_API_KEY="", LLM_API_KEY="",
+                                                                       LLM_BASE_URL=""))
+
+    def one_label(adata, params, groupby, target):  # the synthetic genes are in no marker set
+        adata.obs[target] = pd.Categorical(["T cell"] * adata.n_obs)
+        return {"marker_source": "built-in"}
+
+    monkeypatch.setattr(P, "_annotate_marker_score", one_label)
+    r = large_run.run(large_copy, ["cell_type_annotation"], PipelineParams(
+        annotation_method="llm", annotation_fallback="marker_score", annotation_marker_sets="builtin",
+        chunked="on"), str(large_copy), RunControl(before_step=None))
+    assert r.status == "complete", (r.errors, r.notes)
+    assert "ran instead" in r.cautions["cell_type_annotation"]

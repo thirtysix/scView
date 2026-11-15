@@ -35,10 +35,10 @@ scView: single-cell RNA-seq analysis running locally; these tools call the same 
 - Start with list_datasets, get_dataset (columns, embeddings, steps done), assess_dataset; preflight before a big run.
 - Long work is a job (run_pipeline, annotate_celltypist, milo, import_public_dataset, joint_embedding; spatial,
   ATAC and Mixscape runs wait 20 s first): job_status(job_id, wait_seconds=50) until complete; cancel_job stops it.
-- Conditions with donors: be donor-aware. Use differential_expression(method="pseudobulk") between
-  conditions within a cell type, check a gene with per_donor_expression, test cell-type shares with
-  composition_test (donors as replicates), not cell-level p values alone. Read each result's warnings.
-- Name clusters or build a column (e.g. sample = donor AND day) with set_labels and a cell filter.
+- Conditions with donors: be donor-aware. differential_expression(method="pseudobulk") within a cell type,
+  per_donor_expression, composition_test (donors as replicates), not cell-level p alone. Read the warnings.
+- Cell types: annotate_celltypist (celltypist_models: pick your tissue's), marker_db_check, annotation_crosscheck.
+  Name clusters or build a column (e.g. sample = donor AND day) with set_labels and a cell filter.
 - enrichment takes a differential_expression result_id (ORA of up/down genes, or GSEA), a gene list,
   or a marker group. plot returns a PNG (embedding, violin, dotplot, ATAC coverage).
 - Spatial: plot(embedding="spatial"), spatial_autocorr, spatial_domains, nhood_enrichment, cooccurrence,
@@ -46,7 +46,7 @@ scView: single-cell RNA-seq analysis running locally; these tools call the same 
 - Multiome (atac_status first): atac_fragment_qc, atac_lsi, wnn, atac_gene_activity, atac_differential, atac_links,
   atac_motif_enrichment, atac_chromvar. CRISPR: guide_assignment, mixscape. Hashing: hashing_demux, hashing_samples.
   CITE-seq: differential_expression / per_donor_expression with layer="protein"; wnn(modality="protein").
-- Trajectory: paga(groupby), pseudotime(root_column, root_value; its warnings flag a wrong root), pseudotime_genes.
+- Trajectory: paga(groupby), pseudotime(root_column + root_value, or root_cell; its warnings flag a wrong root), pseudotime_genes.
   Velocity: velocity (a job; order/root check the direction), get_velocity, velocity_direction; plot(overlay=...).
 - The server cannot read your disk: upload a file (curl -F "file=@data.h5ad" http://127.0.0.1:8080/api/v1/datasets/upload);
   upload_instructions has folder and side-file recipes; import_server_path reads server paths when allowed.

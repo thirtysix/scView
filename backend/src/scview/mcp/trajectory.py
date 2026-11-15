@@ -70,12 +70,21 @@ def _paga_reply(view: dict[str, Any], dataset_id: str, n: int) -> dict[str, Any]
         "tree_ends": [g for g, d in zip(groups, degree) if d == 1],
         "edges": table(edges, ["from", "to", "connectivity", "in_tree"], n),
     }
+    if rec.get("warnings"):
+        out["warnings"] = rec["warnings"]
+    if rec.get("ties"):
+        out["ties"] = [{"kept": f"{groups[t['kept'][0]]} - {groups[t['kept'][1]]}",
+                        "instead_of": f"{groups[t['instead_of'][0]]} - {groups[t['instead_of'][1]]}",
+                        **pick(t, "connectivity", "ratio_kept", "ratio_instead_of", "close")} for t in rec["ties"][:n]]
     if view.get("stale"):
         out["stale"] = view["stale"]
     if view.get("root_group"):
         out["pseudotime_root_group"] = view["root_group"]
     out["note"] = ("connectivity: PAGA's (0-1; edges between the groups against random wiring of the same cells), "
-                   "highest first; tree: PAGA's maximum spanning tree. A process usually starts at one of tree_ends: "
+                   "highest first; tree: PAGA's maximum spanning tree, a tie at the same connectivity broken by "
+                   "the uncapped ratio (ties: each tree edge kept over an edge it tied with, closest first; close: kept "
+                   "by under 1.5 times, an uncertain step). "
+                   "A process usually starts at one of tree_ends: "
                    "pseudotime(root_column=groupby, root_value=<that group>). Draw it: "
                    "plot(embedding=..., overlay=['paga']).")
     return out
@@ -102,7 +111,7 @@ async def paga(
 # --- diffusion pseudotime ----------------------------------------------------------------------
 
 def _run_record(p: dict[str, Any]) -> dict[str, Any]:
-    return pick(p, "column", "root_named_column", "root_column", "root_value", "root_cell", "graph",
+    return pick(p, "column", "root_named_column", "root_kind", "root_column", "root_value", "root_cell", "graph",
                 "n_unreachable", "n_detached", "warnings", "stale")
 
 
@@ -124,16 +133,20 @@ async def pseudotime(
     root_value: Annotated[str | None, Field(max_length=256, description=(
         "The start group's value in root_column: the cell state the process begins in (an end of the PAGA "
         "tree, a progenitor, the earliest stage). The root cell is the group's most central cell."))] = None,
+    root_cell: Annotated[str | None, Field(max_length=512, description=(
+        "Instead of a group: one cell's name (obs name) to start from, e.g. a cell at the tip of the start "
+        "state. Give root_cell, or root_column with root_value, not both."))] = None,
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
-    """Diffusion pseudotime (scanpy's DPT) from a root group, saved as the obs column
-    scview_dpt_pseudotime and as one column per root (root_named_column, kept when another
-    root runs). The reply has the route's warnings word for word (a root inside the PAGA tree,
-    a pseudotime that runs against another one, weakly linked cells left out), n_detached and
-    n_unreachable, and each root_column group's median pseudotime, earliest first. Without
-    root_column and root_value: the pseudotime columns the dataset holds and how each was made."""
+    """Diffusion pseudotime (scanpy's DPT) from a root group or one root cell, saved as the obs
+    column scview_dpt_pseudotime and as one column per root (root_named_column, kept when another
+    root runs; scview_dpt_cell_<name> for a cell). The reply has the route's warnings word for word
+    (a root inside the PAGA tree, a pseudotime that runs against another one, weakly linked cells
+    left out, groups not on a path from the root: their value is distance, not progress), n_detached and n_unreachable, and each group's median pseudotime, earliest first
+    (root_column's groups, or PAGA's for a cell root). Without a root: the pseudotime columns the
+    dataset holds and how each was made."""
     n = clamp(limit)
-    if root_column is None and root_value is None:
+    if root_column is None and root_value is None and root_cell is None:
         d = await _get(f"{_ds(dataset_id)}/trajectory")
         out = {"dataset_id": dataset_id, "pseudotime_columns": d.get("pseudotime_columns") or [],
                "runs": {c: _run_record(p) for c, p in (d.get("runs") or {}).items()},
@@ -141,17 +154,31 @@ async def pseudotime(
         if d.get("computed"):
             out["latest"] = _run_record(d["computed"])
         if not out["pseudotime_columns"]:
-            out["note"] = "No pseudotime yet: pseudotime(root_column, root_value) computes one."
+            out["note"] = "No pseudotime yet: pseudotime(root_column, root_value) or pseudotime(root_cell) computes one."
         return dumps(out, _max_chars(limit))
-    if not root_column or root_value is None:
-        raise ToolError("Give both root_column and root_value (or neither, to list the pseudotime columns).")
-    r = await _post(f"{_ds(dataset_id)}/trajectory/dpt", {"root_column": root_column, "root_value": root_value})
+    if root_cell is not None:
+        if root_column is not None or root_value is not None:
+            raise ToolError("Give root_cell, or root_column with root_value, not both.")
+        body: dict[str, Any] = {"root_cell": root_cell}
+    elif not root_column or root_value is None:
+        raise ToolError("Give both root_column and root_value (or root_cell, or none to list the pseudotime columns).")
+    else:
+        body = {"root_column": root_column, "root_value": root_value}
+    r = await _post(f"{_ds(dataset_id)}/trajectory/dpt", body)
     out = {"dataset_id": dataset_id, "warnings": r.get("warnings") or [], **_run_record(r),
            **pick(r, "root_rule", "diffmap_n_comps", "n_dcs")}
     column = r.get("root_named_column") or r.get("column")
-    out["by_group"] = await _medians(dataset_id, column, root_column, n)
-    out["next"] = (f"pseudotime_genes(column='{column}'); plot(kind='violin', value_column='{column}', "
-                   f"groupby='{root_column}'); plot(color_by='{column}')")
+    groupby = root_column
+    if groupby is None:  # a cell root: PAGA's groups, when a graph is saved
+        try:
+            groupby = ((await _get(f"{_ds(dataset_id)}/trajectory/paga")).get("paga") or {}).get("groupby")
+        except ToolError:
+            groupby = None
+    if groupby:
+        out["by_group"] = await _medians(dataset_id, column, groupby, n)
+    out["next"] = (f"pseudotime_genes(column='{column}'); "
+                   + (f"plot(kind='violin', value_column='{column}', groupby='{groupby}'); " if groupby else "")
+                   + f"plot(color_by='{column}')")
     try:  # a wrong root at a tree end passes the checks above when it is the first pseudotime run
         attached = bool((await _get(f"{_ds(dataset_id)}/trajectory")).get("velocity_layers"))
     except ToolError:
@@ -165,6 +192,8 @@ async def pseudotime(
 # --- genes along pseudotime --------------------------------------------------------------------
 
 _TREND_COLUMNS = ["gene", "f_stat", "pval", "pval_adj", "r2", "amplitude", "peak_pseudotime", "pattern", "n_detected"]
+_BRANCH_COLUMNS = ["gene", "f_stat", "pval_adj", "branch_diff", "mean_branch", "mean_others", "peak_pseudotime",
+                   "pattern", "n_detected"]
 
 
 @tool(READ)
@@ -183,12 +212,18 @@ async def pseudotime_genes(
     groups: Annotated[list[str] | None, Field(max_length=200, description=(
         "Ranking on one branch only: the groups of groups_column on it, e.g. the PAGA tree path from the "
         "root to one end."))] = None,
+    rank_by: Annotated[Literal["trend", "branch_specific"] | None, Field(description=(
+        "trend (default): genes that change most along the cells used. branch_specific: genes HIGHER on the "
+        "branch (groups_column + groups, a PAGA tree path) than on the tree's other branches at the same "
+        "pseudotime, as tradeSeq's patternTest compares lineages: the branch's markers, not the shared early "
+        "genes every branch repeats. Needs the PAGA graph of groups_column."))] = None,
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
     """The genes whose log-normalised expression changes most along a pseudotime (spline F-test,
     Benjamini-Hochberg), each with its pattern (rising, falling, transient), peak and amplitude;
-    the first 5 with their binned trend. On one branch with groups_column + groups. With genes:
-    those genes' trends instead. Bins hold equal numbers of cells, each at its median pseudotime.
+    the first 5 with their binned trend. On one branch with groups_column + groups; with
+    rank_by='branch_specific' the genes higher on that branch than on the other branches
+    (branch_diff, mean_branch, mean_others). With genes: those genes' trends instead. Bins hold equal numbers of cells, each at its median pseudotime.
     Changes nothing."""
     n = clamp(limit)
     if genes:
@@ -207,16 +242,27 @@ async def pseudotime_genes(
         return dumps(out, _max_chars(limit))
     if (groups_column is None) != (not groups):
         raise ToolError("Give both groups_column and groups for one branch, or neither.")
-    body = _body(n_top=n_top or max(n, 50), n_bins=n_bins, groups_column=groups_column, groups=groups)
+    if rank_by == "branch_specific" and not groups:
+        raise ToolError("rank_by='branch_specific' needs a branch: groups_column and the groups on it (a PAGA "
+                        "tree path from the root to one end).")
+    body = _body(n_top=n_top or max(n, 50), n_bins=n_bins, groups_column=groups_column, groups=groups,
+                 rank_by=rank_by)
     r = await _post(f"{_ds(dataset_id)}/trajectory/{column}/trend-genes", body)
     ranked = r.get("genes") or []
-    out = {"dataset_id": dataset_id, **pick(r, "column", "n_cells", "n_genes_tested", "min_detected", "expression",
-                                            "method", "restrict"),
-           "genes": table(ranked, _TREND_COLUMNS, n),
+    branch = r.get("rank_by") == "branch_specific"
+    out = {"dataset_id": dataset_id, **pick(r, "column", "n_cells", "n_genes_tested", "n_higher", "min_detected",
+                                            "expression", "method", "restrict", "rank_by"),
+           "genes": table(ranked, _BRANCH_COLUMNS if branch else _TREND_COLUMNS, n),
            "bins": pick(r.get("bins") or {}, "binning", "pseudotime", "n_cells"),
            "trends": {g["gene"]: g.get("mean") for g in ranked[:min(TRENDS_SHOWN, n)]}}
+    if branch:
+        out["branch"] = pick(r.get("branch") or {}, "start", "end", "own", "trunk", "others", "n_own_cells",
+                             "n_trunk_cells", "n_other_cells")
     out["note"] = ("trends: each bin's mean expression (log-normalised) at bins.pseudotime. "
-                   "pseudotime_genes(column, genes=[...]) gives any gene's trend.")
+                   "pseudotime_genes(column, genes=[...]) gives any gene's trend."
+                   + (" branch_diff: how far the branch's own cells sit above the other branches' curve at the same "
+                      "pseudotime (log units); mean_branch / mean_others: mean expression of the branch's own cells "
+                      "and of the other branches' cells." if branch else ""))
     if any(g.get("pval") == 0 for g in ranked[:n]):
         out["p_note"] = P0_NOTE
     return dumps(out, _max_chars(limit))

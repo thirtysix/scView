@@ -151,3 +151,17 @@ describe("the ingest step's chips", () => {
     expect(paramText("formats", ["tenx_mex"], "something_else")).toBe("formats=tenx_mex");
   });
 });
+
+describe("an annotation run in place of the AI in the History", () => {
+  it("says the AI was asked for and which method ran, in one chip", () => {
+    const note = "The AI annotation was asked for, but no language model key is set: CellTypist ran instead (annotation_fallback).";
+    const chips = paramChips({
+      step: "cell_type_annotation",
+      params: { annotation_method: "celltypist", annotation_method_requested: "llm", annotation_fallback_note: note },
+    });
+    expect(chips).toEqual([
+      ["annotation_method", "annotation_method=celltypist"],
+      ["annotation_fallback_note", note],
+    ]);
+  });
+});

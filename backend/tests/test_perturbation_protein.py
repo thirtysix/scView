@@ -146,3 +146,166 @@ async def test_the_route_streams_and_serves_the_protein_check(client, dataset_ma
     results_store.flush()
     got = (await client.get(f"/api/v1/datasets/{did}/perturbation/mixscape")).json()
     assert got["protein"]["flags"][0]["unit"] == "replicate"
+
+
+# --- v0.80: the values tested (layer), default by panel size -------------------------------------
+
+def _compositional(n_proteins: int = 4, seed: int = 5):
+    """The planted screen with antibody COUNTS on ``n_proteins`` proteins: B lowers the most
+    abundant one (P0) to 0.4x in every cell, and nothing else; A's KO cells change no protein.
+    On the per-cell CLR of a small panel the fall of P0 lifts the others (compositional)."""
+    a, ko = planted()
+    rng = np.random.default_rng(seed)
+    lab = a.obs["perturbation"].astype(str).to_numpy()
+    a.obs["rep3"] = pd.Categorical([f"r{i % 3 + 1}" for i in range(a.n_obs)])
+    means = np.r_[400.0, rng.uniform(40, 120, n_proteins - 1)]
+    size = rng.lognormal(0, 0.3, a.n_obs)  # droplet capture, the same for every target
+    mu = size[:, None] * means[None, :]
+    mu[lab == "B", 0] *= 0.4
+    counts = rng.poisson(mu).astype(np.float32)
+    names = [f"P{j}" for j in range(n_proteins)]
+    a.obsm[protein.COUNTS_KEY] = pd.DataFrame(counts, index=a.obs_names, columns=names)
+    a.obsm[protein.CLR_KEY] = pd.DataFrame(protein.clr(counts), index=a.obs_names, columns=names)
+    return a, ko
+
+
+def test_small_panel_defaults_to_log_counts_and_clr_shows_the_compositional_rise():
+    a, _ko = _compositional(4)
+    assert pp.default_layer(a) == pp.COUNTS and pp.resolve_layer(a, None) == pp.COUNTS
+    res, cols = mixscape.run(a, mixscape.Params(lda=False, replicate_column="rep3"))
+    pr = res.protein
+    assert pr["layer"] == pp.COUNTS and pr["layer_choice"] == "auto" and pr["unit_name"] == "log1p counts"
+    assert res.params["protein_layer"] == "auto"
+    by = {(r["target"], r["protein"]): r for r in pr["rows"]}
+    assert by[("B", "P0")]["all"]["diff"] == pytest.approx(np.log(0.4), abs=0.12) and by[("B", "P0")]["flag"]
+    assert not any(by[("B", f"P{j}")]["significant"] for j in (1, 2, 3))  # nothing else moved
+    assert [f["target"] + f["protein"] for f in pr["flags"]] == ["BP0"] and "(log1p counts)" in pr["flags"][0]["text"]
+    assert "fewer than 15: log counts by default" in pr["notes"][0]
+    assert pr["reference_shift"] is None  # only CLR has a reference
+    # The same run on the per-cell CLR: P0's fall lifts the unchanged proteins past the 0.1 line.
+    clr = pp.run(a, *_used(a, res, cols), layer=pp.CLR)
+    cb = {(r["target"], r["protein"]): r for r in clr["rows"]}
+    lifted = [j for j in (1, 2, 3) if cb[("B", f"P{j}")]["all"]["diff"] >= pp.MIN_SHIFT and cb[("B", f"P{j}")]["significant"]]
+    assert lifted, [cb[("B", f"P{j}")]["all"]["diff"] for j in (1, 2, 3)]
+    assert clr["reference_shift"]["B"] < -0.1 and abs(clr["reference_shift"]["A"]) < 0.05
+    assert any(n.startswith("CLR per cell over 4 proteins") and "compositional" in n for n in clr["notes"])
+    assert any("The CLR reference" in n and "B -0." in n for n in clr["notes"])
+    json.dumps(clr, allow_nan=False)
+
+
+def _used(a, res, cols):
+    """The arguments ``perturbation_protein.run`` gets from a Mixscape run on ``a``."""
+    pl = mixscape.plan(a, mixscape.Params(lda=False, replicate_column="rep3"))
+    assert np.array_equal(pl.rows, cols["rows"])
+    return (pl.rows, pl.labels, np.asarray(cols[mixscape.GLOBAL]).astype(str), "NT", res.targets, pl.replicates,
+            pl.replicate_column)
+
+
+def test_a_large_panel_keeps_clr_and_a_panel_without_counts_says_why():
+    a, _ko = _compositional(16)
+    assert pp.default_layer(a) == pp.CLR
+    res, _c = mixscape.run(a, mixscape.Params(lda=False, replicate_column="rep3"))
+    assert res.protein["layer"] == pp.CLR and res.protein["notes"][0] == "16 proteins: CLR per cell by default."
+    assert not any(n.startswith("CLR per cell over") for n in res.protein["notes"])  # not a small panel
+    opts = {o["layer"]: o for o in res.protein["layers"]}
+    assert opts[pp.CLR]["available"] and not opts[pp.CLR]["compositional"] and opts[pp.COUNTS]["available"]
+    # CLR only (an older upload, a foreign object): CLR even on 2 proteins, and the note says why.
+    b, _ = _with_protein()
+    assert pp.default_layer(b) == pp.CLR
+    res, _c = mixscape.run(b, mixscape.Params(lda=False, replicate_column="rep3"))
+    assert res.protein["notes"][0] == "2 proteins: CLR per cell, as the dataset keeps no antibody counts."
+    opts = {o["layer"]: o for o in res.protein["layers"]}
+    assert not opts[pp.COUNTS]["available"] and "no antibody counts" in opts[pp.COUNTS]["reason"]
+    with pytest.raises(pp.ProteinLayerError, match="no antibody counts"):
+        pp.resolve_layer(b, pp.COUNTS)
+
+
+def test_layer_choice_is_checked_and_dsb_says_when_it_is_missing_or_compositional():
+    from scview.core import dsb
+
+    a, _ko = _compositional(4)
+    with pytest.raises(pp.ProteinLayerError, match="Unknown protein layer") as e:
+        pp.resolve_layer(a, "protein_tpm")
+    assert e.value.status == 422
+    with pytest.raises(pp.ProteinLayerError, match="empty droplets"):
+        pp.resolve_layer(a, pp.DSB)
+    with pytest.raises(mixscape.MixscapeError, match="No DSB values") as e:
+        mixscape.plan(a, mixscape.Params(protein_layer=pp.DSB))
+    assert e.value.status == 422
+    # DSB run with step II on a 4-protein panel: offered, marked compositional, said in the notes.
+    vals, record = dsb.compute(a, mode="model_negative")
+    a.obsm[dsb.DSB_KEY] = pd.DataFrame(vals, index=a.obs_names, columns=list(a.obsm[protein.COUNTS_KEY].columns))
+    a.uns[dsb.UNS_RECORD] = json.dumps(record)
+    opt = next(o for o in pp.layers(a) if o["layer"] == pp.DSB)
+    assert opt["available"] and opt["compositional"] and "step II" in opt["reason"]
+    res, _c = mixscape.run(a, mixscape.Params(lda=False, replicate_column="rep3", protein_layer=pp.DSB))
+    assert res.protein["layer"] == pp.DSB and res.protein["layer_choice"] == pp.DSB
+    assert any("DSB step II" in n for n in res.protein["notes"])
+
+
+def test_older_results_read_as_clr():
+    assert pp.layer_of(None) == pp.CLR and pp.layer_of({"rows": []}) == pp.CLR
+    assert pp.layer_of({"layer": pp.COUNTS}) == pp.COUNTS
+    old = {"rows": [], "flags": [{"target": "CMTM6", "protein": "PDL1", "diff": -0.19, "unit": "replicate",
+                                  "ko_fraction": 0.0, "text": "x"}]}
+    r = mixscape.MixscapeResult(params={}, labels="l", control="NT", split_by=None, n_cells=1, n_control=1,
+                                n_targets=1, n_genes=1, gene_source="", expression_source="", targets=[],
+                                protein=old)
+    assert "vs the controls, CLR, judged on replicates" in mixscape._protein_words(r)
+    from scview.mcp.modalities import _protein_reply
+
+    assert _protein_reply(old, 5)["layer"] == pp.CLR
+
+
+async def test_the_route_shows_the_run_on_another_layer_without_saving(client, dataset_manager):
+    from tests.test_hvg_sensitivity import _register
+    from tests.test_perturbation_api import _with_guides
+
+    a, labels, _ko = _with_guides()
+    rng = np.random.default_rng(4)
+    means = np.array([400.0, 80.0, 60.0])
+    mu = rng.lognormal(0, 0.3, a.n_obs)[:, None] * means[None, :]
+    mu[labels == "B", 0] *= 0.4
+    counts = rng.poisson(mu).astype(np.float32)
+    a.obsm[protein.COUNTS_KEY] = pd.DataFrame(counts, index=a.obs_names, columns=["PDL1", "CD86", "PDL2"])
+    a.obsm[protein.CLR_KEY] = pd.DataFrame(protein.clr(counts), index=a.obs_names, columns=["PDL1", "CD86", "PDL2"])
+    a.obs["rep3"] = pd.Categorical([f"r{i % 3 + 1}" for i in range(a.n_obs)])
+    did = _register(dataset_manager, a, "pp2")
+    url = f"/api/v1/datasets/{did}/perturbation/mixscape"
+    assert (await client.get(f"{url}/protein")).status_code == 404  # no run yet
+    assert (await client.post(f"/api/v1/datasets/{did}/perturbation/assign", json={})).status_code == 200
+    bad = await client.post(f"{url}/run-stream", json={"split_by": "rep3", "lda": False, "protein_layer": "protein_dsb"})
+    assert bad.status_code == 422 and "empty droplets" in bad.json()["detail"]
+    r = await client.post(f"{url}/run-stream", json={"split_by": "rep3", "lda": False})
+    from tests.test_hvg_sensitivity import _events
+
+    result = _events(r.text)[-2][1]
+    assert result["protein"]["layer"] == pp.COUNTS and result["params"]["protein_layer"] == "auto"
+    assert [f["target"] + f["protein"] for f in result["protein"]["flags"]] == ["BPDL1"]
+    v = await client.get(f"{url}/protein", params={"layer": pp.CLR})
+    assert v.status_code == 200
+    view = v.json()
+    assert view["layer"] == pp.CLR and view["layer_choice"] == pp.CLR and view["default_layer"] == pp.COUNTS
+    assert view["reference_shift"]["B"] < -0.1
+    same = {(x["target"], x["protein"]): x["all"]["n"] for x in view["rows"]}
+    assert same == {(x["target"], x["protein"]): x["all"]["n"] for x in result["protein"]["rows"]}  # same cells
+    assert (await client.get(f"{url}/protein", params={"layer": "nope"})).status_code == 422
+    assert (await client.get(f"{url}/protein", params={"layer": pp.DSB})).status_code == 422
+    from scview.core import results_store
+
+    results_store.flush()
+    got = (await client.get(url)).json()["protein"]
+    assert got["layer"] == pp.COUNTS  # the run keeps its layer
+    assert not next(x for x in got["layers"] if x["layer"] == pp.DSB)["available"]
+    # DSB computed after the run: offered from then on, on the stored run too.
+    from scview.core import dsb
+
+    adata = (await dataset_manager.get_or_load_dataset(did)).adata
+    vals, record = dsb.compute(adata, mode="model_negative")
+    adata.obsm[dsb.DSB_KEY] = pd.DataFrame(vals, index=adata.obs_names, columns=["PDL1", "CD86", "PDL2"])
+    adata.uns[dsb.UNS_RECORD] = json.dumps(record)
+    got = (await client.get(url)).json()["protein"]
+    assert next(x for x in got["layers"] if x["layer"] == pp.DSB)["available"] and got["layer"] == pp.COUNTS
+    over = (await client.get(f"/api/v1/datasets/{did}/perturbation")).json()["mixscape"]["protein"]
+    assert next(x for x in over["layers"] if x["layer"] == pp.DSB)["available"]
+    assert (await client.get(f"{url}/protein", params={"layer": pp.DSB})).json()["layer"] == pp.DSB

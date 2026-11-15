@@ -115,7 +115,7 @@ def _annotate(monkeypatch, markers, flags, check, reply):
 def test_scview_decides_damaged_clusters_and_notes_random_ones_for_the_ai(monkeypatch):
     markers = {"0": ["CD3D"], "1": ["MS4A1"], "2": ["G1"], "3": ["G2"], "4": ["MYH6"]}
     flags = {"2": ["high_mito"], "3": ["low_quality"], "4": ["high_mito"]}
-    check = lambda adata, mk: MR.RandomCheck(  # noqa: E731
+    check = lambda adata, mk, **_: MR.RandomCheck(  # noqa: E731
         flagged={"1": {}, "3": {}}, checked=5, best={"0": "T cells", "1": "B cells", "4": "Cardiomyocytes"})
     fit, sent, a = _annotate(monkeypatch, markers, flags, check,
                              "tissue: heart\n0: T cells | CL:0000084\n4: Cardiomyocytes | CL:0000746")
@@ -136,7 +136,7 @@ def test_scview_decides_damaged_clusters_and_notes_random_ones_for_the_ai(monkey
 
 
 def test_every_cluster_decided_asks_no_model(monkeypatch):
-    check = lambda adata, mk: MR.RandomCheck(flagged={"0": {}}, checked=2)  # noqa: E731
+    check = lambda adata, mk, **_: MR.RandomCheck(flagged={"0": {}}, checked=2)  # noqa: E731
     fit, sent, a = _annotate(monkeypatch, {"0": ["G1"], "1": ["G2"]},
                              {"0": ["low_quality"], "1": ["high_mito"]}, check, "")
     assert sent == []
@@ -144,7 +144,7 @@ def test_every_cluster_decided_asks_no_model(monkeypatch):
 
 
 def test_a_random_like_cluster_alone_still_asks_the_model(monkeypatch):
-    check = lambda adata, mk: MR.RandomCheck(flagged={"0": {}}, checked=2)  # noqa: E731
+    check = lambda adata, mk, **_: MR.RandomCheck(flagged={"0": {}}, checked=2)  # noqa: E731
     fit, sent, a = _annotate(monkeypatch, {"0": ["G1"], "1": ["G2"]}, {"1": ["high_mito"]}, check,
                              "tissue: kidney\n0: Injured proximal tubule cells | CL:none")
     assert len(sent) == 1 and f"0: G1 [QC: {MR.NOTE}]" in sent[0]
@@ -154,7 +154,7 @@ def test_a_random_like_cluster_alone_still_asks_the_model(monkeypatch):
 def test_failing_checks_decide_nothing(monkeypatch):
     from scview.core import cluster_qc
 
-    monkeypatch.setattr(MR, "check", lambda adata, mk: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(MR, "check", lambda adata, mk, **_: (_ for _ in ()).throw(RuntimeError("boom")))
     monkeypatch.setattr(cluster_qc, "cluster_qc", lambda adata, g: (_ for _ in ()).throw(RuntimeError("boom")))
     assert P._annotation_decided(_adata(), "cluster", {"1": ["G1"]}) == ({}, {})
 

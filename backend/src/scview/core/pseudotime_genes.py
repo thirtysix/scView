@@ -19,6 +19,20 @@ genes are ranked by F and the p-values are indicative only.
 
 Trends for the top genes are binned by equal cell counts along pseudotime, so a
 sparse tail gets as many cells per bin as the dense start.
+
+Branch-specific genes (``rank_by="branch_specific"``, ``branch_genes``). Ranked within one
+branch, every branch leads with the same genes: the shared early switch (pancreas: Spp1, Cpe,
+Aplp1 on all four hormone branches; Gcg not in the alpha branch's top 200). Instead each gene
+is fitted on the cells of the whole PAGA tree along their shared pseudotime order, once with
+one curve for every cell (null) and once with that curve plus a second spline that only the
+branch's own cells take (its groups not shared with another root-to-end path), and the two are
+compared by an F-test. The idea is tradeSeq's patternTest (Van den Berge 2020): do the smoothers
+of two lineages differ anywhere along pseudotime. It differs from it: least squares on log
+values (not a negative-binomial GAM), this branch against the other branches pooled (not every
+pair of lineages), cells of shared groups fitted once by the common curve (not assigned to
+lineages by weights), and genes ranked by F among those HIGHER on the branch (the mean of the
+branch's own spline over its cells: ``branch_diff``), so a list names the branch's markers, not
+the other branches' (which a two-sided test puts at the top of every list).
 """
 
 from __future__ import annotations
@@ -46,6 +60,12 @@ _CHUNK = 2048  # genes per block when the matrix is dense
 METHOD = (
     f"natural cubic spline of pseudotime order ({N_KNOTS} knots), "
     "F-test against a constant, on log-normalised expression"
+)
+RANK_BY = ("trend", "branch_specific")
+BRANCH_METHOD = (
+    f"branch against the other branches of the PAGA tree: one spline of the shared pseudotime order for all "
+    f"cells ({N_KNOTS} knots) against that spline plus a spline only the branch's own cells take, F-test "
+    "(after tradeSeq's patternTest), on log-normalised expression; genes higher on the branch, by F"
 )
 
 
@@ -160,6 +180,7 @@ def trend_genes(
     n_bins: int = DEFAULT_BINS,
     groups_column: str | None = None,
     groups: list[str] | None = None,
+    rank_by: str = "trend",
 ) -> dict[str, Any]:
     """The ``n_top`` genes that change most along the pseudotime ``column``.
 
@@ -169,10 +190,15 @@ def trend_genes(
     binned ``mean`` expression and the spline's ``fitted`` mean in the same
     bins, the fitted ``amplitude`` (max - min, log units), the bin
     pseudotime of the fitted peak and a ``pattern``: rising, falling (peak at the
-    start) or transient.
+    start) or transient. ``rank_by="branch_specific"``: the branch's genes against the
+    other branches instead (``branch_genes``).
     """
     from scview.core.activity import lognorm_source
 
+    if rank_by not in RANK_BY:
+        raise TrendError(f"rank_by is one of {', '.join(RANK_BY)}.")
+    if rank_by == "branch_specific":
+        return branch_genes(adata, column, n_top=n_top, n_bins=n_bins, groups_column=groups_column, groups=groups)
     idx, restrict = cells_used(adata, column, groups_column, groups)
     n = len(idx)
     where = " in those groups" if restrict else ""
@@ -249,7 +275,213 @@ def trend_genes(
         "expression": source,
         "method": METHOD,
         "restrict": restrict,
+        "rank_by": "trend",
         "bins": {"pseudotime": np.round(bin_pt, 4).tolist(), "n_cells": counts.astype(int).tolist(),
                  "binning": BINNING},
+        "genes": genes,
+    }
+
+
+def _tree_path(adj: dict[int, set[int]], a: int, b: int) -> list[int]:
+    parent = {a: a}
+    stack = [a]
+    while stack:
+        x = stack.pop()
+        for y in adj[x]:
+            if y not in parent:
+                parent[y] = x
+                stack.append(y)
+    if b not in parent:
+        return []
+    path = [b]
+    while path[-1] != a:
+        path.append(parent[path[-1]])
+    return path[::-1]
+
+
+def branch_split(adata, column: str, groups_column: str | None, groups: list[str] | None) -> dict[str, Any]:
+    """A branch (``groups``: the groups on a path of the PAGA tree of ``groups_column``) split
+    into its own groups and the trunk it shares with the paths from its start to the tree's other
+    ends; every other tree group is "others". The start is the path end with the earlier median
+    pseudotime."""
+    from scview.core import trajectory as tj
+
+    if not groups_column or not groups:
+        raise TrendError("Branch-specific genes need a branch: groups_column and the groups on it.")
+    record = tj.read_paga(adata)
+    if not record or record.get("groupby") != groups_column:
+        raise TrendError(f"Branch-specific genes need the PAGA graph of '{groups_column}': compute PAGA on it "
+                         "(Trajectory), then pick a branch.")
+    why = tj.paga_stale(adata, record)
+    if why:
+        raise TrendError(f"The PAGA graph of '{groups_column}' is out of date: {why}")
+    names = record["groups"]
+    wanted = list(dict.fromkeys(groups))
+    missing = [g for g in wanted if g not in names]
+    if missing:
+        raise TrendError(f"Not in the PAGA graph of '{groups_column}': {', '.join(map(repr, missing))}.")
+    adj = tj._tree_adjacency(record)
+    on = {names.index(g) for g in wanted}
+    inner = {i: adj[i] & on for i in on}
+    ends = [i for i in on if len(inner[i]) <= 1]
+    if len(on) < 2 or any(len(v) > 2 for v in inner.values()) or len(ends) != 2 or \
+            len(_tree_path(adj, ends[0], ends[1])) != len(on):
+        raise TrendError("The groups must be one path of the PAGA tree with at least two groups, from the start "
+                         "to a branch end.")
+    pt = pd.to_numeric(adata.obs[column], errors="coerce")
+    labels = adata.obs[groups_column].astype(str).where(adata.obs[groups_column].notna())
+
+    def median(i: int) -> float:
+        v = pt[(labels == names[i]).to_numpy()]
+        v = v[np.isfinite(v)]
+        return float(np.median(v)) if len(v) else np.inf
+
+    start, end = sorted(ends, key=median)
+    shared: set[int] = set()
+    for e in (names.index(g) for g in tj.tree_ends(record)):
+        if e not in on:
+            shared |= set(_tree_path(adj, start, e)) & on
+    path = _tree_path(adj, start, end)
+    own = [names[i] for i in path if i not in shared]
+    if not own:
+        raise TrendError(f"Every group on the branch to '{names[end]}' lies on another branch too: pick the branch "
+                         "to another end.")
+    return {"column": groups_column, "path": [names[i] for i in path], "start": names[start], "end": names[end],
+            "trunk": [names[i] for i in path if i in shared], "own": own,
+            "others": [g for i, g in enumerate(names) if i not in on]}
+
+
+def branch_genes(
+    adata,
+    column: str,
+    *,
+    n_top: int = DEFAULT_TOP,
+    n_bins: int = DEFAULT_BINS,
+    groups_column: str | None = None,
+    groups: list[str] | None = None,
+) -> dict[str, Any]:
+    """The genes higher on one branch than on the other branches of the PAGA tree, along
+    the shared pseudotime (module docstring: ``BRANCH_METHOD``). Cells: those with a
+    finite pseudotime in the tree's groups. Each gene has the test (``f_stat``, ``pval``,
+    BH ``pval_adj`` over all genes tested, ``r2`` of the full fit), ``branch_diff`` (log
+    units: how far the branch's own cells sit above the common curve, on average),
+    ``mean_branch`` / ``mean_others`` (mean expression of the branch's own cells and of
+    the other branches' cells), and, along the branch's cells (start to end), binned
+    ``mean``, ``fitted``, ``amplitude``, peak and ``pattern`` as ``trend_genes`` gives them."""
+    from scview.core.activity import lognorm_source
+
+    split = branch_split(adata, column, groups_column, groups)
+    pt_all = pd.to_numeric(adata.obs[column], errors="coerce").to_numpy(dtype=np.float64)
+    col = adata.obs[split["column"]]
+    labels = col.astype(str).where(col.notna()).to_numpy()
+    tree_groups = set(split["path"]) | set(split["others"])
+    use = np.isfinite(pt_all) & np.isin(labels, list(tree_groups))
+    idx = np.flatnonzero(use)
+    n = len(idx)
+    lab = labels[idx]
+    own = np.isin(lab, split["own"])
+    on_path = np.isin(lab, split["path"])
+    others = np.isin(lab, split["others"])
+    for what, m in (("the branch's own groups", own), ("the other branches", others)):
+        if m.sum() < MIN_CELLS:
+            raise TrendError(f"Only {int(m.sum())} cells with a pseudotime in {what}; at least {MIN_CELLS} are needed.")
+    pt = pt_all[idx]
+    order = (stats.rankdata(pt) - 1) / (n - 1)
+    knots = np.unique(np.quantile(order, np.linspace(0, 1, N_KNOTS)))
+    knots_own = np.unique(np.quantile(order[own], np.linspace(0, 1, N_KNOTS)))
+    if len(knots) < 3 or len(knots_own) < 2:
+        raise TrendError("Too few distinct pseudotime values to fit a trend.")
+    D0 = natural_spline_basis(order, knots)
+    D_own = (natural_spline_basis(order, knots_own) if len(knots_own) >= 3
+             else np.column_stack([np.ones(n), order])) * own[:, None]
+    Q0, _ = np.linalg.qr(D0)
+    D1 = np.hstack([D0, D_own])
+    U, S, Vt = np.linalg.svd(D1, full_matrices=False)
+    keep = S > S[0] * 1e-10
+    Q1 = U[:, keep]
+    p0, p1 = Q0.shape[1], Q1.shape[1]
+    if p1 <= p0:
+        raise TrendError("The branch's own cells add nothing to fit: pick another branch.")
+    # The own spline's mean over the branch's own cells, per gene: c @ (Q1.T x) (pseudo-inverse).
+    coef = (Vt[keep].T / S[keep])[p0:]  # own-spline coefficients from Q1.T x
+    c = D_own[own].mean(axis=0) @ coef
+
+    try:
+        choice = lognorm_source(adata)
+    except ValueError:
+        raise TrendError(
+            "No log-normalised expression or raw counts to test: run normalization and "
+            "log transform first."
+        ) from None
+    names, source = np.asarray(choice.names, dtype=object), choice.source
+    X = choice.rows(idx)
+    s1, s2, qtx, detected = _moments(X, np.hstack([Q0, Q1]))
+    qtx0, qtx1 = qtx[:p0], qtx[p0:]
+    tss = s2 - s1 ** 2 / n
+    ess0 = (qtx0 ** 2).sum(axis=0)
+    ess1 = (qtx1 ** 2).sum(axis=0)
+    rss1 = np.maximum(s2 - ess1, 0.0)
+    min_detected = max(MIN_DETECTED, math.ceil(MIN_DETECTED_FRACTION * n))
+    tested = np.flatnonzero((detected >= min_detected) & (tss > 1e-12 * np.maximum(s2, 1)))
+    if not len(tested):
+        raise TrendError(f"No gene is detected in {min_detected} or more of these cells.")
+    num = np.maximum(ess1[tested] - ess0[tested], 0.0) / (p1 - p0)
+    den = rss1[tested] / (n - p1)
+    f_stat = np.divide(num, den, out=np.full(len(tested), np.inf), where=den > 0)
+    pval = stats.f.sf(f_stat, p1 - p0, n - p1)
+    pval_adj = stats.false_discovery_control(pval, method="bh")
+    r2 = np.clip(1 - rss1[tested] / tss[tested], 0, 1)
+    diff = c @ qtx1[:, tested]
+    higher = diff > 0
+    pick = np.flatnonzero(higher)
+    rank = pick[np.lexsort((names[tested[pick]].astype(str), -f_stat[pick]))][: max(1, n_top)]
+    top = tested[rank]
+
+    cols = _columns(X, top)
+    mean_own = cols[own].mean(axis=0)
+    mean_oth = cols[others].mean(axis=0)
+    path_rows = np.flatnonzero(on_path)
+    bin_of, bin_pt, counts = equal_count_bins(pt[path_rows], n_bins)
+    nb = len(bin_pt)
+    B = sp.csr_matrix((np.ones(len(path_rows)), (np.arange(len(path_rows)), bin_of)), shape=(len(path_rows), nb))
+    counts = counts.astype(np.float64)
+    mean = (B.T @ cols[path_rows]) / counts[:, None]
+    fitted = ((B.T @ Q1[path_rows]) / counts[:, None]) @ qtx1[:, top]
+
+    genes = []
+    for k, g in enumerate(top):
+        curve = fitted[:, k]
+        peak = int(np.argmax(curve))
+        rel = peak / (nb - 1)
+        genes.append({
+            "gene": str(names[g]),
+            "f_stat": _num(f_stat[rank[k]], 2),
+            "pval": _sig(pval[rank[k]]),
+            "pval_adj": _sig(pval_adj[rank[k]]),
+            "r2": _num(r2[rank[k]]),
+            "branch_diff": _num(diff[rank[k]]),
+            "mean_branch": _num(mean_own[k]),
+            "mean_others": _num(mean_oth[k]),
+            "amplitude": _num(curve.max() - curve.min()),
+            "peak_pseudotime": _num(bin_pt[peak]),
+            "pattern": "rising" if rel >= 1 - EDGE else "falling" if rel <= EDGE else "transient",
+            "n_detected": int(detected[g]),
+            "mean": np.round(mean[:, k], 4).tolist(),
+            "fitted": np.round(curve, 4).tolist(),
+        })
+    return {
+        "column": column,
+        "n_cells": n,
+        "n_genes_tested": int(len(tested)),
+        "n_higher": int(higher.sum()),
+        "min_detected": min_detected,
+        "expression": source,
+        "method": BRANCH_METHOD,
+        "restrict": {"column": split["column"], "groups": split["path"]},
+        "rank_by": "branch_specific",
+        "branch": {**split, "n_own_cells": int(own.sum()), "n_trunk_cells": int((on_path & ~own).sum()),
+                   "n_other_cells": int(others.sum())},
+        "bins": {"pseudotime": np.round(bin_pt, 4).tolist(), "n_cells": counts.astype(int).tolist(),
+                 "binning": BINNING + "; the branch's cells, start to end"},
         "genes": genes,
     }

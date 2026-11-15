@@ -1028,8 +1028,12 @@ DBL_OUT_PER_CELL = 48
 # Seconds per channel of c cells: 2e-5 x c^1.4 with exact neighbours (one channel of the
 # brain: 0.3 s at 750 cells, 9.7 s at 10k, 68.6 s at 40k; Kang 8.2 s at 13.8k; its 133
 # wells 43 s in all), 6.9e-5 x c^1.4 with pynndescent's over doublets.EXACT_KNN_MAX_CELLS
-# (the 100k brain as one channel: 688 s), and 0.2 s each.
+# (the 100k brain as one channel: 688 s), and 0.2 s each. The brain kept about 1,300
+# variable genes; more take longer, in proportion: Reck 2025's kidney nuclei, six channels
+# of 2,642-13,756 nuclei with 3,423-4,472 variable genes (4,111 counted at most), took 134 s
+# (2 CPUs, 2026-11-15) against 41 s estimated without this term, 131 s with it.
 DBL_SECONDS_COEF = 2e-5
+DBL_SECONDS_HVG = 1300  # variable genes the coefficients were fitted at (more: longer)
 DBL_SECONDS_COEF_APPROX = 6.9e-5
 DBL_SECONDS_POWER = 1.4
 DBL_SECONDS_PER_CHANNEL = 0.2
@@ -1169,6 +1173,18 @@ def _p(params, name: str, default):
     return getattr(params, name, default) if params is not None else default
 
 
+def _annotation_method(params) -> str:
+    """The annotation method that will run: the AI's named fallback when no language model key
+    is set (``pipeline.annotation_method_plan``; CellTypist peaks far above the AI's call)."""
+    method = str(_p(params, "annotation_method", "llm") or "llm").lower()
+    if method == "llm":
+        from scview.config import get_settings
+
+        if not get_settings().llm_api_key:
+            return str(_p(params, "annotation_fallback", "") or "").lower() or method
+    return method
+
+
 # Each step: (state) -> (transient bytes over the state's resident, state after, seconds at 2 CPUs).
 def _step_reset(s: _State, params) -> tuple[int, _State, float]:
     layers = dict(s.layers)
@@ -1246,8 +1262,11 @@ def _step_doublet(s: _State, params, plan: DoubletPlan | None = None, *,
     peak, secs = 0, 0.0
     if method in ("scrublet", "both"):
         peak = max(copies, dense)
+        hvg = max((g for _, g in plan.costed), default=0) if plan is not None and plan.costed else (
+            plan.hvg if plan is not None and plan.hvg else 0)
+        genes = max(1.0, hvg / DBL_SECONDS_HVG)  # unknown or few: as measured
         secs = 3.0 + sum((DBL_SECONDS_COEF if c <= EXACT_KNN_MAX_CELLS else DBL_SECONDS_COEF_APPROX)
-                         * c ** DBL_SECONDS_POWER + DBL_SECONDS_PER_CHANNEL for c in sizes)
+                         * c ** DBL_SECONDS_POWER * genes + DBL_SECONDS_PER_CHANNEL for c in sizes)
     if method in ("scdblfinder-style", "both"):  # after Scrublet, one channel at a time
         nnz = (counts.nnz if counts.nonzero is None else counts.nonzero) * largest / max(1, counts.n_cells)
         points = largest + (min(max(largest, DBL_CLS_MIN_ARTIFICIAL), DBL_CLS_MAX_ARTIFICIAL) if largest else 0)
@@ -1727,7 +1746,7 @@ def _step_scores(s: _State, params) -> tuple[int, _State, float]:
 
 
 def _step_annotation(s: _State, params) -> tuple[int, _State, float]:
-    method = _p(params, "annotation_method", "llm")
+    method = _annotation_method(params)
     ln = s.lognorm()
     if method == "celltypist" and ln is not None:
         # CellTypist scales the model's genes (about 6,000) densely, in float64.
@@ -2088,7 +2107,7 @@ def chunked_step(step: str, sh: ChunkedShape, params, *, write: bool = False,
     elif step == "cell_type_annotation":
         from scview.core import large_scores
 
-        if _p(params, "annotation_method", "llm") == "celltypist":
+        if _annotation_method(params) == "celltypist":
             t = _chunk_pass(sh, params) + large_scores.CELLTYPIST_BLOCK_BYTES
             held = n * CELLTYPIST_LABELS * 4 + n * 3 * 8
             secs = 5.0 + _pass_secs(sh) + 2e-3 * n
@@ -2775,14 +2794,21 @@ def dataset_preflight(dm, dataset_id: str, steps: list[str], overrides: dict | N
             out["mode"].update(converts=True, turns_off=list(large_mode.OFF_IN_LARGE_MODE),
                                layout_after=large_mode.LAYOUT_AFTER)
             out["verdict"]["sentence"] += CONVERTS_SENTENCE
+            if dbl and requested == "auto" and not _would_chunk(requested, alternatives[0][1], avail, cached)[0]:
+                # Only the doublet step pushes it over: without it the run stays in memory.
+                skip = (f"Without doublet detection the run fits in memory "
+                        f"({_about(max(0, alternatives[0][1]))} more at its peak) and the dataset keeps "
+                        "every tool.")
+                out["mode"]["without_doublets"] = {"fits_in_memory": True, "text": skip}
+                out["verdict"]["sentence"] += f" {skip}"
             out["verdict"]["notes"].append(large_mode.conversion_note())
     return out
 
 
 # Said in the verdict of a run that would put the dataset in large-dataset layout.
-CONVERTS_SENTENCE = (" It converts the dataset for good: differential expression and other "
-                     "whole-matrix tools are then refused on it, and .raw leaves its expression "
-                     "layers (see the notes).")
+CONVERTS_SENTENCE = (" This run would switch the dataset to large-dataset mode for good: cell-level "
+                     "differential expression and other whole-matrix tools are then refused on it, "
+                     "and .raw leaves its expression layers (see the notes).")
 
 
 def _light_ok(path, steps: list[str]) -> bool:

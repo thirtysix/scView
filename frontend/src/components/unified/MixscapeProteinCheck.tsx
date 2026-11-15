@@ -1,11 +1,22 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { Loader2 } from "lucide-react";
 import Plot from "@/components/plots/Plot";
 import { Caption } from "@/components/common/Caption";
 import { Help } from "@/components/common/Help";
-import type { ProteinCheck } from "@/api/perturbation";
+import { getMixscapeProtein, type ProteinCheck, type ProteinLayer } from "@/api/perturbation";
 import { formatPValue } from "@/lib/formatting";
-import { pctText, proteinRowsFor, proteinShiftTraces, replicateText, shiftText } from "@/lib/perturbation";
+import {
+  pctText,
+  proteinLayerOf,
+  proteinLayerOptions,
+  proteinRowsFor,
+  proteinShiftTraces,
+  proteinUnit,
+  replicateText,
+  shiftText,
+} from "@/lib/perturbation";
 import { plotConfig } from "@/lib/plotConfig";
+import { errorText } from "@/lib/programs";
 
 const chip = (on: boolean) =>
   `rounded border px-1.5 py-0.5 text-[11px] ${on ? "border-slate-600 bg-slate-600 text-white" : "border-slate-300 text-slate-600 hover:bg-slate-50"}`;
@@ -13,15 +24,46 @@ const chip = (on: boolean) =>
 /**
  * A Mixscape run's protein check (backend core/perturbation_protein.py): each protein's
  * shift per target in all, KO and NP cells against the controls, and the targets that
- * move a protein with no RNA KO class (Papalexi 2021: CMTM6 on PD-L1).
+ * move a protein with no RNA KO class (Papalexi 2021: CMTM6 on PD-L1). The values chips
+ * show the same run on another layer (`GET .../mixscape/protein?layer=`, not saved).
  */
 export function MixscapeProteinCheck({
-  check,
+  check: saved,
+  datasetId,
   onPickTarget,
 }: {
   check: ProteinCheck;
+  datasetId?: string | null;
   onPickTarget?: (target: string) => void;
 }) {
+  const savedLayer = proteinLayerOf(saved);
+  const [layer, setLayer] = useState<ProteinLayer>(savedLayer);
+  const [other, setOther] = useState<{ layer: ProteinLayer; check: ProteinCheck } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    // A new run: back to its own layer.
+    setLayer(proteinLayerOf(saved));
+    setOther(null);
+    setError(null);
+  }, [saved]);
+  useEffect(() => {
+    if (layer === savedLayer || !datasetId || other?.layer === layer) return;
+    let live = true;
+    setLoading(true);
+    setError(null);
+    getMixscapeProtein(datasetId, layer)
+      .then((c) => live && setOther({ layer, check: c }))
+      .catch((e) => live && setError(errorText(e)))
+      .finally(() => live && setLoading(false));
+    return () => {
+      live = false;
+    };
+  }, [layer, savedLayer, datasetId, other]);
+  const check = layer !== savedLayer && other?.layer === layer ? other.check : saved;
+  const shownLayer = proteinLayerOf(check);
+  const unit = proteinUnit(check);
+  const options = proteinLayerOptions(saved);
   const [chosen, setChosen] = useState<string | null>(null);
   const protein = chosen && check.proteins.includes(chosen) ? chosen : (check.default_protein ?? check.proteins[0] ?? "");
   const rows = useMemo(() => proteinRowsFor(check, protein), [check, protein]);
@@ -32,6 +74,37 @@ export function MixscapeProteinCheck({
       <div className="font-medium text-slate-600">
         <Help id="perturbation.protein">Protein by target</Help>
       </div>
+      {datasetId && options.length > 1 && (
+        <div className="flex flex-wrap items-center gap-1" data-testid="mixscape-protein-layers">
+          <span className="text-[11px] text-slate-500">
+            <Help id="perturbation.protein_layer">Values</Help>
+          </span>
+          {options.map((o) => (
+            <button
+              key={o.layer}
+              aria-pressed={o.layer === layer}
+              disabled={!o.available}
+              title={o.reason ?? (o.compositional ? "Compositional on this panel: a fall in one protein lifts the others" : undefined)}
+              onClick={() => setLayer(o.layer)}
+              className={`${chip(o.layer === layer)} disabled:cursor-not-allowed disabled:opacity-50`}
+            >
+              {o.label}
+              {o.layer === savedLayer && <span className="ml-1 opacity-70">(run)</span>}
+            </button>
+          ))}
+          {loading && <Loader2 className="h-3 w-3 animate-spin text-slate-400" aria-label="Loading" />}
+        </div>
+      )}
+      {error && (
+        <div className="rounded border border-red-200 bg-red-50 px-2 py-1 text-[11px] text-red-700" role="alert">
+          {error}
+        </div>
+      )}
+      {shownLayer !== savedLayer && (
+        <div className="text-[11px] text-slate-500" data-testid="mixscape-protein-view-note">
+          Shown on {check.layer_label ?? unit}; the saved run used {saved.layer_label ?? proteinUnit(saved)}.
+        </div>
+      )}
       {check.flags.length > 0 && (
         <div className="rounded border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-800" data-testid="mixscape-protein-flags">
           <div className="font-medium">
@@ -64,13 +137,13 @@ export function MixscapeProteinCheck({
             legend: { orientation: "h", y: 1.12, font: { size: 9 } },
             xaxis: { type: "category", categoryorder: "array", categoryarray: rows.map((r) => r.target), tickangle: -45, tickfont: { size: 9 } },
             yaxis: {
-              title: { text: `${protein} shift vs ${check.control} (CLR)`, font: { size: 10 } },
+              title: { text: `${protein} shift vs ${check.control} (${unit})`, font: { size: 10 } },
               tickfont: { size: 9 },
               zeroline: true,
               zerolinecolor: "#94a3b8",
             },
           }}
-          config={plotConfig(`mixscape_protein_${protein}`)}
+          config={plotConfig(`mixscape_protein_${protein}_${shownLayer}`)}
           style={{ width: "100%", height: "100%" }}
           useResizeHandler
         />
@@ -81,7 +154,7 @@ export function MixscapeProteinCheck({
             <tr className="border-b border-slate-200">
               <th className="px-1.5 py-1 text-left font-medium" title="The targeted gene">Target</th>
               <th className="px-1.5 py-1 text-right font-medium" title="Share of the target's cells Mixscape called KO (RNA)">KO</th>
-              <th className="px-1.5 py-1 text-right font-medium" title={`Mean ${protein} (CLR) of all the target's guide cells minus the controls'`}>
+              <th className="px-1.5 py-1 text-right font-medium" title={`Mean ${protein} (${unit}) of all the target's guide cells minus the controls'`}>
                 All cells
               </th>
               <th className="px-1.5 py-1 text-right font-medium" title="Wilcoxon rank-sum p of all guide cells vs the controls, Benjamini-Hochberg over the targets and proteins">
@@ -139,7 +212,7 @@ export function MixscapeProteinCheck({
         </table>
       </div>
       <Caption n={[{ value: check.n_control, unit: `'${check.control}' cells` }, { value: rows.length, unit: "targets" }]}>
-        {protein} per target against the controls. {check.notes.join(" ")}
+        {protein} per target against the controls, on {check.layer_label ?? unit}. {check.notes.join(" ")}
       </Caption>
     </section>
   );

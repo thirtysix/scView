@@ -80,10 +80,25 @@ export interface Umap3dChoice {
   offer: boolean;
 }
 
+/** How the run would work: in memory, without the matrices (light), or in large-dataset mode */
+export interface RunMode {
+  chunked: boolean;
+  light?: boolean;
+  requested?: string;
+  reason?: string;
+  /** Large-dataset mode would convert the dataset for good (it is not in that layout yet) */
+  converts?: boolean;
+  turns_off?: string[];
+  /** Only the doublet step pushes the run out of memory: without it, it fits */
+  without_doublets?: { fits_in_memory: boolean; text: string };
+}
+
 export interface RunPreflight {
   dataset_id: string;
   steps: PreflightStep[];
   verdict: PreflightVerdict;
+  /** Missing from an older backend */
+  mode?: RunMode;
   /** Null when the run does not cluster with Leiden (missing from an older backend) */
   leiden?: LeidenChoice | null;
   /** Null when the run has no UMAP step (missing from an older backend) */

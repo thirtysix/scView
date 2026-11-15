@@ -50,6 +50,8 @@ class RandomCheck:
     # group -> {named, best_type, best_log10p, null_cut (judged lists only)}: every list with a named
     # gene, flagged or not (core/cluster_evidence.py says it in words)
     scores: dict[str, dict] = field(default_factory=dict)
+    # the dataset's tissue when it restricted the types ({organs, from}); None: every type
+    tissue: dict | None = None
 
     def record(self) -> dict:
         return {"flagged": sorted(self.flagged), "checked": self.checked,
@@ -67,15 +69,19 @@ def _detected_share(adata, names) -> np.ndarray | None:
 class _Index:
     """The database's type sets over the named measured genes, as a sparse type x gene matrix."""
 
-    def __init__(self, sdb, measured):
+    def __init__(self, sdb, measured, keep=None):
+        """``keep``: the types that may compete (the dataset's tissue: ``marker_db.tissue_types``).
+        The named genes (the test's universe and the random lists' pool) stay every type's, so a
+        kept type's p is the one it had before; only the best is taken over the kept types."""
         upper = {}
         for g in measured:
             upper.setdefault(str(g).upper(), str(g))
         sets = {t: {g.upper() for g in sdb.types[t]["genes"]} & upper.keys() for t in sdb.names}
         from scview.core.marker_db import MIN_DB_GENES
 
-        self.types = [t for t in sdb.names if len(sets[t]) >= MIN_DB_GENES]
-        named = sorted(set().union(*(sets[t] for t in self.types))) if self.types else []
+        every = [t for t in sdb.names if len(sets[t]) >= MIN_DB_GENES]
+        named = sorted(set().union(*(sets[t] for t in every))) if every else []
+        self.types = [t for t in every if keep is None or t in keep]
         self.col = {g: i for i, g in enumerate(named)}
         rows, cols = [], []
         for i, t in enumerate(self.types):
@@ -108,9 +114,12 @@ def _rows(idx_lists: list[list[int]], n_cols: int) -> sp.csr_matrix:
     return sp.csr_matrix((np.ones(len(cols), dtype=np.int32), (rows, cols)), shape=(len(idx_lists), n_cols))
 
 
-def check(adata, marker_map: dict[str, list[str]], db=None) -> RandomCheck:
+def check(adata, marker_map: dict[str, list[str]], db=None, tissue: str = "") -> RandomCheck:
     """Which lists in ``marker_map`` look random. Best effort: never fetches the databases
-    (``skipped`` says why nothing was checked)."""
+    (``skipped`` says why nothing was checked). When the dataset's tissue is known (``tissue``, the
+    user's hint, else the data's own) only the types that may compete there are scored, for the
+    lists and for the random ones alike, as the marker-score annotator and the database check's
+    suggestions do: kidney clusters were said to match Paneth cells and retinal bipolar cells."""
     from scview.core import marker_db as mdb
 
     if db is None:
@@ -123,7 +132,9 @@ def check(adata, marker_map: dict[str, list[str]], db=None) -> RandomCheck:
         return RandomCheck(skipped="marker databases not downloaded")
     species, _ = mdb._species(adata, None)
     names = mdb.measured_genes(adata)
-    idx = _Index(db.species(species, db.view("annotate", species)), names)
+    sdb = db.species(species, db.view("annotate", species))
+    keep, tissue_info = mdb.tissue_types(db, sdb, adata, tissue)
+    idx = _Index(sdb, names, keep)
     if not idx.types:
         return RandomCheck(skipped="no database types for these genes")
 
@@ -134,7 +145,7 @@ def check(adata, marker_map: dict[str, list[str]], db=None) -> RandomCheck:
     else:
         pool = list(idx.col.values())
 
-    out = RandomCheck()
+    out = RandomCheck(tissue=tissue_info if keep is not None else None)
     queries = {g: idx.query(genes) for g, genes in marker_map.items()}
     judged = {g: q for g, q in queries.items() if len(q) >= MIN_NAMED}
     out.too_few_named = sorted(g for g in queries if g not in judged)

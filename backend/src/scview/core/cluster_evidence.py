@@ -7,7 +7,9 @@ flags, ``pipeline.decide_clusters``) and this module only says why, never as a p
 
 - markers vs random genes: the list's best marker-database p against the p that 1 in 10 random
   lists of the same number of database genes reach (``core/marker_randomness.py``, the annotator's
-  own check, on the annotator's own lists);
+  own check, on the annotator's own lists), over the types of the dataset's tissue when it is known
+  (obs ``tissue``, else the title: ``marker_db.tissue_types``; v0.80, kidney clusters "matched"
+  Paneth cells and retinal bipolar cells);
 - QC: median genes and % mito against the typical cluster (the median across clusters), with the
   cluster QC flags that fired;
 - doublet-like: the two clusters ``cluster_qc.doublet_like_pair`` picked, the markers they share
@@ -258,20 +260,22 @@ def _hierarchy(index) -> _Hierarchy | None:
     return h
 
 
-def type_candidates(scorer, genes: list[str], index=None) -> list[dict]:
-    """The ``TYPE_TOP`` database types by hypergeometric score (full sets, as the marker-DB
-    annotation), each placed on the Cell Ontology by its own id, else a strict name match."""
+def type_candidates(scorer, genes: list[str], index=None, names: list[str] | None = None) -> list[dict]:
+    """The ``TYPE_TOP`` database types (of ``names``, default every open one) by hypergeometric
+    score (full sets, as the marker-DB annotation), each placed on the Cell Ontology by its own id,
+    else a strict name match."""
     from scview.core import cell_ontology as co
 
     Q = scorer.query(genes)
-    if not Q:
+    names = scorer.open_names if names is None else names
+    if not Q or not names:
         return []
-    s, k, _ = scorer.scores(Q, scorer.open_names, full=True)
+    s, k, _ = scorer.scores(Q, names, full=True)
     out = []
     for i in np.argsort(-s, kind="stable")[:TYPE_TOP]:
         if k[i] <= 0 or s[i] <= 0:
             continue
-        name = scorer.open_names[i]
+        name = names[i]
         cl = None
         if index is not None:
             cl = co.clean_id(scorer.sdb.types[name].get("cl") or "")
@@ -415,6 +419,10 @@ def build(adata, column: str, report: cluster_qc.ClusterQCReport, db=None, index
     else:
         try:
             check = marker_randomness.check(adata, markers, db)
+            if check.tissue:
+                out.notes.append(f"Marker databases: only the cell types of {', '.join(check.tissue['organs'])} "
+                                 f"and those found in every tissue are compared (the tissue from "
+                                 f"{check.tissue['from']}).")
             if check.skipped:
                 out.notes.append(f"Markers not compared with the databases: {check.skipped}.")
                 check = None
@@ -426,11 +434,12 @@ def build(adata, column: str, report: cluster_qc.ClusterQCReport, db=None, index
     out.annotation = rec["target"] if rec else None
 
     groups = [r.group for r in report.clusters]
-    scorer = hier = None
+    scorer = hier = names = None
     if check is not None and is_curated(groups):
         try:
             sp, _ = mdb._species(adata, None)
             scorer = mdb.Scorer(db.species(sp, db.view("annotate", sp)), mdb.measured_genes(adata))
+            names, _ = mdb.tissue_names(db, scorer, adata)  # the same types as the check above
             hier = _hierarchy(index)
             out.typing = True
         except Exception as exc:  # noqa: BLE001
@@ -452,7 +461,7 @@ def build(adata, column: str, report: cluster_qc.ClusterQCReport, db=None, index
             if extra is not None:
                 ev.lines.append(extra)
         if scorer is not None and markers.get(g):
-            shares, nested = type_shares(type_candidates(scorer, markers[g], index), hier)
+            shares, nested = type_shares(type_candidates(scorer, markers[g], index, names), hier)
             if (t := typing_line(shares, nested)) is not None:
                 ev.lines.append(t)
         line, label, recorded = decision_line(g, rec, rules, check)

@@ -7,6 +7,7 @@ import {
   type IngestPreflight,
   type LeidenChoice,
   type PreflightVerdict,
+  type RunMode,
   type Umap3dChoice,
 } from "@/api/preflight";
 import { FAST_LEIDEN, FULL_LEIDEN } from "@/lib/fastLeiden";
@@ -202,6 +203,36 @@ export function Umap3dNote({
   );
 }
 
+/** A run that would convert the dataset to large-dataset layout: said before the run (Run asks
+ *  first), with one click to leave out the doublet step when only that step causes it. */
+export function ConversionNote({ mode, onSkipDoublets }: { mode: RunMode; onSkipDoublets?: () => void }) {
+  if (!mode.converts) return null;
+  const skip = mode.without_doublets?.fits_in_memory;
+  return (
+    <div
+      className="mt-1 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-snug text-amber-900"
+      data-testid="conversion-note"
+    >
+      <p className="flex items-start gap-1.5">
+        <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden />
+        <span>
+          <span className="font-medium">Large-dataset mode, for good.</span> Run asks before it converts the dataset.
+          {skip && " Doublet detection alone pushes it out of memory."}
+          {skip && onSkipDoublets && (
+            <button
+              type="button"
+              onClick={onSkipDoublets}
+              className="ml-1.5 rounded border border-amber-300 bg-white px-1.5 py-0.5 font-medium text-amber-800 hover:bg-amber-100"
+            >
+              Leave out doublet detection
+            </button>
+          )}
+        </span>
+      </p>
+    </div>
+  );
+}
+
 /** The run estimate for the selected steps, next to the pipeline Run button. Refetched
  *  (debounced) when the steps, the parameters it depends on, or `refreshKey` change.
  *  `onLeidenIterations`: the run's clustering setting, for the fast-Leiden offer's button;
@@ -213,6 +244,7 @@ export function PreflightRunNote({
   refreshKey = 0,
   onLeidenIterations,
   onUmap3d,
+  onSkipDoublets,
 }: {
   datasetId: string;
   steps: string[];
@@ -220,10 +252,12 @@ export function PreflightRunNote({
   refreshKey?: number;
   onLeidenIterations?: (iterations: number) => void;
   onUmap3d?: (setting: Umap3dSetting) => void;
+  onSkipDoublets?: () => void;
 }) {
   const [verdict, setVerdict] = useState<PreflightVerdict | null>(null);
   const [leiden, setLeiden] = useState<LeidenChoice | null>(null);
   const [umap3d, setUmap3d] = useState<Umap3dChoice | null>(null);
+  const [mode, setMode] = useState<RunMode | null>(null);
   const key = steps.join(",");
   const paramKey = JSON.stringify(params ?? {});
 
@@ -232,6 +266,7 @@ export function PreflightRunNote({
       setVerdict(null);
       setLeiden(null);
       setUmap3d(null);
+      setMode(null);
       return;
     }
     const ctl = new AbortController();
@@ -241,6 +276,7 @@ export function PreflightRunNote({
           setVerdict(r.verdict);
           setLeiden(r.leiden ?? null);
           setUmap3d(r.umap_3d ?? null);
+          setMode(r.mode ?? null);
         })
         .catch(() => {
           /* advisory only: an older backend or a restart leaves no note */
@@ -248,6 +284,7 @@ export function PreflightRunNote({
             setVerdict(null);
             setLeiden(null);
             setUmap3d(null);
+            setMode(null);
           }
         });
     }, 300);
@@ -261,6 +298,7 @@ export function PreflightRunNote({
   return (
     <>
       <PreflightNote verdict={verdict} />
+      {mode && <ConversionNote mode={mode} onSkipDoublets={onSkipDoublets} />}
       {leiden && <FastLeidenOffer choice={leiden} onChange={onLeidenIterations} />}
       {umap3d && <Umap3dNote choice={umap3d} onChange={onUmap3d} />}
     </>
