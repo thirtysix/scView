@@ -27,11 +27,21 @@ A label of short letter codes only ("IC", "PT": ``is_code``) matches a database 
 Cell Ontology term only whole (its exact name, the same CL term), never a longer name holding
 the code ("IC" is not "Type IC spiral ganglion neuron") or a parent term; and no label reaches
 a name that negates it ("PT" is not "Non PT tubular cell").
+
+Kidney nephron codes (KPMP / Lake 2023, Wilson 2022, Reck 2025 labels: "PT-S1", "aTAL1",
+"CNT-PC", "IC-A") are spelled out in mode C before the words are read (``spell_kidney``), with a
+lowercase state prefix and a segment number set apart ("aTAL1" -> "a thick ascending limb 1").
+``KIDNEY_CODES`` mean nothing else in cell labels and are spelled out anywhere. ``KIDNEY_SENSE``
+codes have other meanings (PT pyramidal tract neurons, PC plasma or Purkinje cells, IC inferior
+colliculus, MD monocyte-derived, PEC peritoneal exudate cells, MES mesenchymal): they are spelled
+out only in a kidney label (another kidney code or word in it: "CNT-PC", "CD-IC") or when the
+caller knows the dataset is kidney (``Matcher.match(kidney=True)``). Else "PC" stays plasma.
 """
 
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections import defaultdict
 from dataclasses import dataclass, field
 
@@ -55,6 +65,7 @@ ABBR = {  # label token -> expansion (mode C)
     "mpp": "multipotent progenitor", "ilc": "innate lymphoid", "plt": "platelet",
     "pc": "plasma", "smc": "smooth muscle", "nkt": "natural killer t",
     "opc": "oligodendrocyte precursor", "ec": "endothelial", "microglial": "microglia",
+    "tc": "cytotoxic t",  # not "th": TH+ dopaminergic neurons
 }
 # CL keeps "DC1" / "DC2" as legacy exact synonyms of conventional / plasmacytoid DC;
 # single-cell DC1 / DC2 (CellTypist, Villani 2017) are cDC1 / cDC2, CL's CD141+ and CD1c+
@@ -73,12 +84,73 @@ HOW_TEXT = {
 }
 
 
+KIDNEY_CODES = {  # spelled out anywhere
+    "TAL": "thick ascending limb", "DCT": "distal convoluted tubule", "CNT": "connecting tubule",
+    "DTL": "descending thin limb", "ATL": "ascending thin limb", "POD": "podocyte", "PODO": "podocyte",
+}
+KIDNEY_SENSE = {  # spelled out in a kidney label or dataset only
+    "PT": "proximal tubule", "PC": "principal", "IC": "intercalated", "ICA": "intercalated A",
+    "ICB": "intercalated B", "MD": "macula densa", "PEC": "parietal epithelial", "MES": "mesangial",
+}
+# Words that make a label a kidney label (besides the codes); "CD" only alone (collecting duct), never CD4.
+KIDNEY_WORDS = frozenset({"kidney", "renal", "nephron", "glomerular", "tubule", "tubular", "cd", "ccd",
+                          "omcd", "imcd"})
+# KPMP state and region prefixes, dropped: the label names the segment ("aTAL1", "cycPT", "dC-TAL",
+# "M-TAL": adaptive, cycling, degenerative, cortical, medullary, transitional). Kept as words they
+# matched one-letter names ("C cell", "M cell").
+KIDNEY_STATES = ("cyc", "a", "d", "t", "c", "m")
+_STATE_CHUNK = re.compile(r"^(?:cyc|[adt])?[CMcm]$")  # "C-", "M-", "dC-" before a code
+_CHUNK = re.compile(r"(?<![A-Za-z])([A-Za-z]+)(\d*)(?![A-Za-z])")
+
+
+def _kidney_code(word: str) -> str | None:
+    """The kidney code ``word`` is, whole ("TAL", "Podo") or after a lowercase state prefix
+    ("aTAL", "dPT", "cycDCT"); else None."""
+    up = word.upper()
+    if up in KIDNEY_CODES or up in KIDNEY_SENSE:
+        return up
+    for pre in KIDNEY_STATES:
+        rest = word[len(pre):]
+        if word.startswith(pre) and rest.isupper() and (rest in KIDNEY_CODES or rest in KIDNEY_SENSE):
+            return rest
+    return None
+
+
+def spell_kidney(name: str, kidney: bool = False) -> str:
+    """``name`` with its kidney codes spelled out (see the module notes): ``KIDNEY_CODES``
+    always, ``KIDNEY_SENSE`` when ``kidney`` or when the label holds another kidney code or word.
+    A segment number stays ("PT-S1", "TAL1" -> "thick ascending limb 1"); state prefixes go."""
+    chunks = [(m, _kidney_code(m.group(1))) for m in _CHUNK.finditer(name)]
+    if not any(code for _m, code in chunks):
+        return name
+    if not kidney:
+        n_codes = sum(1 for _m, code in chunks if code)
+        kidney = n_codes > 1 or any(m.group(1).lower() in KIDNEY_WORDS and not m.group(2) for m, _c in chunks)
+    spelled = [bool(code) and (code in KIDNEY_CODES or kidney) for _m, code in chunks]
+    out, last = [], 0
+    for i, (m, code) in enumerate(chunks):
+        if spelled[i]:
+            words = [KIDNEY_CODES.get(code) or KIDNEY_SENSE[code], m.group(2)]
+        elif (i + 1 < len(chunks) and spelled[i + 1] and not m.group(2) and _STATE_CHUNK.match(m.group(1))
+              and name[m.end():chunks[i + 1][0].start()] in ("-", "_")):  # "M-TAL", "dC-TAL"
+            words = []
+        else:
+            continue
+        out += [name[last:m.start()], " " + " ".join(w for w in words if w) + " "]
+        last = m.end()
+    return "".join(out) + name[last:]
+
+
 def _greek(s: str) -> str:
-    return "".join(f" {GREEK[c]} " if c in GREEK else c for c in s)
+    """Greek letters spelled out and accents dropped ("Naïve" -> "Naive"; it read as "na ve")."""
+    s = "".join(f" {GREEK[c]} " if c in GREEK else c for c in s)
+    if s.isascii():
+        return s
+    return "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
 
 
 def _words(name: str, abbr: bool = False) -> list[str]:
-    s = _greek(str(name).lower())
+    s = _greek((spell_kidney(str(name)) if abbr else str(name)).lower())
     if abbr:
         s = re.sub(r"^\d+\s*", "", s)  # paul15-style "14Mo"
         s = re.sub(r"([a-z])\+", r"\1 ", s)
@@ -92,6 +164,13 @@ def toks(name: str, abbr: bool = False) -> list[str]:
     return [ROMAN.get(x, x) for x in t]
 
 
+# Words that name a state, not a type ("Inflammatory cell", "Naive cell" are database names): a
+# label with a type word is never matched to a name of state words only ("PT Inflammatory" was
+# "Inflammatory cell", "Naïve Th Cell" a B-cell "Naive cell"; Reck 2025 kidney labels).
+STATE_WORDS = frozenset({"naive", "injured", "inflammatory", "cycling", "proliferating", "dividing",
+                         "degenerative", "degenerating", "adaptive", "activated", "resident",
+                         "transitioning", "transitional", "stressed", "damaged", "effector", "memory",
+                         "mature", "immature", "early", "late"})
 CODE_MAX_LETTERS = 3
 NEGATIONS = {"non", "not"}
 
@@ -231,16 +310,20 @@ class Matcher:
         near = [
             (len(k & d) / len(k | d), head_noun in d, tuple(sorted(d)))
             for d in self.by_key
-            if (wider and k <= d and not (d & NEGATIONS) - k) or d <= k
+            if ((wider and k <= d and not (d & NEGATIONS) - k) or d <= k)
+            and not (d <= STATE_WORDS and not k <= STATE_WORDS)
         ]
         if not near:
             return []
         best = max(near)
         return list(self.by_key[frozenset(best[2])])
 
-    def match(self, label: str, mode: str = "C") -> tuple[list[str], str]:
-        """(matched database type names, how): how is exact | cl | subset | cl-ancestor | none."""
+    def match(self, label: str, mode: str = "C", kidney: bool = False) -> tuple[list[str], str]:
+        """(matched database type names, how): how is exact | cl | subset | cl-ancestor | none.
+        ``kidney``: the dataset is kidney, so "PT", "PC", "IC" ... are nephron codes (mode C)."""
         abbr = mode == "C"
+        if abbr and kidney:
+            label = spell_kidney(label, kidney=True)
         use_cl = mode in ("B", "C") and self.cl is not None
         k = norm(label, abbr)
         if not k:

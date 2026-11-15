@@ -43,7 +43,8 @@ logger = logging.getLogger(__name__)
 # (gene_filters.is_unnamed).
 # v7: markers are ranked on log-normalised values, never the raw counts a CELLxGENE file keeps
 # in .raw (core/marker_matrix.py): the fold changes the query is sorted by changed.
-ORA_VERSION = 7
+# v8: pseudogenes (FTH1P20, MTND1P23) leave the query (gene_filters.is_pseudogene).
+ORA_VERSION = 8
 
 META_PREFIX = uns_keys.META_PREFIX
 

@@ -25,7 +25,10 @@ design, handled by the replicate guard and pseudobulk.
 ``single_sample_clusters``: a cluster whose cells come almost all from one sample, in a
 dataset of several samples (QA on the gastrulation erythroid atlas: a default run gave a
 Leiden cluster that was one sample, with no word of it). Often a batch effect, sometimes
-a population only that sample has: a note, never a flag that changes anything.
+a population only that sample has: a note, never a flag that changes anything. It is in the
+MCP run reply after a clustering, the cluster QC report (``single_sample_for``: a
+dataset-level note, never a cluster flag, as flags feed ``pipeline.decide_clusters``) and so
+the co-pilot's cluster QC facts.
 """
 
 from __future__ import annotations
@@ -303,3 +306,20 @@ def single_sample_note(found: list[dict], cluster_col: str, sample_col: str, n_s
             f"(of {n_samples} in all): {named}{more}. A cluster made of one sample is often a batch effect, not a "
             f"cell type: check with crosstab({cluster_col} x {sample_col}), or correct for {sample_col} (Harmony) "
             "before clustering.")
+
+
+def single_sample_for(adata, cluster_col: str) -> dict | None:
+    """``single_sample_clusters`` of ``cluster_col`` against the dataset's sample column
+    (``qc_groups.sample_grouping``): {sample_column, n_samples, clusters, text}. None when
+    there is no sample column, the grouping is that column, or no cluster is one sample."""
+    from scview.core import qc_groups  # qc_groups imports cluster_qc
+
+    sample_col, _why = qc_groups.sample_grouping(adata)
+    if not cluster_col or not sample_col or sample_col == cluster_col:
+        return None
+    found = single_sample_clusters(adata.obs, cluster_col, sample_col)
+    if not found:
+        return None
+    n_samples = int(adata.obs[sample_col].nunique())
+    return {"sample_column": sample_col, "n_samples": n_samples, "clusters": found,
+            "text": single_sample_note(found, cluster_col, sample_col, n_samples)}

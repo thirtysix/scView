@@ -368,7 +368,9 @@ HOW_STRICT_TEXT = {
 # Exact synonyms that single-cell labels use in another sense: never matched. CL lists
 # "CD16+ monocyte" under the intermediate CD14+CD16+ term (CL:0002397), but a "CD16+
 # monocyte" cluster is the non-classical one (CL:0002396, ``_ATLAS``).
-_MISREAD = frozenset({("cd16", "positive", "monocyte")})
+# "IC" is an exact synonym of the inferior cardiac neuron (CL:4070012); as a cell label it is the
+# kidney's intercalated cell (KPMP, Wilson 2022) or a brain region's neuron, never that one.
+_MISREAD = frozenset({("cd16", "positive", "monocyte"), ("ic",)})
 # Names with one single-cell meaning that CL files under another term, by ``strict_key``:
 # matched to the meant term (how "single_cell"), never to the listed one. CL keeps the
 # legacy "DC2" as an exact synonym of plasmacytoid DC and "DC1" of conventional DC, but

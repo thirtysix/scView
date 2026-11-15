@@ -40,6 +40,7 @@ from pydantic import BaseModel
 from scview.core import ambient as ambient_rna
 from scview.core import (
     cell_cycle,
+    confounding,
     doublet_source,
     gene_filters,
     haemoglobin,
@@ -246,6 +247,13 @@ NO_MT_NOTE = ("No mitochondrial (MT-) genes in this dataset, so % mito can't be 
               "(a mito filter had nothing to remove).")
 
 
+class OneSampleNote(BaseModel):
+    sample_column: str
+    n_samples: int
+    clusters: list[dict] = []  # cluster, n_cells, sample, share, sample_share_of_data
+    text: str
+
+
 class ClusterQCReport(BaseModel):
     column: str | None
     n_cells: int
@@ -274,6 +282,9 @@ class ClusterQCReport(BaseModel):
     # Nuclei-like data (typical cluster's median % mito under NUCLEI_MITO_MEDIAN): mito is
     # judged by the share of cells with a mito read (nuclei_mito)
     nuclei_like_mito: bool = False
+    # Clusters almost all from one sample (confounding.single_sample_for): a dataset-level
+    # note, never a flag (flags feed pipeline.decide_clusters). None when no cluster is.
+    one_sample: OneSampleNote | None = None
 
     @property
     def flagged(self) -> list[ClusterQC]:
@@ -584,7 +595,17 @@ def cluster_qc(
         ambient_markers_approximate=amb_approx,
         ambient_markers_help=(ambient_rna.HELP["flag_approximate"] if amb_approx
                               else ambient_rna.HELP["flag"]) if amb else "",
+        one_sample=_one_sample(adata, column),
     )
+
+
+def _one_sample(adata, column: str) -> OneSampleNote | None:
+    try:
+        found = confounding.single_sample_for(adata, column)
+    except Exception as exc:  # pragma: no cover - a note only: the report stands
+        logger.debug("cluster QC: one-sample check failed: %s", exc)
+        return None
+    return OneSampleNote(**found) if found else None
 
 
 def _ambient(adata, column: str) -> tuple[dict[str, list[str]], bool]:
@@ -644,7 +665,8 @@ def _flag_doublet_like(adata, column: str, rows: list["ClusterQC"]) -> bool:
     False when the column has none (nothing to judge by). Never fails the table."""
     try:
         # Unnamed genes kept: the doublet-like rule was measured on the full lists.
-        top = marker_selection.group_markers(adata, column, n=DOUBLET_LIKE_MARKERS, skip_unnamed=False)
+        top = marker_selection.group_markers(adata, column, n=DOUBLET_LIKE_MARKERS, skip_unnamed=False,
+                                                 skip_pseudogenes=False)
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("cluster QC: no markers for doublet-like clusters: %s", exc)
         return False
@@ -694,7 +716,8 @@ def _flag_marker_makeup(adata, column: str, rows: list[ClusterQC], small_cut: fl
 
     try:
         named = marker_selection.group_markers(adata, column, n=DOUBLET_LIKE_MARKERS)
-        full = marker_selection.group_markers(adata, column, n=DOUBLET_LIKE_MARKERS, skip_unnamed=False)
+        full = marker_selection.group_markers(adata, column, n=DOUBLET_LIKE_MARKERS, skip_unnamed=False,
+                                                 skip_pseudogenes=False)
         sex_ids = sex_check.sex_linked_ids(adata)  # Ensembl-id names -> symbols
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("cluster QC: no markers for the marker checks: %s", exc)
@@ -1059,6 +1082,8 @@ def grounding_block(report: ClusterQCReport) -> tuple[list[str], list[tuple[str,
         lines.append(f"- The other {rest} clusters are within the normal range.")
     if report.ambient_hb:
         lines.append(f"- Ambient haemoglobin: {report.ambient_hb} [{head}]")
+    if report.one_sample:
+        lines.append(f"- Clusters from one sample: {report.one_sample.text} [{head}]")
     if mal := malat1_line(report, head):
         lines.append(mal)
     if report.drivers_n_pcs:

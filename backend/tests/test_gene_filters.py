@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from scview.core.gene_filters import is_ribo_mito, is_unnamed, select_query_genes
+from scview.core import gene_filters
+from scview.core.gene_filters import is_pseudogene, is_ribo_mito, is_unnamed, select_query_genes
 
 
 class TestIsUnnamed:
@@ -66,3 +67,22 @@ class TestSelectQueryGenes:
     def test_short_list_after_filter_is_not_padded(self):
         ranked = ["RPL5", "GATA4", "RPS3"]
         assert select_query_genes(ranked, 10) == ["GATA4"]
+
+
+@pytest.mark.parametrize("gene", ["FTH1P20", "ACSL3P1", "FYTTD1P1", "MTND1P23", "RPL13AP5", "HLA-L",
+                                  "H3C9P", "GK4P", "Rpl13a-ps1", "Hba-ps3", "CES1P1"])
+def test_pseudogenes_by_gene_type(gene):
+    assert is_pseudogene(gene)
+
+
+@pytest.mark.parametrize("gene", ["MMP9", "SERP1", "TP53", "CD74", "XIST", "MALAT1", "Uox", "FTH1",
+                                  "ENSG00000289963", "AC012345.1", "", "fth1p20"])
+def test_genes_that_are_not_pseudogenes(gene):
+    """Coding genes ending in P + digits, lncRNAs, ids (skipped as unnamed) and another case."""
+    assert not is_pseudogene(gene)
+
+
+def test_the_shipped_list_is_the_pinned_file():
+    names = gene_filters.pseudogenes()
+    assert 20_000 < len(names) < 30_000
+    assert gene_filters.PSEUDOGENES.stat().st_size < 100_000

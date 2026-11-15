@@ -224,3 +224,19 @@ def test_a_dataset_named_by_ensembl_id_keeps_its_genes():
     genes = [f"ENSG{i:011d}" for i in range(1, 8)] + ["CD3E"]
     assert group_markers(_named_result(genes), "cluster", n=3)["A"] == genes[:3]
 
+
+def test_pseudogenes_are_skipped_by_gene_type_and_the_list_refills():
+    """FTH1P20 / MTND1P23 / mouse Hba-ps3 go; MMP9 and SERP1 (P + digits, coding) stay."""
+    genes = ["FTH1P20", "MMP9", "MTND1P23", "SERP1", "ACSL3P1", "CD74", "HLA-L", "LYZ", "CD14", "S100A8"]
+    a = _named_result(genes)
+    assert group_markers(a, "cluster", n=3)["A"] == ["MMP9", "SERP1", "CD74"]
+    assert ora_query_genes(a, "cluster", "A", 2) == ["MMP9", "SERP1"]
+    assert group_markers(a, "cluster", n=3, skip_pseudogenes=False)["A"] == genes[:3]
+    assert group_markers(_named_result(["Hba-ps3", "Lyz2", "Cd74"]), "cluster", n=2)["A"] == ["Lyz2", "Cd74"]
+
+
+def test_a_list_of_mostly_pseudogenes_keeps_them():
+    """The keep-all rule of the id skip: more than half the ranked genes pseudogenes, nothing goes."""
+    genes = ["FTH1P2", "FTH1P3", "FTH1P20", "FTLP3", "CD74"]
+    assert group_markers(_named_result(genes), "cluster", n=3)["A"] == genes[:3]
+

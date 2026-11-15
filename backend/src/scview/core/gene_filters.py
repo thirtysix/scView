@@ -22,7 +22,11 @@ biogenesis can keep them.
 
 from __future__ import annotations
 
+import gzip
+import hashlib
 import re
+from functools import lru_cache
+from pathlib import Path
 
 # Cytoplasmic ribosomal proteins (RPL*/RPS*, including RPLP*/RPSA and species
 # lowercase) and mitochondrial ribosomal proteins (MRPL*/MRPS*). The RPS6K*
@@ -51,6 +55,31 @@ def is_unnamed(gene: str) -> bool:
     """True if the gene has an identifier but no name (see ``_ENSEMBL``/``_CLONE``)."""
     g = str(gene)
     return bool(_ENSEMBL.match(g) or _CLONE.match(g) or _OLD_CLONE.match(g))
+
+
+# Pseudogenes (FTH1P20, ACSL3P1, MTND1P23, Rpl13a-ps1): named, but by gene type, which no regex
+# tells (MMP9, SERP1 also end in P + digits). A shipped list of 24,374 human + mouse symbols, every
+# locus of which is a pseudogene in GENCODE v32 / v44 / vM23 / vM33 (the 10x references), none
+# coding in any (backend/scripts/make_pseudogenes.py; 63 kB). Shipped, not the GENCODE table
+# gene_annotation fetches, so marker lists never wait on the network and are the same offline.
+PSEUDOGENES = Path(__file__).resolve().parents[1] / "resources" / "pseudogenes.txt.gz"
+PSEUDOGENES_SHA256 = "350937ad48586d3a8c601c280ded4b23ef583b34815888d479f9783449c60d6c"
+
+
+@lru_cache(maxsize=1)
+def pseudogenes() -> frozenset[str]:
+    """The shipped pseudogene symbols (case as written: human upper case, mouse title case)."""
+    raw = PSEUDOGENES.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != PSEUDOGENES_SHA256:
+        raise RuntimeError(f"{PSEUDOGENES.name} is not the pinned file; rebuild it with "
+                           "backend/scripts/make_pseudogenes.py")
+    lines = gzip.decompress(raw).decode().splitlines()
+    return frozenset(x for x in lines if x and not x.startswith("#"))
+
+
+def is_pseudogene(gene: str) -> bool:
+    """True if the symbol is a pseudogene in GENCODE (see ``PSEUDOGENES``)."""
+    return str(gene) in pseudogenes()
 
 
 def select_query_genes(

@@ -158,6 +158,7 @@ export function ClusterQcTable({ datasetId, refreshKey = 0 }: { datasetId: strin
   const flagged = data?.clusters.filter((c) => c.flags.length > 0) ?? [];
   const noted = data?.clusters.filter((c) => (c.notes ?? []).length > 0) ?? [];
   const drivers = data?.drivers ?? [];
+  const oneSample = data?.one_sample?.clusters.length ?? 0;
   // Open by default when something needs a look: a flag, ambient Hb, or a technical
   // score that moves along a PC inside clusters (between-cluster ones are often biology).
   const expanded = open ?? (flagged.length > 0 || !!data?.ambient_hb || drivers.some((d) => d.inside_clusters));
@@ -200,6 +201,7 @@ export function ClusterQcTable({ datasetId, refreshKey = 0 }: { datasetId: strin
               : `No cluster stands out (${data.n_groups} clusters)`}
             {drivers.length > 0 &&
               ` · ${drivers.length} technical score${drivers.length > 1 ? "s" : ""} track${drivers.length > 1 ? "" : "s"} a PC`}
+            {oneSample > 0 && ` · ${oneSample} cluster${oneSample > 1 ? "s" : ""} from one sample`}
           </span>
         ) : null}
         <span className="flex-1" />
@@ -376,6 +378,12 @@ export function ClusterQcTable({ datasetId, refreshKey = 0 }: { datasetId: strin
             <p className="flex items-start gap-1.5 text-xs text-slate-600">
               <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-rose-500" />
               <span>{data.ambient_hb}</span>
+            </p>
+          )}
+          {data.one_sample && (
+            <p className="flex items-start gap-1.5 text-xs text-slate-600" data-testid="one-sample-note">
+              <Info className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-slate-400" />
+              <span>{data.one_sample.text}</span>
             </p>
           )}
           {flagged.length > 0 && (
