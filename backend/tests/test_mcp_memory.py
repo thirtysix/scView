@@ -5,6 +5,7 @@ from __future__ import annotations
 from scview.api.v1 import de as de_api
 from scview.core import memory_budget
 from tests.test_mcp import _call, _register, msigdb_dir, test_settings  # noqa: F401 — fixtures
+from tests.test_preflight import _short
 
 GB = 1024**3
 
@@ -73,16 +74,14 @@ async def test_run_pipeline_passes_the_opt_in_to_the_route(client, dataset_manag
 
 
 async def test_a_refusal_caused_by_the_doublet_step_says_to_leave_it_out(client, dataset_manager, monkeypatch):
-    from scview.core import preflight as pf
-
     did = _register(dataset_manager)
     steps = ["qc_metrics", "doublet_detection", "normalization"]
 
     async def need(s):
         return (await _call("preflight", {"dataset_id": did, "steps": s}))["verdict"]["need_bytes"]
 
-    cut = (await need(steps) + await need([s for s in steps if s != "doublet_detection"])) / 2
-    monkeypatch.setattr(pf, "_would_chunk", lambda req, n, *a, **k: (req != "off" and n > cut, "Too big."))
+    assert await need([s for s in steps if s != "doublet_detection"]) < await need(steps)
+    _short(monkeypatch, lambda steps: (10 if "doublet_detection" in steps else 1) * GB)
     text = await _call("run_pipeline", {"dataset_id": did, "steps": steps}, error=True)
     assert "Not run:" in text and "Without doublet detection the run fits in memory" in text
     assert "Leave doublet_detection out" in text and "allow_large_mode=true" in text

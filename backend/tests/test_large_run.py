@@ -925,12 +925,13 @@ def test_doublet_plan_on_disk_is_counted_once_per_file(tmp_path, monkeypatch):
     assert len(opened) == 1 and first == second and first is not second
     whole = large_run.doublet_plan_on_disk(p, PipelineParams(doublet_channel_key="__all__"))
     assert len(opened) == 2 and whole.channels == [610]
-    # Neither a missing file nor an old-layout one is opened as a run: obs alone, or nothing.
+    # Neither a missing file nor an old-layout one is opened as a run: nothing, or the
+    # old-layout file read backed by anndata, its plan the open dataset's.
     assert large_run.doublet_plan_on_disk(tmp_path / "missing.h5ad", PipelineParams()) is None
     old = tmp_path / "old.h5ad"
     _write_legacy_h5ad(old, np.random.default_rng(0).poisson(1.0, size=(120, 60)))
     old_plan = large_run.doublet_plan_on_disk(old, PipelineParams())
-    assert old_plan is None or old_plan.costed is None  # obs alone (this one has no channels)
+    assert old_plan == preflight.doublet_plan(ad.read_h5ad(old), PipelineParams())
     assert len(opened) == 2
 
 
