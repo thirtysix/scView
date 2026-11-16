@@ -109,7 +109,7 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
      "control features; checked against the count matrix"),
     ("Unified View > Markers", "", "marker table per group"),
     ("Unified View > Expression", "", "gene overlay, several genes, gene vs gene"),
-    ("Unified View > Protein", "CITE-seq, CLR or DSB", "CITE-seq proteins; CLR or DSB normalisation"),
+    ("Unified View > Protein", "CITE-seq, CLR/DSB", "CITE-seq proteins; CLR or DSB normalisation"),
     ("Unified View > Protein > Joint RNA + protein (WNN)", "",
      "Seurat's weighted nearest neighbours: per-cell RNA / protein weights, a joint graph, WNN and "
      "protein UMAPs (in the embedding menu), WNN clusters"),
@@ -186,7 +186,7 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
      "RNA velocity from spliced and unspliced counts (upload them or attach a velocyto .loom, an .h5ad or a STARsolo "
      "folder): steady-state or stochastic model as scVelo; arrows on the plot, per-group coherence, phase portraits; "
      "not the dynamical model or latent time"),
-    ("Unified View > Deconvolution", "bulk RNA-seq",
+    ("Unified View > Deconvolution", "bulk",
      "cell-type fractions of uploaded bulk RNA-seq samples, this dataset as the reference; self-check, "
      "reference download for MuSiC / CIBERSORTx"),
     ("Unified View > Spot composition", "Visium, RCTD",
@@ -214,6 +214,10 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Unified View > Plot reliability", "", "colour cells by how well the plot keeps their neighbours"),
     ("Unified View > Layouts", "UMAP stability", "alternative UMAPs: which structure is stable"),
     ("Unified View > Filter", "", "select cells by gene and metadata conditions"),
+    ("Unified View > New dataset…", "",
+     "a new dataset of the selected cells (a lasso, a legend group or a Filter), the parent unchanged: their "
+     "counts, labels (scView's clusters as parent_*), the parent's UMAP and per-cell modalities; process it like "
+     "any dataset (re-cluster only the T cells, a trajectory on one lineage)"),
     ("Unified View > Gates > Learned gates", "",
      "Learn gate... trains a small model (L1 logistic regression) on the selected cells against the other cells "
      "of their samples; the library exports, imports and applies it to any dataset (in/out column + gate score)"),
