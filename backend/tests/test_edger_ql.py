@@ -187,3 +187,17 @@ def test_compiled_kernels_match_numpy_paths(monkeypatch):
     np.testing.assert_allclose(with_k[3][0], without[3][0], rtol=1e-10, atol=1e-12)
     np.testing.assert_allclose(with_k[3][1], without[3][1], rtol=1e-10, atol=1e-12)
     assert with_k[4] == pytest.approx(without[4], rel=1e-6)
+
+
+def test_weighted_lowess_with_no_weight_left_after_tricube(monkeypatch):
+    """Milo (v0.81.0): rows with no residual df get weight 0; a zero-weight anchor whose weighted
+    neighbours all sat at the window's edge divided by zero in the compiled loop (NaN in numpy).
+    Both now give the window's prior-weighted mean."""
+    x = np.array([0.0, 0.0, 0.0, 1.0, 1.5, 2.0])
+    y = np.array([5.0, 5.0, 5.0, 1.0, 3.0, 9.0])
+    w = np.array([0.0, 0.0, 0.0, 1.0, 1.0, 1.0])
+    with_k = eq.weighted_lowess(x, y, w, 0.3, 0.0)
+    monkeypatch.setattr(eq, "_KERNELS", {})
+    without = eq.weighted_lowess(x, y, w, 0.3, 0.0)
+    assert np.isfinite(with_k).all() and np.allclose(with_k, without)
+    assert np.allclose(with_k[:3], 1.0)  # the anchor at 0: the weighted point at its window's edge

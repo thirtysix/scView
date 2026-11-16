@@ -28,7 +28,7 @@ needs a page in this format:
 - Activity scores: ULM = decoupler; AUCell = decoupler 2.2
 - Composition: propeller-style test with robust eBayes = R limma
 - Ligand-receptor: LIANA consensus rank aggregate = liana-py 1.10
-- Milo neighbourhood DA = pertpy's pydeseq2 solver
+- Milo neighbourhood DA: neighbourhoods = pertpy 1.0.3; test = miloR's edgeR QL with TMM (core/edger_ql.py = R edgeR 4.6.3)
 - WNN = Seurat FindMultiModalNeighbors
 - RNA velocity: steady-state and stochastic = scVelo 0.3.3
 - ATAC: LSI, LinkPeaks, TSS enrichment, nucleosome signal = Signac; motif hits = motifmatchr; chromVAR

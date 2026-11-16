@@ -9,6 +9,7 @@
  * Who reads it: biologists new to single-cell analysis. Say what the thing does, when
  * it is useful and how to read it, in one to three short sentences.
  */
+import { COMPARE_HELP } from "./compare";
 import { GENES_HELP } from "./genes";
 import { MODALITIES_HELP } from "./modalities";
 import { PLOT_HELP } from "./plot";
@@ -23,6 +24,7 @@ export const HELP_GROUPS = {
   spatial: SPATIAL_HELP,
   qc: QC_HELP,
   trajectory: TRAJECTORY_HELP,
+  compare: COMPARE_HELP,
 };
 
 export const HELP: Readonly<Record<string, string>> = Object.assign({}, ...Object.values(HELP_GROUPS));

@@ -3,7 +3,9 @@
 The reference numbers in ``fixtures/milo/pertpy_milo.tsv`` come from pertpy
 1.0.3's ``Milo`` (``make_nhoods(prop=0.1, seed=0)``, ``count_nhoods``,
 ``da_nhoods(design="~donor+cond", solver="pydeseq2")``) run on ``synthetic()``
-below; ``fixtures/milo/pertpy_milo.py`` regenerates them.
+below; ``fixtures/milo/pertpy_milo.py`` regenerates them. Since v0.81.0 the test
+is miloR's (edgeR QL, core/edger_ql.py), so only the neighbourhoods and labels
+still match pertpy exactly; its DESeq2 numbers are a close check.
 """
 
 from __future__ import annotations
@@ -134,15 +136,59 @@ def test_spatial_fdr_is_weighted_bh():
 # --- the test -------------------------------------------------------------------
 
 
-def test_matches_pertpy_pydeseq2():
+def test_neighbourhoods_match_pertpy_and_the_test_its_deseq2():
+    """Clean counts (8 samples, every neighbourhood in both conditions): edgeR QL and pertpy's
+    pydeseq2 solver agree (logFC r 0.9999, at most 0.065 apart; its 65 calls among our 79)."""
     ref = pd.read_csv(FIXTURE, sep="\t")
     r = _run(synthetic())
     assert r.index_cells == ref["index_cell"].tolist()
-    assert np.allclose(r.log_fc, ref["logFC"], atol=1e-4)
-    assert np.allclose(r.pval, ref["PValue"], rtol=1e-3, atol=1e-8)
-    assert np.allclose(r.spatial_fdr, ref["SpatialFDR"], rtol=1e-3, atol=1e-8)
     assert r.labels == ref["label"].where(ref["label_fraction"] >= 0.7, "Mixed").tolist()
     assert r.formula == "~ donor + cond" and r.design == "paired"
+    assert np.corrcoef(r.log_fc, ref["logFC"])[0, 1] > 0.999
+    assert np.abs(r.log_fc - ref["logFC"]).max() < 0.1
+    ours, theirs = r.spatial_fdr < 0.1, ref["SpatialFDR"].to_numpy() < 0.1
+    assert (ours & theirs).sum() == theirs.sum() and ours.sum() <= theirs.sum() * 1.3
+
+
+def test_a_neighbourhood_of_the_tested_condition_only_goes_up():
+    """QA-7 (B3): with DESeq2, neighbourhoods with no reference cell got a negative logFC (0 -> 2
+    cells: -1.66) when the samples' sizes differed a lot. 6 v 6 samples of 30-1,200 cells: every
+    one-sided row has the sign of its counts (pydeseq2 left 104 of 1,248 such rows wrong)."""
+    bad = total = 0
+    for seed in range(4):
+        rng = np.random.default_rng(seed)
+        cond = np.array(["A"] * 6 + ["B"] * 6)
+        lib = rng.choice([30, 60, 120, 300, 600, 1200], size=12).astype(float)
+        shared = rng.negative_binomial(2, 2 / (2 + np.outer(rng.gamma(2, 0.03, 150), lib)))
+        only_b = rng.negative_binomial(1, 1 / (1 + np.outer(rng.gamma(1, 0.004, 80), lib * (cond == "B"))))
+        only_a = rng.negative_binomial(1, 1 / (1 + np.outer(rng.gamma(1, 0.004, 40), lib * (cond == "A"))))
+        C = np.vstack([shared, only_b, only_a])
+        C = C[C.sum(axis=1) > 0]
+        lfc, p = milo._glm_ql(C, cond, ["A", "B"], None, [])
+        ref0, test0 = C[:, :6].sum(axis=1) == 0, C[:, 6:].sum(axis=1) == 0
+        bad += int((ref0 & (lfc <= 0)).sum() + (test0 & (lfc >= 0)).sum())
+        total += int(ref0.sum() + test0.sum())
+        assert np.isfinite(lfc).all() and np.isfinite(p).all()
+    assert total > 300 and bad == 0
+    # The QA rows themselves: 0 -> 2 and 0 -> 1 cells among shared neighbourhoods
+    rng = np.random.default_rng(7)
+    lib = np.array([167, 417, 424, 278, 649, 343, 112, 505, 1032, 534, 986, 587], float)
+    C = np.vstack([rng.poisson(np.outer(rng.gamma(2, 0.03, 200), lib)),
+                   [0] * 6 + [0, 0, 1, 0, 0, 1], [0] * 6 + [0, 1, 0, 0, 0, 0]])
+    lfc, _p = milo._glm_ql(C, np.array(["HC"] * 6 + ["UC"] * 6), ["HC", "UC"], None, [])
+    assert (lfc[-2:] > 0).all()
+
+
+def test_label_medians_follow_one_sided_neighbourhoods():
+    """A type found only in B (none of A's samples has a cell): its label summary goes up."""
+    a = synthetic(shift=1.0)
+    t0_in_a = ((a.obs["type"] == "t0") & (a.obs["cond"] == "A")).to_numpy()
+    a.obs["cond"] = a.obs["cond"].astype(str)
+    a.obs.loc[t0_in_a, "cond"] = "other"  # t0 cells of A are left out of the counts
+    a.obs["cond"] = a.obs["cond"].astype("category")
+    r = _run(a)
+    by = {x["label"]: x for x in r.label_summary()}
+    assert by["t0"]["median_logfc"] > 1 and by["t0"]["n_down"] == 0
 
 
 def test_a_planted_shift_is_found_and_nothing_else():
@@ -289,13 +335,13 @@ async def test_run_streams_off_the_loop_and_reaches_the_copilot(
 
     _dataset(Path(dataset_manager.data_dir), synthetic())
     threads: list[threading.Thread] = []
-    real = milo._deseq2
+    real = milo._glm_ql
 
     def spy(*args, **kwargs):
         threads.append(threading.current_thread())
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(milo, "_deseq2", spy)
+    monkeypatch.setattr(milo, "_glm_ql", spy)
     r = await client.post("/api/v1/datasets/ds/milo/cells", json={"nhoods": [0]})
     assert r.status_code == 404
     r = await client.post("/api/v1/datasets/ds/milo/run",
@@ -310,6 +356,7 @@ async def test_run_streams_off_the_loop_and_reaches_the_copilot(
     result = next(d for e, d in events if e == "result")
     assert result["n_significant"] > 0 and result["label_key"] == "type"
     assert "X_umap" in result["layouts"]
+    assert len(result["result_id"]) == 32 and result["own_graph"] is False
     assert len(threads) == 1 and threads[0] is not MAIN
 
     r = await client.post("/api/v1/datasets/ds/milo/cells", json={"nhoods": [0, 1]})
@@ -422,3 +469,62 @@ def test_grounding_drops_a_result_whose_columns_went():
     assert detail and "neighbourhoods" in detail
     del a.obs["type"]
     assert milo.grounding_lines(ad_) == ([], None)
+
+
+# --- v0.81.0: k / n_pcs, a result per comparison ------------------------------------
+
+
+def test_own_graph_with_k_and_n_pcs_leaves_the_dataset_alone():
+    """QA-7 (F5): the paper's Milo settings (k 20, 30 PCs) needed a pca + neighbors rerun."""
+    a = synthetic(k=10)
+    before = a.obsp["connectivities"].copy()
+    p = milo.plan(a, "cond", "donor", conditions=["A", "B"], k=30, n_pcs=6)
+    assert p.own_graph and p.n_neighbors == 30 and p.representation == "X_pca, 6 PCs"
+    r = milo.run(a, p, label_key="type")
+    assert r.n_neighbors == 30 and r.own_graph and r.n_pcs == 6 and r.representation == "X_pca, 6 PCs"
+    assert (a.obsp["connectivities"] != before).nnz == 0  # the dataset's graph is unchanged
+    assert any("k-NN graph Milo built for this run (k 30" in n for n in r.notes)
+    small = milo.run(a, milo.plan(a, "cond", "donor", conditions=["A", "B"]), label_key="type")
+    assert r.sizes.mean() > 2 * small.sizes.mean()  # k 30 vs the dataset's k 10
+    assert "own graph" in milo.run_settings(r) and "own graph" not in milo.run_settings(small)
+    # k alone: the graph's own representation and dimensions
+    p = milo.plan(a, "cond", "donor", k=10)
+    assert p.representation == "X_pca" and p.n_pcs is None
+    # The same k and all PCs give the neighbours step's graph (sc.pp.neighbors, umap): same nhoods
+    conn, dist, rep, X = milo.own_graph(a, 12, None)
+    assert rep == "X_pca" and X.shape[1] == 10 and conn.shape == (a.n_obs, a.n_obs)
+    with pytest.raises(MiloError, match="k must be between"):
+        milo.plan(a, "cond", "donor", k=2)
+    with pytest.raises(MiloError, match="n_pcs must be between 2 and 10"):
+        milo.plan(a, "cond", "donor", n_pcs=11)
+    no_graph = a.copy()
+    del no_graph.obsp["connectivities"]
+    assert milo.plan(no_graph, "cond", "donor", k=15).own_graph  # PCs are enough
+
+
+async def test_each_comparison_is_its_own_stored_result(client, dataset_manager):
+    """QA-7 (F5): UC vs HC marked CD vs HC superseded, and the reply had no result_id."""
+    from scview.core import results_store
+
+    a = synthetic()
+    a.obs["cond3"] = a.obs["cond"].astype(str)
+    a.obs.loc[(a.obs["cond"] == "B").to_numpy() & (a.obs["donor"].isin(["d1", "d2"])).to_numpy(), "cond3"] = "C"
+    a.obs["cond3"] = a.obs["cond3"].astype("category")
+    _dataset(Path(dataset_manager.data_dir), a)
+    ids = []
+    for pair in (["A", "B"], ["A", "C"], ["A", "B"]):
+        r = await client.post("/api/v1/datasets/ds/milo/run", json={
+            "condition_key": "cond3", "sample_key": "donor", "conditions": pair, "paired": False})
+        assert r.status_code == 200
+        ids.append(next(d for e, d in _events(r.text) if e == "result")["result_id"])
+    results_store.flush()
+    by_id = {e["id"]: e for e in results_store.entries("ds", "milo")}
+    assert by_id[ids[1]]["status"] == "primary"  # A vs C is not superseded by A vs B
+    assert by_id[ids[2]]["status"] == "primary" and by_id[ids[0]]["status"] == "superseded"
+    assert "B vs A" in by_id[ids[0]]["label"] and "C vs A" in by_id[ids[1]]["label"]
+    r = await client.post("/api/v1/datasets/ds/milo/run", json={
+        "condition_key": "cond3", "sample_key": "donor", "conditions": ["A", "B"], "paired": False,
+        "k": 20, "n_pcs": 5})
+    res = next(d for e, d in _events(r.text) if e == "result")
+    assert res["n_neighbors"] == 20 and res["n_pcs"] == 5 and res["own_graph"] is True
+    assert [d["step"] for e, d in _events(r.text) if e == "progress"][0] == "graph"

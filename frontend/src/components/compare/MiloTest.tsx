@@ -4,6 +4,7 @@ import { getDataset } from "@/api/datasets";
 import { miloCells, planMilo, runMilo, type MiloPlan, type MiloRequest, type MiloResult } from "@/api/milo";
 import type { DatasetInfo } from "@/api/types";
 import { MiloBeeswarm, MiloNhoodGraph } from "@/components/compare/MiloPlots";
+import { Help } from "@/components/common/Help";
 import { conditionColumns, suggestConditionColumn } from "@/lib/composition";
 import { downloadCsv } from "@/lib/csv";
 import { replicateColumns } from "@/lib/de";
@@ -30,6 +31,8 @@ const selectCls = "rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-
 const btnCls =
   "flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 hover:text-primary";
 const PROPS = [0.05, 0.1, 0.2] as const;
+const KS = [10, 15, 20, 30, 50] as const;
+const PCS = [10, 20, 30, 50] as const;
 
 /**
  * Milo (Dann et al. 2022): differential abundance in overlapping neighbourhoods
@@ -53,6 +56,8 @@ export function MiloTest({ datasetId, info, defaultCondition, defaultGroup, defa
   const [covariate, setCovariate] = useState("");
   const [pairing, setPairing] = useState<"auto" | "paired" | "unpaired">("auto");
   const [prop, setProp] = useState<number | null>(null); // null = the backend's default
+  const [k, setK] = useState<number | null>(null); // null = the dataset's own graph
+  const [nPcs, setNPcs] = useState<number | null>(null); // null = all the graph's PCs
   const [plan, setPlan] = useState<MiloPlan | null>(null);
   const [planError, setPlanError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
@@ -131,8 +136,10 @@ export function MiloTest({ datasetId, info, defaultCondition, defaultGroup, defa
       ...(pairing !== "auto" ? { paired: pairing === "paired" } : {}),
       ...(labelKey ? { label_key: labelKey } : {}),
       ...(prop != null ? { prop } : {}),
+      ...(k != null ? { k } : {}),
+      ...(nPcs != null ? { n_pcs: nPcs } : {}),
     };
-  }, [conditionKey, sampleKey, reference, tested, covariate, pairing, labelKey, prop]);
+  }, [conditionKey, sampleKey, reference, tested, covariate, pairing, labelKey, prop, k, nPcs]);
 
   // The plan (design, samples, time estimate) follows every change; cheap.
   useEffect(() => {
@@ -231,7 +238,8 @@ export function MiloTest({ datasetId, info, defaultCondition, defaultGroup, defa
   const down = result ? shifted(rows, "down") : [];
   const stale = result && plan && (result.condition_key !== plan.condition_key ||
     result.conditions.join() !== plan.conditions.join() || result.sample_key !== plan.sample_key ||
-    result.formula !== plan.formula || result.label_key !== (labelKey || null));
+    result.formula !== plan.formula || result.label_key !== (labelKey || null) ||
+    result.representation !== plan.representation || (result.n_neighbors ?? null) !== (plan.n_neighbors ?? null));
 
   return (
     <div className="space-y-4">
@@ -315,6 +323,22 @@ export function MiloTest({ datasetId, info, defaultCondition, defaultGroup, defa
               {PROPS.map((p) => <option key={p} value={p}>{Math.round(p * 100)}%</option>)}
             </select>
           </label>
+          <label className="text-xs font-medium text-slate-500">
+            <span className="mb-1 block"><Help id="milo.graphK">Graph k</Help></span>
+            <select aria-label="Milo graph k" value={k == null ? "" : String(k)}
+              onChange={(e) => setK(e.target.value ? Number(e.target.value) : null)} className={selectCls}>
+              <option value="">{plan?.n_neighbors && k == null && nPcs == null ? `Dataset's (${plan.n_neighbors})` : "Dataset's"}</option>
+              {KS.map((v) => <option key={v} value={v}>{v}</option>)}
+            </select>
+          </label>
+          <label className="text-xs font-medium text-slate-500">
+            <span className="mb-1 block"><Help id="milo.graphPcs">PCs</Help></span>
+            <select aria-label="Milo graph PCs" value={nPcs == null ? "" : String(nPcs)}
+              onChange={(e) => setNPcs(e.target.value ? Number(e.target.value) : null)} className={selectCls}>
+              <option value="">All</option>
+              {PCS.map((v) => <option key={v} value={v}>{v}</option>)}
+            </select>
+          </label>
           <button
             onClick={run}
             disabled={!plan || running}
@@ -329,7 +353,8 @@ export function MiloTest({ datasetId, info, defaultCondition, defaultGroup, defa
             {plan.n_cells.toLocaleString()} cells in{" "}
             {plan.conditions.map((k) => `${plan.n_samples[k]} ${k}`).join(" and ")} samples of{" "}
             {prettyObsLabel(plan.sample_key)}; {plan.formula} ({plan.design}). Up to{" "}
-            {plan.n_nhoods_estimate.toLocaleString()} neighbourhoods on the {plan.representation} graph,
+            {plan.n_nhoods_estimate.toLocaleString()} neighbourhoods on the {plan.representation} graph
+            {plan.n_neighbors ? ` (k ${plan.n_neighbors}${plan.own_graph ? ", built for this run" : ""})` : ""},
             about {Math.max(1, Math.round(plan.estimate_seconds))} s.
           </p>
         )}
@@ -428,7 +453,7 @@ export function MiloTest({ datasetId, info, defaultCondition, defaultGroup, defa
                     <th className="px-3 py-2 text-right font-medium" title={`Of those, significant (spatial FDR < ${result.alpha}) with log2FC < 0: less abundant in ${result.conditions[1]}`}>
                       Down
                     </th>
-                    <th className="px-3 py-2 text-right font-medium" title={`Median DESeq2 log2 fold change (${result.conditions[1]} vs ${result.conditions[0]}) over all of the label's neighbourhoods, significant or not`}>
+                    <th className="px-3 py-2 text-right font-medium" title={`Median log2 fold change (edgeR, ${result.conditions[1]} vs ${result.conditions[0]}) over all of the label's neighbourhoods, significant or not`}>
                       Median log2FC
                     </th>
                   </tr>
