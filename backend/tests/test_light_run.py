@@ -288,6 +288,6 @@ def test_every_large_dataset_refusal_is_named_in_what_a_conversion_turns_off():
     assert large_run.REFUSED_BATCH_METHODS.keys() <= {"scanorama", "bbknn"}
 
 
-def test_the_control_allows_large_mode_unless_told_not_to():
-    assert RunControl().allow_large is True
-    assert RunControl(allow_large=False).allow_large is False
+def test_the_control_refuses_large_mode_unless_told_to():
+    assert RunControl().allow_large is False  # v0.81: no conversion without a yes
+    assert RunControl(allow_large=True).allow_large is True

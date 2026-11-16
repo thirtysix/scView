@@ -607,7 +607,8 @@ async def test_auto_runs_in_large_mode_through_the_endpoints_and_reopens(
     monkeypatch.setattr(working_copy, "in_memory", lambda a: reads.append(a) or a.to_memory())
     steps = STEPS[:9] + ["neighbors", "clustering", "marker_genes"]
     r = await client.post(f"{API}/datasets/{did}/{path}",
-                          json={"steps": steps, "params": {**PARAMS, "marker_columns": []}})
+                          json={"steps": steps, "params": {**PARAMS, "marker_columns": []},
+                                "allow_large_mode": True})
     assert r.status_code == 200, r.text
     if path.endswith("stream"):
         events = [line for line in r.text.splitlines() if line.startswith("data: ")]
@@ -639,7 +640,8 @@ async def test_the_cached_copy_is_let_go_before_a_large_run(client, dataset_mana
 
     monkeypatch.setattr(large_run, "run", spy)
     r = await client.post(f"{API}/datasets/{did}/assessment/run",
-                          json={"steps": ["qc_metrics"], "params": {"chunked": "auto"}})
+                          json={"steps": ["qc_metrics"], "params": {"chunked": "auto"},
+                                "allow_large_mode": True})
     assert r.status_code == 200, r.text
     assert alive == [False]
 

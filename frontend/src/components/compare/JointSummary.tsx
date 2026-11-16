@@ -8,6 +8,7 @@ import { useSettingsStore } from "@/stores/settingsStore";
 import { CompositionTest } from "./CompositionTest";
 import { BATCH_METHOD_LABELS, type CompareMethod } from "@/api/batchCompare";
 import { streamEvents } from "@/api/clustering";
+import { withConversionConsent } from "@/api/pipelineRun";
 import { BatchMethodCompare } from "@/components/common/BatchMethodCompare";
 
 /** A score as a share of the ideal, for bar widths: 0 = datasets apart, 1 = ideal. */
@@ -137,14 +138,17 @@ function JointMethodChoice({
     setError(null);
     setMessage(null);
     try {
-      await streamEvents(
-        `/datasets/${datasetId}/assessment/run-stream`,
-        {
-          steps: applySteps(method),
-          params: method === "none" ? {} : { batch_key: batchKey, batch_method: method },
-        },
-        () => undefined,
-        "The run",
+      await withConversionConsent((allowLarge) =>
+        streamEvents(
+          `/datasets/${datasetId}/assessment/run-stream`,
+          {
+            steps: applySteps(method),
+            params: method === "none" ? {} : { batch_key: batchKey, batch_method: method },
+            allow_large_mode: allowLarge,
+          },
+          () => undefined,
+          "The run",
+        ),
       );
       setMessage(`Re-ran the joint graph, clusters, UMAP and markers with ${BATCH_METHOD_LABELS[method]}.`);
       onApplied();

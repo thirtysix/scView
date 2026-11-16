@@ -814,8 +814,33 @@ async def _run_result(job: jobs.Job) -> dict[str, Any]:
     return out
 
 
+# Every tool that starts a run says whether it may convert the dataset to large-dataset layout
+# (``_start_run``'s ``allow_large_mode`` has no default): such a tool takes this argument,
+# default False, and checks it first (``_refuse_conversion``). QA round 7: CellTypist on a
+# 46,700-cell dataset converted it for good, unasked, when only run_pipeline checked.
+AllowLargeMode = Annotated[bool, Field(description=(
+    "Let a run that does not fit in memory convert the dataset to large-dataset layout for good "
+    "(cell-level DE and other whole-matrix tools are then refused on it; pseudobulk DE stays; "
+    ".raw leaves its layers). Default false: such a run is refused, naming what it would turn off."))]
+
+
+async def _refuse_conversion(dataset_id: str, steps: list[str], p: dict[str, Any]) -> None:
+    """A ToolError when the run would convert the dataset (preflight, by the run's own rule:
+    ``large_run.mode_rule``), naming what that turns off and how to allow it."""
+    mode = (await _get(f"{_ds(dataset_id)}/preflight", **_preflight_query(steps, p))).get("mode") or {}
+    if mode.get("converts"):
+        skip = (mode.get("without_doublets") or {}).get("text")
+        raise ToolError(
+            f"Not run: {mode.get('reason')} That converts the dataset for good: "
+            f"{mode.get('layout_after')}; no longer available on it: "
+            f"{'; '.join(mode.get('turns_off') or [])}. "
+            + (f"{skip} Leave doublet_detection out, or " if skip else "")
+            + ("run" if skip else "Run") + " cell-level DE and the other tools first, free "
+            "memory, or pass allow_large_mode=true to convert it.")
+
+
 async def _start_run(dataset_id: str, steps: list[str], p: dict[str, Any], kind: str,
-                     finish: Callable = _run_result, allow_large_mode: bool = True) -> jobs.Job:
+                     finish: Callable = _run_result, *, allow_large_mode: bool) -> jobs.Job:
     if any(j.dataset_id == dataset_id for j in jobs.running()):
         busy = next(j for j in jobs.running() if j.dataset_id == dataset_id)
         raise ToolError(f"Job {busy.id} ({busy.kind}) is still running on this dataset; "
@@ -831,11 +856,7 @@ async def _start_run(dataset_id: str, steps: list[str], p: dict[str, Any], kind:
 
 @tool(WRITE)
 async def run_pipeline(dataset_id: DatasetId, steps: Steps, params: Params = None,
-                       allow_large_mode: Annotated[bool, Field(description=(
-                           "Let a run that does not fit in memory convert the dataset to "
-                           "large-dataset layout for good (cell-level DE and other whole-matrix tools "
-                           "are then refused on it; pseudobulk DE stays; .raw leaves its layers). Default false: such a "
-                           "run is refused, naming what it would turn off."))] = False) -> str:
+                       allow_large_mode: AllowLargeMode = False) -> str:
     """Run pipeline steps on a dataset and save the result (a job: returns job_id at once;
     follow it with job_status, stop it with cancel_job). Check preflight first on a big dataset.
     Steps that need no expression matrix (neighbors, clustering, embeddings on the stored PCA)
@@ -846,16 +867,7 @@ async def run_pipeline(dataset_id: DatasetId, steps: Steps, params: Params = Non
     if "cell_type_annotation" in steps:
         await _check_annotation(p)
     if not allow_large_mode:
-        mode = (await _get(f"{_ds(dataset_id)}/preflight", **_preflight_query(steps, p))).get("mode") or {}
-        if mode.get("converts"):
-            skip = (mode.get("without_doublets") or {}).get("text")
-            raise ToolError(
-                f"Not run: {mode.get('reason')} That converts the dataset for good: "
-                f"{mode.get('layout_after')}; no longer available on it: "
-                f"{'; '.join(mode.get('turns_off') or [])}. "
-                + (f"{skip} Leave doublet_detection out, or " if skip else "")
-                + ("run" if skip else "Run") + " cell-level DE and the other tools first, free "
-                "memory, or pass allow_large_mode=true to convert it.")
+        await _refuse_conversion(dataset_id, steps, p)
     job = await _start_run(dataset_id, steps, p, "pipeline", allow_large_mode=allow_large_mode)
     return dumps({"job_id": job.id, "status": job.status, "dataset_id": dataset_id, "steps": steps,
                   "params": p, "next": "job_status(job_id, wait_seconds=50) until complete"})
@@ -985,13 +997,18 @@ async def annotate_celltypist(
     overwrite: Annotated[bool, Field(description=(
         "Replace target_column when it is a column that came with the data (an author or curated "
         "annotation); without it such a column is refused."))] = False,
+    allow_large_mode: AllowLargeMode = False,
 ) -> str:
     """Label cells with a CellTypist reference model (the pipeline's cell_type_annotation step;
     a job). The result names the labels' confidence and the model's gene overlap. The model is
-    downloaded on first use."""
+    downloaded on first use. Like run_pipeline, a run that would convert the dataset to
+    large-dataset layout is refused unless allow_large_mode is true."""
     model = await _known_celltypist_model(model)
     p = {"annotation_method": "celltypist", "celltypist_model": model, "annotation_groupby": groupby,
          "annotation_target": target_column, "annotation_overwrite": overwrite}
+    steps = ["cell_type_annotation"]
+    if not allow_large_mode:
+        await _refuse_conversion(dataset_id, steps, p)
 
     async def finish(job: jobs.Job) -> dict[str, Any]:
         out = _pipeline_result(job)
@@ -1002,7 +1019,7 @@ async def annotate_celltypist(
             out["celltypist_summary_error"] = e.detail
         return out
 
-    job = await _start_run(dataset_id, ["cell_type_annotation"], p, "celltypist", finish)
+    job = await _start_run(dataset_id, steps, p, "celltypist", finish, allow_large_mode=allow_large_mode)
     return dumps({"job_id": job.id, "status": job.status, "dataset_id": dataset_id,
                   "target_column": target_column, "next": "job_status(job_id, wait_seconds=50)"})
 

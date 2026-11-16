@@ -23,6 +23,7 @@ import {
   type ChatSource,
   type ViewContext,
 } from "@/api/assistant";
+import { withConversionConsent } from "@/api/pipelineRun";
 import { MarkdownLite } from "@/components/assistant/MarkdownLite";
 import { SelectionChip } from "@/components/assistant/SelectionChip";
 import { selectionContext } from "@/lib/copilotSelection";
@@ -391,7 +392,10 @@ export function AssistantChat({ surface = "drawer" }: { surface?: "drawer" | "pa
         ),
       );
       try {
-        const res = await runPipelineSteps(datasetId, [action.step], action.params ?? {});
+        const step = action.step;
+        const res = await withConversionConsent((allowLarge) =>
+          runPipelineSteps(datasetId, [step], action.params ?? {}, allowLarge),
+        );
         const updated = await getDataset(datasetId);
         useDatasetStore.getState().setCurrentDataset(updated);
         const err =
@@ -445,7 +449,8 @@ export function AssistantChat({ surface = "drawer" }: { surface?: "drawer" | "pa
         const res = await runPlan(
           plan.steps,
           {
-            runStep: (step, params) => runStepStreamed(datasetId, step, params),
+            runStep: (step, params) =>
+              withConversionConsent((allowLarge) => runStepStreamed(datasetId, step, params, allowLarge)),
             getDataset: () => getDataset(datasetId),
             enrichmentGroups: (col) => fetchEnrichmentGroups(datasetId, col),
             applyView: (a) => sameDataset() && applyViewAction(a),

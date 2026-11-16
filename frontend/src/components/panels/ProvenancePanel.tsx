@@ -18,6 +18,7 @@ import {
 } from "@/api/provenance";
 import { getDataset } from "@/api/datasets";
 import { keptRerunParams, lastRunText, paramChips } from "@/lib/provenanceParams";
+import { withConversionConsent } from "@/api/pipelineRun";
 import { RecipeViewer } from "@/components/panels/RecipeViewer";
 import { ResultsList } from "@/components/panels/ResultsList";
 import { useDatasetStore } from "@/stores/datasetStore";
@@ -109,7 +110,9 @@ export function ProvenancePanel() {
           ...keptRerunParams(rec),
           ...(cfg ? { [cfg.key]: Number(paramValue) } : {}),
         };
-        const { result } = await rerunStep(dataset.id, step, params);
+        const { result } = await withConversionConsent((allowLarge) =>
+          rerunStep(dataset.id, step, params, allowLarge),
+        );
         await load(dataset.id);
         setCurrentDataset(await getDataset(dataset.id)); // propagate new state to other panels
         setEditingIdx(null);
