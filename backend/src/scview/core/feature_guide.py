@@ -109,7 +109,7 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
      "control features; checked against the count matrix"),
     ("Unified View > Markers", "", "marker table per group"),
     ("Unified View > Expression", "", "gene overlay, several genes, gene vs gene"),
-    ("Unified View > Protein", "CITE-seq, CLR/DSB", "CITE-seq proteins; CLR or DSB normalisation"),
+    ("Unified View > Protein", "CITE-seq, CLR or DSB", "CITE-seq proteins; CLR or DSB normalisation"),
     ("Unified View > Protein > Joint RNA + protein (WNN)", "",
      "Seurat's weighted nearest neighbours: per-cell RNA / protein weights, a joint graph, WNN and "
      "protein UMAPs (in the embedding menu), WNN clusters"),
