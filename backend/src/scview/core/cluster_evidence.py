@@ -65,6 +65,7 @@ FLAG_WORDS = {
     "low_content": "low RNA for its identity",
     "noncoding_markers": "non-coding markers",
     "sex_markers": "sex genes lead its markers",
+    "one_donor": "mostly one donor",
 }
 _DAMAGE = ("low_quality", "high_mito")
 
@@ -204,8 +205,13 @@ def content_line(row: cluster_qc.ClusterQC, rows: dict[str, cluster_qc.ClusterQC
 
 
 def makeup_line(row: cluster_qc.ClusterQC) -> Line | None:
-    """``sex_markers`` / ``noncoding_markers``: what leads the marker list, in words."""
+    """``sex_markers`` / ``noncoding_markers``: what leads the marker list; ``one_donor``: whose
+    cells it holds (QA-6 and QA-7: a one-patient state read as a type of the disease)."""
     parts = []
+    if "one_donor" in row.flags and row.top_donor and row.top_donor_share is not None:
+        parts.append(f"Mostly one donor: {_share(row.top_donor_share)} of its cells are from {row.top_donor}, who "
+                     f"holds {_share(row.top_donor_share_of_data or 0.0)} of all cells; it may be that donor's "
+                     "own state rather than a type or a state of the condition.")
     if "sex_markers" in row.flags and row.sex_markers:
         parts.append(f"Sex genes lead its markers ({', '.join(row.sex_markers)}): it may be one sex's cells "
                      "(or one donor's) of a type split by sex, not a type of its own.")

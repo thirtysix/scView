@@ -343,3 +343,19 @@ def test_a_recorded_unchecked_damaged_cluster_says_the_ai_was_asked(markers):
     assert _text(by["damaged"], "decision") == (
         "Damaged by cluster QC, but the marker databases were not available to read its type, so the AI was "
         "asked and named it Colonocytes in 'anno'.")
+
+
+def test_a_cluster_mostly_from_one_donor_says_whose(markers):
+    """QA-7 (P1): cluster_evidence said nothing about donor make-up (M1 CXCL5 cluster 81% CD_5)."""
+    report = _report()
+    row = report.clusters[1]
+    row.flags = ["one_donor"]
+    row.top_donor, row.top_donor_share, row.top_donor_share_of_data = "CD_5", 0.81, 0.17
+    by = _by(CE.build(_adata(), "cell_type", report, _FakeDB(), _index()))
+    line = next(ln for ln in by["junk"].lines if ln.kind == "makeup")
+    assert line.fired and line.text == ("Mostly one donor: 81% of its cells are from CD_5, who holds 17% of all "
+                                        "cells; it may be that donor's own state rather than a type or a state "
+                                        "of the condition.")
+    assert "mostly one donor" in _text(by["junk"], "qc")
+    lines, _ = CE.grounding_block(CE.build(_adata(), "cell_type", report, _FakeDB(), _index()))
+    assert any("Mostly one donor: 81%" in ln for ln in lines)

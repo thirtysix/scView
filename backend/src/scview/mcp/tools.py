@@ -1187,7 +1187,8 @@ async def cluster_evidence(
     """Why each group of a column was labelled or flagged, in plain words from scView's own rules
     (never a probability): its markers against random genes (best marker-database p vs what 1 in
     10 random lists reach), median genes and % mito against the typical cluster with the cluster
-    QC flags that fired, a doublet-like cluster's two parents, database types as shares of the
+    QC flags that fired, a doublet-like cluster's two parents, a cluster mostly from one donor
+    (80%+ of its cells; the donor and their share of all cells), database types as shares of the
     evidence (named groupings only), and the label scView gave ('Low-quality cells') or would give
     itself in an AI annotation, or the note the AI got. Markers must be computed first; the
     marker lines need the marker databases (marker_db_check downloads them)."""
