@@ -49,7 +49,7 @@ describe("SubsetSelectionControls", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useDatasetStore.setState({ currentDataset: dataset, currentDatasetId: "ds", availableDatasets: [] });
-    useSelectionStore.setState({ selectedCellIndices: range(120), selectionFilter: null });
+    useSelectionStore.setState({ selectedCellIndices: range(120), selectionFilter: null, selectionGroups: null });
     api.listDatasets.mockResolvedValue([]);
   });
 
@@ -100,6 +100,19 @@ describe("SubsetSelectionControls", () => {
     expect(api.makeSubset.mock.calls[0]![1]).toEqual({ filter });
     expect(screen.getByRole("button", { name: "Make dataset" })).toBeDisabled();
     expect(screen.getByRole("textbox")).toHaveValue("pbmc - 60 filtered cells");
+  });
+
+  it("records a group pick as groups and names the subset after them", async () => {
+    useSelectionStore.getState().setGroupSelection(range(120), "author_fine", ["Neutrophil 1", "Neutrophil 2"]);
+    api.makeSubset.mockResolvedValue({ ...plan, steps_note: "Left out: filtering. The parent was filtered by scView." });
+    render(<SubsetSelectionControls />);
+    fireEvent.click(screen.getByRole("button", { name: /New dataset/ }));
+    await waitFor(() => expect(screen.getByTestId("subset-plan")).toHaveTextContent("Left out: filtering"));
+    expect(api.makeSubset.mock.calls[0]![1]).toEqual({
+      groups: { column: "author_fine", values: ["Neutrophil 1", "Neutrophil 2"] },
+    });
+    expect(screen.getByRole("textbox", { name: "Name" })).toHaveValue("pbmc - Neutrophil 1, Neutrophil 2");
+    expect(screen.getByRole("dialog")).toHaveTextContent("Chosen as author_fine: Neutrophil 1, Neutrophil 2");
   });
 
   it("says too few cells without asking the server", () => {

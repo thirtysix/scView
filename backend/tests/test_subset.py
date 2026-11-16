@@ -346,7 +346,9 @@ async def test_replay_script_makes_the_same_subset_from_the_parent(client, tmp_d
     (step,) = replay_script.describe(sub)
     assert step["status"] == replay_script.EXACT
     script = replay_script.build_script(sub, dataset_id="x", dataset_name="pbmc - sub")
-    assert "subset_of_parent(adata, SUBSET_CELLS)" in script and "G15 > 2" in script
+    assert "subset_of_parent(adata, SUBSET_CELLS, columns=" in script and "G15 > 2" in script
+    assert "INPUT = sys.argv[1] if len(sys.argv) > 1 else 'scview_pbmc.h5ad'" in script
+    assert "/api/v1/datasets/p1/export/h5ad" in script
     f = tmp_path / "replay.py"
     f.write_text(script)
     out = tmp_path / "out.h5ad"
@@ -374,3 +376,136 @@ def test_estimate_scales_with_the_cells_chosen(tmp_path):
     half, whole = subset.read_need(str(p), 90, 180), subset.read_need(str(p), 180, 180)
     assert subset.FIXED_BYTES < half < whole
     assert subset.read_need(None, 1, 2) == 0
+
+
+def _processed_parent() -> ad.AnnData:
+    """_parent() as a pipeline run leaves it: QC and doublet columns, variable genes and the
+    scaling's mean/std in var, filtering and doublet detection recorded, a hand-label column."""
+    import scanpy as sc
+
+    from scview.core.user_labels import USER_COLUMNS_KEY
+
+    a = _parent()
+    q = ad.AnnData(a.layers["counts"].copy(), obs=pd.DataFrame(index=a.obs_names), var=a.var.copy())
+    q.var["mt"] = False
+    sc.pp.calculate_qc_metrics(q, qc_vars=["mt"], percent_top=None, log1p=False, inplace=True)
+    for c in q.obs.columns:
+        a.obs[c] = q.obs[c]
+    a.obs["doublet_score"] = np.linspace(0, 0.5, a.n_obs)
+    a.obs["predicted_doublet"] = a.obs["doublet_score"] > 0.45
+    a.obs["author_fine"] = pd.Categorical(np.where(a.obs["cell_type"] == "T", "T naive", "Other"))
+    a.uns[USER_COLUMNS_KEY] = json.dumps(["author_fine"])
+    for c, v in (("highly_variable", np.arange(a.n_vars) < 20), ("means", 1.0), ("mean", 0.5), ("std", 1.0),
+                 ("n_cells_by_counts", 3), ("gene_ids", [f"ENSG{i}" for i in range(a.n_vars)])):
+        a.var[c] = v
+    provenance.record_step(a, step="doublet_detection", tool="test")
+    provenance.record_step(a, step="filtering", tool="test", params={"qc_threshold_mode": "mad"})
+    return a
+
+
+@pytest.mark.asyncio
+async def test_a_processed_parent_gives_a_subset_that_assesses_as_unprocessed(client, tmp_data_dir):
+    import uuid
+
+    from scview.core import assessor
+
+    _add(tmp_data_dir, "p1", "pbmc", _processed_parent())
+    r = await client.post(f"{API}/datasets/p1/subset", json={"groups": {"column": "cell_type", "values": ["T", "B"]}})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert str(uuid.UUID(d["dataset_id"])) == d["dataset_id"]  # the dashed form other ids have
+    assert "filtering" not in d["steps"] and "doublet_detection" not in d["steps"]
+    assert {"qc_metrics", "highly_variable_genes", "pca", "neighbors", "clustering", "embeddings"} <= set(d["steps"])
+    assert "parent was filtered by scView" in d["steps_note"] and "low-RNA" in d["steps_note"]
+    assert "highly_variable_genes" in d["next"] and "filtering" not in d["next"].split("Left out")[0]
+    sub = _new(tmp_data_dir, d["dataset_id"])
+    # the parent's QC and doublet values as parent_*, its per-gene results left behind
+    assert {"parent_n_genes_by_counts", "parent_total_counts", "parent_doublet_score",
+            "parent_predicted_doublet", "parent_leiden", "author_fine"} <= set(sub.obs.columns)
+    assert not {"n_genes_by_counts", "total_counts", "doublet_score", "predicted_doublet"} & set(sub.obs.columns)
+    assert list(sub.var.columns) == ["gene_ids"]
+    state = assessor.assess_preprocessing(sub)
+    for step in ("qc_metrics", "highly_variable_genes", "pca", "neighbors", "clustering", "embeddings",
+                 "marker_genes"):
+        assert getattr(state, step).done is False, step
+    assert state.filtering.done and "filtered by scView" in state.filtering.details
+    assert state.doublet_detection.done and "parent_doublet_score" in state.doublet_detection.details
+    # the step's time and memory, and the parent's own source
+    (h,) = provenance.read_provenance(sub)["history"]
+    assert h["resources"]["seconds"] >= 0 and h["params"]["parent_source"]["origin"] == "upload"
+    assert h["params"]["parent_qc"]["filtered"].startswith("The parent was filtered")
+    # the parent's hand labels stay editable
+    r = await client.post(f"{API}/datasets/{d['dataset_id']}/labels",
+                          json={"column": "author_fine", "label": "T memory", "indices": [0, 1, 2]})
+    assert r.status_code == 200, r.text
+
+
+def test_an_unfiltered_parent_keeps_filtering_in_the_run():
+    a = _parent()
+    info = subset.contents(a, None, "p1")
+    steps, note = subset.default_steps(info.parent_qc)
+    assert steps == subset.FULL_RUN and note is None
+
+
+def test_a_subset_of_a_subset_keeps_one_generation(tmp_path):
+    a = _parent()
+    keep = a.obs["cell_type"].isin(["T", "B"]).to_numpy()
+    info = subset.contents(a, None, "p1")
+    s, _ = subset.build(a, keep, [], info)
+    subset.record(s, parent={"id": "p1", "name": "p", "columns": list(a.obs.columns)},
+                  sel=subset.Selection(keep, {"mask": True}, "x"), n_parent=a.n_obs, counts_source="X", info=info)
+    s.obs["scview_leiden"] = pd.Categorical((np.arange(s.n_obs) % 3).astype(str))  # its own clusters
+    s.obsm["X_umap"] = np.zeros((s.n_obs, 2))
+    info2 = subset.contents(s, None, "s1")
+    assert info2.dropped == ["parent_leiden"] and any("grandparent" in x for x in info2.not_carried)
+    t, _ = subset.build(s, np.arange(s.n_obs) < 60, [], info2)
+    assert "parent_leiden" in t.obs and "parent_leiden_2" not in t.obs
+    assert set(t.obs["parent_leiden"].cat.categories) <= {"0", "1", "2"}  # the parent's, not the grandparent's
+
+
+@pytest.mark.asyncio
+async def test_a_filter_labelling_replays_exactly(client, tmp_data_dir, tmp_path):
+    a = _parent()
+    del a.uns["scview_provenance"]
+    path = _add(tmp_data_dir, "p1", "pbmc", a)
+    flt = {"op": "or", "layer": "", "items": [{"kind": "category", "column": "cell_type", "values": ["T"]},
+                                              {"kind": "range", "column": "score", "min": 1.5}]}
+    m = await client.post(f"{API}/datasets/p1/cells/filter", json={"filter": flt})
+    idx = np.flatnonzero(subset.decode_mask(m.json()["mask"], a.n_obs)).tolist()
+    r = await client.post(f"{API}/datasets/p1/labels", json={"column": "picked", "label": "yes", "indices": idx,
+                                                              "new_column": True, "filter": flt})
+    assert r.status_code == 200, r.text
+    # a filter that does not give these cells is not recorded (the labelling stays not replayable)
+    r = await client.post(f"{API}/datasets/p1/labels", json={"column": "picked", "label": "no", "indices": [0],
+                                                              "filter": flt})
+    assert r.status_code == 200, r.text
+    (derived,) = (tmp_data_dir / "derived" / "p1").glob("*.h5ad")
+    labelled = ad.read_h5ad(derived)
+    steps = replay_script.describe(labelled)
+    assert [s["status"] for s in steps] == [replay_script.EXACT, replay_script.NOT_REPLAYABLE]
+    script = replay_script.build_script(labelled)
+    f = tmp_path / "replay.py"
+    f.write_text(script.replace("label_by_filter(adata, 'picked', 'no'", "pass  # (label_by_filter(adata, 'picked', 'no'"))
+    out = tmp_path / "out.h5ad"
+    done = subprocess.run([sys.executable, str(f), str(path), str(out)], capture_output=True, text=True,
+                          timeout=300, cwd=tmp_path)
+    assert done.returncode == 0, done.stderr
+    rep = ad.read_h5ad(out)
+    want = labelled.obs["picked"].astype(str).replace({"no": "yes"})  # the hand label on cell 0 is not replayed
+    assert (rep.obs["picked"].astype(str).to_numpy() == want.to_numpy()).all()
+
+
+def test_replay_names_a_missing_parent_column(tmp_path):
+    a = _parent()
+    keep = a.obs["cell_type"].eq("T").to_numpy()
+    info = subset.contents(a, None, "p1")
+    sub, src = subset.build(a, keep, [], info)
+    subset.record(sub, parent={"id": "p1", "name": "p", "columns": [*a.obs.columns, "author_fine"]},
+                  sel=subset.Selection(keep, {"mask": True}, "x"), n_parent=a.n_obs, counts_source=src, info=info)
+    f = tmp_path / "replay.py"
+    f.write_text(replay_script.build_script(sub))
+    p = tmp_path / "parent.h5ad"
+    a.write_h5ad(p)
+    done = subprocess.run([sys.executable, str(f), str(p), str(tmp_path / "o.h5ad")], capture_output=True,
+                          text=True, timeout=300, cwd=tmp_path)
+    assert done.returncode != 0 and "INPUT lacks 1 column(s) the subset carried (author_fine)" in done.stderr

@@ -55,7 +55,8 @@ describe("LabelSelectionControls", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useDatasetStore.setState({ currentDataset: dataset(), currentDatasetId: "ds" });
-    useSelectionStore.setState({ selectedCellIndices: new Set([4, 2, 9]), highlightedGroup: null });
+    useSelectionStore.setState({ selectedCellIndices: new Set([4, 2, 9]), highlightedGroup: null, selectionFilter: null,
+      selectionGroups: null });
     useLabelUndoStore.setState({ stacks: {}, lastColumn: {} });
     useObsRevisionStore.setState({ revisions: {} });
     useSettingsStore.setState({ colorBy: "leiden" });
@@ -65,6 +66,22 @@ describe("LabelSelectionControls", () => {
     useSelectionStore.setState({ selectedCellIndices: null });
     const { container } = renderControls();
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it("sends the groups a selection came from, for the replay script", async () => {
+    api.listLabelColumns.mockResolvedValue({ columns: [], unassigned: "Unassigned" });
+    api.labelCells.mockResolvedValue({ column: "manual_labels", label: "Mono", n_cells: 3, created: true, previous: [] });
+    api.getDataset.mockResolvedValue(dataset());
+    useSelectionStore.getState().setGroupSelection(new Set([4, 2, 9]), "leiden", ["1"]);
+    renderControls();
+    fireEvent.click(screen.getByRole("button", { name: /Label selection/ }));
+    await waitFor(() => expect(api.listLabelColumns).toHaveBeenCalledWith("ds"));
+    fireEvent.change(screen.getByPlaceholderText(/activated T cells/), { target: { value: "Mono" } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply label" }));
+    await waitFor(() => expect(api.labelCells).toHaveBeenCalled());
+    expect(api.labelCells.mock.calls[0]![1].filter).toEqual({
+      op: "and", layer: "", items: [{ kind: "category", column: "leiden", values: ["1"] }],
+    });
   });
 
   it("labels the selection into a new column, shows it, and undoes it", async () => {

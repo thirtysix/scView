@@ -22,6 +22,9 @@ export interface SubsetResult {
   not_carried: string[];
   renamed: Record<string, string>;
   dry_run: boolean;
+  /** The run the new dataset needs; filtering and doublet detection left out on cells the parent filtered */
+  steps?: string[];
+  steps_note?: string | null;
   next: string;
 }
 

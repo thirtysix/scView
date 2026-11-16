@@ -107,7 +107,10 @@ make nothing).
 
 The new dataset holds the cells' counts (found as a joint embedding finds them: the counts
 before an ambient RNA correction, `layers['counts']`, `.raw`, `X`, else the source files),
-obs with unused categories dropped and scView's own `scview_*` columns renamed `parent_*`,
+obs with unused categories dropped and the parent's scView results (`scview_*` columns, QC
+metrics, doublet calls, cell cycle) renamed `parent_*` (one generation: a parent's own `parent_*`
+columns are left out), hand-label columns still editable, var without the parent's variable-gene
+and scaling columns,
 the parent's UMAP as `X_umap_parent`, per-cell obsm data (protein, hashtags, guides, TCR/BCR,
 spatial positions), tissue images of the sections kept, and the input files read by barcode
 (ATAC peaks and fragments, spliced/unspliced counts, outlines). Not carried: PCA, the
@@ -115,8 +118,14 @@ neighbour graph, other layouts and stored results. Its metadata carries `source:
 and `subset_of` (`id`, `name`, `how`, `n_cells`, `n_parent_cells`, `carried`, `not_carried`);
 its recipe starts with a `subset` step, which the replay script repeats from the parent.
 
+A new subset assesses as unprocessed (only steps run on it count). `steps` is the run it
+needs: without filtering and doublet detection when the parent was filtered / scored
+(`steps_note` says so; per-sample bounds within one cell type remove real cells), which Data
+Assessment follows too.
+
 **Response** (200): `dataset_id`, `name`, `n_cells`, `n_parent_cells`, `n_genes`,
-`described`, `counts_source`, `carried`, `not_carried`, `renamed`, `next`. Refused: fewer
+`described`, `counts_source`, `carried`, `not_carried`, `renamed`, `steps`, `steps_note`,
+`resources` (seconds, peak_gb), `next`. Refused: fewer
 than 50 cells or every cell (400), an unknown column, group or gene (404), a mask over
 another number of cells (400), a large dataset (422).
 

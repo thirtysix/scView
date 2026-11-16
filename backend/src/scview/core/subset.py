@@ -91,6 +91,20 @@ _RESULT_OBSM = {
 }
 # obsm entries remade from the carried ones when the subset is opened (protein.adopt_obsm).
 _REMADE_OBSM = ("protein_clr",)
+# The pipeline's per-cell results a run on the subset computes again (QC metrics, doublet calls,
+# cell cycle, dissociation stress): the parent's values are kept as parent_*, so a new subset
+# never looks as if its own QC or doublet detection had run.
+PIPELINE_OBS = ("doublet_score", "predicted_doublet", "predicted_doublet_scrublet", "doublet_score_classifier",
+                "predicted_doublet_classifier", "capture_channel", "S_score", "G2M_score", "phase",
+                "cc_difference", "dissociation_stress_score")
+PIPELINE_OBS_PATTERN = r"^(log1p_)?(n_genes_by_counts|total_counts(_.+)?|pct_counts_.+)$"
+# The pipeline's per-gene results, computed on the parent's cells: left behind (a subset's own
+# variable genes are its own; the parent's made a run skip that step).
+PIPELINE_VAR = ("highly_variable", "means", "dispersions", "dispersions_norm", "variances",
+                "residual_variances", "highly_variable_rank", "highly_variable_nbatches",
+                "highly_variable_intersection", "mean", "std", "n_cells", "mt", "n_cells_by_counts",
+                "mean_counts", "pct_dropout_by_counts", "total_counts", "log1p_mean_counts",
+                "log1p_total_counts", "velocity_gene", "velocity_gamma")
 # uns entries describing a modality's input (where it came from, its panel), carried as they are.
 _INPUT_UNS = ("scview_spatial", "scview_protein", "scview_hashing", "scview_vdj", "scview_crispr",
               "scview_atac", "scview_seq_metrics", "scview_ambient_soup")
@@ -248,22 +262,29 @@ def default_name(parent_name: str, sel: Selection) -> str:
 
 
 def _parent_name(column: str, taken: set[str]) -> str:
-    base = PARENT_PREFIX + column[len("scview_"):]
+    base = PARENT_PREFIX + (column[len("scview_"):] if column.startswith("scview_") else column)
     name, i = base, 2
     while name in taken:
         name, i = f"{base}_{i}", i + 1
     return name
 
 
-def obs_names_map(columns) -> dict[str, str]:
-    """Each obs column's name in the subset: scView's own ``scview_*`` columns (cleared by a
-    run) as ``parent_*``, except the cell types a per-type % mito filter reads; the rest as
-    they are."""
-    cols = [str(c) for c in columns]
-    taken = {c for c in cols if not c.startswith("scview_")}
+def obs_names_map(columns, drop=()) -> dict[str, str]:
+    """Each obs column's name in the subset (the columns in ``drop`` left out): scView's own
+    ``scview_*`` columns (cleared by a run) and the pipeline's per-cell results
+    (``PIPELINE_OBS``, the QC metrics) as ``parent_*``, except the cell types a per-type
+    % mito filter reads; the rest (author labels, hand labels) as they are."""
+    import re
+
+    def ours(c):
+        return ((c.startswith("scview_") and c != "scview_mito_type") or c in PIPELINE_OBS
+                or re.match(PIPELINE_OBS_PATTERN, c) is not None)
+
+    cols = [str(c) for c in columns if str(c) not in set(drop)]
+    taken = {c for c in cols if not ours(c)}
     out = {}
     for c in cols:
-        if c.startswith("scview_") and c != "scview_mito_type":
+        if ours(c):
             new = _parent_name(c, taken)
             taken.add(new)
             out[c] = new
@@ -272,9 +293,26 @@ def obs_names_map(columns) -> dict[str, str]:
     return out
 
 
-def subset_obs(obs: pd.DataFrame, keep: np.ndarray) -> pd.DataFrame:
-    """The kept rows, renamed (``obs_names_map``), unused categories dropped."""
-    out = obs.loc[keep].copy()
+def clean_var(var):
+    """``var`` without the pipeline's per-gene results (``PIPELINE_VAR``, ``scview_*``)."""
+    return var.drop(columns=[c for c in var.columns
+                             if str(c) in PIPELINE_VAR or str(c).startswith("scview_")])
+
+
+def grandparent_columns(adata) -> list[str]:
+    """The parent's own parent_* columns, when the parent is a subset itself: a subset keeps
+    one generation (the immediate parent's results), so these are left out."""
+    out: list[str] = []
+    for h in provenance.read_provenance(adata).get("history") or []:
+        if isinstance(h, dict) and h.get("step") == STEP:
+            renamed = (h.get("params") or {}).get("renamed") or {}
+            out += [str(v) for v in renamed.values() if str(v) in adata.obs.columns]
+    return list(dict.fromkeys(out))
+
+
+def subset_obs(obs: pd.DataFrame, keep: np.ndarray, drop=()) -> pd.DataFrame:
+    """The kept rows, renamed (``obs_names_map``, ``drop`` left out), unused categories dropped."""
+    out = obs.loc[keep, [c for c in obs.columns if str(c) not in set(drop)]].copy()
     out = out.rename(columns=obs_names_map(out.columns))
     for c in out.columns:
         if isinstance(out[c].dtype, pd.CategoricalDtype):
@@ -306,6 +344,8 @@ class Contents:
     obsm: list[str] = field(default_factory=list)  # obsm keys taken (source names)
     stores: list[tuple[Path, str]] = field(default_factory=list)  # (file, path under the new id's folder)
     renamed: dict[str, str] = field(default_factory=dict)
+    dropped: list[str] = field(default_factory=list)  # the grandparent's columns (``grandparent_columns``)
+    parent_qc: dict[str, str | None] = field(default_factory=dict)  # ``parent_qc``
 
 
 def _store_files(data_dir: Path, parent_id: str) -> tuple[list[tuple[Path, str]], list[str], list[str]]:
@@ -346,11 +386,17 @@ def contents(adata, data_dir: Path | None, parent_id: str) -> Contents:
     from scview.core import ambient, protein, spatial
 
     out = Contents()
-    out.renamed = {c: n for c, n in obs_names_map(adata.obs.columns).items() if c != n}
-    n_cols = len(adata.obs.columns)
+    out.dropped = grandparent_columns(adata)
+    names = obs_names_map(adata.obs.columns, out.dropped)
+    out.renamed = {c: n for c, n in names.items() if c != n}
+    n_cols = len(names)
     out.carried.append(f"{n_cols} obs column{'s' if n_cols != 1 else ''}"
-                       + (f" ({len(out.renamed)} of scView's renamed parent_*, e.g. "
+                       + (f" ({len(out.renamed)} of the parent's scView results renamed parent_*, e.g. "
                           f"{next(iter(out.renamed.values()))})" if out.renamed else ""))
+    if out.dropped:
+        out.not_carried.append(f"the grandparent's columns ({_values_text(out.dropped, 3)}): a subset keeps one "
+                               "generation, its parent's results as parent_*")
+    out.parent_qc = parent_qc(adata)
     if ambient.ORIGINAL_LAYER in adata.layers:
         out.carried.append("the counts from before the ambient RNA correction")
     umap = _umap_key(adata)
@@ -455,9 +501,9 @@ def build(adata, keep: np.ndarray, fallback_paths: list[str], info: Contents) ->
     from scview.core import spatial
 
     counts = counts_rows(adata, keep, fallback_paths)
-    var = counts.var
+    var = clean_var(counts.var)
     var.index = var.index.astype(str)
-    obs = subset_obs(adata.obs, keep)
+    obs = subset_obs(adata.obs, keep, info.dropped)
     sub = ad.AnnData(X=counts.X, obs=obs, var=var)
     umap = _umap_key(adata)
     from scview.core.pipeline import ORIGINAL_UMAP_KEY, PARENT_UMAP_KEY
@@ -486,16 +532,86 @@ def build(adata, keep: np.ndarray, fallback_paths: list[str], info: Contents) ->
         from scview.core import velocity_input
 
         uns[velocity_input.UNS_KEY] = vel
+    uns.update(_label_uns(adata, obs, info.renamed))
     uns[CELLS_KEY] = np.asarray(obs.index, dtype=object)
     sub.uns.update(uns)
     return sub, counts.source
 
 
+def _label_uns(adata, obs: pd.DataFrame, renamed: dict[str, str]) -> dict[str, str]:
+    """The parent's hand-label columns stay hand-label columns (editable on the subset), with
+    their Cell Ontology terms."""
+    from scview.core.cell_ontology import TERMS_KEY
+    from scview.core.user_labels import USER_COLUMNS_KEY, user_columns
+
+    out: dict[str, str] = {}
+    users = [renamed.get(c, c) for c in user_columns(adata)]
+    users = [c for c in users if c in obs.columns]
+    if users:
+        out[USER_COLUMNS_KEY] = json.dumps(users)
+    raw = adata.uns.get(TERMS_KEY)
+    try:
+        terms = json.loads(raw) if isinstance(raw, str) else {}
+    except ValueError:
+        terms = {}
+    if isinstance(terms, dict):
+        kept = {renamed.get(c, c): t for c, t in terms.items() if renamed.get(c, c) in obs.columns}
+        if kept:
+            out[TERMS_KEY] = json.dumps(kept, sort_keys=True)
+    return out
+
+
+def parent_qc(adata) -> dict[str, str | None]:
+    """Whether the parent's cells were filtered and doublet-scored, in words (None: not that
+    we can tell): a subset of filtered cells is not filtered again by default (per-sample
+    bounds inside one cell type remove real cells: QA 2026-11-16, 29% of neutrophils)."""
+    from scview.core import assessor, qc_filter
+
+    history = [h for h in provenance.read_provenance(adata).get("history") or [] if isinstance(h, dict)]
+    out: dict[str, str | None] = {"filtered": None, "doublets": None}
+    rec = qc_filter.recorded_filtering(adata)
+    if rec is not None:
+        when = str(rec.get("timestamp") or "")[:10]
+        out["filtered"] = f"The parent was filtered by scView{' on ' + when if when else ''}"
+    else:
+        f = assessor._check_filtering(adata)
+        if f.done:
+            out["filtered"] = f"The parent looks filtered ({f.details})"
+    if any(h.get("step") == "doublet_detection" for h in history):
+        out["doublets"] = "Doublet detection ran on the parent (its calls are parent_doublet_score / parent_predicted_doublet)"
+    else:
+        d = assessor._check_doublet_detection(adata)
+        if d.done and not d.details.startswith("Not applicable"):
+            out["doublets"] = f"The parent has doublet calls ({d.details})"
+    return out
+
+
+FULL_RUN = ["qc_metrics", "doublet_detection", "filtering", "normalization", "log_transform",
+            "highly_variable_genes", "scaling", "pca", "neighbors", "clustering", "embeddings", "marker_genes"]
+
+
+def default_steps(qc: dict[str, str | None]) -> tuple[list[str], str | None]:
+    """The run a new subset needs, and what it leaves out and why: no filtering and no doublet
+    detection on cells the parent already filtered / scored."""
+    skip = []
+    if qc.get("filtered"):
+        skip.append("filtering")
+    if qc.get("doublets"):
+        skip.append("doublet_detection")
+    steps = [s for s in FULL_RUN if s not in skip]
+    if not skip:
+        return steps, None
+    why = "; ".join(q for q in (qc.get("filtered"), qc.get("doublets")) if q)
+    return steps, (f"Left out: {' and '.join(skip)}. {why}. Filtering again applies per-sample bounds within "
+                   "these cells alone and can remove real ones (low-RNA cell types); add the steps to do it anyway.")
+
+
 def record(sub: ad.AnnData, *, parent: dict[str, Any], sel: Selection, n_parent: int,
-           counts_source: str, info: Contents) -> None:
+           counts_source: str, info: Contents, resources: dict | None = None) -> None:
     """The source block (origin subset, the parent named) and the ``subset`` step."""
     provenance.init_source(sub, origin=SOURCE, original_filename=str(parent.get("filename") or "input.h5ad"),
                            fmt="subset", overwrite=True)
+    carried = [c for c in parent.get("columns") or [] if c not in set(info.dropped)]
     data = provenance.read_provenance(sub)
     data["source"]["subset_of"] = subset_of(parent, sel, n_parent)
     data["history"] = []
@@ -504,9 +620,11 @@ def record(sub: ad.AnnData, *, parent: dict[str, Any], sel: Selection, n_parent:
         sub, step=STEP, tool="scview.subset",
         params={"parent_id": parent["id"], "parent_name": parent.get("name"), **sel.how,
                 "described": sel.described, "n_cells": sel.n, "n_parent_cells": n_parent,
-                "counts_source": counts_source, "renamed": info.renamed,
+                "counts_source": counts_source, "renamed": info.renamed, "dropped_columns": info.dropped,
+                "parent_columns": carried, "parent_qc": info.parent_qc,
                 "parent_source": parent.get("source") or {}},
         note=f"{sel.n:,} of {n_parent:,} cells of '{parent.get('name')}': {sel.described}",
+        resources=resources,
     )
 
 

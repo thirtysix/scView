@@ -5,6 +5,7 @@ import { ApiDetailError, labelCells, listLabelColumns, undoLabel } from "@/api/l
 import { CellTypeCombobox, type PickedTerm } from "@/components/common/CellTypeCombobox";
 import { Help } from "@/components/common/Help";
 import type { DatasetInfo } from "@/api/types";
+import type { CellFilter } from "@/lib/cellFilter";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
 import { columnNameError, labelError, suggestColumnName, UNASSIGNED } from "@/lib/labels";
 import { defaultColorBy } from "@/lib/obsColumns";
@@ -183,12 +184,19 @@ function LabelSelectionForm({ dataset, indices, onClose }: LabelSelectionFormPro
     setBusy(true);
     setError(null);
     try {
+      // The groups or filter the selection came from: the server records it when it gives
+      // exactly these cells, so the replay script can label them again.
+      const { selectionFilter, selectionGroups } = useSelectionStore.getState();
+      const filter: CellFilter | null = selectionGroups
+        ? { op: "and", layer: "", items: [{ kind: "category", column: selectionGroups.column, values: selectionGroups.values }] }
+        : selectionFilter;
       const res = await labelCells(dataset.id, {
         column: isNew ? newName.trim() : target,
         label: label.trim(),
         indices: Array.from(indices),
         newColumn: isNew,
         ontologyId: term?.id ?? null,
+        filter,
       });
       useLabelUndoStore.getState().push({
         datasetId: dataset.id,
