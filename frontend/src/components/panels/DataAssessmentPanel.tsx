@@ -29,6 +29,7 @@ import { PcaDiagnostics } from "@/components/panels/PcaDiagnostics";
 import { ObjectInspector } from "@/components/panels/ObjectInspector";
 import { ConversionReport } from "@/components/panels/ConversionReport";
 import { PublicSourceCard } from "@/components/panels/PublicSourceCard";
+import { SubsetSourceCard } from "@/components/panels/SubsetSourceCard";
 import { PreflightRunNote } from "@/components/common/PreflightNote";
 import { FastLeidenInfo } from "@/components/common/FastLeidenInfo";
 import { TargetedPanelNote, type TargetedPanelInfo } from "@/components/qc/TargetedPanelNote";
@@ -1216,6 +1217,7 @@ export function DataAssessmentPanel() {
       </p>
       {dataset?.conversion && <ConversionReport report={dataset.conversion} />}
       {dataset?.public_source && <PublicSourceCard source={dataset.public_source} />}
+      {dataset?.subset_of && <SubsetSourceCard source={dataset.subset_of} />}
 
       {/* Two columns: controls + steps on the left, QC plots on the right */}
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start">

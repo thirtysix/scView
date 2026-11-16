@@ -1,5 +1,7 @@
 /** Help for the QC cards outside Unified View (Data Assessment). Keys: `<card>.<thing>`. */
 export const QC_HELP: Record<string, string> = {
+  "subset.source":
+    "This dataset was made from some cells of another one. Its parent_ columns are the parent's clusters and annotations, kept to compare with its own clusters once it is processed. UMAP (parent) is where its cells sat in the parent's UMAP.",
   "markerdb.tissue":
     "Database types described only in other organs are left out of the best types, so a kidney cluster is not offered a colon type. Immune, blood, vessel and stromal types, and types described across many tissues, stay. A label's own verdict is not affected.",
   "evidence.section":
