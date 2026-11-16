@@ -803,7 +803,8 @@ private mode). The tools for the routes above: `guide_assignment`, `mixscape`, `
 `plot(kind="coverage")`, and `layer="protein"` on `differential_expression` /
 `per_donor_expression`. Trajectory and velocity: `paga`, `pseudotime`, `pseudotime_genes`,
 `velocity`, `get_velocity`, `velocity_direction`, `plot(overlay=["velocity", "paga"])`,
-`plot(kind="phase")` and `plot(kind="violin", value_column=...)`. `upload_instructions` gives the curl recipes above;
+`plot(kind="phase")` and `plot(kind="violin", value_column=...)`. `subset_dataset` wraps
+`POST /datasets/{id}/subset` (groups or a filter) and names the `run_pipeline` call for the new id. `upload_instructions` gives the curl recipes above;
 `import_server_path` imports a file or folder on the server under `MCP_IMPORT_DIRS` (off when
 unset, always off with `DEPLOYMENT_MODE=public`).
 

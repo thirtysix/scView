@@ -1256,6 +1256,53 @@ async def subcluster(
     return dumps({"dataset_id": dataset_id, **r})
 
 
+_FULL_RUN = ["qc_metrics", "doublet_detection", "filtering", "normalization", "log_transform",
+             "highly_variable_genes", "scaling", "pca", "neighbors", "clustering", "embeddings", "marker_genes"]
+
+
+@tool(WRITE)
+async def subset_dataset(
+    dataset_id: DatasetId,
+    column: Annotated[str | None, Field(description=(
+        "Obs column of the groups to keep (with values), e.g. the cell type column. Give either "
+        "column + values or filter."))] = None,
+    values: Annotated[list[str] | None, Field(description="The groups of column to keep, as listed.")] = None,
+    filter: Annotated[CellFilter | None, Field(description=(
+        "Cells by conditions instead of groups (the cell filter grammar, see set_labels), e.g. a gene "
+        "above a value."))] = None,
+    name: Annotated[str | None, Field(description=(
+        "The new dataset's name (default '<parent> - <groups>')."))] = None,
+    dry_run: Annotated[bool, Field(description=(
+        "True: say how many cells and what would be carried, make nothing."))] = False,
+) -> str:
+    """Make a NEW dataset of some cells (a cell type, a lineage for a trajectory, cells to re-cluster),
+    leaving this one unchanged. It holds their counts, obs (scView's own clusters/annotations renamed
+    parent_*, to compare after re-clustering), the parent's UMAP as X_umap_parent and per-cell
+    modalities; not PCA, the graph or stored results. Then process it with run_pipeline on the new id."""
+    if filter is None and not (column and values):
+        raise ToolError("Give column + values (the groups to keep), or filter.")
+    if filter is not None and (column or values):
+        raise ToolError("Give column + values, or filter, not both.")
+    body: dict[str, Any] = {"dry_run": dry_run}
+    if filter is not None:
+        body["filter"] = filter.model_dump(mode="json")
+    else:
+        body["groups"] = {"column": column, "values": list(values or [])}
+    if name:
+        body["name"] = name
+    r = await _post(f"{_ds(dataset_id)}/subset", body)
+    out = {k: r.get(k) for k in ("dataset_id", "name", "n_cells", "n_parent_cells", "n_genes", "described",
+                                 "counts_source", "carried", "not_carried", "renamed") if r.get(k) is not None}
+    if dry_run:
+        out["next"] = "subset_dataset again without dry_run to make it."
+    else:
+        out["parent_id"] = dataset_id
+        out["next"] = (f"run_pipeline(dataset_id='{r['dataset_id']}', steps={_FULL_RUN}) processes it from its "
+                       "counts (add batch_correction with params.batch_key when the cells span batches); the "
+                       "parent's clusters are the parent_* columns.")
+    return dumps(out)
+
+
 # --- statistics -----------------------------------------------------------------------------------
 
 def _de_warnings(r: dict[str, Any]) -> list[str]:
