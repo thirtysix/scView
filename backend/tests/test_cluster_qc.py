@@ -238,3 +238,44 @@ async def test_chat_fallback_answers_quality_question_from_the_numbers(client, d
     assert body["grounded"] is False  # no key in tests: deterministic facts
     assert "Per-cluster QC" in body["answer"]
     assert "result:qc:leiden:5" in {s["ref"] for s in body["sources"]}
+
+
+def _donors(a: ad.AnnData, share_in_3: float) -> ad.AnnData:
+    """Six donors spread evenly, except cluster 3: ``share_in_3`` of it from donor d1."""
+    n = a.n_obs
+    donors = np.array([f"d{i % 6}" for i in range(n)], dtype=object)
+    idx = np.flatnonzero(a.obs["leiden"].to_numpy() == "3")
+    k = int(round(share_in_3 * len(idx)))
+    donors[idx[:k]] = "d1"
+    donors[idx[k:]] = [f"d{2 + i % 4}" for i in range(len(idx) - k)]
+    a.obs["donor_id"] = pd.Categorical(donors)
+    return a
+
+
+def test_a_cluster_mostly_from_one_donor_is_flagged():
+    """QA-7 (C5): N2 neutrophils 187 of 197 cells from one Crohn's patient, M1 CXCL5 81% in a
+    subset cluster; cluster QC said nothing. Flag at 80% when that donor holds under half the cells."""
+    report = cluster_qc(_donors(_planted(), 0.85))
+    rows = _by_group(report)
+    assert report.donor_column == "donor_id"
+    assert "one_donor" in rows["3"].flags and rows["3"].top_donor == "d1"
+    assert rows["3"].top_donor_share == pytest.approx(0.853, abs=0.01)
+    assert rows["3"].top_donor_share_of_data < 0.5
+    reason = rows["3"].reasons[rows["3"].flags.index("one_donor")]
+    assert reason.startswith("Mostly one donor: 85% of its 150 cells are from d1 (donor_id), who holds")
+    assert all("one_donor" not in r.flags for g, r in rows.items() if g != "3")
+    assert "one_donor" in report.flag_help
+    # Below 80%: nothing; and the flag never decides a label
+    assert all("one_donor" not in r.flags for r in cluster_qc(_donors(_planted(), 0.75)).clusters)
+    from scview.core.pipeline import decide_clusters
+
+    check = type("C", (), {"best": {}, "flagged": [], "skipped": None})()
+    decided, _ = decide_clusters(check, report, {g: ["X"] for g in rows})
+    assert "3" not in decided
+
+
+def test_no_donor_column_no_donor_flag():
+    a = _planted()
+    a.obs["batch"] = pd.Categorical(["b1" if i % 2 else "b2" for i in range(a.n_obs)])
+    report = cluster_qc(a)
+    assert report.donor_column is None and all("one_donor" not in r.flags for r in report.clusters)

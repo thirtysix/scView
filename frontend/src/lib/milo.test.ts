@@ -70,7 +70,9 @@ describe("milo helpers", () => {
   });
 
   it("describes the run and asks the co-pilot with its own numbers", () => {
-    expect(describeMilo(MILO)).toContain("~ Donor + stim, paired by Donor (CTRL 8, STIM 8 samples)");
+    expect(describeMilo(MILO)).toContain("~ Donor + stim, paired by Donor (CTRL 8, STIM 8 samples), tested with edgeR");
+    expect(describeMilo({ ...MILO, n_neighbors: 20, own_graph: true, representation: "X_pca, 30 PCs" }))
+      .toContain("on the X_pca, 30 PCs graph (k 20, built for this run)");
     const q = miloQuestion(MILO);
     expect(q).toContain("STIM vs CTRL with Donor as replicates: 2 of 4 neighbourhoods");
     expect(q).toContain("CD14 Mono: 1 up, 1 down of 2");

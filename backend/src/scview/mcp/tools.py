@@ -1229,7 +1229,8 @@ async def cluster_evidence(
     """Why each group of a column was labelled or flagged, in plain words from scView's own rules
     (never a probability): its markers against random genes (best marker-database p vs what 1 in
     10 random lists reach), median genes and % mito against the typical cluster with the cluster
-    QC flags that fired, a doublet-like cluster's two parents, database types as shares of the
+    QC flags that fired, a doublet-like cluster's two parents, a cluster mostly from one donor
+    (80%+ of its cells; the donor and their share of all cells), database types as shares of the
     evidence (named groupings only), and the label scView gave ('Low-quality cells') or would give
     itself in an AI annotation, or the note the AI got. Markers must be computed first; the
     marker lines need the marker databases (marker_db_check downloads them)."""
@@ -1727,16 +1728,24 @@ async def milo(
         "Donors in both conditions as pairs (default: paired when every donor is in both)."))] = None,
     label_key: Annotated[str | None, Field(description="Cell types to label neighbourhoods by.")] = None,
     prop: Annotated[float | None, Field(gt=0, le=1, description="Share of cells sampled as index cells.")] = None,
+    k: Annotated[int | None, Field(ge=3, le=100, description=(
+        "Neighbours per cell of a k-NN graph Milo builds for this run (default: the dataset's own graph "
+        "and its k). The dataset's graph is not changed."))] = None,
+    n_pcs: Annotated[int | None, Field(ge=2, description=(
+        "PCs of the graph's representation for that graph (default: all of them); with k, the paper's "
+        "Milo settings (e.g. k 20, 30 PCs) without a pca + neighbors rerun."))] = None,
 ) -> str:
     """Milo neighbourhood differential abundance between two conditions, donors as replicates,
     no clusters needed (a job: returns job_id; job_status gives the result: neighbourhoods
     significant at spatial FDR, the labels they fall in, the graph's k and representation,
-    and which sample fills each one: samples_in_significant). Cells in neither condition are
-    not counted but the neighbourhoods span the whole graph (the plan warns). Rebuild the graph
-    on another representation with run_pipeline(["neighbors"], {"neighbors_use_rep": "X_pca"}).
-    The dataset is not changed."""
+    and which sample fills each one: samples_in_significant; result_id for get_result). The
+    test is miloR's: edgeR quasi-likelihood with TMM. Cells in neither condition are not counted
+    but the neighbourhoods span the whole graph (the plan warns). Rebuild the graph on another
+    representation with run_pipeline(["neighbors"], {"neighbors_use_rep": "X_pca"}). Each pair of
+    conditions is stored as its own result. The dataset is not changed."""
     body = {"condition_key": condition_key, "sample_key": sample_key, "conditions": conditions,
-            "covariates": covariates, "paired": paired, "label_key": label_key, "prop": prop}
+            "covariates": covariates, "paired": paired, "label_key": label_key, "prop": prop,
+            "k": k, "n_pcs": n_pcs}
     plan = await _post(f"{_ds(dataset_id)}/milo/plan", body)
     job = jobs.new("milo", dataset_id, f"{_ds(dataset_id)}/milo/run", body,
                    progress_line=_line, finish=_milo_result)

@@ -65,6 +65,7 @@ FLAG_WORDS = {
     "low_content": "low RNA for its identity",
     "noncoding_markers": "non-coding markers",
     "sex_markers": "sex genes lead its markers",
+    "one_donor": "mostly one donor",
 }
 _DAMAGE = ("low_quality", "high_mito")
 
@@ -204,8 +205,13 @@ def content_line(row: cluster_qc.ClusterQC, rows: dict[str, cluster_qc.ClusterQC
 
 
 def makeup_line(row: cluster_qc.ClusterQC) -> Line | None:
-    """``sex_markers`` / ``noncoding_markers``: what leads the marker list, in words."""
+    """``sex_markers`` / ``noncoding_markers``: what leads the marker list; ``one_donor``: whose
+    cells it holds (QA-6 and QA-7: a one-patient state read as a type of the disease)."""
     parts = []
+    if "one_donor" in row.flags and row.top_donor and row.top_donor_share is not None:
+        parts.append(f"Mostly one donor: {_share(row.top_donor_share)} of its cells are from {row.top_donor}, who "
+                     f"holds {_share(row.top_donor_share_of_data or 0.0)} of all cells; it may be that donor's "
+                     "own state rather than a type or a state of the condition.")
     if "sex_markers" in row.flags and row.sex_markers:
         parts.append(f"Sex genes lead its markers ({', '.join(row.sex_markers)}): it may be one sex's cells "
                      "(or one donor's) of a type split by sex, not a type of its own.")
@@ -356,13 +362,14 @@ def decision_line(group: str, rec: dict | None, rules: dict[str, list[str]],
                   check: marker_randomness.RandomCheck | None) -> tuple[Line | None, str | None, bool]:
     """(line, scView's own label, recorded): from the annotation's record when there is one,
     else what ``pipeline.decide_clusters`` would decide now."""
-    from scview.core.pipeline import LOW_QUALITY_LABEL, RANDOM_NOTED, UNIDENTIFIED_LABEL
+    from scview.core.pipeline import LOW_QUALITY_LABEL, RANDOM_NOTED, UNCHECKED_TO_AI, UNIDENTIFIED_LABEL
 
     best = (check.best.get(group) if check else None) or "a type"
     src = rec["record"] if rec else rules
     # llm_random_markers: an annotation of v0.71.0-v0.74.0 labelled those clusters Unidentified itself
-    low, unid, noted, to_ai = (_ids(src.get(k)) for k in (
-        "llm_decided_low_quality", "llm_random_markers", RANDOM_NOTED, "llm_high_mito_type_to_ai"))
+    low, unid, noted, to_ai, unchecked = (_ids(src.get(k)) for k in (
+        "llm_decided_low_quality", "llm_random_markers", RANDOM_NOTED, "llm_high_mito_type_to_ai",
+        UNCHECKED_TO_AI))
     label = LOW_QUALITY_LABEL if group in low else UNIDENTIFIED_LABEL if group in unid else None
     told = "its markers do not beat 9 of 10 random gene lists of the same size against the marker databases"
     if rec:
@@ -379,6 +386,10 @@ def decision_line(group: str, rec: dict | None, rules: dict[str, list[str]],
             return Line(kind="decision", text=(
                 f"High mito, but its markers best match {best}, a cell type with much mitochondrial RNA by nature, "
                 f"so the AI was asked{f' and named it {named}' if named else ''} in {where}.")), None, True
+        if group in unchecked:
+            return Line(kind="decision", text=(
+                "Damaged by cluster QC, but the marker databases were not available to read its type, so the AI "
+                f"was asked{f' and named it {named}' if named else ''} in {where}.")), None, True
         if named:
             return Line(kind="decision", text=f"The AI named it {named} in {where}."), None, True
         return None, None, False
@@ -393,6 +404,11 @@ def decision_line(group: str, rec: dict | None, rules: dict[str, list[str]],
         return Line(kind="decision", text=(
             f"High mito, but its markers best match {best}, a cell type with much mitochondrial RNA by nature: "
             "AI annotation would still ask the AI.")), None, False
+    if group in unchecked:
+        return Line(kind="decision", text=(
+            "Damaged by cluster QC. AI annotation downloads the marker databases first and labels it Low-quality "
+            "cells itself unless its markers match a cell type with much mitochondrial RNA by nature; without "
+            "them it asks the AI.")), None, False
     return None, None, False
 
 
@@ -429,7 +445,9 @@ def build(adata, column: str, report: cluster_qc.ClusterQCReport, db=None, index
         except Exception as exc:  # noqa: BLE001 - best effort, as in the annotator
             logger.info("Evidence: random-marker check skipped: %s", exc)
             check = None
-    rules = decide_clusters(check or marker_randomness.RandomCheck(), report, markers)[1] if markers else {}
+    # No check (databases not on disk, or it failed): no type is read, as in the annotator
+    rules = decide_clusters(check or marker_randomness.RandomCheck(skipped="not compared"), report,
+                            markers)[1] if markers else {}
     rec = recorded_annotation(adata, column)
     out.annotation = rec["target"] if rec else None
 

@@ -24,6 +24,7 @@ export const FLAG_LABELS: Record<ClusterFlag, string> = {
   low_content: "Low RNA",
   noncoding_markers: "Non-coding markers",
   sex_markers: "Sex genes lead",
+  one_donor: "Mostly one donor",
 };
 
 const FLAG_STYLES: Record<ClusterFlag, string> = {
@@ -41,6 +42,7 @@ const FLAG_STYLES: Record<ClusterFlag, string> = {
   low_content: "border-amber-200 bg-amber-50 text-amber-800",
   noncoding_markers: "border-slate-200 bg-slate-50 text-slate-600",
   sex_markers: "border-slate-200 bg-slate-50 text-slate-600",
+  one_donor: "border-purple-200 bg-purple-50 text-purple-700",
 };
 
 const MALAT1_TITLE =
@@ -354,6 +356,8 @@ export function ClusterQcTable({ datasetId, refreshKey = 0 }: { datasetId: strin
                           >
                             {FLAG_LABELS[f]}
                             {f === "doublet_like" && c.doublet_like_of?.length === 2 && `: ${c.doublet_like_of.join(" + ")}`}
+                            {f === "one_donor" && c.top_donor && c.top_donor_share != null &&
+                              ` (${Math.round(c.top_donor_share * 100)}% from ${c.top_donor})`}
                           </span>
                         ))}
                         {c.flags.length > 0 && (

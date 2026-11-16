@@ -195,6 +195,12 @@ FLAG_HELP = {
         "ambient RNA, split off by sequencing depth rather than biology. Its markers against that "
         "cluster are often ambient genes from other cell types."
     ),
+    "one_donor": (
+        "Most of its cells come from one donor, who holds a much smaller share of the whole "
+        "dataset. It may be that person's own state (their disease, treatment or handling), not a "
+        "cell type or state of the condition: check it in the other donors before generalising, "
+        "and compare conditions by donor (pseudobulk, composition by donor)."
+    ),
     "noncoding_markers": (
         "Its top markers are mostly small RNAs (miRNA, snoRNA, 7SL), multi-copy genes or "
         "pseudogenes, or unnamed genes and MALAT1: reads a cell type's marker list does not hold. "
@@ -238,6 +244,10 @@ class ClusterQC(BaseModel):
     low_content_shared: list[int] = []  # low_content: [its markers among that cluster's, its markers]
     noncoding_markers: list[str] = []  # small RNAs / pseudogenes / unnamed genes among its top markers
     sex_markers: list[str] = []  # sex-linked genes among its top SEX_TOP markers
+    # one_donor: the donor holding most of its cells, that share, and the donor's share of all cells
+    top_donor: str | None = None
+    top_donor_share: float | None = None
+    top_donor_share_of_data: float | None = None
     flags: list[str] = []
     reasons: list[str] = []  # one plain-language sentence per flag, with the numbers
     notes: list[str] = []  # not a problem, but worth saying (erythroid: Hb is real)
@@ -283,8 +293,10 @@ class ClusterQCReport(BaseModel):
     # judged by the share of cells with a mito read (nuclei_mito)
     nuclei_like_mito: bool = False
     # Clusters almost all from one sample (confounding.single_sample_for): a dataset-level
-    # note, never a flag (flags feed pipeline.decide_clusters). None when no cluster is.
+    # note (the batch-effect reading), not a flag. None when no cluster is.
     one_sample: OneSampleNote | None = None
+    # The donor column one_donor read (qc_groups.sample_grouping's donor), None without one
+    donor_column: str | None = None
 
     @property
     def flagged(self) -> list[ClusterQC]:
@@ -507,6 +519,7 @@ def cluster_qc(
     like_checked = len(order) >= MIN_GROUPS and _flag_doublet_like(adata, column, rows)
     if len(order) >= MIN_GROUPS:
         _flag_marker_makeup(adata, column, rows, small_cut)
+    donor_column = _flag_one_donor(adata, column, rows)
 
     names = {"genes": "median_genes", "counts": "median_counts", "pct_mt": "median_pct_mt",
              "pct_ribo": "median_pct_ribo", "doublet": "doublet_fraction",
@@ -596,7 +609,47 @@ def cluster_qc(
         ambient_markers_help=(ambient_rna.HELP["flag_approximate"] if amb_approx
                               else ambient_rna.HELP["flag"]) if amb else "",
         one_sample=_one_sample(adata, column),
+        donor_column=donor_column,
     )
+
+
+# one_donor: a cluster this much from one donor who holds under SINGLE_SAMPLE_MAX_SAMPLE_SHARE of
+# the cells, with 3+ donors (confounding's rules). QA-7 (Garrido-Trigo 2023 colon, 18 donors): at 80%
+# the myeloid subset's M1 CXCL5 cluster (81% CD_5, who holds 17% of the cells) and, on the authors'
+# labels, Neutrophil 2 (95% CD_5), M1 CXCL5 (92%) and germinal-centre B cells (91% UC_4); none of
+# Kang's 13 cell types or 12 clusters (8 donors, top 34%) and none of Reck 2025's 59 kidney types
+# (12 donors: immune types of one obstructed kidney 70-75%). At 90% (the one-sample note) the
+# myeloid cluster at 81% went unsaid.
+ONE_DONOR_SHARE = 0.8
+
+
+def _flag_one_donor(adata, column: str, rows: list[ClusterQC]) -> str | None:
+    """``one_donor`` on clusters mostly from one donor (the donor column ``qc_groups.sample_grouping``
+    picks for QC and DE; not a batch column); returns that column. A per-cluster flag, not a
+    damage flag: it never decides a label, and the AI annotator is not told."""
+    from scview.core import qc_groups  # qc_groups imports this module
+
+    try:
+        col, why = qc_groups.sample_grouping(adata)
+        if why != "donor" or not col or col == column:
+            return None
+        found = confounding.single_sample_clusters(adata.obs, column, col, share_min=ONE_DONOR_SHARE)
+    except Exception as exc:  # pragma: no cover - a flag only: the report stands
+        logger.debug("cluster QC: one-donor check failed: %s", exc)
+        return None
+    by = {r.group: r for r in rows}
+    for f in found:
+        row = by.get(f["cluster"])
+        if row is None:
+            continue
+        row.top_donor, row.top_donor_share = f["sample"], f["share"]
+        row.top_donor_share_of_data = f["sample_share_of_data"]
+        row.flags.append("one_donor")
+        row.reasons.append(
+            f"Mostly one donor: {f['share']:.0%} of its {f['n_cells']:,} cells are from {f['sample']} ({col}), "
+            f"who holds {f['sample_share_of_data']:.0%} of all cells. Check it in the other donors before "
+            "calling it a cell type or a state of the condition.")
+    return col
 
 
 def _one_sample(adata, column: str) -> OneSampleNote | None:

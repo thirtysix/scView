@@ -287,6 +287,20 @@ describe("AnnotationControl (CellTypist)", () => {
     expect(screen.queryByText("fine")).toBeNull();
   });
 
+  it("says which damaged clusters went to the AI because the marker databases were missing", async () => {
+    getProvenance.mockResolvedValue({ recorded: { history: [{
+      step: "cell_type_annotation", tool: "t", timestamp: "",
+      params: { annotation_method: "llm", annotation_target: "paul15_clusters_celltypeAnno",
+        llm_damaged_unchecked_to_ai: ["5", "7"] },
+    }] } });
+    render(<AnnotationControl onAnnotate={vi.fn().mockResolvedValue(undefined)} running={false} species="human" />);
+    fireEvent.click(screen.getByText("Annotate cell types"));
+    const note = await screen.findByTestId("annotation-decided");
+    expect(note.textContent).toContain("Cluster QC flags clusters 5, 7 as damaged, but the marker databases were not");
+    expect(note.textContent).toContain("so the AI was asked");
+    expect(note.textContent).not.toContain("Low-quality cells itself");
+  });
+
   it("says which clusters went to the AI with a random-marker note (v0.75.0 records)", async () => {
     getProvenance.mockResolvedValue({ recorded: { history: [{
       step: "cell_type_annotation", tool: "t", timestamp: "",

@@ -94,6 +94,7 @@ def _annotate(monkeypatch, markers, flags, check, reply):
     monkeypatch.setattr(cluster_qc, "cluster_qc", lambda adata, g: types.SimpleNamespace(clusters=[
         types.SimpleNamespace(group=k, flags=flags.get(k, [])) for k in groups]))
     monkeypatch.setattr(MR, "check", check)
+    monkeypatch.setattr(P, "_marker_db_or_none", lambda: None)  # never fetched in a test
     sent: list[str] = []
 
     class _Client:
@@ -151,11 +152,44 @@ def test_a_random_like_cluster_alone_still_asks_the_model(monkeypatch):
     assert a.uns["cell_type_llm_mapping"] == {"0": "Injured proximal tubule cells", "1": "Low-quality cells"}
 
 
+def test_without_the_marker_databases_damaged_clusters_go_to_the_ai(monkeypatch):
+    """QA-7 (A1): on a first run the databases were not downloaded, so no type was read and 5,608
+    colonocytes and goblet cells were labelled Low-quality cells blind. The annotator now fetches
+    them first; when it cannot, damaged clusters go to the AI with their QC note."""
+    def check(adata, mk, db=None, **_):
+        return MR.RandomCheck(skipped="marker databases not downloaded")
+
+    fit, sent, a = _annotate(monkeypatch, {"0": ["CD3D"], "5": ["SLC26A3"], "7": ["MUC2"]},
+                             {"5": ["high_mito"], "7": ["high_mito"]}, check,
+                             "tissue: colon\n0: T cells | CL:0000084\n5: Colonocytes | CL:none\n7: Goblet cells | CL:none")
+    assert "llm_decided_low_quality" not in fit and fit[P.UNCHECKED_TO_AI] == ["5", "7"]
+    listing = sent[0].split("Clusters and marker genes:")[1].strip().splitlines()
+    assert listing == ["0: CD3D", "5: SLC26A3 [QC: flagged high_mito]", "7: MUC2 [QC: flagged high_mito]"]
+    assert a.uns["cell_type_llm_mapping"] == {"0": "T cells", "5": "Colonocytes", "7": "Goblet cells"}
+
+
+def test_the_annotator_fetches_the_databases_and_passes_them_on(monkeypatch):
+    db = object()
+    monkeypatch.setattr(P, "_marker_db_or_none", lambda: db)
+    seen = []
+    monkeypatch.setattr(MR, "check", lambda adata, mk, db=None, **_: seen.append(db) or MR.RandomCheck(
+        best={"5": "Enterocytes"}, checked=1))
+    from scview.core import cluster_qc
+
+    monkeypatch.setattr(cluster_qc, "cluster_qc", lambda adata, g: types.SimpleNamespace(clusters=[
+        types.SimpleNamespace(group="5", flags=["high_mito"]), types.SimpleNamespace(group="6", flags=["high_mito"])]))
+    decided, record = P._annotation_decided(_adata(), "cluster", {"5": ["SLC26A3"], "6": ["MT-CO1"]})
+    assert seen == [db]
+    assert decided == {"6": "Low-quality cells"} and record == {
+        "llm_decided_low_quality": ["6"], "llm_high_mito_type_to_ai": ["5"]}
+
+
 def test_failing_checks_decide_nothing(monkeypatch):
     from scview.core import cluster_qc
 
     monkeypatch.setattr(MR, "check", lambda adata, mk, **_: (_ for _ in ()).throw(RuntimeError("boom")))
     monkeypatch.setattr(cluster_qc, "cluster_qc", lambda adata, g: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(P, "_marker_db_or_none", lambda: None)
     assert P._annotation_decided(_adata(), "cluster", {"1": ["G1"]}) == ({}, {})
 
 
@@ -167,6 +201,9 @@ def test_failing_checks_decide_nothing(monkeypatch):
     ("Peritubular myoid cells", False), ("Pretubular aggregate cell", False), ("Tubulointerstitial cell", False),
     ("Hepatic stellate cells", False), ("Smooth muscle cells", False), ("Parietal epithelial cell", False),
     ("Monocytes", False), ("", False),
+    # gut epithelium (v0.81.0, QA-7 colon): the marker databases' names
+    ("Enterocytes", True), ("Colonocytes", True), ("Goblet cells", True), ("Intestinal epithelial cells", True),
+    ("Enteroendocrine cells", False), ("Enteric glial cells", False), ("Paneth cells", False),
 ])
 def test_high_mito_types(name, natural):
     assert bool(P._HIGH_MITO_TYPE.search(name)) is natural

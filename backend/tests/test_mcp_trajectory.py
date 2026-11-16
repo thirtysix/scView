@@ -210,6 +210,13 @@ async def test_pseudotime_off_lineage_names_the_subset_call(client, dataset_mana
     assert r["subset"] == {"call": "subset_dataset", "dataset_id": did, "column": "grp",
                            "values": ["P1", "P2", "P3"],
                            "then": "run_pipeline on the new id, then pseudotime there from the same root"}
+    chk = r["lineage_check"]
+    assert chk["column"] == "grp" and chk["n_on_lineage"] == 3 and chk["min_share"] == 0.01
+    assert chk["off_lineage"][0]["group"] == "Q" and chk["off_lineage"][0]["widest_share"] < 0.01
+    assert chk["weakest_on_lineage"]["widest_share"] >= 0.01
+    # From inside the lineage the block says how close it came, with nothing off
+    r = await _call("pseudotime", {"dataset_id": did, "root_column": "grp", "root_value": "P2"})
+    assert r["lineage_check"]["weakest_on_lineage"]["group"] in {"P1", "P3"}
 
 
 def test_every_paga_node_gets_a_name_clear_of_the_others():
