@@ -862,20 +862,36 @@ async def run_pipeline(dataset_id: DatasetId, steps: Steps, params: Params = Non
 
 
 @tool(READ)
-async def get_recipe(dataset_id: DatasetId) -> str:
-    """The dataset's recorded processing, in order: each step with its parameters, how the
-    replay script reproduces it, its measured time and peak memory (measured: seconds,
-    peak_gb, for runs scView watched; peak_gb is the server's whole use), and the source the
-    data came from."""
-    d = await _get(f"{_ds(dataset_id)}/recipe")
+async def get_recipe(
+    dataset_id: DatasetId,
+    offset: Annotated[int, Field(ge=0, description=(
+        "Step to start from, counted among the steps shown (after the steps filter): page with next_offset."))] = 0,
+    limit: Annotated[int, Field(ge=1, le=compact.MAX_LIMIT, description=(
+        "Steps per page (default 30, max 200); a page also stops when its text gets long."))] = 30,
+    steps: Annotated[list[str] | None, Field(description=(
+        "Only these step kinds (e.g. ['qc_metrics', 'filtering', 'clustering']); step_counts in the "
+        "reply lists every kind with its count."))] = None,
+) -> str:
+    """The dataset's recorded processing, in order, a page at a time: each step with its index in
+    the whole recipe, its parameters, how the replay script reproduces it, its measured time and
+    peak memory (measured: seconds, peak_gb, for runs scView watched; peak_gb is the server's
+    whole use), and the source the data came from. n_total counts every step and step_counts
+    each kind (many hand labellings can bury a pipeline run: filter with steps)."""
+    d = await _get(f"{_ds(dataset_id)}/recipe", step=steps or None)
     try:  # the measured time and memory per step sit in the full record only
         history = ((await api.get(f"{_ds(dataset_id)}/provenance")).get("recorded") or {}).get("history") or []
     except api.RouteError:
         history = []
     used = {h.get("commit_id"): h.get("resources") for h in history if isinstance(h.get("resources"), dict)}
-    steps = []
-    for s in d.get("recipe") or []:
-        e = pick(s, "step", "tool", "params", "timestamp")
+    picked = d.get("recipe") or []
+    out: dict[str, Any] = {"dataset_id": dataset_id, "n_total": d.get("n_total", len(picked)),
+                           "step_counts": d.get("step_counts")}
+    if steps:
+        out["n_matched"] = len(picked)
+    out.update(offset=offset, steps=[])
+    budget = _max_chars(limit) - len(json.dumps({**out, "source": d.get("source")}, default=str)) - 200
+    for s in picked[offset:offset + limit]:
+        e = {"index": s.get("index"), **pick(s, "step", "tool", "params", "timestamp")}
         res = used.get(s.get("commit_id"))
         if res:
             seconds = res.get("elapsed_s", res.get("seconds"))
@@ -887,8 +903,15 @@ async def get_recipe(dataset_id: DatasetId) -> str:
         rep = s.get("replay")
         if isinstance(rep, dict):
             e["replay"] = rep.get("status")
-        steps.append(e)
-    return dumps({"dataset_id": dataset_id, "steps": steps, "source": d.get("source")})
+        budget -= len(json.dumps(compact.rounded(e), separators=(",", ":"), default=str)) + 1
+        if budget < 0 and out["steps"]:
+            break
+        out["steps"].append(e)
+    end = offset + len(out["steps"])
+    if end < len(picked):
+        out["next_offset"] = end
+    out["source"] = d.get("source")
+    return dumps(out, _max_chars(limit) + 1000)
 
 
 @tool(READ)
