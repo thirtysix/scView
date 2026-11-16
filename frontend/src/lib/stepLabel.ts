@@ -45,6 +45,7 @@ export const STEP_LABELS: Record<string, string> = {
   label_cells: "Cells labelled",
   undo_label_cells: "Cell labels undone",
   combine_columns: "Columns combined",
+  import_labels: "Labels imported from a table",
   doublet_threshold: "Doublet threshold set",
   mito_refilter: "Re-filtered by % mito per cell type",
   qc_state_label: "QC states labelled",

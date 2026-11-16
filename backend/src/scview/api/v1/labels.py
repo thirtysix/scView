@@ -3,18 +3,20 @@
 ``POST /labels`` labels cells and answers with their previous values; the
 frontend keeps those on an undo stack and sends one back to ``POST /labels/undo``.
 Both save the derived file, so the dataset is evicted and reloaded afterwards.
+``POST /labels/import`` (JSON) and ``/labels/import-file`` (a CSV/TSV upload) write
+a per-cell label table into a user column (``core/label_import.py``).
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel, ConfigDict, Field
 
-from scview.core import cell_ontology
+from scview.core import cell_ontology, label_import
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import dataset_edit, edit_room, editable, save_edit, uns_snapshot
 from scview.core.user_labels import (
@@ -171,3 +173,100 @@ async def combine_label_columns(
     missing a value in any of them gets none."""
     return await _edit_and_save(
         dm, dataset_id, lambda adata: combine_columns(adata, body.columns, body.name, body.separator))
+
+
+class ImportRequest(BaseModel):
+    """One of ``labels`` (barcode -> label), ``values`` (one label per cell, in order) or
+    ``table`` (CSV/TSV text with a header row)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    column: str
+    labels: dict[str, str | None] | None = None
+    values: list[str | None] | None = None
+    table: str | None = None
+    filename: str | None = Field(None, max_length=255)  # the table's file name, for the record
+    barcode_column: str | None = None  # table: default its first column
+    label_column: str | None = None  # table: default its one other column
+    match: Literal["name", "order"] = "name"  # table: by barcode, or row i = cell i
+    new_column: bool = True
+    strip_suffix: bool = False
+    min_match: float = Field(label_import.MIN_MATCH, ge=0, le=1)
+    dry_run: bool = False
+
+
+def _table_of(body: ImportRequest) -> label_import.LabelTable:
+    given = [k for k in ("labels", "values", "table") if getattr(body, k) is not None]
+    if len(given) != 1:
+        raise LabelError("Give one of labels (barcode -> label), values (one per cell, in order) or table.")
+    if body.labels is not None:
+        return label_import.LabelTable(labels=list(body.labels.values()), barcodes=list(body.labels),
+                                       source={"input": "mapping"})
+    if body.values is not None:
+        return label_import.LabelTable(labels=list(body.values), source={"input": "values"})
+    return label_import.read_table(body.table.encode("utf-8"), body.filename or "", body.barcode_column,
+                                   body.label_column, by_order=body.match == "order")
+
+
+async def _import(dm: DatasetManager, dataset_id: str, make_table: Callable[[], label_import.LabelTable],
+                  body_opts: dict[str, Any]) -> dict[str, Any]:
+    try:
+        table = await asyncio.to_thread(make_table)  # a big table parses off the event loop
+    except LabelError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc))
+
+    def edit(adata):
+        return label_import.import_labels(adata, body_opts["column"], table, **{
+            k: body_opts[k] for k in ("new_column", "strip_suffix", "min_match", "dry_run")})
+
+    if body_opts["dry_run"]:
+        adaptor = await dm.get_or_load_dataset(dataset_id)
+        if adaptor is None:
+            raise HTTPException(status_code=404, detail="Dataset not found.")
+        try:
+            return await asyncio.to_thread(edit, adaptor.adata)
+        except LabelError as exc:
+            raise HTTPException(status_code=exc.status, detail=str(exc))
+    return await _edit_and_save(dm, dataset_id, edit)
+
+
+@router.post("/datasets/{dataset_id}/labels/import")
+async def import_label_table(
+    dataset_id: str,
+    body: ImportRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """A per-cell label table into a user annotation column, matched by cell name (or by
+    order with one row per cell): says how many rows matched, the rows naming no cell
+    (``n_extra``) and the cells left out (``n_unmatched_cells``); refused when under
+    ``min_match`` of the labelled rows name a cell. ``dry_run`` only reports."""
+    return await _import(dm, dataset_id, lambda: _table_of(body), body.model_dump())
+
+
+@router.post("/datasets/{dataset_id}/labels/import-file")
+async def import_label_file(
+    dataset_id: str,
+    file: UploadFile = File(...),
+    column: str = Form(...),
+    barcode_column: str | None = Form(None),
+    label_column: str | None = Form(None),
+    match: Literal["name", "order"] = Form("name"),
+    new_column: bool = Form(True),
+    strip_suffix: bool = Form(False),
+    min_match: float = Form(label_import.MIN_MATCH, ge=0, le=1),
+    dry_run: bool = Form(False),
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """``/labels/import`` with the table as a CSV/TSV upload (gzipped too), e.g.
+    ``curl -F file=@labels.csv -F column=author_fine .../labels/import-file``."""
+    data = await file.read(label_import.MAX_TABLE_BYTES + 1)
+    if len(data) > label_import.MAX_TABLE_BYTES:
+        raise HTTPException(status_code=413, detail=(
+            f"The table is larger than {label_import.MAX_TABLE_BYTES // 2**20} MB."))
+    name = (file.filename or "").rsplit("/", 1)[-1][:255]
+    return await _import(
+        dm, dataset_id,
+        lambda: label_import.read_table(data, name, barcode_column or None, label_column or None,
+                                        by_order=match == "order"),
+        {"column": column, "new_column": new_column, "strip_suffix": strip_suffix, "min_match": min_match,
+         "dry_run": dry_run})

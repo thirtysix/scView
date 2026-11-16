@@ -625,6 +625,47 @@ or with fewer than 30 cells in the branch's own groups or in the other branches.
 
 ---
 
+## Labels
+
+### Import a Per-Cell Label Table
+
+```
+POST /datasets/{dataset_id}/labels/import
+Content-Type: application/json
+```
+
+Writes per-cell labels (an author annotation, a collaborator's table) into a user annotation
+column in one call. Give one of `labels` (cell name -> label), `values` (one label per cell, in
+the dataset's order) or `table` (CSV/TSV text with a header row).
+
+```json
+{"column": "author_fine", "labels": {"AAACCTGAGAAGGCCT-1": "M2", "AAACCTGAGACAGACC-1": "IDA macrophage"},
+ "new_column": true, "strip_suffix": false, "min_match": 0.9, "dry_run": false}
+```
+
+With `table`: `barcode_column` (default the first column), `label_column` (default the one
+other column), `match` `name` (default) or `order` (row i labels cell i), `filename` (kept in the
+record so the replay script can read the file again). Blank and `NA` labels are skipped.
+The answer: `n_rows`, `n_matched`, `n_extra` (rows naming no cell, with `extra_examples`),
+`n_unmatched_cells` (cells the table leaves out, `Unassigned` in a new column), `n_duplicates`,
+`labels` (each label's count, top 20). Refused (400) when under `min_match` of the labelled rows
+name a cell (the message shows both barcode formats; `hint` suggests `strip_suffix` when removing
+a `-1` suffix would match), when by order the row and cell counts differ, or when one barcode
+has two labels. `new_column: false` writes into an existing user column; cells the table leaves
+out keep their value.
+
+```
+POST /datasets/{dataset_id}/labels/import-file
+Content-Type: multipart/form-data
+```
+
+The same with the table as a file (`.csv`, `.tsv`, gzipped too) and the other fields as form
+fields: `curl -F file=@labels.csv -F column=author_fine -F label_column=annotation .../labels/import-file`.
+MCP: `import_labels` (inline `labels` / `values` / `table`, or `path` on the server under
+`MCP_IMPORT_DIRS`).
+
+---
+
 ## Export
 
 ### Export Data
