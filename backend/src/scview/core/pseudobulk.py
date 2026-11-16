@@ -41,6 +41,7 @@ import logging
 import threading
 import weakref
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -107,6 +108,9 @@ class PseudobulkResult:
     covariates: list[str] = field(default_factory=list)  # in the design, as asked
     covariate_notes: list[str] = field(default_factory=list)  # left out, and why
     warnings: list[str] = field(default_factory=list)  # design cautions (repeated donors)
+    # Genes left out and by which filter (``gene_filter``), and each asked gene's fate.
+    gene_filter: dict | None = None
+    asked_genes: list[dict] = field(default_factory=list)
 
 
 def _sample_values(values: pd.Series, codes: np.ndarray, n: int, name: str,
@@ -290,12 +294,73 @@ def sum_rows(M, rows: np.ndarray, codes: np.ndarray, n_samples: int) -> sp.csr_m
 
 def _filter_genes(P: sp.csr_matrix, min_samples: int) -> np.ndarray:
     """Column indices of the genes worth testing, capped at ``MAX_GENES`` by total count."""
-    expressed = np.asarray((P >= MIN_GENE_COUNT).sum(axis=0)).ravel() >= min_samples
+    expressed = _samples_with_counts(P) >= min_samples
     idx = np.flatnonzero(expressed)
     if len(idx) > MAX_GENES:
         totals = np.asarray(P[:, idx].sum(axis=0)).ravel()
         idx = np.sort(idx[np.argsort(-totals, kind="stable")[:MAX_GENES]])
     return idx
+
+
+def _samples_with_counts(P: sp.csr_matrix) -> np.ndarray:
+    """Per gene, the pseudobulk samples with at least ``MIN_GENE_COUNT`` counts."""
+    return np.asarray((P >= MIN_GENE_COUNT).sum(axis=0)).ravel()
+
+
+MAX_ASKED_GENES = 50
+
+
+def gene_fates(P: sp.csr_matrix, gene_names, genes_idx: np.ndarray, fitted: dict[str, tuple], min_samples: int,
+               sample_cond: np.ndarray, names: dict[str, str], asked: list[str] | None
+               ) -> tuple[dict, list[dict]]:
+    """How many genes each filter left out (``gene_filter``), and for each asked gene
+    whether it was tested and, if not, why: NRG1 untestable IDA vs M2 in QA round 7
+    (its M2 donor sums near 0) was only visible as a missing row."""
+    names_arr = np.asarray(gene_names).astype(str)
+    n_with = _samples_with_counts(P)
+    expressed = n_with >= min_samples
+    n_expr = int(expressed.sum())
+    n_fit = len(fitted)
+    rule = (f"tested when it has at least {MIN_GENE_COUNT} counts in at least {min_samples} of the "
+            f"{P.shape[0]} donor samples (the smaller side's number)")
+    summary = {"n_genes": int(P.shape[1]), "n_tested": n_fit, "rule": rule,
+               "dropped": {"low_counts": int(P.shape[1] - n_expr), "gene_cap": int(n_expr - len(genes_idx)),
+                           "not_fit": int(len(genes_idx) - n_fit)}}
+    out: list[dict] = []
+    if not asked:
+        return summary, out
+    where = {g: i for i, g in enumerate(names_arr)}
+    lower: dict[str, int] = {}
+    for i, g in enumerate(names_arr):
+        lower.setdefault(g.lower(), i)
+    in_idx = set(int(i) for i in genes_idx)
+    side = {k: sample_cond == k for k in ("a", "b")}
+    for gene in list(dict.fromkeys(str(g).strip() for g in asked if str(g).strip()))[:MAX_ASKED_GENES]:
+        i = where.get(gene, lower.get(gene.lower()))
+        if i is None:
+            out.append({"gene": gene, "status": "not_found", "reason": "not a gene of this dataset"})
+            continue
+        name = str(names_arr[i])
+        col = np.asarray(P[:, i].toarray()).ravel()
+        rec: dict[str, Any] = {"gene": name, "n_samples_with_counts": int(n_with[i]), "needs": int(min_samples),
+                               "counts": {names[k]: [int(round(v)) for v in col[side[k]]] for k in ("a", "b")}}
+        if name in fitted:
+            lfc, p, padj = fitted[name][:3]
+            rec.update(status="tested", log2fc=lfc, pval=p, pval_adj=padj)
+        elif not expressed[i]:
+            per = ", ".join(f"{names[k]} {int((col[side[k]] >= MIN_GENE_COUNT).sum())} of {int(side[k].sum())}"
+                            for k in ("a", "b"))
+            rec.update(status="low_counts", reason=(
+                f"{MIN_GENE_COUNT}+ counts in {int(n_with[i])} donor sample{'' if n_with[i] == 1 else 's'} "
+                f"({per}); the filter needs "
+                f"{min_samples}: too few counts to test at donor level"))
+        elif i not in in_idx:
+            rec.update(status="gene_cap", reason=(
+                f"expressed, but outside the {MAX_GENES:,} genes with the most counts that are tested"))
+        else:
+            rec.update(status="not_fit", reason="the model gave no estimate (an outlier sample or no variance)")
+        out.append(rec)
+    return summary, out
 
 
 def pseudobulk_de(
@@ -310,6 +375,7 @@ def pseudobulk_de(
     ruv_k: int = 0,
     covariates: pd.DataFrame | None = None,
     numeric_covariates: list[str] | None = None,
+    genes: list[str] | None = None,
 ) -> PseudobulkResult:
     """Condition A vs B on per-donor pseudobulk sums: limma-voom / voomByGroup's
     moderated t, edgeR QL's F-test, or DESeq2's Wald test (``method``), with ``ruv_k`` RUVg
@@ -322,6 +388,8 @@ def pseudobulk_de(
     ``covariates``: per-sample obs columns of those cells (one column each) to
     put in the design before the condition; those in ``numeric_covariates`` are read as
     numbers (``numeric_values``) and enter as one slope.
+    ``genes``: genes the caller asked about; ``asked_genes`` says of each whether it was
+    tested and, if not, which filter left it out.
     """
     if method not in METHODS:
         raise PseudobulkError(f"Unknown pseudobulk method '{method}' ({', '.join(METHODS)}).")
@@ -445,6 +513,7 @@ def pseudobulk_de(
     terms = w_names + (["donor"] if paired else []) + list(cov_meta) + ["condition"]
     shown = dict(zip(cov_meta, cov_used))
 
+    asked = genes
     if method == "deseq2":
         genes, stat = _run_deseq2(C, X, list(counts_df.columns))
     elif method == "edger_ql":
@@ -452,8 +521,12 @@ def pseudobulk_de(
     else:
         genes, stat = _run_voom(C, X, sample_cond if method == "voombygroup" else None,
                                 eff_lib, list(counts_df.columns))
+    gene_filter, asked_genes = gene_fates(P, gene_names, genes_idx, {g[0]: g[1:] for g in genes}, min(n_a, n_b),
+                                          sample_cond, names, asked)
     return PseudobulkResult(
         genes=genes,
+        gene_filter=gene_filter,
+        asked_genes=asked_genes,
         n_samples_a=n_a,
         n_samples_b=n_b,
         n_cells_a=int(n_cells_kept[sample_cond == "a"].sum()),

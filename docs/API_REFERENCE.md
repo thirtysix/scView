@@ -736,7 +736,7 @@ and read as expression layers `protein` (CLR), `protein_counts` and `protein_dsb
 | Route | Body / query | What |
 |-------|--------------|------|
 | `POST /datasets/{id}/de` | `{"indices", "label", "method", "min_pct", "layer"}` | `layer`: `protein` (CLR) or `protein_counts` tests the proteins instead of the genes |
-| `POST /datasets/{id}/de/compare` | `{"split_by", "group_a", "group_b", "within_column", "within_value", "method", "layer", ...}` | A vs B; `layer` as above, cell-level methods only (pseudobulk is refused with `layer`) |
+| `POST /datasets/{id}/de/compare` | `{"split_by", "group_a", "group_b", "within_column", "within_value", "method", "layer", "genes", ...}` | A vs B; `layer` as above, cell-level methods only (pseudobulk is refused with `layer`). Pseudobulk answers `gene_filter` (genes dropped by low counts, the 20,000-gene cap, or no fit, and the rule) and, for `genes` (up to 50), `asked_genes`: each one's result or why it was not tested |
 | `GET /datasets/{id}/expression/per-donor` | `gene`, `groupby`, `sample`, `condition`, `method`, `conditions`, `reference`, `groups`, `all_cells`, `layer` | one value per donor; `all_cells=true`: the whole dataset as one group; `layer=protein`: a protein's mean CLR per donor |
 | `GET /datasets/{id}/protein/dsb` / `POST` | `{"mode", "rna_window", "prot_window", "isotypes", "denoise"}` | DSB normalisation (empty droplets or ModelNegativeADTnorm) |
 | `GET /datasets/{id}/wnn` | `groupby` | WNN RNA + protein: what a run would use, the saved result |

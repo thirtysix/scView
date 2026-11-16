@@ -1389,6 +1389,9 @@ async def differential_expression(
     layer: Annotated[Literal["protein", "protein_counts"] | None, Field(description=(
         "Test the CITE-seq proteins instead of the genes (cell-level tests only): protein = their CLR "
         "values (Seurat's ADT normalisation), protein_counts = their counts log-normalised. Default: genes."))] = None,
+    genes: Annotated[list[str] | None, Field(max_length=50, description=(
+        "Genes to report whatever their result (up to 50): each one's row, or why it was not tested "
+        "(pseudobulk: which filter dropped it, with its counts per donor sample)."))] = None,
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
     """Differential expression: A vs B of one column (optionally within one cell type), one
@@ -1396,7 +1399,10 @@ async def differential_expression(
     (layer='protein'). Returns the result_id (for enrichment and
     get_result), counts significant at padj_max and |log2FC| >= lfc_min, the top up and down
     genes, and the route's warnings (confounding with batch, cell-type composition shift,
-    too few donors, transcriptome size). Across conditions prefer method='pseudobulk'."""
+    too few donors, transcriptome size); pseudobulk adds gene_filter (genes each filter dropped).
+    genes=[...] reports named genes whatever their result, or why untested. Across conditions
+    prefer method='pseudobulk'."""
+    asked = list(genes or [])  # `genes` is the route's rows below
     if group_a is not None or group_b is not None:
         if not (column and group_a and group_b):
             raise ToolError("Between groups needs column, group_a and group_b.")
@@ -1410,6 +1416,8 @@ async def differential_expression(
                 raise ToolError("Proteins are tested cell-level (wilcoxon, t-test, logreg); per donor: "
                                 "per_donor_expression(layer='protein').")
             body["layer"] = layer
+        if asked and method == "pseudobulk":
+            body["genes"] = asked
         if covariates or donor_key or numeric_covariates:
             if method != "pseudobulk":
                 raise ToolError("covariates, numeric_covariates and donor_key are for method='pseudobulk'.")
@@ -1481,7 +1489,27 @@ async def differential_expression(
     if comp.get("groups") and comp.get("warn"):
         out["composition_shift"] = [pick(g, "group", "share_a", "share_b", "diff_points", "p")
                                     for g in comp["groups"][:5] if g.get("flagged")]
-    return dumps(out, _max_chars(limit))
+    if r.get("gene_filter"):  # pseudobulk: what each filter left out
+        out["gene_filter"] = r["gene_filter"]
+    if asked:
+        out["asked_genes"] = r.get("asked_genes") or _asked_rows(asked, r)
+    return dumps(out, _max_chars(limit) + (1500 if asked else 0))
+
+
+def _asked_rows(asked: list[str], r: dict[str, Any]) -> list[dict[str, Any]]:
+    """Cell-level: each asked gene's row, or why it has none."""
+    all_genes = {str(g.get("gene")).lower(): g for g in r.get("genes") or []}
+    out = []
+    for gene in dict.fromkeys(asked):
+        g = all_genes.get(str(gene).lower())
+        if g:
+            out.append({"gene": g.get("gene"), "status": "tested",
+                        **{k: num(g.get(k)) for k in ("logfoldchange", "pval_adj", "pval", "stat") if k in g}})
+        else:
+            out.append({"gene": gene, "status": "not_tested", "reason": (
+                f"detected in under {r.get('min_pct')} of the cells on both sides (min_pct), or not a gene "
+                "of this dataset" if r.get("n_genes_skipped") else "not a gene of this dataset")})
+    return out
 
 
 @tool(READ)
