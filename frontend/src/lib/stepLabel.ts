@@ -13,6 +13,7 @@ export const STEP_LABELS: Record<string, string> = {
   // Bringing data in
   ingest: "Imported",
   integrate: "Datasets merged (joint embedding)",
+  subset: "Made from another dataset's cells (subset)",
   // The pipeline
   reset_to_counts: "Reset to counts",
   qc_metrics: "QC metrics",

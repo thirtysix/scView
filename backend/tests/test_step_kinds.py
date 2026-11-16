@@ -29,7 +29,7 @@ WRAPPERS = {"core/user_labels.py", "core/vdj.py"}
 # matrix, the clustering or a label column a result may have grouped by. Everything else
 # is in ADDITIVE_STEPS or LABEL_STEPS. A new step kind goes in one or the other.
 DATA_CHANGING = {
-    "ingest", "integrate", *ALL_STEPS, "run_errors",
+    "ingest", "integrate", "subset", *ALL_STEPS, "run_errors",
     "subcluster", "merge_clusters", "keep_resolution", "keep_hvg_setting", "keep_layout",
     "doublet_threshold", "mito_refilter",
     "protein_dsb",

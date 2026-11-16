@@ -1992,6 +1992,84 @@ _HELPERS["atac_fragments"] = _atac_fragments_helper()
 _HELPER_ORDER += ("atac_fragments",)
 
 
+def _subset_helper() -> str:
+    """A subset's cells from its parent (core/subset.py): the barcodes, the counts as scView
+    took them, scView's columns renamed by core/subset.py's own code, the parent's UMAP."""
+    import inspect
+
+    from scview.core import subset as sub
+
+    lines = [f"PARENT_PREFIX = {_lit(sub.PARENT_PREFIX)}",
+             f"SUBSET_RESULT_OBSM = {_lit(sorted([*sub._RESULT_OBSM, *sub._REMADE_OBSM]))}", ""]
+    for obj in (sub._parent_name, sub.obs_names_map):
+        lines += ["", inspect.getsource(obj).rstrip("\n")]
+    return "\n".join(lines) + '''
+
+
+def subset_barcodes(packed):
+    """The subset's barcodes, as scView packed them (zlib, base64, one per line)."""
+    import base64
+    import zlib
+
+    return zlib.decompress(base64.b64decode("".join(packed))).decode("utf-8").split("\\n")
+
+
+def subset_counts(adata):
+    """(counts, genes) as scView takes them for a subset: the counts from before an ambient RNA
+    correction, else the first of layers['counts'], .raw and X that holds counts."""
+    if "counts_uncorrected" in adata.layers:
+        return adata.layers["counts_uncorrected"], adata.var
+    if "counts" in adata.layers and looks_like_counts(adata.layers["counts"]):
+        return adata.layers["counts"], adata.var
+    if adata.raw is not None and looks_like_counts(adata.raw.X):
+        return adata.raw.X, adata.raw.var
+    if looks_like_counts(adata.X):
+        return adata.X, adata.var
+    sys.exit("No raw counts in the parent's layers['counts'], .raw or X: pass the file scView took them from.")
+
+
+def subset_of_parent(parent, cells):
+    """The new dataset: the cells' counts in X, obs (scView's columns as parent_*), the parent's
+    UMAP as X_umap_parent and the per-cell obsm entries that are data, not results."""
+    pos = parent.obs_names.get_indexer(pd.Index(cells))
+    if (pos < 0).any():
+        sys.exit(f"{int((pos < 0).sum()):,} of the subset's cells are not in INPUT: pass the parent dataset.")
+    M, var = subset_counts(parent)
+    X = M[pos]
+    X = sp.csr_matrix(X, dtype=np.float32) if sp.issparse(X) else sp.csr_matrix(np.asarray(X, dtype=np.float32))
+    obs = parent.obs.iloc[pos].copy()
+    obs = obs.rename(columns=obs_names_map(obs.columns))
+    for c in obs.columns:
+        if obs[c].dtype.name == "category":
+            obs[c] = obs[c].cat.remove_unused_categories()
+    var = var.copy()
+    var.index = var.index.astype(str)
+    obs.index = obs.index.astype(str)
+    out = ad.AnnData(X=X, obs=obs, var=var)
+    umap = "X_umap" if "X_umap" in parent.obsm else next((k for k in parent.obsm if k.lower() == "x_umap"), None)
+    if umap is not None and np.ndim(parent.obsm[umap]) == 2 and np.shape(parent.obsm[umap])[1] >= 2:
+        out.obsm["X_umap_parent"] = np.asarray(parent.obsm[umap])[pos, :2].astype(np.float32)
+    if "X_umap_original" in parent.obsm:
+        out.obsm["X_umap_original"] = np.asarray(parent.obsm["X_umap_original"])[pos]
+    for k in parent.obsm:
+        if str(k).startswith("X_") or k in SUBSET_RESULT_OBSM:
+            continue
+        v = parent.obsm[k]
+        if isinstance(v, pd.DataFrame):
+            v = v.iloc[pos].copy()
+            v.index = obs.index
+        else:
+            v = v[pos]
+        out.obsm[k] = v
+    return out
+'''
+
+
+_HELPERS["subset"] = _subset_helper()
+_HELPER_ORDER += ("subset",)
+_HELPER_NEEDS["subset"] = ("looks_like_counts",)
+
+
 def _need(ctx: _Ctx, *names: str) -> None:
     for name in names:
         if name not in ctx.helpers:
@@ -2056,7 +2134,8 @@ if "counts" in adata.layers or adata.raw is not None:
         "highly_variable", "means", "dispersions", "dispersions_norm", "variances",
         "residual_variances", "highly_variable_rank", "highly_variable_nbatches",
         "highly_variable_intersection") if c in adata.var.columns], inplace=True)
-    for k in [k for k in list(adata.obsm.keys()) if k.startswith("X_") and k not in ("X_umap_original", "X_pca_original")]:
+    for k in [k for k in list(adata.obsm.keys())
+              if k.startswith("X_") and k not in ("X_umap_original", "X_pca_original", "X_umap_parent")]:
         del adata.obsm[k]
     for k in list(adata.obsp.keys()):
         del adata.obsp[k]
@@ -3042,6 +3121,50 @@ def _integrate(p: dict, ctx: _Ctx) -> Snippet:
         *_param_comment(p),
         *(_unit_filtering_lines(filtering) if isinstance(filtering, dict) else []),
     ], "merge of datasets: start from the merged file")
+
+
+# Characters of packed barcodes per line of the script
+_PACKED_WIDTH = 96
+
+
+def _subset(p: dict, ctx: _Ctx) -> Snippet:
+    """The cells of the parent this dataset was made of (core/subset.py), from the barcodes
+    kept in uns['scview_subset_cells']; the recorded rule is a comment."""
+    import base64
+    import zlib
+
+    from scview.core import subset as sub
+
+    head = [
+        f"# This dataset is a subset of scView dataset {comment_text(repr(str(p.get('parent_name'))), 120)} "
+        f"(id {comment_text(p.get('parent_id'), 40)}):",
+        f"# {comment_text(p.get('n_cells'), 12)} of {comment_text(p.get('n_parent_cells'), 12)} cells, "
+        f"chosen by {comment_text(p.get('described'), 200)}.",
+        "# INPUT is that dataset as scView held it when the subset was made: its stored .h5ad, or",
+        "# the output of its own replay script. The counts came from "
+        f"{comment_text(p.get('counts_source') or 'the parent', 120)}.",
+    ]
+    cells = ctx.adata.uns.get(sub.CELLS_KEY) if hasattr(ctx.adata, "uns") else None
+    if cells is None or len(cells) == 0:
+        return Snippet(NOT_REPLAYABLE, head + ["# The cells' barcodes were not kept: start from this dataset's own",
+                                               "# stored file instead. Recorded:", *_param_comment(p)],
+                       "barcodes not kept")
+    packed = base64.b64encode(zlib.compress("\n".join(map(str, cells)).encode("utf-8"), 9)).decode("ascii")
+    chunks = [packed[i:i + _PACKED_WIDTH] for i in range(0, len(packed), _PACKED_WIDTH)]
+    _need(ctx, "subset")
+    note = ""
+    status = EXACT
+    if " of the " in str(p.get("counts_source") or ""):  # recover_counts' source-file fallback
+        status, note = APPROXIMATE, "counts from the parent's source file"
+        head.append("# NOTE: scView read them from that file, by barcode: pass it as INPUT if the parent's "
+                    "own file has none.")
+    return Snippet(status, head + [
+        "SUBSET_CELLS = subset_barcodes((",
+        *[f"    {c!r}" for c in chunks],
+        "))",
+        "adata = subset_of_parent(adata, SUBSET_CELLS)",
+        f"assert adata.n_obs == {int(len(cells))}",
+    ], note)
 
 
 def _subcluster(p: dict, ctx: _Ctx) -> Snippet:
@@ -4289,6 +4412,7 @@ def _remove_score(p: dict, ctx: _Ctx) -> Snippet:
 _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "ingest": _ingest,
     "integrate": _integrate,
+    "subset": _subset,
     "reset_to_counts": _reset_to_counts,
     "qc_metrics": _qc_metrics,
     "doublet_detection": _doublet_detection,

@@ -18,6 +18,7 @@ RECORDED_STEPS: tuple[str, ...] = (
     # Bringing data in
     "ingest",
     "integrate",
+    "subset",
     # The pipeline (pipeline.ALL_STEPS)
     "reset_to_counts",
     "qc_metrics",

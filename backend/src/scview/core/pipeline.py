@@ -1160,7 +1160,9 @@ def keep_original_umap(adata: ad.AnnData) -> bool:
 
 
 ORIGINAL_PCA_KEY = "X_pca_original"
-ORIGINAL_KEYS = (ORIGINAL_UMAP_KEY, ORIGINAL_PCA_KEY)
+# A subset's parent UMAP (core/subset.py): kept by runs as the file's own UMAP is.
+PARENT_UMAP_KEY = "X_umap_parent"
+ORIGINAL_KEYS = (ORIGINAL_UMAP_KEY, ORIGINAL_PCA_KEY, PARENT_UMAP_KEY)
 
 
 def keep_original_pca(adata: ad.AnnData) -> bool:

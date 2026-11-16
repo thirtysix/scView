@@ -89,6 +89,37 @@ DELETE /datasets/{dataset_id}
 {"message": "Dataset deleted."}
 ```
 
+### Make a Dataset from Some Cells (subset)
+
+```
+POST /datasets/{dataset_id}/subset
+```
+
+A new dataset of the chosen cells; the parent is never changed. Choose the cells with exactly
+one of `filter` (the `POST /cells/filter` grammar), `groups` (`{"column", "values"}`) or `mask`
+(the packed base64 bitmask `/cells/filter` returns, over the dataset's cells in their current
+order). Optional `name` (default `<parent> - <groups>`), `dry_run` (say what it would hold,
+make nothing).
+
+```json
+{"groups": {"column": "cell_type", "values": ["CD14 Mono"]}}
+```
+
+The new dataset holds the cells' counts (found as a joint embedding finds them: the counts
+before an ambient RNA correction, `layers['counts']`, `.raw`, `X`, else the source files),
+obs with unused categories dropped and scView's own `scview_*` columns renamed `parent_*`,
+the parent's UMAP as `X_umap_parent`, per-cell obsm data (protein, hashtags, guides, TCR/BCR,
+spatial positions), tissue images of the sections kept, and the input files read by barcode
+(ATAC peaks and fragments, spliced/unspliced counts, outlines). Not carried: PCA, the
+neighbour graph, other layouts and stored results. Its metadata carries `source: "subset"`
+and `subset_of` (`id`, `name`, `how`, `n_cells`, `n_parent_cells`, `carried`, `not_carried`);
+its recipe starts with a `subset` step, which the replay script repeats from the parent.
+
+**Response** (200): `dataset_id`, `name`, `n_cells`, `n_parent_cells`, `n_genes`,
+`described`, `counts_source`, `carried`, `not_carried`, `renamed`, `next`. Refused: fewer
+than 50 cells or every cell (400), an unknown column, group or gene (404), a mask over
+another number of cells (400), a large dataset (422).
+
 ---
 
 ## Embeddings
