@@ -199,3 +199,14 @@ async def test_pseudotime_genes_ranks_a_branchs_own_genes(client, dataset_manage
     text = await _call("pseudotime_genes", {"dataset_id": did, "column": "dpt_pseudotime",
                                             "rank_by": "branch_specific"}, error=True)
     assert "needs a branch" in text
+
+
+async def test_pseudotime_off_lineage_names_the_subset_call(client, dataset_manager):
+    from tests.test_trajectory_paga import _two_lineages
+
+    did = _register(dataset_manager, _two_lineages(), "mlin")
+    r = await _call("pseudotime", {"dataset_id": did, "root_column": "grp", "root_value": "P1"})
+    assert any("not on a path" in w for w in r["warnings"])
+    assert r["subset"] == {"call": "subset_dataset", "dataset_id": did, "column": "grp",
+                           "values": ["P1", "P2", "P3"],
+                           "then": "run_pipeline on the new id, then pseudotime there from the same root"}

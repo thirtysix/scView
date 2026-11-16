@@ -298,6 +298,7 @@ def test_dpt_warns_when_groups_sit_off_the_roots_lineage():
     (w,) = [x for x in got["warnings"] if "not on a path" in x]
     assert w.startswith("1 groups of grp (120 of 480 cells, 25%) are not on a path from 'P1'")
     assert f"'Q' ({q['median_pseudotime']:.2g})" in w and "'P1', 'P2', 'P3'" in w
+    assert "New dataset…" in w and "subset_dataset" in w  # how to make the lineage's own dataset
     # Q's own root: P1 - P3 are off its lineage the same way
     other = compute_dpt(a, "grp", "Q")
     assert [x["group"] for x in other["root_checks"]["lineage"]["off_lineage"]] == ["P1", "P2", "P3"]

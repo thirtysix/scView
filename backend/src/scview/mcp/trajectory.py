@@ -176,6 +176,12 @@ async def pseudotime(
             groupby = None
     if groupby:
         out["by_group"] = await _medians(dataset_id, column, groupby, n)
+    lineage = (r.get("root_checks") or {}).get("lineage") or {}
+    if lineage.get("off_lineage") and any("not on a path" in w for w in out["warnings"]):
+        # groups off the root's lineage: their own dataset gives a pseudotime of the lineage alone
+        out["subset"] = {"call": "subset_dataset", "dataset_id": dataset_id, "column": lineage.get("column"),
+                         "values": lineage.get("lineage") or [],
+                         "then": "run_pipeline on the new id, then pseudotime there from the same root"}
     out["next"] = (f"pseudotime_genes(column='{column}'); "
                    + (f"plot(kind='violin', value_column='{column}', groupby='{groupby}'); " if groupby else "")
                    + f"plot(color_by='{column}')")

@@ -587,7 +587,8 @@ def lineage_check(adata, work: ad.AnnData, pt: np.ndarray, column: str,
             f"group's neighbours are in the other. DPT still gives them a pseudotime, latest first (median "
             f"shown): {named}{more}. "
             "That value is distance from the root, not progress along a process. Read the pseudotime within the "
-            f"root's lineage ({lineage}), or compute it on those groups' cells alone.")
+            f"root's lineage ({lineage}), or make a dataset of the lineage's cells and compute it there (Unified "
+            "View: select the groups, then New dataset…; MCP: subset_dataset).")
     return out
 
 
