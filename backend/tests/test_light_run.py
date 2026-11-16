@@ -263,8 +263,9 @@ async def test_preflight_says_light_or_what_a_conversion_turns_off(client, datas
     assert preflight.CONVERTS_SENTENCE.strip() in body["verdict"]["sentence"]
     assert large_mode.conversion_note() in body["verdict"]["notes"]
     r = await client.get(f"{API}/datasets/otero/preflight", params={"steps": "pca,neighbors"})
-    assert r.json()["mode"] == {"chunked": False, "requested": "auto", "reason": "The run fits in memory.",
-                                "light": False}
+    mode = r.json()["mode"]  # the run's own rule and words (large_run.mode_rule)
+    assert (mode["chunked"], mode["requested"], mode["light"]) == (False, "auto", False)
+    assert mode["reason"].endswith("so it works in memory.")
 
 
 def test_every_large_dataset_refusal_is_named_in_what_a_conversion_turns_off():
@@ -287,6 +288,6 @@ def test_every_large_dataset_refusal_is_named_in_what_a_conversion_turns_off():
     assert large_run.REFUSED_BATCH_METHODS.keys() <= {"scanorama", "bbknn"}
 
 
-def test_the_control_allows_large_mode_unless_told_not_to():
-    assert RunControl().allow_large is True
-    assert RunControl(allow_large=False).allow_large is False
+def test_the_control_refuses_large_mode_unless_told_to():
+    assert RunControl().allow_large is False  # v0.81: no conversion without a yes
+    assert RunControl(allow_large=True).allow_large is True

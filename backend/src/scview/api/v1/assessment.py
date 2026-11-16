@@ -49,9 +49,10 @@ class RunPipelineRequest(BaseModel):
     """Request body for the pipeline run endpoint."""
     steps: list[str]
     params: dict[str, Any] | None = None
-    # False: refused (409, before anything runs) when the run would put the dataset in
-    # large-dataset layout, with what that turns off (the MCP passes its opt-in here).
-    allow_large_mode: bool = True
+    # False (the default): refused (409, before anything runs) when the run would put the
+    # dataset in large-dataset layout, with what that turns off; true only after the user
+    # (UI confirm) or the caller (MCP allow_large_mode) said yes.
+    allow_large_mode: bool = False
 
 
 class SuggestRequest(BaseModel):
@@ -63,6 +64,7 @@ class RerunRequest(BaseModel):
     """Re-run a step (and its downstream) with new parameters."""
     edited_step: str
     params: dict[str, Any] | None = None
+    allow_large_mode: bool = False  # as RunPipelineRequest
 
 
 # ---------------------------------------------------------------------------
@@ -771,7 +773,7 @@ async def rerun_step(
 
     params = _run_params(body.params)
     _check_annotation_target(adaptor, plan.rerun_steps, params)
-    control = RunControl(plan=(plan.rerun_steps, params))
+    control = RunControl(plan=(plan.rerun_steps, params), allow_large=body.allow_large_mode)
     del adaptor  # as /assessment/run: no hold on the copy the run replaces
 
     def _run(adaptor):

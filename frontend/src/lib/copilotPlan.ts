@@ -220,11 +220,12 @@ export async function runStepStreamed(
   datasetId: string,
   step: string,
   params: Record<string, unknown>,
+  allowLarge = false,
 ): Promise<RunOutcomeFields> {
   let result: RunOutcomeFields | null = null;
   await streamEvents(
     `/datasets/${datasetId}/assessment/run-stream`,
-    { steps: [step], params },
+    { steps: [step], params, allow_large_mode: allowLarge },
     () => undefined,
     "The run",
     undefined,

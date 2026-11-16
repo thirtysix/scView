@@ -5,6 +5,7 @@ import { useViewStore } from "@/stores/viewStore";
 import { useOnScreenStore } from "@/stores/onScreenStore";
 import { apiFetch } from "@/api/client";
 import { runPipelineSteps } from "@/api/assistant";
+import { withConversionConsent } from "@/api/pipelineRun";
 import { getDataset } from "@/api/datasets";
 import { collectionLabel } from "@/api/genesets";
 import { runGsea, type EnrichmentResult, type GseaResponse, type GseaTerm } from "@/api/enrichment";
@@ -214,9 +215,9 @@ export function UnifiedEnrichmentSubtab({
     setIsComputingMarkers(true);
     setMarkersError(null);
     try {
-      const res = await runPipelineSteps(datasetId, ["marker_genes"], {
-        marker_columns: [groupByColumn],
-      });
+      const res = await withConversionConsent((allowLarge) =>
+        runPipelineSteps(datasetId, ["marker_genes"], { marker_columns: [groupByColumn] }, allowLarge),
+      );
       const err = res.errors?.marker_genes;
       if (err) throw new Error(err);
       setCurrentDataset(await getDataset(datasetId));

@@ -77,7 +77,7 @@ describe("co-pilot plans", () => {
     runStepStreamed.mockResolvedValue({ steps_run: ["doublet_detection"], status: "complete" });
     fireEvent.click(within(card).getByRole("button", { name: "Run plan" }));
     await waitFor(() => expect(within(card).getByRole("status").textContent).toBe("All 2 steps done."));
-    expect(runStepStreamed).toHaveBeenCalledWith("kang", "doublet_detection", {});
+    expect(runStepStreamed).toHaveBeenCalledWith("kang", "doublet_detection", {}, false); // no conversion without a yes
     expect(useSettingsStore.getState().colorBy).toBe("stim");
     expect(useDatasetStore.getState().currentDataset?.obs_columns.map((c) => c.name)).toContain("predicted_doublet");
     expect(within(card).queryByRole("button", { name: "Run plan" })).toBeNull();

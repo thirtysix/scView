@@ -583,6 +583,16 @@ async def test_dataset_preflight_takes_the_doublet_channels(client, dataset_mana
         assert per < whole, loaded
 
 
+def _short(monkeypatch, need) -> None:
+    """A 6 GB limit with 1 GB used, and the run's need by its steps (``large_run`` estimates)."""
+    from scview.core import large_run, memory_budget
+
+    monkeypatch.setattr(memory_budget, "read_budget", lambda *a, **k: memory_budget.MemoryBudget(
+        6 * GiB, GiB, True, "container limit"))
+    monkeypatch.setattr(large_run, "opening_need", lambda path, steps, *a, **k: (need(steps), 0, 0))
+    monkeypatch.setattr(large_run, "in_memory_need", lambda adaptor, steps, *a: (need(steps), 0))
+
+
 async def test_a_conversion_only_the_doublet_step_causes_says_the_run_fits_without_it(
         client, dataset_manager, monkeypatch):
     from tests.test_doublet_channels import _dataset
@@ -599,8 +609,8 @@ async def test_a_conversion_only_the_doublet_step_causes_says_the_run_fits_witho
 
     with_dbl, without = await need(steps), await need(steps.replace("doublet_detection,", ""))
     assert without < with_dbl
-    cut = (with_dbl + without) / 2  # memory for the run without doublets, not with them
-    monkeypatch.setattr(pf, "_would_chunk", lambda req, n, *a, **k: (req != "off" and n > cut, "Too big."))
+    # The run's own rule: 6 GB with 1 GB used; 10 GB for the run with doublets, 1 GB without.
+    _short(monkeypatch, lambda steps: (10 if "doublet_detection" in steps else 1) * GiB)
     body = (await client.get(f"{API}/datasets/pf3/preflight", params={"steps": steps})).json()
     assert body["mode"]["converts"] is True
     assert body["mode"]["without_doublets"]["fits_in_memory"] is True
@@ -608,7 +618,7 @@ async def test_a_conversion_only_the_doublet_step_causes_says_the_run_fits_witho
     assert "switch the dataset to large-dataset mode for good" in sentence
     assert "Without doublet detection the run fits in memory" in sentence
     # The doublet step alone is not the cause: no such hint.
-    monkeypatch.setattr(pf, "_would_chunk", lambda req, n, *a, **k: (True, "Too big."))
+    _short(monkeypatch, lambda steps: 10 * GiB)
     body = (await client.get(f"{API}/datasets/pf3/preflight", params={"steps": steps})).json()
     assert body["mode"]["converts"] is True and "without_doublets" not in body["mode"]
 
