@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, ChevronDown, ChevronRight, Info, Loader2, Sparkles } from "lucide-react";
+import { errorMessage } from "@/lib/errorMessage";
 import { getClusterQc, type ClusterFlag, type ClusterQc, type ClusterQcReport, type QcDriver } from "@/api/qc";
 import { Help } from "@/components/common/Help";
 import { ClusterEvidenceList } from "@/components/qc/ClusterEvidence";
@@ -135,7 +136,7 @@ export function ClusterQcTable({ datasetId, refreshKey = 0 }: { datasetId: strin
     setError(null);
     getClusterQc(datasetId, groupby || undefined)
       .then((d) => !cancelled && setData(d))
-      .catch((e) => !cancelled && setError(String(e?.message ?? e)))
+      .catch((e) => !cancelled && setError(errorMessage(e)))
       .finally(() => !cancelled && setLoading(false));
     return () => {
       cancelled = true;
