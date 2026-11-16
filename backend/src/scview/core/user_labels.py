@@ -158,7 +158,8 @@ def _record(adata, step: str, params: dict[str, Any]) -> None:
 
 
 def label_cells(
-    adata, column: str, label: object, indices: Iterable[int], new_column: bool
+    adata, column: str, label: object, indices: Iterable[int], new_column: bool,
+    record: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Give the cells at ``indices`` the label ``label`` in a user annotation column.
 
@@ -183,7 +184,7 @@ def label_cells(
         _set_user_columns(adata, [*names, column])
     forget_column_results(adata, column)
     _record(adata, "label_cells", {
-        "column": column, "label": clean, "n_cells": int(idx.size), "new_column": new_column,
+        "column": column, "label": clean, "n_cells": int(idx.size), "new_column": new_column, **(record or {}),
     })
     n_labels = len(adata.obs[column].cat.categories)
     out = {

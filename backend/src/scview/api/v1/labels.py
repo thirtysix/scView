@@ -9,12 +9,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from types import SimpleNamespace
 from typing import Any, Callable
+
+import numpy as np
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from scview.core import cell_ontology
+from scview.core.cell_filter import CellFilter, FilterError, GeneCondition, _conditions, evaluate
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import dataset_edit, edit_room, editable, save_edit, uns_snapshot
 from scview.core.user_labels import (
@@ -35,6 +39,26 @@ class LabelRequest(BaseModel):
     # A Cell Ontology term the user picked for the label (core/cell_ontology.py); None
     # leaves the label's term as it is.
     ontology_id: str | None = None
+    # The filter the cells came from (MCP set_labels, the UI's Filter): recorded with the
+    # labelling when it has only category and range conditions and gives exactly these cells,
+    # so the replay script can label the same cells (core/replay_script.py).
+    filter: CellFilter | None = None
+
+
+def _replayable_filter(adata, spec: CellFilter | None, indices: list[int]) -> dict | None:
+    """``spec`` as JSON when it reads obs alone and matches exactly ``indices``; else None."""
+    if spec is None or any(isinstance(c, GeneCondition) for c in _conditions(spec)):
+        return None
+    try:
+        hits = evaluate(SimpleNamespace(adata=adata), spec)
+    except (FilterError, KeyError, ValueError):
+        return None
+    want = np.zeros(adata.n_obs, dtype=bool)
+    idx = np.asarray(indices, dtype=np.int64)
+    if idx.size and (idx.min() < 0 or idx.max() >= adata.n_obs):
+        return None
+    want[idx] = True
+    return spec.model_dump(mode="json") if np.array_equal(hits, want) else None
 
 
 class CombineRequest(BaseModel):
@@ -128,7 +152,9 @@ async def label_selection(
         raise HTTPException(status_code=exc.status, detail=str(exc))
 
     def edit(adata):
-        out = label_cells(adata, body.column, body.label, body.indices, body.new_column)
+        flt = _replayable_filter(adata, body.filter, body.indices)
+        out = label_cells(adata, body.column, body.label, body.indices, body.new_column,
+                          record={"filter": flt} if flt is not None else None)
         out["previous_terms"] = (
             cell_ontology.set_terms(adata, out["column"], {out["label"]: term}) if term else {})
         return out
