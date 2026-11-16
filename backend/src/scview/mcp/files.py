@@ -18,7 +18,7 @@ import hashlib
 import os
 import shutil
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
@@ -26,7 +26,7 @@ from pydantic import Field
 from scview.mcp import api, jobs
 from scview.mcp.compact import dumps, pick
 from scview.mcp.spatial import NEXT, _body
-from scview.mcp.tools import READ, WRITE, _line, tool
+from scview.mcp.tools import READ, WRITE, DatasetId, _line, _post, tool
 
 MAX_FILES = 2000  # a folder with more is not one experiment
 _CHUNK = 4 * 1024 * 1024
@@ -243,3 +243,88 @@ async def import_server_path(
                    runner=run)
     return dumps({"job_id": job.id, "status": job.status, "path": str(real), "n_files": len(files), "bytes": total,
                   **({"skipped": skipped[:20]} if skipped else {}), "next": NEXT})
+
+
+LABEL_TABLE_MAX_BYTES = 512 * 1024 * 1024
+
+
+def _read_label_file(path: str) -> tuple[str, str]:
+    """(text, file name) of a label table on the server, under MCP_IMPORT_DIRS."""
+    roots = _allowed_roots()
+    if not path or "\x00" in path or not Path(path).is_absolute():
+        raise ToolError("Give an absolute path on the server.")
+    try:
+        real = Path(path).resolve(strict=True)
+    except (OSError, RuntimeError):
+        raise ToolError(f"'{path}' does not exist on the server.") from None
+    if _inside(real, roots) is None or not real.is_file():
+        raise ToolError(f"'{path}' is not a file under the folders the server allows "
+                        f"({', '.join(map(str, roots))}).")
+    if real.stat().st_size > LABEL_TABLE_MAX_BYTES:
+        raise ToolError("The table is larger than 512 MB.")
+    data = real.read_bytes()
+    if data[:2] == b"\x1f\x8b":
+        import gzip
+
+        data = gzip.decompress(data)
+    return data.decode("utf-8-sig", "replace"), real.name
+
+
+@tool(WRITE)
+async def import_labels(
+    dataset_id: DatasetId,
+    column: Annotated[str, Field(min_length=1, max_length=64, description=(
+        "The user annotation column to write: a new one (new_column) or one set_labels / an import made."))],
+    labels: Annotated[dict[str, str | None] | None, Field(description=(
+        "Cell name (barcode, as in the dataset's obs names) -> label. For a few thousand cells; "
+        "a bigger table goes as path or through the REST upload (see the tool's description)."))] = None,
+    values: Annotated[list[str | None] | None, Field(description=(
+        "One label per cell in the dataset's order (match by order): refused unless the count "
+        "equals the dataset's cells."))] = None,
+    table: Annotated[str | None, Field(description=(
+        "CSV or TSV text with a header row: a barcode column and a label column."))] = None,
+    path: Annotated[str | None, Field(max_length=4096, description=(
+        "Or a CSV/TSV (.gz too) ON THE SERVER under MCP_IMPORT_DIRS, as import_server_path reads."))] = None,
+    barcode_column: Annotated[str | None, Field(description=(
+        "table/path: the column of cell names (default: the first column)."))] = None,
+    label_column: Annotated[str | None, Field(description=(
+        "table/path: the column of labels (default: the one other column)."))] = None,
+    match: Annotated[Literal["name", "order"], Field(description=(
+        "table/path: by cell name (default), or by order: row i labels cell i, refused unless the "
+        "row count equals the cell count."))] = "name",
+    new_column: Annotated[bool, Field(description=(
+        "Create the column (cells the table leaves out: 'Unassigned'). False: write into an existing "
+        "user column; cells the table leaves out keep their label."))] = True,
+    strip_suffix: Annotated[bool, Field(description=(
+        "Remove a '-1'-style suffix from the cell names on both sides before matching."))] = False,
+    min_match: Annotated[float, Field(ge=0, le=1, description=(
+        "Refuse when fewer than this share of the table's labelled rows name a cell (default 0.9)."))] = 0.9,
+    dry_run: Annotated[bool, Field(description="True: report the match, change nothing.")] = False,
+) -> str:
+    """Bring per-cell labels (an author annotation from GEO, a collaborator's table) into a user
+    annotation column in one call, matched by cell name or by order. Says how many rows matched,
+    rows naming no cell (n_extra, with examples), cells the table leaves out, and each label's
+    count; refused when under min_match of the rows match (a barcode format that differs) or, by
+    order, when the counts differ. Recorded; a table read from a file replays from that file.
+    A big table on your machine: curl -F file=@labels.csv -F column=NAME [-F label_column=...]
+    http://127.0.0.1:8080/api/v1/datasets/<id>/labels/import-file (same fields as form fields)."""
+    given = [k for k, v in (("labels", labels), ("values", values), ("table", table), ("path", path))
+             if v is not None]
+    if len(given) != 1:
+        raise ToolError("Give one of labels, values, table or path.")
+    body: dict[str, Any] = {"column": column, "new_column": new_column, "strip_suffix": strip_suffix,
+                            "min_match": min_match, "dry_run": dry_run}
+    if labels is not None:
+        body["labels"] = labels
+    elif values is not None:
+        body["values"] = values
+    else:
+        text, name = (await asyncio.to_thread(_read_label_file, path)) if path else (table, None)
+        body.update(table=text, filename=name, barcode_column=barcode_column, label_column=label_column,
+                    match=match)
+    r = await _post(f"/datasets/{dataset_id}/labels/import", body)
+    out = {"dataset_id": dataset_id, **r}
+    if not dry_run:
+        out["next"] = (f"crosstab the new column against a known one to check it; set_labels edits it; "
+                       f"colour by '{r.get('column')}' in the UI")
+    return dumps(out)

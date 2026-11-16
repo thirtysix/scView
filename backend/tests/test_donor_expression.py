@@ -270,3 +270,16 @@ async def test_endpoint(client, dataset_manager):
     r = await client.get(url, params=[("gene", "G0"), ("groupby", "cell_type"), ("condition", "stim"),
                                       ("conditions", "nope"), ("conditions", "CTRL")])
     assert r.status_code == 400 and "not a value" in r.json()["detail"]
+
+
+def test_few_donors_warning_names_only_the_tested_conditions():
+    """QA round 7: CD vs UC tested, and the warning named 'normal: 0', a condition not asked for."""
+    a = _adata(n_donors=3, conditions=("CD", "UC", "HC"))
+    hc = (a.obs["stim"] == "HC").to_numpy()
+    a.obs.loc[hc & (a.obs["donor_id"] != "D0").to_numpy(), "cell_type"] = "B"  # HC: A only in D0
+    r = dx.per_donor_expression(a, "G0", "cell_type", condition_key="stim", conditions=["CD", "UC"],
+                                groups=["A"])
+    assert r["n_donors"]["HC"] == 1 and r["warnings"] == []
+    r = dx.per_donor_expression(a, "G0", "cell_type", condition_key="stim", conditions=["CD", "HC"],
+                                groups=["A"])
+    assert len(r["warnings"]) == 1 and "HC: 1" in r["warnings"][0] and "CD" not in r["warnings"][0]

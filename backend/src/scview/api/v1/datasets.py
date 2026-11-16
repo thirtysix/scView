@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from fastapi.responses import Response
 from pydantic import BaseModel
 
@@ -427,20 +427,34 @@ async def get_provenance(
 @router.get("/datasets/{dataset_id}/recipe")
 async def get_recipe(
     dataset_id: str,
+    offset: int = Query(0, ge=0),
+    limit: int | None = Query(None, ge=1),
+    step: list[str] | None = Query(None),
     dm: DatasetManager = Depends(get_dataset_manager),
 ):
     """Return the ordered, replayable recipe (commit chain of step+params) — a
     portable record for reproducing this dataset's processing — with how the
-    replay script reproduces each step (``replay``: status + note)."""
+    replay script reproduces each step (``replay``: status + note).
+
+    ``step`` (repeatable) keeps those step kinds only; ``offset`` / ``limit`` page what
+    is left (default: all). Each step carries its ``index`` in the whole recipe;
+    ``n_total`` counts every step, ``n_matched`` those of the kinds asked for, and
+    ``step_counts`` each kind's steps (196 hand labellings hid a pipeline run in QA-7)."""
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
     steps = provenance.recipe(adaptor.adata)
     replay = replay_script.describe(adaptor.adata)
-    for s, r in zip(steps, replay):
+    counts: dict[str, int] = {}
+    for i, (s, r) in enumerate(zip(steps, replay)):
         s["replay"] = r
+        s["index"] = i
+        counts[s["step"]] = counts.get(s["step"], 0) + 1
+    picked = [s for s in steps if s["step"] in set(step)] if step else steps
+    page = picked[offset:offset + limit] if limit else picked[offset:]
     source = provenance.read_provenance(adaptor.adata).get("source") or {}
-    return {"recipe": steps, "source": source}
+    return {"recipe": page, "source": source, "n_total": len(steps), "n_matched": len(picked),
+            "offset": offset, "step_counts": counts}
 
 
 def _recipe_parts(dm: DatasetManager, dataset_id: str) -> tuple[str, list[str]]:

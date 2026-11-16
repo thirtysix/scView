@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from scview.core import msigdb_species, provenance, vdj
+from scview.core import label_import, msigdb_species, provenance, vdj
 
 EXACT = "exact"
 APPROXIMATE = "approximate"
@@ -807,6 +807,43 @@ def infer_cnv(adata, genes, chromosomes, ref_column, ref_groups, window=100, ste
     return X, score, tmp.obs["cnv_leiden"].astype(str).to_numpy()
 """
 
+_HELPERS["imported_labels"] = '''
+def imported_labels(name, sep, barcode_column, label_column, obs_names, strip_suffix=False, existing=None):
+    """A per-cell label table scView imported, read again (beside this script or the
+    input file) and joined to the cells by name, or by order with no barcode column.
+    Blank labels and cells the table leaves out keep ``existing`` (default Unassigned)."""
+    import os
+
+    BLANKS = @BLANKS@
+
+    path = next((p for p in (name, os.path.join(os.path.dirname(os.path.abspath(INPUT)), name))
+                 if os.path.exists(p)), None)
+    if path is None:
+        raise SystemExit(f"{name}: put the label table scView imported beside this script or the input file")
+    table = pd.read_csv(path, sep=sep, dtype=str, keep_default_na=False)
+    labels = table[label_column].str.strip()
+    labels = labels.where(~labels.isin(BLANKS))
+    if barcode_column is None:
+        if len(labels) != len(obs_names):
+            raise SystemExit(f"{name}: {len(labels)} rows for {len(obs_names)} cells")
+        values = pd.Series(labels.to_numpy(), index=obs_names)
+    else:
+        keys = table[barcode_column].astype(str).str.strip()
+        names = pd.Index(obs_names).astype(str)
+        if strip_suffix:
+            keys = keys.str.replace(r"[-.]\\d+$", "", regex=True)
+            names = names.str.replace(r"[-.]\\d+$", "", regex=True)
+        by_key = pd.Series(labels.to_numpy(), index=keys.to_numpy())
+        by_key = by_key[by_key.notna()]
+        by_key = by_key[~by_key.index.duplicated()]
+        values = pd.Series(by_key.reindex(names).to_numpy(), index=obs_names)
+    base = (pd.Series(existing, index=obs_names).astype(object) if existing is not None
+            else pd.Series("Unassigned", index=obs_names, dtype=object))
+    return base.where(values.isna(), values).astype("category")
+'''
+
+_HELPERS["imported_labels"] = _HELPERS["imported_labels"].replace("@BLANKS@", repr(sorted(label_import.BLANK)))
+
 _HELPERS["read_hashtags"] = '''
 def read_hashtags(path, cells, features, sources):
     """The tag counts scView demultiplexed, read again from the input file (cells x
@@ -910,7 +947,7 @@ _HELPER_ORDER = ("looks_like_counts", "keep_raw_counts", "find_counts", "var_fro
                  "mad_thresholds", "apply_thresholds", "fixed_drop", "type_mito_drop", "refilter_types",
                  "markers_key", "louvain",
                  "harmony", "scanorama", "lognorm_scoring", "subcluster", "gene_programs", "infer_cnv",
-                 "read_hashtags", "hashing", "vdj", "aucell")
+                 "read_hashtags", "hashing", "vdj", "aucell", "imported_labels")
 
 # Helpers another helper calls.
 _HELPER_NEEDS = {
@@ -3370,6 +3407,31 @@ def _combine_columns(p: dict, ctx: _Ctx) -> Snippet:
     ])
 
 
+def _import_labels(p: dict, ctx: _Ctx) -> Snippet:
+    column = str(p.get("column") or "")
+    name, label_col = p.get("file"), p.get("label_column")
+    if not (column and name and label_col):  # a mapping or a list of values sent inline
+        return Snippet(NOT_REPLAYABLE, [
+            "# Cells labelled from a per-cell table sent inline (not a file); to carry the labels",
+            "# over, join the column from scView's cell metadata export by barcode, e.g.:",
+            "#   meta = pd.read_csv('cell_metadata.csv', index_col=0)",
+            f"#   adata.obs[{comment_text(repr(column), 80)}] = meta.loc[adata.obs_names, "
+            f"{comment_text(repr(column), 80)}].astype('category')",
+            "# Recorded:",
+            *_param_comment(p),
+        ], "labels sent inline: table not recorded")
+    ctx.helpers.add("imported_labels")
+    existing = "None" if p.get("new_column", True) else f"adata.obs[{_lit(column)}]"
+    how = (f"by cell name ({p.get('barcode_column')})" if p.get("barcode_column") else "by order")
+    return Snippet(APPROXIMATE, [
+        f"# Labels imported from the table {comment_text(name, 120)}, {how}: "
+        f"{comment_text(p.get('n_matched'), 20)} of {comment_text(p.get('n_rows'), 20)} rows matched.",
+        f"adata.obs[{_lit(column)}] = imported_labels({_lit(name)}, {_lit(p.get('sep') or ',')}, "
+        f"{_lit(p.get('barcode_column'))}, {_lit(label_col)}, adata.obs_names, "
+        f"strip_suffix={bool(p.get('strip_suffix'))}, existing={existing})",
+    ], "needs the imported table beside the script")
+
+
 def _annotation_crosscheck(p: dict, ctx: _Ctx) -> Snippet:
     outs = [str(c) for c in (p.get("outputs") or []) if c]
     join = [f"#   adata.obs[{comment_text(repr(c), 80)}] = meta.loc[adata.obs_names, {comment_text(repr(c), 80)}]"
@@ -4513,6 +4575,7 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "label_cells": _label_cells,
     "undo_label_cells": _label_cells,
     "combine_columns": _combine_columns,
+    "import_labels": _import_labels,
     "doublet_threshold": _doublet_threshold,
     "annotation_crosscheck": _annotation_crosscheck,
     "merge_clusters": _merge_clusters,

@@ -876,20 +876,36 @@ async def run_pipeline(dataset_id: DatasetId, steps: Steps, params: Params = Non
 
 
 @tool(READ)
-async def get_recipe(dataset_id: DatasetId) -> str:
-    """The dataset's recorded processing, in order: each step with its parameters, how the
-    replay script reproduces it, its measured time and peak memory (measured: seconds,
-    peak_gb, for runs scView watched; peak_gb is the server's whole use), and the source the
-    data came from."""
-    d = await _get(f"{_ds(dataset_id)}/recipe")
+async def get_recipe(
+    dataset_id: DatasetId,
+    offset: Annotated[int, Field(ge=0, description=(
+        "Step to start from, counted among the steps shown (after the steps filter): page with next_offset."))] = 0,
+    limit: Annotated[int, Field(ge=1, le=compact.MAX_LIMIT, description=(
+        "Steps per page (default 30, max 200); a page also stops when its text gets long."))] = 30,
+    steps: Annotated[list[str] | None, Field(description=(
+        "Only these step kinds (e.g. ['qc_metrics', 'filtering', 'clustering']); step_counts in the "
+        "reply lists every kind with its count."))] = None,
+) -> str:
+    """The dataset's recorded processing, in order, a page at a time: each step with its index in
+    the whole recipe, its parameters, how the replay script reproduces it, its measured time and
+    peak memory (measured: seconds, peak_gb, for runs scView watched; peak_gb is the server's
+    whole use), and the source the data came from. n_total counts every step and step_counts
+    each kind (many hand labellings can bury a pipeline run: filter with steps)."""
+    d = await _get(f"{_ds(dataset_id)}/recipe", step=steps or None)
     try:  # the measured time and memory per step sit in the full record only
         history = ((await api.get(f"{_ds(dataset_id)}/provenance")).get("recorded") or {}).get("history") or []
     except api.RouteError:
         history = []
     used = {h.get("commit_id"): h.get("resources") for h in history if isinstance(h.get("resources"), dict)}
-    steps = []
-    for s in d.get("recipe") or []:
-        e = pick(s, "step", "tool", "params", "timestamp")
+    picked = d.get("recipe") or []
+    out: dict[str, Any] = {"dataset_id": dataset_id, "n_total": d.get("n_total", len(picked)),
+                           "step_counts": d.get("step_counts")}
+    if steps:
+        out["n_matched"] = len(picked)
+    out.update(offset=offset, steps=[])
+    budget = _max_chars(limit) - len(json.dumps({**out, "source": d.get("source")}, default=str)) - 200
+    for s in picked[offset:offset + limit]:
+        e = {"index": s.get("index"), **pick(s, "step", "tool", "params", "timestamp")}
         res = used.get(s.get("commit_id"))
         if res:
             seconds = res.get("elapsed_s", res.get("seconds"))
@@ -901,8 +917,15 @@ async def get_recipe(dataset_id: DatasetId) -> str:
         rep = s.get("replay")
         if isinstance(rep, dict):
             e["replay"] = rep.get("status")
-        steps.append(e)
-    return dumps({"dataset_id": dataset_id, "steps": steps, "source": d.get("source")})
+        budget -= len(json.dumps(compact.rounded(e), separators=(",", ":"), default=str)) + 1
+        if budget < 0 and out["steps"]:
+            break
+        out["steps"].append(e)
+    end = offset + len(out["steps"])
+    if end < len(picked):
+        out["next_offset"] = end
+    out["source"] = d.get("source")
+    return dumps(out, _max_chars(limit) + 1000)
 
 
 @tool(READ)
@@ -1396,6 +1419,9 @@ async def differential_expression(
     layer: Annotated[Literal["protein", "protein_counts"] | None, Field(description=(
         "Test the CITE-seq proteins instead of the genes (cell-level tests only): protein = their CLR "
         "values (Seurat's ADT normalisation), protein_counts = their counts log-normalised. Default: genes."))] = None,
+    genes: Annotated[list[str] | None, Field(max_length=50, description=(
+        "Genes to report whatever their result (up to 50): each one's row, or why it was not tested "
+        "(pseudobulk: which filter dropped it, with its counts per donor sample)."))] = None,
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
     """Differential expression: A vs B of one column (optionally within one cell type), one
@@ -1403,7 +1429,10 @@ async def differential_expression(
     (layer='protein'). Returns the result_id (for enrichment and
     get_result), counts significant at padj_max and |log2FC| >= lfc_min, the top up and down
     genes, and the route's warnings (confounding with batch, cell-type composition shift,
-    too few donors, transcriptome size). Across conditions prefer method='pseudobulk'."""
+    too few donors, transcriptome size); pseudobulk adds gene_filter (genes each filter dropped).
+    genes=[...] reports named genes whatever their result, or why untested. Across conditions
+    prefer method='pseudobulk'."""
+    asked = list(genes or [])  # `genes` is the route's rows below
     if group_a is not None or group_b is not None:
         if not (column and group_a and group_b):
             raise ToolError("Between groups needs column, group_a and group_b.")
@@ -1417,6 +1446,8 @@ async def differential_expression(
                 raise ToolError("Proteins are tested cell-level (wilcoxon, t-test, logreg); per donor: "
                                 "per_donor_expression(layer='protein').")
             body["layer"] = layer
+        if asked and method == "pseudobulk":
+            body["genes"] = asked
         if covariates or donor_key or numeric_covariates:
             if method != "pseudobulk":
                 raise ToolError("covariates, numeric_covariates and donor_key are for method='pseudobulk'.")
@@ -1488,7 +1519,27 @@ async def differential_expression(
     if comp.get("groups") and comp.get("warn"):
         out["composition_shift"] = [pick(g, "group", "share_a", "share_b", "diff_points", "p")
                                     for g in comp["groups"][:5] if g.get("flagged")]
-    return dumps(out, _max_chars(limit))
+    if r.get("gene_filter"):  # pseudobulk: what each filter left out
+        out["gene_filter"] = r["gene_filter"]
+    if asked:
+        out["asked_genes"] = r.get("asked_genes") or _asked_rows(asked, r)
+    return dumps(out, _max_chars(limit) + (1500 if asked else 0))
+
+
+def _asked_rows(asked: list[str], r: dict[str, Any]) -> list[dict[str, Any]]:
+    """Cell-level: each asked gene's row, or why it has none."""
+    all_genes = {str(g.get("gene")).lower(): g for g in r.get("genes") or []}
+    out = []
+    for gene in dict.fromkeys(asked):
+        g = all_genes.get(str(gene).lower())
+        if g:
+            out.append({"gene": g.get("gene"), "status": "tested",
+                        **{k: num(g.get(k)) for k in ("logfoldchange", "pval_adj", "pval", "stat") if k in g}})
+        else:
+            out.append({"gene": gene, "status": "not_tested", "reason": (
+                f"detected in under {r.get('min_pct')} of the cells on both sides (min_pct), or not a gene "
+                "of this dataset" if r.get("n_genes_skipped") else "not a gene of this dataset")})
+    return out
 
 
 @tool(READ)
@@ -2247,9 +2298,11 @@ async def plot(
             if arrows is None and graph is None:
                 return plots.embedding(xy, values, title, label, note, focus, tissue=tissue), note
             note += _overlay_note(arrows, graph)
-            label_nodes = not (graph is not None and color_by == (graph.get("paga") or {}).get("groupby"))
+            # Coloured by the PAGA column: its nodes carry the names (the groups' own labels
+            # were dropped where they collided, leaving 3 of 8 nodes unnamed in QA round 7).
+            same = graph is not None and color_by == (graph.get("paga") or {}).get("groupby")
             return plots.embedding(xy, values, title, label, note, focus, tissue=tissue, arrows=arrows,
-                                   graph=graph, label_nodes=label_nodes), note
+                                   graph=graph, label_groups=not same), note
         if not gene and not value_column:
             raise ToolError("A violin plot needs a gene or a value_column.")
         if gene and value_column:
