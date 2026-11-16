@@ -177,6 +177,13 @@ async def pseudotime(
     if groupby:
         out["by_group"] = await _medians(dataset_id, column, groupby, n)
     lineage = (r.get("root_checks") or {}).get("lineage") or {}
+    if lineage:  # how close the lineage check came, also when it passed (QA-7)
+        off = lineage.get("off_lineage") or []
+        out["lineage_check"] = {
+            "column": lineage.get("column"), "min_share": lineage.get("min_share"),
+            "n_on_lineage": len(lineage.get("lineage") or []), "weakest_on_lineage": lineage.get("weakest_on"),
+            "off_lineage": [pick(x, "group", "n_cells", "widest_share", "via") for x in off[:12]],
+            **({"n_off_lineage": len(off)} if len(off) > 12 else {})}
     if lineage.get("off_lineage") and any("not on a path" in w for w in out["warnings"]):
         # groups off the root's lineage: their own dataset gives a pseudotime of the lineage alone
         out["subset"] = {"call": "subset_dataset", "dataset_id": dataset_id, "column": lineage.get("column"),
