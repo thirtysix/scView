@@ -311,7 +311,7 @@ MAX_ASKED_GENES = 50
 
 
 def gene_fates(P: sp.csr_matrix, gene_names, genes_idx: np.ndarray, fitted: dict[str, tuple], min_samples: int,
-               sample_cond: np.ndarray, names: dict[str, str], asked: list[str] | None
+               sample_cond: np.ndarray, sample_donor: np.ndarray, names: dict[str, str], asked: list[str] | None
                ) -> tuple[dict, list[dict]]:
     """How many genes each filter left out (``gene_filter``), and for each asked gene
     whether it was tested and, if not, why: NRG1 untestable IDA vs M2 in QA round 7
@@ -335,15 +335,21 @@ def gene_fates(P: sp.csr_matrix, gene_names, genes_idx: np.ndarray, fitted: dict
         lower.setdefault(g.lower(), i)
     in_idx = set(int(i) for i in genes_idx)
     side = {k: sample_cond == k for k in ("a", "b")}
+    seen: set[str] = set()
     for gene in list(dict.fromkeys(str(g).strip() for g in asked if str(g).strip()))[:MAX_ASKED_GENES]:
         i = where.get(gene, lower.get(gene.lower()))
         if i is None:
             out.append({"gene": gene, "status": "not_found", "reason": "not a gene of this dataset"})
             continue
         name = str(names_arr[i])
+        if name in seen:  # "Isg15" after "ISG15"
+            continue
+        seen.add(name)
         col = np.asarray(P[:, i].toarray()).ravel()
         rec: dict[str, Any] = {"gene": name, "n_samples_with_counts": int(n_with[i]), "needs": int(min_samples),
-                               "counts": {names[k]: [int(round(v)) for v in col[side[k]]] for k in ("a", "b")}}
+                               "counts": {names[k]: {str(d): int(round(v)) for d, v in zip(sample_donor[side[k]],
+                                                                                            col[side[k]])}
+                                          for k in ("a", "b")}}
         if name in fitted:
             lfc, p, padj = fitted[name][:3]
             rec.update(status="tested", log2fc=lfc, pval=p, pval_adj=padj)
@@ -522,7 +528,7 @@ def pseudobulk_de(
         genes, stat = _run_voom(C, X, sample_cond if method == "voombygroup" else None,
                                 eff_lib, list(counts_df.columns))
     gene_filter, asked_genes = gene_fates(P, gene_names, genes_idx, {g[0]: g[1:] for g in genes}, min(n_a, n_b),
-                                          sample_cond, names, asked)
+                                          sample_cond, sample_donor, names, asked)
     return PseudobulkResult(
         genes=genes,
         gene_filter=gene_filter,

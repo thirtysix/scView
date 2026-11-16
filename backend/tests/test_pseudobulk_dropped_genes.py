@@ -38,7 +38,7 @@ async def test_gene_filter_counts_each_filter_and_explains_asked_genes(monkeypat
     assert by["G0"]["status"] == "tested" and by["G0"]["log2fc"] > 1 and by["G0"]["pval_adj"] < 0.05
     rare = by["G59"]  # matched whatever the case
     assert rare["status"] == "low_counts" and rare["needs"] == 5
-    assert "in 1 donor sample (A 1 of 5, B 0 of 5)" in rare["reason"] and rare["counts"]["B"] == [0] * 5
+    assert "in 1 donor sample (A 1 of 5, B 0 of 5)" in rare["reason"] and rare["counts"]["B"] == {d: 0 for d in DONORS}
     assert by["NOPE"]["status"] == "not_found"
     assert [g["gene"] for g in res.asked_genes] == ["G0", "G59", "NOPE", "G1"]
 
