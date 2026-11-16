@@ -68,6 +68,18 @@ def test_refused_when_too_few_rows_match_with_examples_and_a_suffix_hint():
     assert out["n_matched"] == 12 and (a.obs["author"] == "T").all()
 
 
+def test_hints_for_an_r_style_suffix_and_a_sample_prefix():
+    a = _adata()
+    a.obs_names = [f"{'CTRL' if i < 6 else 'STIM'}_AAAC{i:02d}.1" for i in range(12)]
+    with pytest.raises(LabelError, match="'.1' suffix removed"):
+        li.import_labels(a, "c", li.LabelTable(labels=["T"] * 12, barcodes=[f"CTRL_AAAC{i:02d}" for i in range(12)]))
+    with pytest.raises(LabelError, match="prefix is set aside .e.g. 'CTRL_AAAC00.1'"):
+        li.import_labels(a, "c", li.LabelTable(labels=["T"] * 12, barcodes=[f"AAAC{i:02d}.1" for i in range(12)]))
+    a.obs_names = [f"{'CTRL' if i < 6 else 'STIM'}_AAAC{i % 6:02d}" for i in range(12)]
+    with pytest.raises(LabelError, match="in several samples"):
+        li.import_labels(a, "c", li.LabelTable(labels=["T"] * 6, barcodes=[f"AAAC{i:02d}" for i in range(6)]))
+
+
 def test_min_match_lets_a_table_with_other_cells_through():
     a = _adata()
     rows = [(f"AAAC{i:02d}-1", "T") for i in range(6)] + [(f"OTHER{i}", "T") for i in range(4)]

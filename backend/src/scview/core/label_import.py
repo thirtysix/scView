@@ -41,7 +41,7 @@ EXAMPLES = 5  # names listed for extra rows and cells left out
 TOP_LABELS = 20  # labels listed in the answer
 # Read as "no label": the cell keeps its value (UNASSIGNED in a new column).
 BLANK = frozenset({"", "NA", "N/A", "NaN", "nan", "None", "null", "NULL"})
-SUFFIX_RE = r"-\d+$"  # Cell Ranger's "-1" (and a merge's "-2", ...)
+SUFFIX_RE = r"[-.]\d+$"  # Cell Ranger's "-1" (a merge's "-2"), R make.unique's ".1"
 
 
 @dataclass
@@ -134,6 +134,29 @@ def _examples(values) -> list[str]:
     return [str(v) for v in list(values)[:EXAMPLES]]
 
 
+def _hints(obs: pd.Index, keys: pd.Series, share: float, strip_suffix: bool) -> dict[str, str]:
+    """A suggestion when most rows miss: a suffix to strip, or a sample prefix the dataset's
+    names carry ("CTRL_AAAC..." vs "AAAC..."), which is never stripped for the user: the
+    same barcode is often in several samples."""
+    if not len(keys):
+        return {}
+    if not strip_suffix:
+        alt = _strip(pd.Index(keys)).isin(set(_strip(obs)))
+        if alt.mean() > share + 0.05:
+            return {"hint": f"With a '-1' / '.1' suffix removed from both sides, {int(alt.sum()):,} of "
+                            f"{len(keys):,} rows would match: import with strip_suffix."}
+    core = obs.str.replace(r"^.*[_:#]", "", regex=True)
+    if strip_suffix:
+        core = _strip(core)
+    hit = pd.Index(keys).isin(set(core))
+    if hit.mean() > share + 0.05:
+        first = obs[core.get_indexer([keys[hit].iloc[0]])[0]] if core.is_unique else obs[0]
+        same = "" if core.is_unique else " The same barcode is in several samples, so it alone cannot say which cell."
+        return {"hint": f"{int(hit.sum()):,} of {len(keys):,} rows match once the dataset's prefix is set aside "
+                        f"(e.g. '{first}'): write the cell names as the dataset has them.{same}"}
+    return {}
+
+
 def plan(adata, table: LabelTable, *, strip_suffix: bool = False, min_match: float = MIN_MATCH
          ) -> tuple[np.ndarray, dict[str, Any]]:
     """Each cell's imported label (None: none) and the match report; LabelError when
@@ -181,7 +204,9 @@ def plan(adata, table: LabelTable, *, strip_suffix: bool = False, min_match: flo
                 both = sorted(map(str, dups.loc[dups["key"] == k, "label"].unique()))[:2]
                 raise LabelError(
                     f"{len(clash):,} barcodes have more than one label in the table, e.g. '{k}' "
-                    f"('{both[0]}' and '{both[1]}'). Keep one row per cell.")
+                    f"('{both[0]}' and '{both[1]}'). Keep one row per cell: a barcode repeated with "
+                    "other labels is most often the same barcode in two samples, so name the cells as "
+                    "the dataset does (sample prefix and all), or match by order.")
         n_dup = int(frame["key"].duplicated().sum())
         frame = frame.drop_duplicates("key")
         where = obs.get_indexer(frame["key"])
@@ -192,11 +217,8 @@ def plan(adata, table: LabelTable, *, strip_suffix: bool = False, min_match: flo
                       share_matched=round(share, 4))
         if (~found).any():
             report["extra_examples"] = _examples(frame["key"][~found])
-        if not strip_suffix and share < 1.0:
-            alt = _strip(frame["key"]).isin(set(_strip(obs)))
-            if alt.mean() > share + 0.05:
-                report["hint"] = (f"With a '-1'-style suffix removed from both sides, {int(alt.sum()):,} of "
-                                  f"{n_labelled:,} rows would match: import with strip_suffix.")
+        if share < 1.0:
+            report.update(_hints(obs, frame["key"], share, strip_suffix))
         if n_labelled == 0 or share < min_match:
             seen = _examples(obs[:EXAMPLES])
             raise LabelError(

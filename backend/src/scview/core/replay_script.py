@@ -814,13 +814,15 @@ def imported_labels(name, sep, barcode_column, label_column, obs_names, strip_su
     Blank labels and cells the table leaves out keep ``existing`` (default Unassigned)."""
     import os
 
+    BLANKS = @BLANKS@
+
     path = next((p for p in (name, os.path.join(os.path.dirname(os.path.abspath(INPUT)), name))
                  if os.path.exists(p)), None)
     if path is None:
         raise SystemExit(f"{name}: put the label table scView imported beside this script or the input file")
     table = pd.read_csv(path, sep=sep, dtype=str, keep_default_na=False)
     labels = table[label_column].str.strip()
-    labels = labels.where(~labels.isin(LABEL_BLANKS))
+    labels = labels.where(~labels.isin(BLANKS))
     if barcode_column is None:
         if len(labels) != len(obs_names):
             raise SystemExit(f"{name}: {len(labels)} rows for {len(obs_names)} cells")
@@ -829,8 +831,8 @@ def imported_labels(name, sep, barcode_column, label_column, obs_names, strip_su
         keys = table[barcode_column].astype(str).str.strip()
         names = pd.Index(obs_names).astype(str)
         if strip_suffix:
-            keys = keys.str.replace(r"-\\d+$", "", regex=True)
-            names = names.str.replace(r"-\\d+$", "", regex=True)
+            keys = keys.str.replace(r"[-.]\\d+$", "", regex=True)
+            names = names.str.replace(r"[-.]\\d+$", "", regex=True)
         by_key = pd.Series(labels.to_numpy(), index=keys.to_numpy())
         by_key = by_key[by_key.notna()]
         by_key = by_key[~by_key.index.duplicated()]
@@ -839,6 +841,8 @@ def imported_labels(name, sep, barcode_column, label_column, obs_names, strip_su
             else pd.Series("Unassigned", index=obs_names, dtype=object))
     return base.where(values.isna(), values).astype("category")
 '''
+
+_HELPERS["imported_labels"] = _HELPERS["imported_labels"].replace("@BLANKS@", repr(sorted(label_import.BLANK)))
 
 _HELPERS["read_hashtags"] = '''
 def read_hashtags(path, cells, features, sources):
@@ -3352,7 +3356,6 @@ def _import_labels(p: dict, ctx: _Ctx) -> Snippet:
     return Snippet(APPROXIMATE, [
         f"# Labels imported from the table {comment_text(name, 120)}, {how}: "
         f"{comment_text(p.get('n_matched'), 20)} of {comment_text(p.get('n_rows'), 20)} rows matched.",
-        f"LABEL_BLANKS = {_lit(sorted(label_import.BLANK))}",
         f"adata.obs[{_lit(column)}] = imported_labels({_lit(name)}, {_lit(p.get('sep') or ',')}, "
         f"{_lit(p.get('barcode_column'))}, {_lit(label_col)}, adata.obs_names, "
         f"strip_suffix={bool(p.get('strip_suffix'))}, existing={existing})",
