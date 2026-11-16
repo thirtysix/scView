@@ -1,4 +1,5 @@
 import { apiFetch } from "./client";
+import type { CellFilter } from "@/lib/cellFilter";
 import { errorMessage, errorStatus } from "@/lib/errorMessage";
 
 /** Cells that had `value` before a labelling (null: no value). */
@@ -53,7 +54,15 @@ export function listLabelColumns(datasetId: string): Promise<{ columns: string[]
  */
 export function labelCells(
   datasetId: string,
-  body: { column: string; label: string; indices: number[]; newColumn: boolean; ontologyId?: string | null },
+  body: {
+    column: string;
+    label: string;
+    indices: number[];
+    newColumn: boolean;
+    ontologyId?: string | null;
+    /** The filter the cells came from: recorded for the replay script when it reads metadata only */
+    filter?: CellFilter | null;
+  },
 ): Promise<LabelResult> {
   return call(`/datasets/${datasetId}/labels`, {
     method: "POST",
@@ -63,6 +72,7 @@ export function labelCells(
       indices: body.indices,
       new_column: body.newColumn,
       ontology_id: body.ontologyId ?? null,
+      ...(body.filter ? { filter: body.filter } : {}),
     }),
   });
 }

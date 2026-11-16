@@ -16,18 +16,26 @@ import { useViewStore } from "@/stores/viewStore";
 /** At least this many cells (backend core/subset.py MIN_CELLS). */
 export const SUBSET_MIN_CELLS = 50;
 
-/** The request's selector: the filter a selection came from, else the cells themselves. */
+export type SelectionGroups = { column: string; values: string[] } | null;
+
+/** The request's selector: the groups or the filter a selection came from (recorded with the
+ *  new dataset), else the cells themselves. */
 export function subsetSelector(
   indices: Set<number>,
   filter: CellFilter | null,
   nCells: number,
+  groups: SelectionGroups = null,
 ): SubsetSelector {
+  if (groups) return { groups: { column: groups.column, values: [...groups.values] } };
   return filter ? { filter } : { mask: encodeMask(indices, nCells) };
 }
 
 /** The name the server would give (core/subset.py default_name), shown to edit. */
-export function defaultSubsetName(parent: string, n: number, byFilter: boolean): string {
-  const name = `${parent} - ${n.toLocaleString("en-US")} ${byFilter ? "filtered" : "selected"} cells`;
+export function defaultSubsetName(parent: string, n: number, byFilter: boolean, groups: SelectionGroups = null): string {
+  const what = groups
+    ? groups.values.slice(0, 3).join(", ") + (groups.values.length > 3 ? " +" : "")
+    : `${n.toLocaleString("en-US")} ${byFilter ? "filtered" : "selected"} cells`;
+  const name = `${parent} - ${what}`;
   return name.length <= 120 ? name : `${name.slice(0, 119)}…`;
 }
 
@@ -39,6 +47,7 @@ export function SubsetSelectionControls() {
   const dataset = useDatasetStore((s) => s.currentDataset);
   const selected = useSelectionStore((s) => s.selectedCellIndices);
   const filter = useSelectionStore((s) => s.selectionFilter);
+  const groups = useSelectionStore((s) => s.selectionGroups);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const hasSelection = !!selected && selected.size > 0;
@@ -73,7 +82,13 @@ export function SubsetSelectionControls() {
         New dataset…
       </button>
       {open && (
-        <SubsetForm dataset={dataset} indices={selected} filter={filter} onClose={() => setOpen(false)} />
+        <SubsetForm
+          dataset={dataset}
+          indices={selected}
+          filter={filter}
+          groups={groups}
+          onClose={() => setOpen(false)}
+        />
       )}
     </div>
   );
@@ -83,18 +98,19 @@ interface SubsetFormProps {
   dataset: DatasetInfo;
   indices: Set<number>;
   filter: CellFilter | null;
+  groups: SelectionGroups;
   onClose: () => void;
 }
 
-function SubsetForm({ dataset, indices, filter, onClose }: SubsetFormProps) {
+function SubsetForm({ dataset, indices, filter, groups, onClose }: SubsetFormProps) {
   const dialogRef = useRef<HTMLFormElement>(null);
   useDialogFocus(dialogRef, onClose);
   const n = indices.size;
   const selector = useMemo(
-    () => subsetSelector(indices, filter, dataset.n_cells ?? 0),
-    [indices, filter, dataset.n_cells],
+    () => subsetSelector(indices, filter, dataset.n_cells ?? 0, groups),
+    [indices, filter, dataset.n_cells, groups],
   );
-  const [name, setName] = useState(() => defaultSubsetName(dataset.name, n, !!filter));
+  const [name, setName] = useState(() => defaultSubsetName(dataset.name, n, !!filter, groups));
   const [plan, setPlan] = useState<SubsetResult | null>(null);
   const [planError, setPlanError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -189,7 +205,13 @@ function SubsetForm({ dataset, indices, filter, onClose }: SubsetFormProps) {
         </div>
       ) : (
         <>
-          {filter && <p className="text-[11px] text-slate-500">Chosen by the filter the selection came from.</p>}
+          {groups ? (
+            <p className="text-[11px] text-slate-500">
+              Chosen as {groups.column}: {groups.values.join(", ")} (recorded with the new dataset).
+            </p>
+          ) : (
+            filter && <p className="text-[11px] text-slate-500">Chosen by the filter the selection came from.</p>
+          )}
           <label className="block space-y-1">
             <span className="text-[11px] font-medium text-slate-500">Name</span>
             <input
@@ -228,6 +250,7 @@ function SubsetForm({ dataset, indices, filter, onClose }: SubsetFormProps) {
                 <span className="font-medium text-slate-600">Not carried: </span>
                 <span className="text-slate-500">{plan.not_carried.join("; ")}</span>
               </div>
+              {plan.steps_note && <div className="text-slate-500">{plan.steps_note}</div>}
             </div>
           )}
           {error && (
