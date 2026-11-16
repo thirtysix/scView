@@ -678,18 +678,20 @@ Content-Type: application/json
 **Request body:**
 ```json
 {
-  "type": "markers",
+  "data_type": "markers",
   "format": "csv",
-  "options": {
-    "groupby": "0"
+  "params": {
+    "column": "leiden",
+    "group": "0"
   }
 }
 ```
 
 **Response**: `application/octet-stream` (file download)
 
-Supported export types: `markers`, `metadata`, `expression`
-Supported formats: `csv`, `xlsx`
+`data_type`: `markers` (`params.column`, optional `params.group`, `params.n_genes`, default 100),
+`metadata` (every obs column) or `expression` (`params.genes`: a list of gene names).
+`format`: `csv` or `xlsx`. An unknown field is refused (422), not ignored.
 
 ---
 

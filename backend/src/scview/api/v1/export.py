@@ -16,7 +16,7 @@ from typing import Any
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from scview.api.v1.markers import ensure_specificity
 from scview.core import large_layout, large_mode
@@ -35,7 +35,10 @@ router = APIRouter()
 
 
 class ExportRequest(BaseModel):
-    """Body for the export endpoint."""
+    """Body for the export endpoint. An unknown key is refused: ``{"type": "metadata"}``
+    (an old doc's name) silently exported markers instead (QA round 7)."""
+
+    model_config = ConfigDict(extra="forbid")
 
     format: str = "csv"  # "csv" | "xlsx"
     data_type: str = "markers"  # "markers" | "metadata" | "expression"

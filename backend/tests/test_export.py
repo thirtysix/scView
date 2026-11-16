@@ -171,3 +171,10 @@ async def test_an_excel_export_over_the_cell_cap_is_413(client, dataset_manager,
     r = await _export(client, format="xlsx", data_type="expression", params=body)
     assert r.status_code == 200
     assert pd.read_excel(io.BytesIO(r.content), index_col=0).shape == (60, 5)
+
+
+async def test_an_unknown_body_key_is_refused_not_ignored(client, dataset_manager):
+    """QA round 7: the API doc's {"type": "metadata"} was ignored and markers were exported."""
+    _register(dataset_manager)
+    r = await _export(client, format="csv", type="metadata")
+    assert r.status_code == 422 and "type" in r.text
