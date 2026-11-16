@@ -2268,9 +2268,11 @@ async def plot(
             if arrows is None and graph is None:
                 return plots.embedding(xy, values, title, label, note, focus, tissue=tissue), note
             note += _overlay_note(arrows, graph)
-            label_nodes = not (graph is not None and color_by == (graph.get("paga") or {}).get("groupby"))
+            # Coloured by the PAGA column: its nodes carry the names (the groups' own labels
+            # were dropped where they collided, leaving 3 of 8 nodes unnamed in QA round 7).
+            same = graph is not None and color_by == (graph.get("paga") or {}).get("groupby")
             return plots.embedding(xy, values, title, label, note, focus, tissue=tissue, arrows=arrows,
-                                   graph=graph, label_nodes=label_nodes), note
+                                   graph=graph, label_groups=not same), note
         if not gene and not value_column:
             raise ToolError("A violin plot needs a gene or a value_column.")
         if gene and value_column:

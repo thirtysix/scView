@@ -107,13 +107,14 @@ def _label_spots(xy: np.ndarray, codes: np.ndarray, names: list[str]) -> list[tu
 def embedding(xy: np.ndarray, values: pd.Series | np.ndarray | None, title: str,
               color_label: str, caption: str, focus: np.ndarray | None = None, tissue: bool = False,
               arrows: dict[str, Any] | None = None, graph: dict[str, Any] | None = None,
-              label_nodes: bool = True) -> bytes:
+              label_nodes: bool = True, label_groups: bool = True) -> bytes:
     """Cells on two embedding dimensions, coloured by a category (legend, and labels on
     the groups) or a number (colour bar). ``focus`` (a mask): only those cells are
     coloured, the others drawn grey beneath them. ``tissue``: positions on a section,
     y downwards as in its image. ``arrows``: velocity on a grid (``GET /velocity/grid``)
     drawn over the cells; ``graph``: a PAGA graph placed on this embedding (``GET
-    /trajectory/paga``), its nodes named unless ``label_nodes`` is False."""
+    /trajectory/paga``), its nodes named unless ``label_nodes`` is False. ``label_groups``
+    False: no names on the groups' cells (the PAGA nodes of the same column carry them)."""
     fig = _figure(8.5, 7)
     ax = fig.add_subplot(1, 1, 1)
     size = max(0.5, min(12.0, 30000.0 / max(len(xy), 1)))
@@ -148,7 +149,7 @@ def embedding(xy: np.ndarray, values: pd.Series | np.ndarray | None, title: str,
                        for i, n in enumerate(names)]
             ax.legend(handles=handles, title=color_label, loc="center left", bbox_to_anchor=(1.0, 0.5),
                       fontsize=8, title_fontsize=9, frameon=False, markerscale=1.2)
-            for n, x, y in _label_spots(xy, codes, names):
+            for n, x, y in (_label_spots(xy, codes, names) if label_groups else []):
                 ax.text(x, y, n, fontsize=8, ha="center", va="center", weight="bold",
                         bbox={"boxstyle": "round,pad=0.15", "fc": "white", "ec": "none", "alpha": 0.6})
         else:
@@ -212,10 +213,54 @@ def _paga(ax, view: dict[str, Any], label_nodes: bool) -> None:
             continue
         ax.scatter([pos[k][0]], [pos[k][1]], s=40 + 360 * np.sqrt((sizes[k] if k < len(sizes) else 0) / top),
                    c="white", edgecolors="#111111", linewidths=1.2, zorder=5)
-        if label_nodes:  # beside the node, not over it
-            ax.annotate(str(g), (pos[k][0], pos[k][1]), xytext=(9, 9), textcoords="offset points", fontsize=8,
-                        weight="bold", zorder=6,
-                        bbox={"boxstyle": "round,pad=0.15", "fc": "white", "ec": "none", "alpha": 0.75})
+    if label_nodes:  # beside each node, not over it, and not over another node's name
+        (x0, y0), (x1, y1) = ax.dataLim.get_points()
+        for name, x, y, ha in paga_label_spots(pos, [str(g) for g in groups], (x0, y0), (x1 - x0, y1 - y0)):
+            ax.text(x, y, name, fontsize=8, weight="bold", ha=ha, va="center", zorder=6,
+                    bbox={"boxstyle": "round,pad=0.15", "fc": "white", "ec": "none", "alpha": 0.75})
+
+
+PAGA_LABEL_GAP = 0.03  # of the axis: from a node's centre to its name
+
+
+def paga_label_spots(pos: list, names: list[str], lo: tuple[float, float], span: tuple[float, float]
+                     ) -> list[tuple[str, float, float, str]]:
+    """(name, x, y, horizontal alignment) for every PAGA node with a position: up right of
+    the node, else the first of seven other sides that clears the names placed so far and
+    the other nodes; if none does, up right anyway (a node is never left unnamed, as three
+    were in QA round 7 when the cell-group labels stood in for them)."""
+    sx, sy = (float(v) if v and np.isfinite(v) and v > 0 else 1.0 for v in span)
+    nodes = [((p[0] - lo[0]) / sx, (p[1] - lo[1]) / sy) if p is not None else None for p in pos]
+    g = PAGA_LABEL_GAP
+    sides = [(g, g, "left"), (g, -g, "left"), (-g, g, "right"), (-g, -g, "right"),
+             (0, 2 * g, "center"), (0, -2 * g, "center"), (1.4 * g, 0, "left"), (-1.4 * g, 0, "right")]
+    placed: list[tuple[float, float, float, float]] = []  # x left, x right, y low, y high (axis 0-1)
+    out = []
+    for k, name in enumerate(names):
+        if k >= len(nodes) or nodes[k] is None:
+            continue
+        nx, ny = nodes[k]
+        width = 0.0075 * len(name) + 0.01
+        best = None
+        for dx, dy, ha in sides:
+            x, y = nx + dx, ny + dy
+            left = x if ha == "left" else x - width if ha == "right" else x - width / 2
+            box = (left, left + width, y - LABEL_HEIGHT / 2, y + LABEL_HEIGHT / 2)
+            clear = all(box[1] < b[0] or box[0] > b[1] or box[3] < b[2] or box[2] > b[3] for b in placed)
+            clear = clear and all(o is None or j == k or not (box[0] - 0.01 < o[0] < box[1] + 0.01
+                                                           and box[2] - 0.01 < o[1] < box[3] + 0.01)
+                                  for j, o in enumerate(nodes))
+            if clear:
+                best = (x, y, ha, box)
+                break
+        if best is None:
+            dx, dy, ha = sides[0]
+            x, y = nx + dx, ny + dy
+            best = (x, y, ha, (x, x + width, y - LABEL_HEIGHT / 2, y + LABEL_HEIGHT / 2))
+        x, y, ha, box = best
+        placed.append(box)
+        out.append((name, lo[0] + x * sx, lo[1] + y * sy, ha))
+    return out
 
 
 def phase(result: dict[str, Any], title: str, caption: str) -> bytes:
