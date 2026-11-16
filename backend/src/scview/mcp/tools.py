@@ -151,9 +151,11 @@ async def get_dataset(dataset_id: DatasetId) -> str:
             # The route lists both for a bool column (its colour slots): name the one present.
             vals = (await _get(f"{_ds(dataset_id)}/metadata/{c['name']}", format="json"))["values"]
             values[c["name"]] = sorted({str(v) for v in vals if v is not None})
-    out = pick(d, "id", "name", "status", "n_cells", "n_genes", "error_message", "active_clustering",
+    out = pick(d, "id", "name", "status", "source", "n_cells", "n_genes", "error_message", "active_clustering",
                "user_annotation_columns", "app_annotation_columns", "available_embeddings",
                "default_expression_layer")
+    if isinstance(d.get("subset_of"), dict):  # made of some cells of another dataset (subset_dataset)
+        out["subset_of"] = pick(d["subset_of"], "id", "name", "described", "n_cells", "n_parent_cells")
     out["expression_layers"] = [
         (layer.get("key") or layer.get("name")) if isinstance(layer, dict) else layer
         for layer in d.get("expression_layers") or []]
@@ -1214,8 +1216,9 @@ async def set_labels(
     idx = await _indices(dataset_id, filter)
     if len(idx) == 0:
         raise ToolError("No cell matches the filter; nothing was labelled.")
-    r = await _post(f"{_ds(dataset_id)}/labels", {"column": column, "label": label,
-                                                    "indices": idx.tolist(), "new_column": new_column})
+    r = await _post(f"{_ds(dataset_id)}/labels", {"column": column, "label": label, "indices": idx.tolist(),
+                                                    "new_column": new_column,
+                                                    "filter": filter.model_dump(mode="json")})
     out = pick(r, "column", "label", "created", "n_labels", "note")
     out.update(dataset_id=dataset_id, n_labelled=int(len(idx)),
                n_changed=sum(len(g.get("indices") or []) for g in r.get("previous") or []
@@ -1270,6 +1273,10 @@ async def subset_dataset(
     filter: Annotated[CellFilter | None, Field(description=(
         "Cells by conditions instead of groups (the cell filter grammar, see set_labels), e.g. a gene "
         "above a value."))] = None,
+    mask: Annotated[str | None, Field(max_length=700_000, description=(
+        "Or the cells as a packed base64 bitmask over the dataset's cells in their current order (cell i "
+        "is bit i % 8, least significant first, of byte i // 8), as the UI's /cells/filter returns: a "
+        "lasso or any hand-made selection."))] = None,
     name: Annotated[str | None, Field(description=(
         "The new dataset's name (default '<parent> - <groups>')."))] = None,
     dry_run: Annotated[bool, Field(description=(
@@ -1279,27 +1286,33 @@ async def subset_dataset(
     leaving this one unchanged. It holds their counts, obs (scView's own clusters/annotations renamed
     parent_*, to compare after re-clustering), the parent's UMAP as X_umap_parent and per-cell
     modalities; not PCA, the graph or stored results. Then process it with run_pipeline on the new id."""
-    if filter is None and not (column and values):
-        raise ToolError("Give column + values (the groups to keep), or filter.")
-    if filter is not None and (column or values):
-        raise ToolError("Give column + values, or filter, not both.")
+    given = sum([filter is not None, mask is not None, bool(column or values)])
+    if given == 0 or (filter is None and mask is None and not (column and values)):
+        raise ToolError("Give column + values (the groups to keep), or filter, or mask.")
+    if given > 1:
+        raise ToolError("Give one of column + values, filter or mask, not several.")
     body: dict[str, Any] = {"dry_run": dry_run}
     if filter is not None:
         body["filter"] = filter.model_dump(mode="json")
+    elif mask is not None:
+        body["mask"] = mask
     else:
         body["groups"] = {"column": column, "values": list(values or [])}
     if name:
         body["name"] = name
     r = await _post(f"{_ds(dataset_id)}/subset", body)
     out = {k: r.get(k) for k in ("dataset_id", "name", "n_cells", "n_parent_cells", "n_genes", "described",
-                                 "counts_source", "carried", "not_carried", "renamed") if r.get(k) is not None}
+                                 "counts_source", "carried", "not_carried", "renamed", "steps_note")
+           if r.get(k) is not None}
+    steps = r.get("steps") or _FULL_RUN
     if dry_run:
+        out["steps"] = steps
         out["next"] = "subset_dataset again without dry_run to make it."
     else:
         out["parent_id"] = dataset_id
-        out["next"] = (f"run_pipeline(dataset_id='{r['dataset_id']}', steps={_FULL_RUN}) processes it from its "
+        out["next"] = (f"run_pipeline(dataset_id='{r['dataset_id']}', steps={steps}) processes it from its "
                        "counts (add batch_correction with params.batch_key when the cells span batches); the "
-                       "parent's clusters are the parent_* columns.")
+                       "parent's clusters and QC values are the parent_* columns.")
     return dumps(out)
 
 
