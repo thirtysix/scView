@@ -206,8 +206,12 @@ def test_no_markers_or_no_databases_say_so(monkeypatch, markers):
     rep = CE.build(_adata(), "cell_type", _report(), None, None)
     assert not rep.typing and any("not downloaded" in n for n in rep.notes)
     assert all(ln.kind != "markers" for c in rep.clusters for ln in c.lines)
-    # The QC rule still decides without the databases.
-    assert _by(rep)["damaged"].label == "Low-quality cells" and _by(rep)["junk"].label is None
+    # Without the databases no type is read (v0.81.0): the annotator fetches them first and, failing
+    # that, asks the AI about a damaged cluster rather than labelling it blind (QA-7 colonocytes).
+    damaged = _by(rep)["damaged"]
+    assert damaged.label is None and _by(rep)["junk"].label is None
+    assert _text(damaged, "decision").startswith("Damaged by cluster QC. AI annotation downloads the marker "
+                                                 "databases first")
     monkeypatch.setattr(CE.marker_selection, "group_markers", lambda adata, column, n: {})
     rep = CE.build(_adata(), "cell_type", _report(), _FakeDB(), _index())
     assert not rep.markers and "Unified View > Markers" in rep.notes[0]
@@ -326,3 +330,16 @@ def test_the_cluster_report_carries_the_groups_evidence(monkeypatch):
     page = report_html.render(rep)
     assert "<h3>Evidence</h3>" in page
     assert next(ln["text"] for ln in ev["lines"] if ln["kind"] == "qc").split(".")[0] in page
+
+
+def test_a_recorded_unchecked_damaged_cluster_says_the_ai_was_asked(markers):
+    a = _adata()
+    provenance.record_step(a, step="cell_type_annotation", tool="scview.cell_type_annotation", params={
+        "annotation_method": "llm", "annotation_groupby": "cell_type", "annotation_target": "anno",
+        P.UNCHECKED_TO_AI: ["damaged"]})
+    a.uns["anno_llm_mapping"] = {"CD8 T": "CD8 T cells", "junk": "T cells", "damaged": "Colonocytes", "mix": "T cells"}
+    by = _by(CE.build(a, "cell_type", _report(), _FakeDB(), _index()))
+    assert by["damaged"].label is None and by["damaged"].decided
+    assert _text(by["damaged"], "decision") == (
+        "Damaged by cluster QC, but the marker databases were not available to read its type, so the AI was "
+        "asked and named it Colonocytes in 'anno'.")

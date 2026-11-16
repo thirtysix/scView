@@ -2007,11 +2007,23 @@ RANDOM_NOTED = "llm_random_markers_noted"
 _DAMAGE_FLAGS = ("low_quality", "high_mito")
 # Cell types with much mitochondrial RNA by nature. A flagged cluster whose markers best match one of
 # them goes to the AI with its QC note instead, which may name the type when its lineage genes are clear.
+# Gut epithelium (v0.81.0): QA-7 (Garrido-Trigo 2023 IBD colon, 10x 3') colonocytes (SLC26A3, CEACAM7)
+# at 38% and goblet cells (MUC2, ITLN1) at 28% mito against 9.4% for the typical cluster, 5,608 cells
+# labelled "Low-quality cells" here; the authors kept epithelium up to 65% mito on purpose, the
+# marker databases matched them as Enterocytes (p 2e-26) and Goblet cells (p 8e-42), and CellTypist's
+# gut model called them Colonocyte and BEST2+ Goblet cell. Colonocytes run on butyrate oxidation;
+# Osorio & Cai 2021 (Bioinformatics, 1,349 PanglaoDB datasets) list colon among the human tissues
+# averaging over 5% mito. Matching only sends the cluster to the AI: it is not kept unasked.
 _HIGH_MITO_TYPE = re.compile(
     r"cardiomyocyte|cardiac muscle|cardiac myocyte|heart muscle|myocardial|hepatocyte|hepatoblast|"
     r"hepatic cell|hepatocellular|(?<!peri)(?<!pre)(?<!pre-)tubul(?!o)|loop of henle|collecting duct|"
     r"intercalated|skeletal muscle (?:cell|fiber)|myofiber|^myocytes$|striated muscle|brown adipocyte|"
-    r"beige adipocyte|^parietal cells$|oxyphil", re.I)
+    r"beige adipocyte|^parietal cells$|oxyphil|colonocyte|enterocyte|intestinal absorptive|"
+    r"intestinal epithelial|goblet", re.I)
+# The step record's key for damaged clusters sent to the AI because their type could not be read:
+# the marker databases were not there (download off or failed) when the annotation ran. Labelling
+# them "Low-quality cells" blind called QA-7's colonocytes damaged on a first run.
+UNCHECKED_TO_AI = "llm_damaged_unchecked_to_ai"
 # Cluster QC flags worth a note beside a cluster's markers (core/cluster_qc.py).
 # low_malat1 stays although it fires on real mouse Smart-seq2 clusters: leaving it out
 # (2026-11-09) cut visible-doublet naming in the T4 lung set from 52/54 to 46/54.
@@ -2057,7 +2069,9 @@ def _annotation_decided(adata: ad.AnnData, groupby: str, marker_map: dict[str, l
 
     - "Low-quality cells": cluster QC flags it ``low_quality`` (few genes and high mito) or
       ``high_mito``, unless its markers best match a type with much mito RNA by nature
-      (``_HIGH_MITO_TYPE``): that cluster goes to the AI with its QC note.
+      (``_HIGH_MITO_TYPE``): that cluster goes to the AI with its QC note. The marker databases are
+      fetched first when missing (the step waits, ~1.5 min once); without them no type can be read,
+      so such clusters go to the AI with their QC note too (record ``UNCHECKED_TO_AI``).
     - Markers that do not beat 9 of 10 random gene lists of the same size against the marker
       databases (``core/marker_randomness.py``) are not decided: the cluster goes to the AI with a
       QC note saying so (record ``RANDOM_NOTED``). Damaged wins when both hold.
@@ -2069,8 +2083,11 @@ def _annotation_decided(adata: ad.AnnData, groupby: str, marker_map: dict[str, l
     most junk. Best effort: a check that cannot run decides nothing."""
     from scview.core import cluster_qc, marker_randomness
 
+    # Fetched first where missing and allowed (worker thread): the high-mito exception reads the type.
+    # None (download off or failed): the check skips, and damaged clusters go to the AI.
+    db = _marker_db_or_none()
     try:
-        check = marker_randomness.check(adata, marker_map, tissue=tissue)  # types of the tissue only
+        check = marker_randomness.check(adata, marker_map, db=db, tissue=tissue)  # types of the tissue only
     except Exception as exc:
         logger.info("Random-marker check skipped: %s", exc)
         check = marker_randomness.RandomCheck(skipped="check failed")
@@ -2084,16 +2101,18 @@ def _annotation_decided(adata: ad.AnnData, groupby: str, marker_map: dict[str, l
 
 def decide_clusters(check, report, marker_map) -> tuple[dict[str, str], dict[str, list[str]]]:
     """``_annotation_decided`` from a random-marker check and a cluster QC report (None: not run),
-    so ``core/cluster_evidence.py`` shows the decision the annotator makes from the same inputs."""
+    so ``core/cluster_evidence.py`` shows the decision the annotator makes from the same inputs.
+    A check that did not run (``skipped``) reads no type: damaged clusters then go to the AI."""
     damaged = [str(r.group) for r in report.clusters if any(f in _DAMAGE_FLAGS for f in r.flags)] if report else []
     in_map = {str(g) for g in marker_map}
     best = {str(g): t for g, t in check.best.items()}
+    unchecked = sorted((g for g in damaged if g in in_map), key=str) if getattr(check, "skipped", None) else []
     to_ai = sorted((g for g in damaged if g in in_map and _HIGH_MITO_TYPE.search(best.get(g, ""))), key=str)
-    low = sorted((g for g in damaged if g in in_map and g not in to_ai), key=str)
+    low = sorted((g for g in damaged if g in in_map and g not in to_ai and g not in unchecked), key=str)
     noted = sorted((str(g) for g in check.flagged if str(g) in in_map and str(g) not in low), key=str)
     decided = {g: LOW_QUALITY_LABEL for g in low}
     record = {k: v for k, v in (("llm_decided_low_quality", low), (RANDOM_NOTED, noted),
-                                ("llm_high_mito_type_to_ai", to_ai)) if v}
+                                ("llm_high_mito_type_to_ai", to_ai), (UNCHECKED_TO_AI, unchecked)) if v}
     return decided, record
 
 
