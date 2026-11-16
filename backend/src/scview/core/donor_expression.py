@@ -351,7 +351,8 @@ def per_donor_expression(
             out["paired_tests"] = paired_design.group_paired_tests(points, tested, group_order)
         else:  # different donors in each: rank-sum + Welch on donor values
             out["unpaired_tests"] = paired_design.group_unpaired_tests(points, tested, group_order)
-    few = {k: n for k, n in out["n_donors"].items() if n < FEW_DONORS}
+    # Of the tested conditions only: QA round 7 asked CD vs UC and was warned "normal: 0".
+    few = {k: n for k, n in out["n_donors"].items() if n < FEW_DONORS and (not tested or k in tested)}
     if few:
         where = ", ".join(f"{k or 'all cells'}: {n}" for k, n in few.items())
         out["warnings"].append(
