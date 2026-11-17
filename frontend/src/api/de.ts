@@ -1,3 +1,4 @@
+import type { PseudobulkGeneFilter } from "@/lib/deDetection";
 import { apiFetch } from "./client";
 import type { CellMethod } from "@/lib/deMethods";
 
@@ -62,6 +63,8 @@ export interface DEResponse {
     n_nominal_expected: number;
     note: string | null;
   } | null;
+  /** Pseudobulk: the genes each filter left out, and the rule (absent from older servers). */
+  gene_filter?: PseudobulkGeneFilter | null;
   /** /de/compare, cell-level: a technology or batch value on one side only (absent from older servers). */
   technology_warnings?: string[];
   /** /de/compare: the sides' samples differ in sex (absent from older servers). */

@@ -378,12 +378,19 @@ describe("UnifiedDESubtab cell-level method", () => {
       n_samples_a: 5, n_samples_b: 6, design: "~condition", counts_source: "X",
       significance: { n_tested: 100, n_significant: 0, min_padj: 0.69, min_padj_gene: "PCK1", n_nominal: 4,
                       n_nominal_expected: 5, note: "No gene reaches adjusted p < 0.05: the smallest adjusted p is 0.69 (PCK1)." },
+      gene_filter: { n_genes: 32354, n_tested: 100, dropped: { low_counts: 32254, gene_cap: 0, not_fit: 0 },
+                     rule: "tested when it has at least 10 counts in at least 5 of the 11 donor samples (the smaller side's number)" },
     });
     useDESettingsStore.getState().update({ mode: "groups", test: "pseudobulk", replicateKey: "ind", splitBy: "stim",
       groupA: "STIM", groupB: "CTRL" });
     renderDE();
     fireEvent.click(screen.getByRole("button", { name: /compute de/i }));
     expect((await screen.findByTestId("de-none-significant")).textContent).toContain("smallest adjusted p is 0.69");
+    // QA round 7: NRG1 was dropped by this filter, unseen; the caption says how many genes were.
+    expect(screen.getByTestId("de-gene-filter").textContent).toBe(
+      "100 of 32,354 genes tested; not tested: 32,254 with too few counts (a gene needs at least 10 counts in at " +
+        "least 5 of the 11 donor samples).",
+    );
     computeDECompare.mockResolvedValue({
       n_selected: 100, n_rest: 100, label: "DKD", genes: [], method: "wilcoxon", replicate_key: "donor_id",
       technology_warnings: ["'assay' value '10x 3' v3' is only in CTRL (37% of its cells)."],

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   DEFAULT_MIN_PCT,
+  describeGeneFilter,
   describePrefilter,
   detectionBins,
   formatPct,
@@ -68,5 +69,26 @@ describe("describePrefilter", () => {
     );
     expect(describePrefilter({ min_pct: null, n_genes_tested: 500, n_genes_skipped: 0 })).toMatch(/scaled/);
     expect(describePrefilter({})).toBe(""); // an older backend
+  });
+});
+
+describe("describeGeneFilter", () => {
+  it("names each filter's dropped genes (Kang DC STIM vs CTRL)", () => {
+    const f = {
+      n_genes: 14053, n_tested: 1250,
+      rule: "tested when it has at least 10 counts in at least 7 of the 15 donor samples (the smaller side's number)",
+      dropped: { low_counts: 12803, gene_cap: 0, not_fit: 0 },
+    };
+    expect(describeGeneFilter(f)).toBe(
+      "1,250 of 14,053 genes tested; not tested: 12,803 with too few counts (a gene needs at least 10 counts in " +
+        "at least 7 of the 15 donor samples).",
+    );
+    expect(describeGeneFilter({ ...f, n_tested: 19998, dropped: { low_counts: 0, gene_cap: 500, not_fit: 2 } })).toBe(
+      "19,998 of 14,053 genes tested; not tested: 500 past the 20,000-gene cap (fewest counts); 2 the model could not estimate.",
+    );
+    expect(describeGeneFilter({ ...f, n_tested: 14053, dropped: { low_counts: 0, gene_cap: 0, not_fit: 0 } })).toBe(
+      "All 14,053 genes tested.",
+    );
+    expect(describeGeneFilter(undefined)).toBe("");
   });
 });
