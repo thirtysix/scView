@@ -73,7 +73,7 @@ describe("LabelImportCard", () => {
     fireEvent.click(screen.getByRole("checkbox"));
     expect(screen.queryByTestId("label-import-report")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Check the match" }));
-    expect((await screen.findByRole("alert")).textContent).toContain("import with strip_suffix");
+    expect((await screen.findByRole("alert")).textContent).toContain('tick "Ignore a -1 or .1 ending"');
     expect(importLabelFile.mock.calls[1]![2].stripSuffix).toBe(true);
   });
 

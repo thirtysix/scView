@@ -3,6 +3,7 @@ import {
   BY_ORDER,
   defaultColumns,
   describeReport,
+  inCardWords,
   parseHeader,
   readFirstLine,
   separatorOf,
@@ -62,4 +63,11 @@ describe("match report", () => {
     const r = { ...base, match: "order" as const, n_rows: 13836, n_matched: 13836, n_extra: 0, n_unmatched_cells: 0 };
     expect(describeReport(r)).toEqual(["13,836 of 13,836 cells get a label, row by row in the dataset's order."]);
   });
+});
+
+it("names the card's controls, not the API's options", () => {
+  expect(inCardWords("13,336 of 13,366 rows would match: import with strip_suffix.")).toBe(
+    '13,336 of 13,366 rows would match: tick "Ignore a -1 or .1 ending".',
+  );
+  expect(inCardWords("or lower min_match if the table")).toBe('or lower "Rows that must match" if the table');
 });

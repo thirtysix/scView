@@ -8,6 +8,7 @@ import {
   BY_ORDER,
   defaultColumns,
   describeReport,
+  inCardWords,
   parseHeader,
   readFirstLine,
   suggestImportName,
@@ -102,7 +103,7 @@ export function LabelImportCard({ datasetId }: { datasetId: string }) {
       }
     } catch (e) {
       setReport(null);
-      setError(e instanceof Error ? e.message : "The import failed.");
+      setError(inCardWords(e instanceof Error ? e.message : "The import failed."));
     } finally {
       setBusy(null);
     }
@@ -280,7 +281,7 @@ function ImportReport({ report }: { report: LabelImportReport }) {
           {l}
         </p>
       ))}
-      {report.hint && <p className="text-[11px] text-amber-800">{report.hint}</p>}
+      {report.hint && <p className="text-[11px] text-amber-800">{inCardWords(report.hint)}</p>}
       {report.note && <p className="text-[11px] text-slate-500">{report.note}</p>}
       <table className="mt-1 text-[11px]" aria-label="Labels in the table">
         <thead>

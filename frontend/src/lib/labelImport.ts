@@ -119,3 +119,10 @@ export function describeReport(r: LabelImportReport): string[] {
   if (r.n_duplicates > 0) lines.push(`${n(r.n_duplicates)} repeated rows (same cell, same label) count once.`);
   return lines;
 }
+
+/** The server's words for its API options, as this card's controls name them. */
+export function inCardWords(text: string): string {
+  return text
+    .replace(/import with strip_suffix/g, 'tick "Ignore a -1 or .1 ending"')
+    .replace(/lower min_match/g, 'lower "Rows that must match"');
+}
