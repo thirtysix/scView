@@ -27,10 +27,11 @@ the cached copy is dropped instead and the work gets a fresh adaptor that has re
 nothing (``control.mode`` tells the run endpoints which way to run). A run whose steps
 need no matrix (neighbours, clustering, UMAP on the stored PCA: ``large_run.run_light``)
 gets the same and reads the file without its matrices, so it never converts the dataset;
-a run that would convert it is refused (409) when ``control.allow_large`` is False (the
-MCP's ``run_pipeline`` without ``allow_large_mode``). Work that needs only
-obs, obsm, obsp and uns (PAGA, pseudotime: ``run_exclusive(light=True)``) gets the same
-on a large dataset and reads it without its matrices (``large_run.read_light``). Any
+a run that would convert it is refused (409) unless ``control.allow_large`` is True (the
+run routes' ``allow_large_mode``, False by default: the UI's confirm, the MCP tools'
+argument). Work that needs only obs, obsm, obsp and uns (PAGA, pseudotime:
+``run_exclusive(light=True)``) gets the same on a large dataset and reads it without its
+matrices (``large_run.read_light``). Any
 other work on a large dataset is refused (422): it would read the matrices into memory.
 
 A pipeline run passes its ``RunControl`` (``core/run_watchdog.py``): while the
@@ -153,7 +154,8 @@ async def _make_run_room(dm: DatasetManager, dataset_id: str, adaptor: AnnDataAd
 
             raise HTTPException(status_code=409, detail=(
                 f"{control.mode.reason} {large_mode.conversion_note()} Nothing was run: run it "
-                "again allowing large-dataset mode to convert it, or free memory first."))
+                "again allowing large-dataset mode to convert it (allow_large_mode true), or free "
+                "memory first."))
         if control.mode.light:  # reads no matrix: the cached copy goes, the run reads the rest
             path = adaptor.h5ad_path
             dm.evict(dataset_id)

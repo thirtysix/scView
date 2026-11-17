@@ -821,6 +821,8 @@ def _check_embeddings(adata: Any) -> StepStatus:
     try:
         embedding_keys = []
         for key in adata.obsm_keys():
+            if key == "X_umap_parent":  # a subset's place in its parent's UMAP (core/subset.py)
+                continue
             if key in ("X_umap", "X_tsne"):
                 embedding_keys.append(key)
             elif key.startswith("X_") and key != "X_pca":
@@ -1079,6 +1081,43 @@ def recorded_normalization_method(adata: Any) -> str | None:
     return None
 
 
+# A subset (core/subset.py) starts from its counts: these steps count as done only once run on
+# it. The parent's values it carries (parent_* columns, its UMAP as X_umap_parent, its variable
+# genes left behind) would otherwise read as done, and the default run skipped HVG and UMAP.
+_SUBSET_FRESH = ("qc_metrics", "normalization", "log_transform", "highly_variable_genes", "scaling", "pca",
+                 "neighbors", "clustering", "embeddings", "marker_genes", "enrichment", "cell_cycle",
+                 "dissociation_stress")
+
+
+def _subset_overlay(adata: Any, history: list, last: dict, state: PreprocessingState) -> None:
+    """For a subset: the steps not run on it since it was made are not done; filtering and
+    doublet detection follow the parent's (``subset.parent_qc``): its cells were filtered and
+    scored there, and a run on the subset leaves them out by default."""
+    sub = next((h for h in history if isinstance(h, dict) and h.get("step") == "subset"), None)
+    if sub is None:
+        return
+    for field in _SUBSET_FRESH:
+        if field not in last and not getattr(state, field).details.startswith("Not applicable"):
+            setattr(state, field, StepStatus(
+                done=False, confidence="high",
+                details="Not run on this subset yet: it starts from its counts (the parent's results are its "
+                        "parent_* columns and UMAP (parent))"))
+    qc = (sub.get("params") or {}).get("parent_qc") or {}
+    for field, key, again in (
+        ("filtering", "filtered", "select it to filter these cells again (per-sample bounds within these cells "
+                                  "alone can remove real ones)"),
+        ("doublet_detection", "doublets", "select it to score these cells again"),
+    ):
+        if field in last or getattr(state, field).details.startswith("Not applicable"):
+            continue
+        if qc.get(key):
+            setattr(state, field, StepStatus(done=True, confidence="high",
+                                             details=f"{qc[key]}; {again}"))
+        else:
+            setattr(state, field, StepStatus(done=False, confidence="high",
+                                             details="Not run on this subset or its parent"))
+
+
 def _apply_recorded_provenance(adata: Any, state: PreprocessingState) -> PreprocessingState:
     """Overlay what scView actually recorded doing: a step in the provenance
     history is authoritatively 'done' (high confidence), overriding heuristics.
@@ -1095,6 +1134,7 @@ def _apply_recorded_provenance(adata: Any, state: PreprocessingState) -> Preproc
                 # no longer done; the data decides.
                 for step in (h.get("params") or {}).get("stale") or []:
                     last.pop(_PROV_STEP_TO_FIELD.get(step, ""), None)
+        _subset_overlay(adata, history, last, state)
         for field, h in last.items():
             ts = h.get("timestamp", "")
             when = ts.split("T")[0] if ts else ""

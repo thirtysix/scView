@@ -129,6 +129,9 @@ class DECompareRequest(_CompareScope):
     composition_by: str | None = None
     # Cell-level only: test the proteins (CITE-seq) instead of the genes.
     layer: ProteinLayer | None = None
+    # Pseudobulk: genes the caller asks about; ``asked_genes`` says of each whether it
+    # was tested and, if not, which filter left it out (core/pseudobulk.py gene_fates).
+    genes: list[str] | None = Field(default=None, max_length=50)
 
 
 class DECompareMethodsRequest(_CompareScope):
@@ -269,6 +272,10 @@ class DEResponse(BaseModel):
     sex_linked: list[str] = []
     # The proteins were tested, not the genes (``protein`` CLR, or ``protein_counts``).
     layer: str | None = None
+    # Pseudobulk: the genes each filter left out (low counts, gene cap, no fit) and the
+    # rule, and for the request's ``genes`` whether each was tested and why not.
+    gene_filter: dict | None = None
+    asked_genes: list[dict] | None = None
 
     @model_validator(mode="after")
     def _flag_sex_linked(self):
@@ -1009,6 +1016,7 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
             label_a=body.group_a, label_b=body.group_b, donor_key=key,
             method=body.pb_method, ruv_k=body.ruv_k,
             covariates=adata.obs[covs] if covs else None, numeric_covariates=body.numeric_covariates,
+            genes=body.genes,
         )
         try:  # obs total_counts (the QC step's); never a pass over the matrix here
             size = transcriptome_size.check(adata, mask_a, mask_b)
@@ -1025,6 +1033,7 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
             label_a=body.group_a, label_b=body.group_b, donor_key=key,
             method=body.pb_method, ruv_k=body.ruv_k,
             covariates=sub.obs[covs] if covs else None, numeric_covariates=body.numeric_covariates,
+            genes=body.genes,
         )
         # DESeq2's size factors and voom's TMM factors normalise library size too.
         return res, transcriptome_size.check(sub, mask_a[keep], mask_b[keep])
@@ -1110,6 +1119,8 @@ async def _pseudobulk_compare(adata, body: DECompareRequest, mask_a, mask_b, dat
         covariate_notes=res.covariate_notes,
         replicate_warnings=rep_warnings,
         significance=pseudobulk.significance(res.genes),
+        gene_filter=res.gene_filter,
+        asked_genes=res.asked_genes if body.genes else None,
     )
 
 

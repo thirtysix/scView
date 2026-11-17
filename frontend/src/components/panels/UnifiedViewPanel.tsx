@@ -149,6 +149,7 @@ export function UnifiedViewPanel() {
   const selectedIndices = useSelectionStore((s) => s.selectedCellIndices);
   const selectionMode = useSelectionStore((s) => s.selectionMode);
   const setSelection = useSelectionStore((s) => s.setSelection);
+  const setGroupSelection = useSelectionStore((s) => s.setGroupSelection);
   const clearSelection = useSelectionStore((s) => s.clearSelection);
   const setHighlight = useSelectionStore((s) => s.setHighlight);
   const setPanel = useViewStore((s) => s.setPanel);
@@ -1004,11 +1005,13 @@ export function UnifiedViewPanel() {
         }
         if (same) { clearSelection(); setHighlight(null); return; }
       }
-      setSelection(indices);
+      if (colorBy && colorColumnName === colorBy) setGroupSelection(indices, colorBy, [cat]);
+      else setSelection(indices);
       // Shared with the cluster map and the Markers / DE subtabs.
       if (colorBy) setHighlight({ column: colorBy, value: cat });
     },
-    [colors, categories, selectedIndices, setSelection, clearSelection, colorBy, setHighlight],
+    [colors, categories, selectedIndices, setSelection, setGroupSelection, clearSelection, colorBy, colorColumnName,
+     setHighlight],
   );
 
   // --- Legend multi-select: Ctrl/Cmd/Shift-click picks several groups, shown
@@ -1035,9 +1038,10 @@ export function UnifiedViewPanel() {
   const handleSelectPicked = useCallback(() => {
     if (!pickedCells) return;
     setHighlight(null);
-    setSelection(pickedCells);
+    if (colorBy) setGroupSelection(pickedCells, colorBy, picked); // pickedCells exist only for colorBy's groups
+    else setSelection(pickedCells);
     setPicked([]);
-  }, [pickedCells, setHighlight, setSelection]);
+  }, [pickedCells, picked, colorBy, setHighlight, setSelection, setGroupSelection]);
   // The picks stand in for the selection on the plots while there are any.
   const shownSelection = pickedCells ?? selectedIndices;
 
@@ -1053,10 +1057,11 @@ export function UnifiedViewPanel() {
         setHighlight(null);
         return;
       }
-      setSelection(cells);
+      if (colorBy && colorColumnName === colorBy) setGroupSelection(cells, colorBy, groups);
+      else setSelection(cells);
       setHighlight(groups.length === 1 && colorBy ? { column: colorBy, value: groups[0]! } : null, { select: false });
     },
-    [colors, categories, setSelection, clearSelection, setHighlight, colorBy],
+    [colors, categories, setSelection, setGroupSelection, clearSelection, setHighlight, colorBy, colorColumnName],
   );
   const groupCounts = useMemo(() => {
     if (!colors || !categories || colorColumnName !== colorBy) return undefined;
@@ -1094,8 +1099,8 @@ export function UnifiedViewPanel() {
     const indices = new Set<number>();
     for (let i = 0; i < colors.length; i++) if (colors[i] === catIndex) indices.add(i);
     appliedHighlight.current = hl;
-    setSelection(indices);
-  }, [highlightedGroup, colorBy, colorColumnName, colors, categories, setSelection]);
+    setGroupSelection(indices, hl.column, [hl.value]);
+  }, [highlightedGroup, colorBy, colorColumnName, colors, categories, setGroupSelection]);
   // ...and keeps its label while the others fade.
   const labelHighlight = highlightedGroup?.column === colorColumnName ? highlightedGroup.value : null;
 

@@ -520,37 +520,85 @@ def root_warnings(adata, pt: np.ndarray, iroot: int, own_column: str,
 
 
 # Lineage check (``lineage_check``): a group whose best route from the root crosses a link
-# where under this share of the smaller group's kNN edges reach the other group is not on a
-# path from the root. Widest route from the true root, lowest group: paul15 (7MEP) 0.022
-# (19Lymph), Bastidas-Ponce pancreas (Ductal) 0.038 (Delta), Pijuan-Sala erythroid (Blood
-# progenitors 1) 0.126. Reck 2025 kidney from PT S1: immune, endothelial, stromal, IC and
-# glomerular groups 0.002-0.007 (38 of 59 groups), distal nephron 0.024, PT 0.042 and up.
+# where under this share of the smaller group's kNN edges reach the other group is not on a path
+# from the root. A group smaller than both its neighbours on the route is a pipe (v0.81.0): its
+# two links count as the fewer of their edges against the smaller of the two neighbours, so a
+# small group in between cannot join two lineages. QA-7's whole-myeloid subset (Garrido-Trigo
+# 2023 colon) put mast cells (734) and basophils (57) after macrophages with no warning: 33
+# cycling cells bridged them (1.5% of their edges reach mast cells, 0.3% of the mast cells'
+# edges reach back). Measured against the group reached instead, a small root group was cut from
+# the large group it feeds (a 1-D path test: 75% of cells off). Widest route from the true root,
+# lowest group (pipe / before): paul15 (7MEP) 0.022 / 0.022 (19Lymph), Bastidas-Ponce pancreas
+# (Ductal) 0.022 / 0.038, Pijuan-Sala erythroid (Blood progenitors 1) 0.059 / 0.126: no warning.
+# Reck 2025 kidney (half the nuclei) from PT S1: the same 37 groups (49%) off, 0.0009-0.0053;
+# closest kept PEC 0.010. QA-7 myeloid from M0: mast cells and basophils 0.004 (0.015 before),
+# neutrophils 0.023, macrophage, monocyte and DC groups 0.049 and up.
 LINEAGE_MIN_SHARE = 0.01
 LINEAGE_MIN_CELLS = 0.05  # warn when the groups off the root's lineage hold this share of the cells
 LINEAGE_NAMED = 6
 
 
-def edge_shares(distances, codes: np.ndarray, n_groups: int) -> np.ndarray:
-    """Between each pair of groups: their kNN edges (both ways) as a share of the smaller
-    group's own edges, ``codes`` -1 for a cell in no group (left out)."""
+def group_edges(distances, codes: np.ndarray, n_groups: int) -> tuple[np.ndarray, np.ndarray]:
+    """(kNN edges between each pair of groups, both ways; each group's own edges), ``codes`` -1
+    for a cell in no group (left out)."""
     keep = codes >= 0
     D = sp.csr_matrix(distances)[keep][:, keep]
     c = codes[keep]
     both, _ = group_links(D, c, n_groups)
-    out_edges = np.bincount(c, weights=np.diff(D.indptr), minlength=n_groups)
-    smaller = np.minimum.outer(out_edges, out_edges)
+    return both, np.bincount(c, weights=np.diff(D.indptr), minlength=n_groups)
+
+
+def widest_routes(both: np.ndarray, out_edges: np.ndarray, root: int) -> tuple[np.ndarray, np.ndarray]:
+    """(widest, previous) per group: the largest weakest link over routes from ``root`` (0 when
+    unreachable, inf at the root) and the group before it on that route. A link is its edges as a
+    share of the smaller group's edges; a group smaller than both its neighbours on the route is a
+    pipe: min(edges in, edges out) as a share of the smaller neighbour's edges."""
+    import heapq
+
+    n = len(out_edges)
     with np.errstate(divide="ignore", invalid="ignore"):
-        share = np.where(smaller > 0, both / (2 * smaller), 0.0)
+        share = np.where(both > 0, both / (2 * np.minimum.outer(out_edges, out_edges)), 0.0)
+    share[~np.isfinite(share)] = 0.0
     np.fill_diagonal(share, 0)
-    return share
+    best = np.zeros(n)
+    prev = np.full(n, -1)
+    best[root] = np.inf
+    state: dict[tuple[int, int], float] = {}  # (from, to): widest weakest link arriving this way
+    heap = []
+    for j in np.flatnonzero(share[root] > 0):
+        state[(root, int(j))] = float(share[root, j])
+        heapq.heappush(heap, (-float(share[root, j]), root, int(j)))
+    done = set()
+    while heap:
+        b, i, j = heapq.heappop(heap)
+        if (i, j) in done:
+            continue
+        done.add((i, j))
+        if -b > best[j]:
+            best[j], prev[j] = -b, i
+        for k in np.flatnonzero(share[j] > 0):
+            k = int(k)
+            if k in (i, root):
+                continue
+            if out_edges[j] < min(out_edges[i], out_edges[k]):
+                w = min(both[i, j], both[j, k]) / (2 * min(out_edges[i], out_edges[k]))
+            else:
+                w = share[j, k]
+            v = min(-b, float(w))
+            if v > state.get((j, k), 0.0):
+                state[(j, k)] = v
+                heapq.heappush(heap, (-v, j, k))
+    return best, prev
 
 
 def lineage_check(adata, work: ad.AnnData, pt: np.ndarray, column: str,
                   root: str | None) -> dict[str, Any] | None:
     """The groups of ``column`` that DPT orders (finite pseudotime) but that sit off the root's
     lineage: the widest route to them from the root group (most shared kNN edges at its weakest
-    link, ``edge_shares``) falls under ``LINEAGE_MIN_SHARE``. Their pseudotime is distance from
-    the root through a weak link, not progress along a process. None when it cannot be read."""
+    link, ``widest_routes``) falls under ``LINEAGE_MIN_SHARE``. Their pseudotime is distance from
+    the root through a weak link, not progress along a process. The block also names the weakest
+    link of the groups kept on the lineage (``weakest_on``): how close the check came. None when
+    it cannot be read."""
     if root is None or column not in adata.obs.columns or "distances" not in work.obsp:
         return None
     order, labels = _group_labels(adata, column)
@@ -558,23 +606,28 @@ def lineage_check(adata, work: ad.AnnData, pt: np.ndarray, column: str,
         return None
     finite = np.isfinite(pt)
     codes = np.where(finite, pd.Index(order).get_indexer(labels), -1)
-    share = edge_shares(work.obsp["distances"], codes, len(order))
-    tree = spanning_tree(len(order), share, share)
+    both, out_edges = group_edges(work.obsp["distances"], codes, len(order))
     r = order.index(root)
+    best, prev = widest_routes(both, out_edges, r)
     n = np.bincount(codes[codes >= 0], minlength=len(order))
-    widest = {}
-    for j in range(len(order)):
-        if n[j] and j != r:
-            path = _tree_path(tree, r, j)
-            widest[j] = min((share[e] for e in path), default=0.0)
+    widest = {j: float(best[j]) for j in range(len(order)) if n[j] and j != r}
     off = [j for j, w in widest.items() if w < LINEAGE_MIN_SHARE]
     on = [order[j] for j in sorted((j for j, w in widest.items() if w >= LINEAGE_MIN_SHARE),
                                    key=lambda j: -widest[j])]  # closest first
-    rows = [{"group": order[j], "n_cells": int(n[j]), "widest_share": round(float(widest[j]), 4),
-             "median_pseudotime": round(float(np.median(pt[codes == j])), 4)} for j in off]
+
+    def via(j: int) -> str | None:
+        return order[int(prev[j])] if prev[j] >= 0 and prev[j] != r else None
+
+    rows = [{"group": order[j], "n_cells": int(n[j]), "widest_share": round(widest[j], 4),
+             "median_pseudotime": round(float(np.median(pt[codes == j])), 4)}
+            | ({"via": via(j)} if via(j) else {}) for j in off]
     rows.sort(key=lambda x: -x["median_pseudotime"])  # the ones DPT puts latest first
     out: dict[str, Any] = {"column": column, "root_group": root, "min_share": LINEAGE_MIN_SHARE,
                            "lineage": [root, *on], "off_lineage": rows}
+    kept = [j for j, w in widest.items() if w >= LINEAGE_MIN_SHARE]
+    if kept:
+        j = min(kept, key=lambda j: widest[j])
+        out["weakest_on"] = {"group": order[j], "widest_share": round(widest[j], 4)}
     n_off, n_all = int(n[off].sum()) if off else 0, int(n.sum())
     if off and n_off >= LINEAGE_MIN_CELLS * n_all:
         named = ", ".join(f"'{x['group']}' ({x['median_pseudotime']:.2g})" for x in rows[:LINEAGE_NAMED])
@@ -584,10 +637,12 @@ def lineage_check(adata, work: ad.AnnData, pt: np.ndarray, column: str,
         out["warning"] = (
             f"{len(rows)} groups of {column} ({n_off:,} of {n_all:,} cells, {n_off / n_all:.0%}) are not on a path "
             f"from '{root}': every route to them crosses a link where under {LINEAGE_MIN_SHARE:.0%} of the smaller "
-            f"group's neighbours are in the other. DPT still gives them a pseudotime, latest first (median "
+            f"group's neighbours are in the other (a small group in between counts as narrow as its fewer links). "
+            f"DPT still gives them a pseudotime, latest first (median "
             f"shown): {named}{more}. "
             "That value is distance from the root, not progress along a process. Read the pseudotime within the "
-            f"root's lineage ({lineage}), or compute it on those groups' cells alone.")
+            f"root's lineage ({lineage}), or make a dataset of the lineage's cells and compute it there (Unified "
+            "View: select the groups, then New dataset…; MCP: subset_dataset).")
     return out
 
 

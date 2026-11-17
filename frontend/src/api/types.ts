@@ -43,6 +43,21 @@ export interface DatasetInfo {
   public_source?: PublicSource | null;
   /** Spatial coordinates (obsm "spatial", tissue images), or null/absent without them */
   spatial?: SpatialInfo | null;
+  /** A dataset made of some cells of another one (backend core/subset.py) */
+  subset_of?: SubsetOf | null;
+}
+
+/** Where a subset came from (metadata `subset_of`, POST /datasets/{id}/subset). */
+export interface SubsetOf {
+  id: string;
+  name: string | null;
+  /** The request's selector: {groups}, {filter} or {mask: true} */
+  how: Record<string, unknown>;
+  described: string;
+  n_cells: number;
+  n_parent_cells: number;
+  carried?: string[];
+  not_carried?: string[];
 }
 
 /** One tissue image of a spatial library (uns spatial[library].images[res]). */

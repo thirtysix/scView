@@ -270,10 +270,11 @@ SINGLE_SAMPLE_MAX_SAMPLE_SHARE = 0.5  # a sample holding this much of the data f
 SINGLE_SAMPLE_LISTED = 5
 
 
-def single_sample_clusters(obs: pd.DataFrame, cluster_col: str, sample_col: str) -> list[dict]:
-    """Clusters of at least MIN_CELLS cells with SINGLE_SAMPLE_SHARE or more of them from one
-    sample, when ``sample_col`` has SINGLE_SAMPLE_MIN_SAMPLES or more samples and that sample
-    holds under SINGLE_SAMPLE_MAX_SAMPLE_SHARE of the cells. Largest share first."""
+def single_sample_clusters(obs: pd.DataFrame, cluster_col: str, sample_col: str,
+                           share_min: float = SINGLE_SAMPLE_SHARE) -> list[dict]:
+    """Clusters of at least MIN_CELLS cells with ``share_min`` (SINGLE_SAMPLE_SHARE) or more of
+    them from one sample, when ``sample_col`` has SINGLE_SAMPLE_MIN_SAMPLES or more samples and
+    that sample holds under SINGLE_SAMPLE_MAX_SAMPLE_SHARE of the cells. Largest share first."""
     if cluster_col not in obs.columns or sample_col not in obs.columns:
         return []
     clusters = obs[cluster_col].astype(str).where(obs[cluster_col].notna())
@@ -288,7 +289,7 @@ def single_sample_clusters(obs: pd.DataFrame, cluster_col: str, sample_col: str)
         n = int(row.sum())
         top = row.idxmax()
         share = float(row[top]) / n if n else 0.0
-        if n >= MIN_CELLS and share >= SINGLE_SAMPLE_SHARE and overall[top] < SINGLE_SAMPLE_MAX_SAMPLE_SHARE:
+        if n >= MIN_CELLS and share >= share_min and overall[top] < SINGLE_SAMPLE_MAX_SAMPLE_SHARE:
             out.append({"cluster": str(cluster), "n_cells": n, "sample": str(top), "share": round(share, 3),
                         "sample_share_of_data": round(float(overall[top]), 3)})
     out.sort(key=lambda r: (-r["share"], -r["n_cells"]))

@@ -51,11 +51,12 @@ export async function getRerunPlan(id: string, step: string): Promise<RerunPlan>
 export async function rerunStep(
   id: string,
   edited_step: string,
-  params: Record<string, unknown>
+  params: Record<string, unknown>,
+  allowLarge = false,
 ): Promise<{ plan: RerunPlan; result: Record<string, unknown> }> {
   return apiFetch(`/datasets/${id}/rerun`, {
     method: "POST",
-    body: JSON.stringify({ edited_step, params }),
+    body: JSON.stringify({ edited_step, params, allow_large_mode: allowLarge }),
   });
 }
 

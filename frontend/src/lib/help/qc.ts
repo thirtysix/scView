@@ -1,5 +1,7 @@
 /** Help for the QC cards outside Unified View (Data Assessment). Keys: `<card>.<thing>`. */
 export const QC_HELP: Record<string, string> = {
+  "subset.source":
+    "This dataset was made from some cells of another one. Its parent_ columns are the parent's clusters and annotations, kept to compare with its own clusters once it is processed. UMAP (parent) is where its cells sat in the parent's UMAP.",
   "markerdb.tissue":
     "Database types described only in other organs are left out of the best types, so a kidney cluster is not offered a colon type. Immune, blood, vessel and stromal types, and types described across many tissues, stay. A label's own verdict is not affected.",
   "evidence.section":
@@ -24,6 +26,14 @@ export const QC_HELP: Record<string, string> = {
     "Two libraries of this sample hold a different mix of cell types (or depth) than different samples alike in condition, tissue and sex usually do. One library may hold another sample's cells, or its capture failed. Compare its cell types and markers with the other library before pooling them; the numbers are under the table.",
   "hashing.split_by":
     "Call the tags within each lane or channel, on the tags it has counts for. Use it when lanes were counted against different tag panels: a tag that is 0 in a whole lane breaks a call over all cells. The suggested column is the one whose lanes explain those zeros.",
+  "labelimport.card":
+    "Bring per-cell labels from a table into a new label column: an author annotation from GEO or a collaborator's file, one row per cell with its name and label. Check the match first: it says how many rows name a cell here, which do not, and which cells the table leaves out.",
+  "labelimport.barcodes":
+    "The table's column of cell names, written as this dataset names its cells (barcode, sample prefix and all). With none, row 1 labels the first cell and so on: only safe when the table has exactly this dataset's cells in this order.",
+  "labelimport.strip":
+    "Match AAACCTG-1 and AAACCTG.1 to AAACCTG: removes a '-1' or '.1' ending from the names on both sides. Use it when the check says most rows would match without it.",
+  "labelimport.min-match":
+    "The import is refused when fewer of the table's labelled rows than this name a cell here, since a table whose names are written differently would label almost nothing. Lower it only when the table also holds cells of other datasets.",
   "evidence.decision":
     "The label scView gave the cluster itself, without asking the AI, or would give it in an AI annotation. Fixed rules on the numbers above, not a model.",
 };

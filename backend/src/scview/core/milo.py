@@ -13,16 +13,14 @@ PMID 34594043). Follows pertpy's ``Milo`` (the milopy port) step by step:
 2. **Counts.** Cells of each sample (one donor in one condition) in each
    neighbourhood.
 3. **Test.** A negative binomial GLM per neighbourhood, ``~ [donor +]
-   [covariate +] condition``, fitted by DESeq2 (pydeseq2, already used for
-   pseudobulk DE; pertpy offers it as Milo's ``pydeseq2`` solver) and a Wald
-   test of the condition. Milo's own solver is edgeR's quasi-likelihood F-test
-   with TMM, which needs R in the image. On Kang (Harmony graph, 779
-   neighbourhoods, ``~ donor + stim``) the results match pertpy's pydeseq2
-   solver to 5e-7, and edgeR's log fold changes to r = 0.989: edgeR calls 304
-   neighbourhoods at spatial FDR < 0.1, DESeq2 234, 233 of them shared and all
-   in the same direction. On donor-level label shuffles both call nothing in 9
-   of 10 runs, DESeq2 a little more conservatively. Donors sampled in both
-   conditions are paired (a donor term), as in the composition test.
+   [covariate +] condition``, and edgeR's quasi-likelihood F-test of the
+   condition with TMM factors over the neighbourhood counts: miloR's own test
+   (``testNhoods``), run by core/edger_ql.py. Until v0.81.0 DESeq2 (pydeseq2,
+   pertpy's ``pydeseq2`` solver) fitted it, which turned the sign of
+   neighbourhoods with no reference cells (``_glm_ql``). On Kang (Harmony graph,
+   ``~ donor + stim``) the two call 672 and 671 neighbourhoods at spatial
+   FDR < 0.1, logFC r 0.997. Donors sampled in both conditions are paired (a
+   donor term), as in the composition test.
 4. **Spatial FDR.** Neighbourhoods overlap, so plain BH over them counts the
    same cells many times where the graph is dense. Milo weights each
    neighbourhood's p-value by 1 / (distance from its index cell to the k-th
@@ -46,6 +44,7 @@ import logging
 import random
 import threading
 import time
+import uuid
 import weakref
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
@@ -80,14 +79,18 @@ ONE_CONDITION_WARN = 0.5  # share of neighbourhoods that are one condition befor
 ONE_SAMPLE_SHARE = 0.5  # a neighbourhood with this share of its cells from one sample
 ONE_SAMPLE_WARN = 0.5  # share of the significant neighbourhoods that are, before warning
 OUTSIDE_WARN = 0.1  # share of the cells in neither condition before saying so
-# DESeq2 fits one model per neighbourhood: one process keeps it in this worker
-# thread, as pseudobulk does.
-N_CPUS = 1
-# Seconds per (sampled index cell x sample), measured on Kang: 1,384 and 2,767
-# sampled cells (780 and 1,193 neighbourhoods after refinement) x 16 samples ran
-# in 2.3 and 2.6 s on one laptop core, nearly all of it the DESeq2 fit.
-SECONDS_PER_CELL_OF_TABLE = 0.0001
-SECONDS_BASE = 1.0
+# A graph Milo builds itself (``k`` / ``n_pcs``): k within these bounds
+MIN_K, MAX_K = 3, 100
+MIN_PCS = 2
+# Seconds per (sampled index cell x sample), measured on Kang (v0.81.0, edgeR QL, 2 CPUs):
+# 1,384 and 2,767 sampled cells (763 and 1,182 neighbourhoods after refinement) x 16 samples
+# ran in 0.32 and 0.48 s once edgeR's numba kernels were compiled (3.7 s, once per process:
+# ``EDGER_COMPILE_SECONDS``). DESeq2 took 2.3 and 2.6 s.
+SECONDS_PER_CELL_OF_TABLE = 0.00001
+SECONDS_BASE = 0.3
+EDGER_COMPILE_SECONDS = 3.5
+# A graph Milo builds itself: sc.pp.neighbors on 3,771 cells took 0.18 s (warm)
+SECONDS_PER_GRAPH_CELL = 0.0001
 
 
 class MiloError(ValueError):
@@ -148,6 +151,32 @@ def graph_batch_key(adata, recorded: str | None) -> str | None:
     if batch_methods.is_bbknn_graph(adata) or not rep or rep in batch_methods.CORRECTED_KEYS:
         return recorded
     return None
+
+
+def own_graph(adata, k: int | None, n_pcs: int | None
+              ) -> tuple[sp.csr_matrix, sp.csr_matrix, str, np.ndarray]:
+    """(connectivities, distances, representation, X) of a k-NN graph Milo builds for itself
+    on the first ``n_pcs`` columns of the graph's representation (all of them when None), with
+    ``k`` neighbours (the dataset graph's k when None), as the neighbours step builds one
+    (``sc.pp.neighbors``, umap method, seed 0). The dataset and its graph are not changed. The
+    paper's settings (Garrido-Trigo 2023: k 20, 30 PCs) no longer need a pca + neighbours rerun."""
+    import anndata as ad
+    import scanpy as sc
+
+    rep, X = representation(adata)
+    if n_pcs is not None:
+        X = np.asarray(adata.obsm[rep])[:, :n_pcs]
+    k = k or graph_k(adata) or 15
+    holder = ad.AnnData(obs=pd.DataFrame(index=np.arange(adata.n_obs).astype(str)))
+    holder.obsm["X_rep"] = np.asarray(X, dtype=np.float32)
+    sc.pp.neighbors(holder, n_neighbors=min(k, adata.n_obs - 1), use_rep="X_rep")
+    return (sp.csr_matrix(holder.obsp["connectivities"]), sp.csr_matrix(holder.obsp["distances"]),
+            rep, np.asarray(X))
+
+
+def graph_text(representation: str, n_pcs: int | None, own: bool) -> str:
+    """The representation as results name it: 'X_pca' (the dataset's graph), 'X_pca, 30 PCs'."""
+    return f"{representation}, {n_pcs} PCs" if own and n_pcs else representation
 
 
 def default_prop(n_cells: int) -> float:
@@ -261,6 +290,10 @@ class MiloResult:
     n_neighbors: int | None = None
     top_sample: list[str] | None = None
     top_sample_share: np.ndarray | None = None
+    # v0.81.0: PCs of the representation used (None: all the graph used) and whether Milo built
+    # its own graph (k / n_pcs asked) rather than reading the dataset's
+    n_pcs: int | None = None
+    own_graph: bool = False
 
     def sample_summary(self) -> dict[str, Any] | None:
         """Which samples fill the significant neighbourhoods: how many of them have half or
@@ -306,6 +339,7 @@ class MiloResult:
             "reference": self.conditions[0], "design": self.design,
             "covariates": self.covariates, "formula": self.formula,
             "representation": self.representation, "n_neighbors": self.n_neighbors,
+            "n_pcs": self.n_pcs, "own_graph": self.own_graph,
             "prop": self.prop, "seed": SEED,
             "n_cells": self.n_cells, "n_samples": self.n_samples,
             "n_nhoods": int(len(self.index)),
@@ -373,6 +407,12 @@ class Plan:
     notes: list[str] = field(default_factory=list)
     dropped_samples: list[str] = field(default_factory=list)
     n_neighbors: int | None = None
+    k: int | None = None  # asked: Milo builds its own graph (``own_graph``)
+    n_pcs: int | None = None
+
+    @property
+    def own_graph(self) -> bool:
+        return self.k is not None or self.n_pcs is not None
 
     def to_dict(self) -> dict:
         return {
@@ -383,22 +423,34 @@ class Plan:
             "n_nhoods_estimate": self.n_nhoods_estimate,
             "estimate_seconds": round(self.estimate_seconds, 1),
             "representation": self.representation, "n_neighbors": self.n_neighbors,
+            "n_pcs": self.n_pcs, "own_graph": self.own_graph,
             "warnings": self.warnings, "notes": self.notes,
             "dropped_samples": self.dropped_samples,
         }
 
 
-def estimate_seconds(n_nhoods: int, n_samples: int) -> float:
-    return SECONDS_BASE + SECONDS_PER_CELL_OF_TABLE * n_nhoods * max(n_samples, 1)
+def estimate_seconds(n_nhoods: int, n_samples: int, graph_cells: int = 0) -> float:
+    """The run's seconds: the test, edgeR's compile when still to come, and a graph of
+    ``graph_cells`` cells when Milo builds its own (with numba's compile still to come)."""
+    from scview.core import edger_ql, numba_warm
+
+    secs = SECONDS_BASE + SECONDS_PER_CELL_OF_TABLE * n_nhoods * max(n_samples, 1)
+    if edger_ql._KERNELS is None:
+        secs += EDGER_COMPILE_SECONDS
+    if graph_cells:
+        secs += SECONDS_PER_GRAPH_CELL * graph_cells + numba_warm.neighbours_seconds(graph_cells)
+    return secs
 
 
 def plan(adata, condition_key: str, sample_key: str | None, *,
          conditions: list[str] | None = None, covariates: list[str] | None = None,
          paired: bool | None = None, prop: float | None = None,
-         batch_key: str | None = None) -> Plan:
+         batch_key: str | None = None, k: int | None = None,
+         n_pcs: int | None = None) -> Plan:
     """Check the request against the dataset and work out the design. Cheap:
     no neighbourhoods are built. ``conditions`` is [reference, tested]
-    (default: the column's first two values)."""
+    (default: the column's first two values). ``k`` / ``n_pcs``: Milo builds its own graph
+    with k neighbours on the first n_pcs PCs (``own_graph``) instead of reading the dataset's."""
     obs = adata.obs
     covariates = [c for c in dict.fromkeys(covariates or []) if c]
     for col in (condition_key, sample_key, *covariates):
@@ -415,8 +467,15 @@ def plan(adata, condition_key: str, sample_key: str | None, *,
     if adata.n_obs > MAX_CELLS:
         raise MiloError(f"Milo runs on at most {MAX_CELLS:,} cells; this dataset has "
                         f"{adata.n_obs:,}.")
-    graph(adata)
+    if k is None and n_pcs is None:
+        graph(adata)
     rep, _X = representation(adata)
+    if k is not None and not MIN_K <= k <= min(MAX_K, adata.n_obs - 1):
+        raise MiloError(f"k must be between {MIN_K} and {min(MAX_K, adata.n_obs - 1)}.")
+    if n_pcs is not None:
+        have = np.asarray(adata.obsm[rep]).shape[1]
+        if not MIN_PCS <= n_pcs <= have:
+            raise MiloError(f"n_pcs must be between {MIN_PCS} and {have}: '{rep}' has {have} components.")
     if prop is None:
         prop = default_prop(adata.n_obs)
     if not MIN_PROP <= prop <= MAX_PROP:
@@ -520,9 +579,11 @@ def plan(adata, condition_key: str, sample_key: str | None, *,
         condition_key=condition_key, sample_key=sample_key, conditions=chosen, design=design,
         covariates=covariates, formula=formula, n_cells=int(keep.sum()), n_samples=n_samples,
         prop=float(prop), n_nhoods_estimate=n_nh,
-        estimate_seconds=estimate_seconds(n_nh, n_s), representation=rep, keep=keep,
+        estimate_seconds=estimate_seconds(n_nh, n_s, adata.n_obs if (k is not None or n_pcs is not None) else 0),
+        representation=graph_text(rep, n_pcs, k is not None or n_pcs is not None), keep=keep,
         sample_codes=codes, sample_cond=s_cond, sample_donor=s_donor, sample_cov=sample_cov,
-        warnings=warnings, notes=notes, dropped_samples=dropped, n_neighbors=graph_k(adata),
+        warnings=warnings, notes=notes, dropped_samples=dropped,
+        n_neighbors=k if k is not None else graph_k(adata), k=k, n_pcs=n_pcs,
     )
 
 
@@ -576,38 +637,32 @@ def design_warnings(adata, condition_key: str, keep: np.ndarray,
     return out
 
 
-def _deseq2(counts: np.ndarray, s_cond: np.ndarray, chosen: list[str],
+def _glm_ql(counts: np.ndarray, s_cond: np.ndarray, chosen: list[str],
             donors: np.ndarray | None, covariates: list[np.ndarray],
             ) -> tuple[np.ndarray, np.ndarray]:
-    """(log2 fold change, p) per row of ``counts`` (neighbourhoods x samples):
-    DESeq2's Wald test of the condition, as pertpy's pydeseq2 solver runs it."""
-    from pydeseq2.dds import DeseqDataSet
-    from pydeseq2.default_inference import DefaultInference
-    from pydeseq2.ds import DeseqStats
+    """(log2 fold change, p) per row of ``counts`` (neighbourhoods x samples): miloR's
+    ``testNhoods`` defaults, edgeR's quasi-likelihood F-test of the condition with TMM factors
+    and each sample's counted cells as its library size (core/edger_ql.py, = R edgeR 4.6.3,
+    glmQLFit legacy=FALSE; miloR also passes robust=TRUE, not implemented there). The logFC is
+    edgeR's, from the fit with a prior count of 0.125: a neighbourhood with no cell of one
+    condition gets a finite logFC of the right sign.
 
-    # Safe level and column names: formulaic parses the design.
-    meta = pd.DataFrame(index=[f"s{i}" for i in range(len(s_cond))])
-    terms = []
-    for name, factor in ([("donor", donors)] if donors is not None else []) + [
-            (f"cov{i}", f) for i, f in enumerate(covariates)]:
-        levels = {v: f"l{j}" for j, v in enumerate(sorted(set(factor)))}
-        meta[name] = pd.Categorical([levels[v] for v in factor])
-        terms.append(name)
-    meta["condition"] = pd.Categorical(np.where(s_cond == chosen[1], "test", "ref"),
-                                       categories=["ref", "test"])
-    terms.append("condition")
-    df = pd.DataFrame(counts.T.astype(np.int64), index=meta.index,
-                      columns=[f"n{i}" for i in range(counts.shape[0])])
-    inference = DefaultInference(n_cpus=N_CPUS)
-    dds = DeseqDataSet(counts=df, metadata=meta, design="~" + "+".join(terms),
-                       refit_cooks=True, inference=inference, quiet=True)
-    dds.deseq2()
-    res = DeseqStats(dds, contrast=["condition", "test", "ref"], inference=inference,
-                     quiet=True)
-    res.summary()
-    table = res.results_df
-    return (table["log2FoldChange"].to_numpy(dtype=np.float64),
-            table["pvalue"].to_numpy(dtype=np.float64))
+    DESeq2 (pydeseq2, pertpy's ``pydeseq2`` solver) ran here before v0.81.0. On neighbourhood
+    counts it turned signs: most rows hold a zero, so median-of-ratios fell back to an iterative
+    fit that did not converge, and DESeq2's floor on the fitted mean (0.5) lifted the reference of
+    a one-sided row. QA-7 (Garrido-Trigo 2023 colon myeloid, 6 HC v 6 UC donors, k 20): size
+    factors 0.12-1.21 for the controls and 0.23-7.8 for UC, though their counted cells differ
+    112-1,032; 34 of 93 neighbourhoods with no control cell got a negative logFC (0 -> 2 cells:
+    -1.66) and all 73 significant ones went down. Here: 0 of 93 negative, 124 significant (102 up).
+    miloR's size factors alone left 104 of 1,248 one-sided rows wrong in a simulation with 30-1,200
+    cells per sample; a lower floor fixed that only above a cliff (Kang: 679 significant at 0.05,
+    312 at 0.01, Hauck-Donner on the Wald test). On Kang (Harmony graph, ``~ Donor + stim``, 763
+    tested) DESeq2 called 671 and this test 672, logFC r 0.997."""
+    from scview.core import edger_ql
+
+    X = design_matrix(s_cond, chosen, donors, covariates)
+    res = edger_ql.glm_ql(np.asarray(counts, dtype=np.float64).T, X, coef=-1)
+    return np.asarray(res.logFC, dtype=np.float64), np.asarray(res.pvalue, dtype=np.float64)
 
 
 def _one_condition_share(counts: dict[str, np.ndarray], n_cells: dict[str, int]) -> float:
@@ -632,14 +687,19 @@ def iter_milo(adata, p: Plan, *, label_key: str | None = None,
     if label_key is not None and label_key not in adata.obs.columns:
         raise MiloError(f"Column '{label_key}' not found.")
 
+    if p.own_graph:
+        yield {"step": "graph", "message": f"Building a k-NN graph (k {p.n_neighbors}) on {p.representation}"}
+        conn, dist, rep, X = own_graph(adata, p.k, p.n_pcs)
+        timings["graph"] = time.perf_counter() - t0
+    else:
+        conn, dist = graph(adata)
+        rep, X = representation(adata)
     yield {"step": "nhoods", "message": "Sampling neighbourhoods on the cell graph"}
-    conn, dist = graph(adata)
-    rep, X = representation(adata)
     nh = make_nhoods(conn, X, dist, p.prop, SEED)
     if len(nh.index) > MAX_NHOODS:
         raise MiloError(f"{len(nh.index):,} neighbourhoods is too many (at most "
                         f"{MAX_NHOODS:,}); sample a smaller share of the cells.")
-    timings["nhoods"] = time.perf_counter() - t0
+    timings["nhoods"] = time.perf_counter() - t0 - timings.get("graph", 0.0)
     if stop():
         return
 
@@ -658,7 +718,7 @@ def iter_milo(adata, p: Plan, *, label_key: str | None = None,
 
     n_s = counts.shape[1]
     yield {"step": "test", "message": f"Fitting a negative binomial model per neighbourhood "
-           f"(DESeq2, about {estimate_seconds(len(nh.index), n_s):.0f} s)"}
+           f"(edgeR quasi-likelihood, about {estimate_seconds(len(nh.index), n_s):.0f} s)"}
     t = time.perf_counter()
     tested = counts.sum(axis=1) > 0
     log_fc = np.full(len(nh.index), np.nan)
@@ -667,7 +727,7 @@ def iter_milo(adata, p: Plan, *, label_key: str | None = None,
     covs = [p.sample_cov[c] for c in p.covariates]
     if tested.sum() < 2:
         raise MiloError("Fewer than two neighbourhoods hold cells of these samples.")
-    lfc_t, p_t = _deseq2(counts[tested], p.sample_cond, p.conditions, donors, covs)
+    lfc_t, p_t = _glm_ql(counts[tested], p.sample_cond, p.conditions, donors, covs)
     log_fc[tested], pval[tested] = lfc_t, p_t
     fdr = spatial_fdr(pval, nh.kth_distance)
     timings["test"] = time.perf_counter() - t
@@ -704,8 +764,11 @@ def iter_milo(adata, p: Plan, *, label_key: str | None = None,
         notes.append(
             f"Neighbourhoods hold {mean_size:.0f} cells on average, for {n_s} samples: Milo "
             f"suggests at least {CELLS_PER_SAMPLE} per sample ({CELLS_PER_SAMPLE * n_s}), so "
-            "counts are small and only clear shifts reach significance. A neighbour graph with a "
-            "larger k (Data Assessment, neighbours step) gives bigger neighbourhoods.")
+            "counts are small and only clear shifts reach significance. A larger k (Graph k; MCP: k) "
+            "gives bigger neighbourhoods.")
+    if p.own_graph:
+        notes.append(f"Neighbourhoods are on a k-NN graph Milo built for this run (k {p.n_neighbors}, "
+                     f"{p.representation}); the dataset's own graph is not changed.")
     if labels is not None:
         notes.append(f"Neighbourhoods whose commonest '{label_key}' label holds under "
                      f"{MIXED_FRACTION:.0%} of their cells are labelled {MIXED}.")
@@ -730,19 +793,19 @@ def iter_milo(adata, p: Plan, *, label_key: str | None = None,
             "leaving the sample out.")
     untested = int(tested.sum() - np.isfinite(pval).sum())
     if untested:
-        notes.append(f"{untested} neighbourhoods were not tested (DESeq2 flagged an outlying "
-                     "count, or all their counts are zero).")
+        notes.append(f"{untested} neighbourhoods were not tested (all their counts are zero).")
     names = adata.obs_names
     yield {"result": MiloResult(
         condition_key=p.condition_key, sample_key=p.sample_key, label_key=label_key,
         conditions=p.conditions, design=p.design, covariates=p.covariates, formula=p.formula,
-        representation=rep, prop=p.prop, n_cells=p.n_cells, n_samples=p.n_samples,
+        representation=graph_text(rep, p.n_pcs, p.own_graph), prop=p.prop, n_cells=p.n_cells,
+        n_samples=p.n_samples,
         index_cells=[str(names[i]) for i in nh.index], index=nh.index, sizes=nh.sizes,
         kth_distance=nh.kth_distance, counts=by_cond, log_fc=log_fc, pval=pval,
         spatial_fdr=fdr, labels=labels, label_fraction=frac, edges=edges,
         n_edges_total=n_edges, membership=nh.membership, warnings=warnings, notes=notes,
-        dropped_samples=p.dropped_samples, timings=timings, n_neighbors=graph_k(adata),
-        top_sample=top_sample, top_sample_share=top_share,
+        dropped_samples=p.dropped_samples, timings=timings, n_neighbors=p.n_neighbors,
+        top_sample=top_sample, top_sample_share=top_share, n_pcs=p.n_pcs, own_graph=p.own_graph,
     )}
 
 
@@ -797,24 +860,32 @@ _last: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 _last_lock = threading.Lock()
 
 
-def remember(adaptor, result: MiloResult) -> None:
-    """Keep the last result (for the co-pilot and for selecting a
-    neighbourhood's cells) as long as the loaded dataset is."""
+def remember(adaptor, result: MiloResult) -> str | None:
+    """Keep the last result (for the co-pilot and for selecting a neighbourhood's cells) as
+    long as the loaded dataset is, and store it; returns the stored result's id. The key names
+    the comparison (both conditions) and the settings, so a run of another pair of conditions
+    does not supersede this one (QA-7: UC vs HC marked CD vs HC superseded)."""
     try:
         with _last_lock:
             _last[adaptor] = result
     except TypeError:  # not weak-referenceable (a test double)
-        return
+        return None
     how = run_settings(result)
-    results_store.keep(adaptor, "milo", result,
-                       key=f"{result.condition_key}|{result.sample_key}|{how}",
-                       label=f"Milo neighbourhoods: {' vs '.join(reversed(result.conditions))} ({how})")
+    result_id = uuid.uuid4().hex
+    ref, test = result.conditions
+    future = results_store.keep(
+        adaptor, "milo", result, result_id=result_id,
+        key=f"{result.condition_key}:{test} vs {ref}|{result.sample_key}|{how}",
+        label=f"Milo neighbourhoods: {test} vs {ref} ({how})")
+    return result_id if future is not None else None
 
 
 def run_settings(result: MiloResult) -> str:
     """What tells two Milo runs of one comparison apart (Wilson 2022: k=30, k=30 + assay and
     k=50 shared one label and superseded each other): k, the representation, covariates."""
     parts = [f"k={result.n_neighbors}" if result.n_neighbors else "k=?", str(result.representation)]
+    if getattr(result, "own_graph", False):  # stored before v0.81.0: the attribute is missing
+        parts.append("own graph")
     if result.covariates:
         parts.append("+ " + ", ".join(result.covariates))
     return ", ".join(parts)

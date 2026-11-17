@@ -48,6 +48,10 @@ export interface ClusterQc {
   /** noncoding_markers / sex_markers: the genes that lead its marker list. */
   noncoding_markers?: string[];
   sex_markers?: string[];
+  /** one_donor: the donor holding most of its cells, that share, and the donor's share of all cells. */
+  top_donor?: string | null;
+  top_donor_share?: number | null;
+  top_donor_share_of_data?: number | null;
   flags: ClusterFlag[];
   reasons: string[]; // one plain-language sentence per flag, with the numbers
   /** Not a problem, but worth saying (an erythroid cluster's haemoglobin is real). */
@@ -68,7 +72,8 @@ export type ClusterFlag =
   | "nuclei_mito"
   | "low_content"
   | "noncoding_markers"
-  | "sex_markers";
+  | "sex_markers"
+  | "one_donor";
 
 /** A technical score that tracks one of the clustering's leading PCs (backend core/qc_drivers.py). */
 export interface QcDriver {
@@ -116,6 +121,8 @@ export interface ClusterQcReport {
   nuclei_like_mito?: boolean;
   /** Clusters almost all from one sample: a dataset-level note, never a flag. Null when none is. */
   one_sample?: OneSampleNote | null;
+  /** The donor column the one_donor flag read; null without one. */
+  donor_column?: string | null;
 }
 
 /** A cluster made almost all of one sample (backend confounding.single_sample_for). */

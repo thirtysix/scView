@@ -449,6 +449,9 @@ interface Decided {
   /** Sent to the AI with a note that their markers look random (`llm_random_markers_noted`) */
   noted: string[];
   toAi: string[];
+  /** Damaged by cluster QC but sent to the AI: the marker databases were not there to read their
+   *  type (`llm_damaged_unchecked_to_ai`, v0.81.0) */
+  unchecked: string[];
   /** The clustering the annotation was based on (its clusters' evidence). */
   column?: string;
 }
@@ -468,8 +471,9 @@ async function lastLlmNotes(datasetId: string, target: string): Promise<{ cut: s
     const p = step.params ?? {};
     const cut = typeof p.llm_reply_cut === "string" && p.llm_reply_cut ? p.llm_reply_cut : null;
     const d = { lowQuality: ids(p.llm_decided_low_quality), unidentified: ids(p.llm_random_markers),
-      noted: ids(p.llm_random_markers_noted), toAi: ids(p.llm_high_mito_type_to_ai) };
-    const any = d.lowQuality.length || d.unidentified.length || d.noted.length || d.toAi.length;
+      noted: ids(p.llm_random_markers_noted), toAi: ids(p.llm_high_mito_type_to_ai),
+      unchecked: ids(p.llm_damaged_unchecked_to_ai) };
+    const any = d.lowQuality.length || d.unidentified.length || d.noted.length || d.toAi.length || d.unchecked.length;
     return { cut, decided: any ? d : null };
   } catch {
     return { cut: null, decided: null };
@@ -479,7 +483,8 @@ async function lastLlmNotes(datasetId: string, target: string): Promise<{ cut: s
 /** Which clusters scView labelled without the AI, and why: the rule, then each cluster's evidence. */
 function DecidedNote({ decided, datasetId }: { decided: Decided; datasetId: string }) {
   const [showEvidence, setShowEvidence] = useState(false);
-  const groups = [...decided.lowQuality, ...decided.unidentified, ...decided.noted, ...decided.toAi];
+  const groups = [...decided.lowQuality, ...decided.unidentified, ...decided.noted, ...decided.toAi,
+    ...decided.unchecked];
   return (
     <div className="mt-2 space-y-0.5 rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs text-slate-600" data-testid="annotation-decided">
       {decided.lowQuality.length > 0 && (
@@ -506,6 +511,13 @@ function DecidedNote({ decided, datasetId }: { decided: Decided; datasetId: stri
           {decided.toAi.length === 1 ? "has" : "have"} high mitochondrial RNA, but{" "}
           {decided.toAi.length === 1 ? "its" : "their"} markers match a cell type with much of it by nature
           (such as cardiomyocytes or hepatocytes), so the AI named {decided.toAi.length === 1 ? "it" : "them"}.
+        </p>
+      )}
+      {decided.unchecked.length > 0 && (
+        <p>
+          Cluster QC flags {clusterList(decided.unchecked)} as damaged, but the marker databases were not
+          available to check whether {decided.unchecked.length === 1 ? "its" : "their"} markers name a cell type
+          with much mitochondrial RNA by nature, so the AI was asked, with the QC numbers.
         </p>
       )}
       <p>The AI named the other clusters.</p>

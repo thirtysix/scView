@@ -502,10 +502,11 @@ class RunControl:
 
     def __init__(self, watchdog: RunWatchdog | None = None,
                  before_step: BeforeStep | None | object = _DEFAULT,
-                 plan: tuple[list[str], Any] | None = None, allow_large: bool = True) -> None:
+                 plan: tuple[list[str], Any] | None = None, allow_large: bool = False) -> None:
         self.watchdog = watchdog if watchdog is not None else RunWatchdog()
-        # False: a run that would put a dataset in large-dataset layout is refused before it
-        # starts (core/processing.py), naming what that turns off (the MCP's opt-in).
+        # False (the default): a run that would put a dataset in large-dataset layout is
+        # refused before it starts (core/processing.py), naming what that turns off; the
+        # run routes pass the caller's explicit yes (allow_large_mode).
         self.allow_large = allow_large
         # (steps, PipelineParams) the run will make: before it starts, core/processing.py
         # closes other open datasets whose memory its estimated peak needs.

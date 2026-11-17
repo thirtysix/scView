@@ -2,10 +2,11 @@
 
 A run is made in memory (``pipeline.run_pipeline``) unless ``PipelineParams.chunked``
 says otherwise: "on" always runs it here, "off" never, and "auto" (the default) runs it
-here when the in-memory run would not fit the memory budget (``choose_mode``: its
-estimated need, a backed dataset's read-in included, with ``LOAD_MARGIN`` and the working
-reserve, against what is free with the other open datasets closed: the rule
-``DatasetManager.free_memory_for`` uses). A dataset already in this layout always runs
+here when the in-memory run would not fit the memory budget (``mode_rule``, which the
+run's ``choose_mode`` and its preflight both ask: its estimated need, a backed dataset's
+read-in included, with ``LOAD_MARGIN`` and the working reserve, against what is free with
+the other open datasets closed: the rule ``DatasetManager.free_memory_for`` uses). A
+dataset already in this layout always runs
 here, "off" or not: it is never read into memory. ``core/processing.py`` makes that choice
 before the run and, for this mode, never reads the dataset into memory. Work that needs
 only obs, obsm, obsp and uns (PAGA, pseudotime) gets the dataset without its matrices
@@ -374,40 +375,101 @@ def in_memory_need(adaptor, steps: list[str], params) -> tuple[int, int]:
     return copy + run, run
 
 
-def choose_mode(dm, dataset_id: str, adaptor, steps: list[str], params) -> ModeChoice:
-    """Large-dataset mode or in memory for a run of ``steps`` (see the module docstring);
-    in memory without the matrices (``light``) when every step needs none of them
-    (``light_run_ok``), unless large-dataset mode was chosen. Raises ``ValueError`` for a
-    ``chunked`` value that is not auto / on / off."""
-    from scview.core import memory_budget, preflight
+def opening_need(path, steps: list[str], params, *, used: int | None, limit: int | None,
+                 cached: int = 0) -> tuple[int, int, int]:
+    """(``in_memory_need``, its run part, memory opening the dataset adds) for a dataset
+    that is not open yet, as ``choose_mode`` sees it once the run's request has opened
+    it: in memory, or backed when the dataset manager would open it so (a file over
+    ``BACKED_MIN_BYTES``, or its in-memory load does not fit: ``_make_memory_room``,
+    with ``used``, ``limit`` and the other open datasets' ``cached`` bytes freeable).
+    From the file's header; the doublet step's channels from the file
+    (``doublet_plan_on_disk``)."""
+    from scview.core import preflight
+    from scview.core.dataset_manager import LOAD_MARGIN, load_plan, working_reserve
+
+    h = preflight.read_header(path, "h5ad")
+    backed = bool(h.backed)
+    if not backed and limit is not None and used is not None:
+        opens = load_plan(str(path)).in_memory
+        backed = opens is not None and (
+            max(0, limit - used) + cached < opens * LOAD_MARGIN + working_reserve(limit))
+    h.backed = backed
+    load = preflight.resident_bytes(h)
+    copy = preflight.backed_bytes(h) if backed else 0
+    h.backed = False  # the run's estimate: the dataset as read in
+    plan = doublet_plan_on_disk(path, params) if "doublet_detection" in steps else None
+    est = preflight.estimate_run(h, steps=steps, params=params, warm=preflight.process_warm(),
+                                 doublets=plan)
+    run = max(0, int(est.peak_bytes - est.start_bytes))
+    return copy + run, run, int(load)
+
+
+LARGE_LAYOUT_REASON = ("This dataset is in large-dataset layout (its counts and gene-major copy "
+                       "are on disk beside it), so it runs in large-dataset mode: it is never "
+                       "read into memory.")
+
+
+def mode_rule(requested: str, need: Callable[[], tuple[int, ...]], *, used: int | None,
+              limit: int | None, cached: int = 0, light: bool = False,
+              large: bool = False) -> ModeChoice:
+    """THE rule for large-dataset mode or in memory: the run (``choose_mode``) and its
+    preflight (``preflight.dataset_preflight``: the pre-run note, the MCP ``run_pipeline``
+    check, the doublet alternative) both ask it, so they cannot disagree on the same inputs.
+
+    A dataset in large-dataset layout (``large``) always runs there; "on" runs there; steps
+    that need no matrix (``light``) run in memory without them; "off" runs in memory; "auto"
+    runs in memory when ``need()`` (what the in-memory run needs beyond what is ``used``
+    now, and its run part: ``in_memory_need``) with ``LOAD_MARGIN`` and the working reserve
+    fits what is free (``limit - used``, file cache left out: ``read_budget``) with the other
+    open datasets (``cached`` bytes) closed. ``need`` is only called for "auto" under a
+    known limit; for a dataset not open yet it gives a third number, what opening it adds
+    (``opening_need``), counted as used, as the run will find it. Raises ``ValueError`` for
+    a ``requested`` value that is not auto / on / off."""
     from scview.core.dataset_manager import LOAD_MARGIN, working_reserve
 
-    requested = check_chunked(getattr(params, "chunked", "auto"))
-    path = getattr(adaptor, "h5ad_path", None)
-    if large_info(path) is not None:
-        return ModeChoice(True, requested, "This dataset is in large-dataset layout (its counts "
-                          "and gene-major copy are on disk beside it), so it runs in "
-                          "large-dataset mode: it is never read into memory.")
+    requested = check_chunked(requested)
+    if large:
+        return ModeChoice(True, requested, LARGE_LAYOUT_REASON)
     if requested == "on":
         return ModeChoice(True, requested, "Large-dataset mode was chosen for this run.")
-    if light_run_ok(path, steps):
+    if light:
         return ModeChoice(False, requested, LIGHT_REASON, light=True)
     if requested == "off":
         return ModeChoice(False, requested, "In memory was chosen for this run.")
-    budget = memory_budget.read_budget()
-    if budget.limit_bytes is None or budget.used_bytes is None:
+    if limit is None or used is None:
         return ModeChoice(False, requested, "No memory limit is known: the run works in memory.")
-    need, run = in_memory_need(adaptor, steps, params)
-    others = preflight.cached_others(dm, dataset_id).bytes
-    free = max(0, budget.limit_bytes - budget.used_bytes) + others
-    target = need * LOAD_MARGIN + working_reserve(budget.limit_bytes)
-    fits = target <= free
-    reason = (f"In memory the run needs about {need / GB:.1f} GB more at its peak; scView has "
-              f"{free / GB:.1f} GB free (with the other open datasets closed) and keeps "
-              f"{working_reserve(budget.limit_bytes) / GB:.1f} GB in reserve, so ")
+    got = need()
+    total, run = max(0, int(got[0])), got[1]
+    opening = len(got) > 2
+    if opening:  # not open yet: what opening it adds is used by the time the run starts
+        used += int(got[2])
+    free = max(0, limit - used) + max(0, int(cached))
+    reserve = working_reserve(limit)
+    fits = total * LOAD_MARGIN + reserve <= free
+    reason = ("Once this dataset is open, in memory " if opening else "In memory ")
+    reason += (f"the run needs about {total / GB:.1f} GB more at its peak; scView has "
+               f"{free / GB:.1f} GB free (with the other open datasets closed) and keeps "
+               f"{reserve / GB:.1f} GB in reserve, so ")
     reason += ("it works in memory." if fits else
                "it runs in large-dataset mode: the matrices stay on disk, read in blocks.")
-    return ModeChoice(not fits, requested, reason, need, run, free, budget.limit_bytes)
+    return ModeChoice(not fits, requested, reason, total, run, free, limit)
+
+
+def choose_mode(dm, dataset_id: str, adaptor, steps: list[str], params) -> ModeChoice:
+    """Large-dataset mode or in memory for a run of ``steps`` on the open ``adaptor`` (see
+    the module docstring), by ``mode_rule``: in memory without the matrices (``light``)
+    when every step needs none of them (``light_run_ok``), unless large-dataset mode was
+    chosen. Raises ``ValueError`` for a ``chunked`` value that is not auto / on / off."""
+    from scview.core import memory_budget, preflight
+
+    path = getattr(adaptor, "h5ad_path", None)
+    large = large_info(path) is not None
+    budget = memory_budget.read_budget()
+    return mode_rule(getattr(params, "chunked", "auto"),
+                     lambda: in_memory_need(adaptor, steps, params),
+                     used=budget.used_bytes, limit=budget.limit_bytes,
+                     cached=preflight.cached_others(dm, dataset_id).bytes,
+                     light=not large and light_run_ok(path, steps), large=large)
 
 
 # ---------------------------------------------------------------------------
@@ -525,7 +587,9 @@ def doublet_plan_on_disk(path: str | Path, params=None):
     if key in _DISK_PLANS:
         return replace(_DISK_PLANS[key])
     plan = None
-    if not is_legacy_layout(p):
+    if is_legacy_layout(p):
+        plan = _legacy_doublet_plan(p, params)
+    else:
         run = LargeRun(p, None, params)
         try:
             run.open()
@@ -542,6 +606,27 @@ def doublet_plan_on_disk(path: str | Path, params=None):
         _DISK_PLANS.pop(next(iter(_DISK_PLANS)))
     _DISK_PLANS[key] = plan
     return replace(plan)
+
+
+def _legacy_doublet_plan(path: Path, params):
+    """``preflight.doublet_plan`` of an anndata < 0.7 file opened backed (anndata reads
+    its compound obs; the counts in ``raw.X`` are read in sample rows): Kang 2018 unopened
+    was costed as one channel of 13,836 cells, 2.67 GB at the peak against 1.84 GB
+    (measured 1.78) for its two channels once open. None when it can't be read."""
+    from scview.core import preflight
+
+    try:
+        a = ad.read_h5ad(str(path), backed="r")
+    except Exception as e:  # noqa: BLE001 — an estimate never fails a request
+        logger.debug("doublet plan of %s: %s", path.name, e)
+        return None
+    try:
+        return preflight.doublet_plan(a, params)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("doublet plan of %s: %s", path.name, e)
+        return None
+    finally:
+        a.file.close()
 
 
 def _remove_stale_stages(folder: Path) -> None:

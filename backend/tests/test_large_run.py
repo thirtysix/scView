@@ -607,7 +607,8 @@ async def test_auto_runs_in_large_mode_through_the_endpoints_and_reopens(
     monkeypatch.setattr(working_copy, "in_memory", lambda a: reads.append(a) or a.to_memory())
     steps = STEPS[:9] + ["neighbors", "clustering", "marker_genes"]
     r = await client.post(f"{API}/datasets/{did}/{path}",
-                          json={"steps": steps, "params": {**PARAMS, "marker_columns": []}})
+                          json={"steps": steps, "params": {**PARAMS, "marker_columns": []},
+                                "allow_large_mode": True})
     assert r.status_code == 200, r.text
     if path.endswith("stream"):
         events = [line for line in r.text.splitlines() if line.startswith("data: ")]
@@ -639,7 +640,8 @@ async def test_the_cached_copy_is_let_go_before_a_large_run(client, dataset_mana
 
     monkeypatch.setattr(large_run, "run", spy)
     r = await client.post(f"{API}/datasets/{did}/assessment/run",
-                          json={"steps": ["qc_metrics"], "params": {"chunked": "auto"}})
+                          json={"steps": ["qc_metrics"], "params": {"chunked": "auto"},
+                                "allow_large_mode": True})
     assert r.status_code == 200, r.text
     assert alive == [False]
 
@@ -925,12 +927,13 @@ def test_doublet_plan_on_disk_is_counted_once_per_file(tmp_path, monkeypatch):
     assert len(opened) == 1 and first == second and first is not second
     whole = large_run.doublet_plan_on_disk(p, PipelineParams(doublet_channel_key="__all__"))
     assert len(opened) == 2 and whole.channels == [610]
-    # Neither a missing file nor an old-layout one is opened as a run: obs alone, or nothing.
+    # Neither a missing file nor an old-layout one is opened as a run: nothing, or the
+    # old-layout file read backed by anndata, its plan the open dataset's.
     assert large_run.doublet_plan_on_disk(tmp_path / "missing.h5ad", PipelineParams()) is None
     old = tmp_path / "old.h5ad"
     _write_legacy_h5ad(old, np.random.default_rng(0).poisson(1.0, size=(120, 60)))
     old_plan = large_run.doublet_plan_on_disk(old, PipelineParams())
-    assert old_plan is None or old_plan.costed is None  # obs alone (this one has no channels)
+    assert old_plan == preflight.doublet_plan(ad.read_h5ad(old), PipelineParams())
     assert len(opened) == 2
 
 

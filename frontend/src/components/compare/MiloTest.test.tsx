@@ -108,6 +108,23 @@ describe("MiloTest", () => {
     expect(screen.getByRole("button", { name: /Run Milo/ })).toBeDisabled();
   });
 
+  it("sends a graph k and PCs for a graph built for the run, and says so in the plan", async () => {
+    planMilo.mockImplementation(async (_id, body) => ({
+      ...PLAN, ...(body.k ? { n_neighbors: body.k, own_graph: true, representation: "X_pca_harmony, 30 PCs" }
+        : { n_neighbors: 15, own_graph: false }),
+    }));
+    render(<MiloTest datasetId="kang" info={KANG} />);
+    expect(await screen.findByRole("option", { name: "Dataset's (15)" })).toBeInTheDocument();
+    expect(planMilo).toHaveBeenLastCalledWith("kang", expect.not.objectContaining({ k: expect.anything() }));
+    fireEvent.change(screen.getByLabelText("Milo graph k"), { target: { value: "20" } });
+    fireEvent.change(screen.getByLabelText("Milo graph PCs"), { target: { value: "30" } });
+    await waitFor(() =>
+      expect(planMilo).toHaveBeenLastCalledWith("kang", expect.objectContaining({ k: 20, n_pcs: 30 })),
+    );
+    expect(await screen.findByText(/X_pca_harmony, 30 PCs graph/)).toBeInTheDocument();
+    expect(screen.getByTestId("milo-plan").textContent).toContain("(k 20, built for this run)");
+  });
+
   it("runs, shows the result, selects a clicked neighbourhood's cells and exports CSV", async () => {
     render(<MiloTest datasetId="kang" info={KANG} />);
     await screen.findByTestId("milo-plan");

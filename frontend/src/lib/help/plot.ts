@@ -53,6 +53,8 @@ export const PLOT_HELP: Record<string, string> = {
     "Tick groups, then Select to make their cells the selection, as a lasso would. Useful for groups that are scattered on the plot or hard to draw around.",
   "plot.label-selection":
     "Give the selected cells a label in an annotation column of your own, for example to name a cluster. A new column starts with every other cell Unassigned; in an existing one, the other cells keep their labels. Undo label takes back the latest one.",
+  "plot.new-dataset":
+    "Make a new dataset of the selected cells, for example one cell type to re-cluster or one lineage for a trajectory. It keeps their counts, labels and the current UMAP as UMAP (parent); scView's clusters become parent_ columns. This dataset is not changed. Process the new one from Data Assessment.",
   "filter.about":
     "Select cells by conditions on gene expression and metadata, such as CD3E above 1 and sample is ctrl. A group nests conditions under the other rule, for (A or B) and C. The count updates as you build it; Select makes the matching cells the selection.",
   "filter.match":

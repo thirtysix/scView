@@ -44,6 +44,10 @@ class MiloRequest(BaseModel):
     paired: bool | None = None  # None: paired when every donor is in both conditions
     label_key: str | None = None  # cell types / clusters to label neighbourhoods by
     prop: float | None = None  # share of cells sampled as index cells
+    # Milo builds its own k-NN graph (the dataset's is not changed) with k neighbours on the
+    # first n_pcs PCs of the graph's representation; both None: the dataset's graph
+    k: int | None = None
+    n_pcs: int | None = None
 
 
 class CellsRequest(BaseModel):
@@ -76,7 +80,8 @@ def _plan(adata, body: MiloRequest) -> tuple[milo.Plan, bool]:
         key = pick_donor(obs, donor_candidates(obs, exclude), masks)
     p = milo.plan(adata, body.condition_key, key, conditions=body.conditions,
                   covariates=body.covariates, paired=body.paired, prop=body.prop,
-                  batch_key=milo.graph_batch_key(adata, recorded_batch_key(adata)))
+                  batch_key=milo.graph_batch_key(adata, recorded_batch_key(adata)),
+                  k=body.k, n_pcs=body.n_pcs)
     return p, not body.sample_key
 
 
@@ -143,10 +148,11 @@ async def milo_run(
                     break
                 if "result" in item:
                     result: milo.MiloResult = item["result"]
-                    milo.remember(adaptor, result)
+                    result_id = milo.remember(adaptor, result)
                     payload = await asyncio.to_thread(
                         lambda: result.to_dict(milo.layouts(adata, result.index)))
-                    yield _sse("result", {**payload, "sample_key_detected": detected})
+                    yield _sse("result", {**payload, "sample_key_detected": detected,
+                                          "result_id": result_id})
                 else:
                     yield _sse("progress", item)
             yield _sse("complete", {})

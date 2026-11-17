@@ -15,6 +15,10 @@ export interface MiloRequest {
   label_key?: string;
   /** Share of cells sampled as index cells (default 0.1; 0.05 above 30k cells). */
   prop?: number;
+  /** Neighbours of a k-NN graph Milo builds for the run (left out: the dataset's own graph). */
+  k?: number;
+  /** PCs of the graph's representation for that graph (left out: all of them). */
+  n_pcs?: number;
 }
 
 export interface MiloPlan {
@@ -35,6 +39,11 @@ export interface MiloPlan {
   n_nhoods_estimate: number;
   estimate_seconds: number;
   representation: string;
+  /** The graph's k: the dataset's, or the one asked for. */
+  n_neighbors?: number | null;
+  n_pcs?: number | null;
+  /** Milo builds its own graph (k or n_pcs asked); the dataset's is not changed. */
+  own_graph?: boolean;
   warnings: string[];
   notes: string[];
   dropped_samples: string[];
@@ -76,6 +85,11 @@ export interface MiloResult {
   covariates: string[];
   formula: string;
   representation: string;
+  n_neighbors?: number | null;
+  n_pcs?: number | null;
+  own_graph?: boolean;
+  /** The stored result (Results, MCP get_result); null when it could not be stored. */
+  result_id?: string | null;
   prop: number;
   seed: number;
   n_cells: number;
@@ -102,7 +116,7 @@ export interface MiloResult {
 }
 
 export interface MiloProgress {
-  step: "nhoods" | "counts" | "test" | "annotate";
+  step: "graph" | "nhoods" | "counts" | "test" | "annotate";
   message: string;
 }
 

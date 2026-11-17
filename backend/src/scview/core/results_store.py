@@ -141,7 +141,7 @@ ADDITIVE_STEPS = frozenset({
 # Mixscape run (core/crispr.py, core/mixscape.py) write their own obs columns only too: a
 # result goes stale after one only when it named a column whose labels changed (a DE by
 # ``mixscape_class`` after Mixscape re-ran, a Mixscape run after the guides were re-assigned).
-LABEL_STEPS = frozenset({"label_cells", "undo_label_cells", "combine_columns", "hashing_demux",
+LABEL_STEPS = frozenset({"label_cells", "undo_label_cells", "combine_columns", "import_labels", "hashing_demux",
                          "hashing_samples", "crispr_assign", "mixscape"})
 HASHING_PROTEIN = "hashing_demux_protein"
 

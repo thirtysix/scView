@@ -110,6 +110,25 @@ def _to_csr(M) -> sp.csr_matrix:
     return sp.csr_matrix(np.asarray(M, dtype=np.float32))
 
 
+def rows_csr(M, keep: np.ndarray) -> sp.csr_matrix:
+    """The rows of ``M`` where ``keep`` is True as a float32 CSR; from an on-disk matrix only
+    those rows are read."""
+    if working_copy.on_disk(M):
+        M = working_copy.read_rows(M, keep)
+        return sp.csr_matrix(M, dtype=np.float32) if sp.issparse(M) else sp.csr_matrix(
+            np.asarray(M, dtype=np.float32))
+    if sp.issparse(M):
+        return sp.csr_matrix(sp.csr_matrix(M)[keep], dtype=np.float32)
+    return sp.csr_matrix(np.asarray(M)[keep].astype(np.float32, copy=False))
+
+
+def _rows_at(M, pos: np.ndarray) -> sp.csr_matrix:
+    """Rows ``pos`` of ``M`` in that order, reading only those from an on-disk matrix."""
+    mask = np.zeros(M.shape[0], dtype=bool)
+    mask[pos] = True
+    return rows_csr(M, mask)[np.searchsorted(np.flatnonzero(mask), pos)]
+
+
 def _open_lazily(path: str) -> ad.AnnData:
     """``path`` with X and .raw's X left on disk: reading counts for a joint embedding or
     a mapping needs one matrix, not all of them. ``.file.close()`` it when done."""
@@ -123,20 +142,22 @@ class RecoveredCounts:
     source: str  # human-readable origin, e.g. "raw.X of the original upload"
 
 
-def recover_counts(adata: ad.AnnData, fallback_paths: list[str]) -> RecoveredCounts:
-    """Raw counts for ``adata``'s cells, from the dataset itself or its sources.
+def recover_counts(adata: ad.AnnData, fallback_paths: list[str],
+                   keep: np.ndarray | None = None) -> RecoveredCounts:
+    """Raw counts for ``adata``'s cells (``keep``: those where it is True), from the dataset
+    itself or its sources.
 
     Processing can replace the counts (scaling stores log-normalised data in
     ``.raw``), but the dataset's original upload / ingest still holds them; those
     are read and aligned to the current cells by barcode, so annotations made
-    after filtering still line up.
+    after filtering still line up. With ``keep``, only those rows are read.
     """
     hit = _find_counts(adata)
     if hit is not None:
         where, M, var = hit
-        return RecoveredCounts(_to_csr(M), var.copy(), where)
+        return RecoveredCounts(_to_csr(M) if keep is None else rows_csr(M, keep), var.copy(), where)
 
-    want = adata.obs_names
+    want = adata.obs_names if keep is None else adata.obs_names[keep]
     for path in fallback_paths:
         try:
             src = _open_lazily(path)
@@ -154,7 +175,8 @@ def recover_counts(adata: ad.AnnData, fallback_paths: list[str]) -> RecoveredCou
                 continue
             where, M, var = hit
             layer = _SOURCE_LAYER_LABEL.get(Path(path).parent.parent.name, "source file")
-            return RecoveredCounts(_to_csr(M)[pos], var.copy(), f"{where} of the {layer}")
+            X = _to_csr(M)[pos] if keep is None else _rows_at(M, pos)
+            return RecoveredCounts(X, var.copy(), f"{where} of the {layer}")
         finally:
             src.file.close()
 

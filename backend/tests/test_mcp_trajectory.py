@@ -199,3 +199,43 @@ async def test_pseudotime_genes_ranks_a_branchs_own_genes(client, dataset_manage
     text = await _call("pseudotime_genes", {"dataset_id": did, "column": "dpt_pseudotime",
                                             "rank_by": "branch_specific"}, error=True)
     assert "needs a branch" in text
+
+
+async def test_pseudotime_off_lineage_names_the_subset_call(client, dataset_manager):
+    from tests.test_trajectory_paga import _two_lineages
+
+    did = _register(dataset_manager, _two_lineages(), "mlin")
+    r = await _call("pseudotime", {"dataset_id": did, "root_column": "grp", "root_value": "P1"})
+    assert any("not on a path" in w for w in r["warnings"])
+    assert r["subset"] == {"call": "subset_dataset", "dataset_id": did, "column": "grp",
+                           "values": ["P1", "P2", "P3"],
+                           "then": "run_pipeline on the new id, then pseudotime there from the same root"}
+    chk = r["lineage_check"]
+    assert chk["column"] == "grp" and chk["n_on_lineage"] == 3 and chk["min_share"] == 0.01
+    assert chk["off_lineage"][0]["group"] == "Q" and chk["off_lineage"][0]["widest_share"] < 0.01
+    assert chk["weakest_on_lineage"]["widest_share"] >= 0.01
+    # From inside the lineage the block says how close it came, with nothing off
+    r = await _call("pseudotime", {"dataset_id": did, "root_column": "grp", "root_value": "P2"})
+    assert r["lineage_check"]["weakest_on_lineage"]["group"] in {"P1", "P3"}
+
+
+def test_every_paga_node_gets_a_name_clear_of_the_others():
+    """QA round 7 (8 nodes, coloured by the PAGA column): M0, M2.2 and M2 had no name; the
+    group labels stood in for the node names and were dropped where they collided."""
+    from scview.mcp.plots import LABEL_HEIGHT, paga_label_spots
+
+    px = {"IDA macrophage": (757, 410), "M0_Ribhi": (502, 575), "M0": (568, 672), "M1 ACOD1": (575, 180),
+          "Inflammatory monocytes": (735, 255), "M2": (858, 642), "M2.2": (667, 687), "M1 CXCL5": (430, 320)}
+    names = list(px)
+    pos = [[x, -y] for x, y in px.values()] + [None]
+    spots = paga_label_spots(pos, names + ["no position"], (360, -815), (590, 735))
+    assert [s[0] for s in spots] == names
+    boxes = []
+    for name, x, y, ha in spots:
+        fx, fy = (x - 360) / 590, (y + 815) / 735
+        w = 0.0075 * len(name) + 0.01
+        left = fx if ha == "left" else fx - w if ha == "right" else fx - w / 2
+        boxes.append((left, left + w, fy - LABEL_HEIGHT / 2, fy + LABEL_HEIGHT / 2))
+    for i, a in enumerate(boxes):
+        for b in boxes[i + 1:]:
+            assert a[1] < b[0] or a[0] > b[1] or a[3] < b[2] or a[2] > b[3], (a, b)

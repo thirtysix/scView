@@ -101,6 +101,7 @@ export function isRedundantClusterCol(name: string, allNames: string[]): boolean
  *  - X_umap               -> "UMAP"
  *  - X_umap_uncorrected   -> "UMAP (uncorrected)"
  *  - X_umap_original      -> "UMAP (original)" (the file's own, kept by the pipeline)
+ *  - X_umap_parent        -> "UMAP (parent)" (a subset's place in its parent's UMAP)
  *  - X_pca_harmony        -> "PCA (HARMONY)"
  *  - spatial              -> "Tissue" (obsm spatial: the tissue plot)
  */
@@ -110,6 +111,6 @@ export function prettyEmbeddingLabel(name: string): string {
   const suffix = rest.filter((r) => r.toLowerCase() !== "3d").join(" ");
   if (!suffix) return base.toUpperCase();
   // Words stay words ("UMAP (protein)", the WNN card's protein layout); tool names in capitals.
-  const word = suffix === "uncorrected" || suffix === "protein" || suffix === "original";
+  const word = suffix === "uncorrected" || suffix === "protein" || suffix === "original" || suffix === "parent";
   return `${base.toUpperCase()} (${word ? suffix : suffix.toUpperCase()})`;
 }

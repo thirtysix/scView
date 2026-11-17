@@ -254,6 +254,13 @@ def weighted_lowess(x: np.ndarray, y: np.ndarray, w: np.ndarray, span: float, de
     tw = np.clip(1.0 - u**3, 0.0, None) ** 3
     ww = tw * ws[None, :]
     sw = ww.sum(axis=1)
+    # No weight left once tricube is applied (a zero-weight anchor whose weighted neighbours all
+    # sit at the window's edge: Milo rows with no df): the window's prior-weighted mean
+    cwy = np.r_[0.0, np.cumsum(ws * ys)]
+    wsum = cw[ri + 1] - cw[li]
+    flat = np.where(wsum > 0, (cwy[ri + 1] - cwy[li]) / np.where(wsum > 0, wsum, 1.0), ys[a])
+    empty = sw <= 0
+    sw = np.where(empty, 1.0, sw)
     mx = (ww @ xs) / sw
     my = (ww @ ys) / sw
     dx = xs[None, :] - mx[:, None]
@@ -261,6 +268,7 @@ def weighted_lowess(x: np.ndarray, y: np.ndarray, w: np.ndarray, span: float, de
     cxy = (ww * dx) @ ys
     lin = vx > 1e-12 * np.maximum(1.0, mx * mx) * sw
     fit = np.where(lin, my + np.where(lin, cxy / np.where(lin, vx, 1.0), 0.0) * (x0 - mx), my)
+    fit = np.where(empty, flat, fit)
     out = np.empty(n)
     out[o] = np.interp(xs, x0, fit)
     return out
@@ -837,6 +845,15 @@ def _wlowess_loop(xs, ys, ws, target, anchors):
             sxx += wj * xj * xj
             sy += wj * ys[j]
             sxy += wj * xj * ys[j]
+        if sw <= 0.0:  # no weight left after tricube: the window's prior-weighted mean (ties at its edge in)
+            sw = 0.0
+            sy = 0.0
+            for j in range(n):
+                if abs(xs[j] - x0) <= h:
+                    sw += ws[j]
+                    sy += ws[j] * ys[j]
+            out[k] = sy / sw if sw > 0 else ys[i]
+            continue
         mx = sx / sw
         my = sy / sw
         vx = sxx - sw * mx * mx

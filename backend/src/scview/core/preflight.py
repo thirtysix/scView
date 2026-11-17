@@ -2630,11 +2630,17 @@ def _file_doublet_plan(path, params=None) -> DoubletPlan | None:
         from scview.core import doublets
 
         with h5py.File(path, "r") as f:
-            obs = ad.io.read_elem(f["obs"])
+            # anndata < 0.7 wrote obs as one compound dataset (Kang 2018): anndata reads it
+            legacy = isinstance(f["obs"], h5py.Dataset)
+            obs = None if legacy else ad.io.read_elem(f["obs"])
             unit = f.get("uns/scview_spatial/unit")
             tech = f.get("uns/scview_spatial/technology")
             if unit is not None and (_s(unit[()]) in ("spot", "bin") or (tech is not None and _s(tech[()]) == "visium_hd")):
                 return DoubletPlan([])  # the step is skipped
+        if legacy:
+            backed = ad.read_h5ad(path, backed="r")
+            obs = backed.obs.copy()
+            backed.file.close()
         ch = doublets.channels(ad.AnnData(obs=obs), _p(params, "doublet_channel_key", "") or None)
         return DoubletPlan([int(k) for k in ch.sizes])
     except Exception:  # noqa: BLE001 — an estimate never fails a request: one channel then
@@ -2675,10 +2681,10 @@ def dataset_preflight(dm, dataset_id: str, steps: list[str], overrides: dict | N
     """The run estimate for ``steps`` on a dataset, with its verdict. The shape comes
     from the cached dataset, else from the header of its file (never loaded here).
     ``mode`` says whether the run would go to large-dataset mode (``params.chunked``:
-    auto by the rule ``large_run.choose_mode`` applies, or on / off); in that mode the
+    auto, on or off, by the run's own rule on the run's own inputs: ``run_mode``); in that mode the
     steps and verdict are that mode's (``estimate_chunked_run``, with the disk it writes)
     and ``in_memory`` holds the in-memory estimate it replaced."""
-    from scview.core import large_layout
+    from scview.core import large_run
     from scview.core.pipeline import PipelineParams, check_chunked
 
     params = PipelineParams()
@@ -2686,6 +2692,8 @@ def dataset_preflight(dm, dataset_id: str, steps: list[str], overrides: dict | N
         if hasattr(params, k):
             setattr(params, k, v)
     requested = check_chunked(params.chunked)
+    # The run's own steps and parameters: the mode is decided on them, as the run decides it.
+    run_steps, run_params = list(steps), _params_with(params)
     adaptor = dm.get_dataset(dataset_id)
     in_memory = adaptor is not None
     h = None
@@ -2719,7 +2727,8 @@ def dataset_preflight(dm, dataset_id: str, steps: list[str], overrides: dict | N
             raise FileNotFoundError(dataset_id)
         h = read_header(files[0], "h5ad")
         plan = _disk_doublet_plan(files[0], params) if dbl else None
-    large = h.large or (in_memory and large_layout.is_large(adaptor.adata))
+    # As the run tells (``large_run.choose_mode``): the file it opens is in that layout.
+    large = h.large or large_run.large_info(getattr(adaptor, "h5ad_path", None) or files[0]) is not None
     warm = process_warm()
     est = estimate_run(h, steps=steps, params=params, warm=warm, doublets=plan)
     # A backed dataset holds less than the run's start (its matrices are read in first).
@@ -2772,17 +2781,14 @@ def dataset_preflight(dm, dataset_id: str, steps: list[str], overrides: dict | N
     out = {"dataset_id": dataset_id, "in_memory": in_memory, "header": h.to_dict(),
            "steps": [e.to_dict() for e in est.steps], "verdict": v,
            "leiden": leiden_choice(h.n_cells, steps, params, h.unit)}
-    chunked, reason = _would_chunk(requested, need, avail, cached, large)
+    mode = run_mode(dm, dataset_id, adaptor, files, run_steps, run_params, avail, cached, large)
+    chunked = mode.chunked
     out["umap_3d"] = umap_3d_choice(h.n_cells, steps, params, chunked)
-    if not large and requested != "on" and files and _light_ok(files[0], steps):
-        from scview.core.large_run import LIGHT_REASON
-
-        out["mode"] = {"chunked": False, "light": True, "requested": requested, "reason": LIGHT_REASON}
-        out["umap_3d"] = umap_3d_choice(h.n_cells, steps, params, False)
+    out["mode"] = mode.to_dict()
+    if mode.light:
         out["in_memory_estimate"] = {"steps": out["steps"], "verdict": v}
         out.update(_light_preflight(h, steps, params, held, avail, cached))
         return out
-    out["mode"] = {"chunked": chunked, "requested": requested, "reason": reason, "light": False}
     if chunked:
         out["in_memory_estimate"] = {"steps": out["steps"], "verdict": v}
         out.update(_chunked_preflight(h, steps, _large_params(params), held, avail, cached, plan,
@@ -2794,7 +2800,9 @@ def dataset_preflight(dm, dataset_id: str, steps: list[str], overrides: dict | N
             out["mode"].update(converts=True, turns_off=list(large_mode.OFF_IN_LARGE_MODE),
                                layout_after=large_mode.LAYOUT_AFTER)
             out["verdict"]["sentence"] += CONVERTS_SENTENCE
-            if dbl and requested == "auto" and not _would_chunk(requested, alternatives[0][1], avail, cached)[0]:
+            if dbl and requested == "auto" and not run_mode(
+                    dm, dataset_id, adaptor, files, [s for s in run_steps if s != "doublet_detection"],
+                    run_params, avail, cached, large).chunked:
                 # Only the doublet step pushes it over: without it the run stays in memory.
                 skip = (f"Without doublet detection the run fits in memory "
                         f"({_about(max(0, alternatives[0][1]))} more at its peak) and the dataset keeps "
@@ -2811,10 +2819,36 @@ CONVERTS_SENTENCE = (" This run would switch the dataset to large-dataset mode f
                      "and .raw leaves its expression layers (see the notes).")
 
 
-def _light_ok(path, steps: list[str]) -> bool:
-    from scview.core.large_run import light_run_ok
+def run_mode(dm, dataset_id: str, adaptor, files: list, steps: list[str], params,
+             avail: Available, cached: Cached, large: bool):
+    """The mode the run of ``steps`` would get, by the rule it applies itself
+    (``large_run.mode_rule``) on the same inputs: what the open dataset needs
+    (``large_run.in_memory_need``), or, for one not open yet, what it will need once the
+    run's request has opened it, with what opening it adds counted as used
+    (``large_run.opening_need``)."""
+    from scview.core import large_run
 
-    return light_run_ok(path, steps)
+    path = getattr(adaptor, "h5ad_path", None) or (files[0] if files else None)
+    open_now = adaptor is not None and not dm.is_busy(dataset_id)
+
+    def from_file(opening: bool):
+        n, r, load = large_run.opening_need(path, steps, params, used=avail.used_bytes,
+                                            limit=avail.limit_bytes, cached=cached.bytes)
+        return (n, r, load) if opening else (n, r)
+
+    def need():
+        if open_now:
+            try:
+                return large_run.in_memory_need(adaptor, steps, params)
+            except (RuntimeError, ValueError):  # changed under us: its file says what it was
+                pass
+        # Open but busy (a run changes it): its memory is counted in used already.
+        return from_file(adaptor is None)
+
+    return large_run.mode_rule(params.chunked, need, used=avail.used_bytes,
+                               limit=avail.limit_bytes, cached=cached.bytes,
+                               light=not large and bool(path) and large_run.light_run_ok(path, steps),
+                               large=large)
 
 
 # Memory the first neighbour graph or UMAP in a fresh process keeps (numba's compiled
@@ -2898,29 +2932,6 @@ def leiden_choice(n_cells: int | None, steps: list[str], params=None, unit: str 
         "offer_fast": bool(full > limit),
         "iterations": leiden_iterations(params),
     }
-
-
-def _would_chunk(requested: str, need: int, avail: Available, cached: Cached,
-                 large: bool = False) -> tuple[bool, str]:
-    """Large-dataset mode or not, by the rule ``large_run.choose_mode`` applies."""
-    from scview.core.dataset_manager import LOAD_MARGIN, working_reserve
-
-    if large:
-        return True, ("This dataset is in large-dataset layout, so it runs in large-dataset "
-                      "mode: it is never read into memory.")
-    if requested == "on":
-        return True, "Large-dataset mode was chosen for this run."
-    if requested == "off":
-        return False, "In memory was chosen for this run."
-    if avail.limit_bytes is None or avail.available_bytes is None:
-        return False, "No memory limit is known: the run works in memory."
-    free = avail.available_bytes + cached.bytes
-    target = max(0, need) * LOAD_MARGIN + working_reserve(avail.limit_bytes)
-    if target <= free:
-        return False, "The run fits in memory."
-    return True, (f"In memory the run needs {_about(max(0, need))} more at its peak, more "
-                  f"than scView can give it with its working reserve, so it runs in "
-                  "large-dataset mode: the matrices stay on disk, read in blocks.")
 
 
 def step_times(dm, dataset_id: str, steps: list[str], params, chunked: bool) -> dict[str, tuple[float, float]]:

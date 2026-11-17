@@ -109,11 +109,12 @@ export interface AssistantAction {
 export async function runPipelineSteps(
   datasetId: string,
   steps: string[],
-  params: Record<string, unknown>
+  params: Record<string, unknown>,
+  allowLarge = false,
 ): Promise<{ steps_run: string[]; errors: Record<string, string> }> {
   return apiFetch(`/datasets/${datasetId}/assessment/run`, {
     method: "POST",
-    body: JSON.stringify({ steps, params }),
+    body: JSON.stringify({ steps, params, allow_large_mode: allowLarge }),
   });
 }
 

@@ -1,4 +1,5 @@
 import { apiFetch, readError } from "@/api/client";
+import { errorMessage } from "@/lib/errorMessage";
 import { clearedText } from "@/lib/runErrors";
 
 /** A warning the run watchdog sends into a run's stream (backend core/run_watchdog.py). */
@@ -107,6 +108,34 @@ export function isConversionRefusal(message: string): boolean {
 export function conversionQuestion(message: string): string {
   const reason = (message.split(" Nothing was run:")[0] ?? message).trim();
   return `${reason}\n\nRun it in large-dataset mode anyway? The dataset stays in that layout.`;
+}
+
+/** Run `call` without the yes to a conversion (`allow_large_mode` false, the backend's
+ *  default); when the backend refuses because the run would convert the dataset, ask the
+ *  user (`ask`, a confirm by default) and, on yes only, run it again allowing it. Every UI
+ *  caller of a run route goes through here or asks the same way (DataAssessmentPanel). */
+export async function withConversionConsent<T>(
+  call: (allowLarge: boolean) => Promise<T>,
+  ask: (question: string) => boolean = (q) => window.confirm(q),
+): Promise<T> {
+  try {
+    return await call(false);
+  } catch (e) {
+    const msg = errorMessage(e);
+    if (isConversionRefusal(msg) && ask(conversionQuestion(msg))) return call(true);
+    throw e;
+  }
+}
+
+/** What a run's failure says in the UI: a declined conversion in plain words (the refusal's own
+ *  text names the API flag), anything else as the server's reason. */
+export const DECLINED_CONVERSION =
+  "Not run: it would have switched the dataset to large-dataset mode, and you chose not to. Close other " +
+  "datasets or raise scView's memory limit to run it in memory.";
+
+export function runErrorText(e: unknown): string {
+  const msg = errorMessage(e);
+  return isConversionRefusal(msg) ? DECLINED_CONVERSION : msg;
 }
 
 const gb = (n: number) => (n >= 10 ? n.toFixed(0) : n.toFixed(1));

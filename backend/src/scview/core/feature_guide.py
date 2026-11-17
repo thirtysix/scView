@@ -92,6 +92,10 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
      "rest, told when a cluster's markers do not beat 9 of 10 random gene lists of the same size"),
     ("Data Assessment > Label from a reference dataset", "reference mapping",
      "label cells from another annotated library dataset; flags cells not in the reference"),
+    ("Data Assessment > Import labels from a file", "author labels, label table",
+     "a per-cell label table (CSV/TSV, e.g. an author annotation from GEO) into a new label column, matched by cell "
+     "name (or by order, one row per cell); Check the match first: rows matched, rows naming no cell, cells left out; "
+     "refused when most names differ, with a hint (a '-1' ending, a sample prefix)"),
     ("Data Assessment > Annotation confidence", "", "label-fit flags per cell"),
     ("Data Assessment > Annotation cross-check", "", "agreement between two annotations"),
     ("Data Assessment > Annotation cross-check > Marker database check", "",
@@ -186,7 +190,7 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
      "RNA velocity from spliced and unspliced counts (upload them or attach a velocyto .loom, an .h5ad or a STARsolo "
      "folder): steady-state or stochastic model as scVelo; arrows on the plot, per-group coherence, phase portraits; "
      "not the dynamical model or latent time"),
-    ("Unified View > Deconvolution", "bulk RNA-seq",
+    ("Unified View > Deconvolution", "bulk",
      "cell-type fractions of uploaded bulk RNA-seq samples, this dataset as the reference; self-check, "
      "reference download for MuSiC / CIBERSORTx"),
     ("Unified View > Spot composition", "Visium, RCTD",
@@ -214,6 +218,10 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Unified View > Plot reliability", "", "colour cells by how well the plot keeps their neighbours"),
     ("Unified View > Layouts", "UMAP stability", "alternative UMAPs: which structure is stable"),
     ("Unified View > Filter", "", "select cells by gene and metadata conditions"),
+    ("Unified View > New dataset…", "",
+     "a new dataset of the selected cells (a lasso, a legend group or a Filter), the parent unchanged: their "
+     "counts, labels (scView's clusters as parent_*), the parent's UMAP and per-cell modalities; process it like "
+     "any dataset (re-cluster only the T cells, a trajectory on one lineage)"),
     ("Unified View > Gates > Learned gates", "",
      "Learn gate... trains a small model (L1 logistic regression) on the selected cells against the other cells "
      "of their samples; the library exports, imports and applies it to any dataset (in/out column + gate score)"),
@@ -248,7 +256,8 @@ FULL_ONLY = ("Unified View > Accessibility >", "Unified View > Embedding > Tissu
              "Data Assessment > Cell-type annotation", "Data Assessment > Cluster QC", "Unified View > Compare",
              "Data Assessment > Annotation cross-check > Marker database check",
              "Data Assessment > QC Distributions > QC per sample", "Data Assessment > Cell/Gene Filtering",
-             "Data Assessment > Cell hashing >", "Unified View > Perturbation >")
+             "Data Assessment > Cell hashing >", "Unified View > Perturbation >",
+             "Data Assessment > Import labels from a file")
 
 
 def compact_guide() -> str:

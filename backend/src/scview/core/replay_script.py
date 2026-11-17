@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from scview.core import msigdb_species, provenance, vdj
+from scview.core import label_import, msigdb_species, provenance, vdj
 
 EXACT = "exact"
 APPROXIMATE = "approximate"
@@ -807,6 +807,43 @@ def infer_cnv(adata, genes, chromosomes, ref_column, ref_groups, window=100, ste
     return X, score, tmp.obs["cnv_leiden"].astype(str).to_numpy()
 """
 
+_HELPERS["imported_labels"] = '''
+def imported_labels(name, sep, barcode_column, label_column, obs_names, strip_suffix=False, existing=None):
+    """A per-cell label table scView imported, read again (beside this script or the
+    input file) and joined to the cells by name, or by order with no barcode column.
+    Blank labels and cells the table leaves out keep ``existing`` (default Unassigned)."""
+    import os
+
+    BLANKS = @BLANKS@
+
+    path = next((p for p in (name, os.path.join(os.path.dirname(os.path.abspath(INPUT)), name))
+                 if os.path.exists(p)), None)
+    if path is None:
+        raise SystemExit(f"{name}: put the label table scView imported beside this script or the input file")
+    table = pd.read_csv(path, sep=sep, dtype=str, keep_default_na=False)
+    labels = table[label_column].str.strip()
+    labels = labels.where(~labels.isin(BLANKS))
+    if barcode_column is None:
+        if len(labels) != len(obs_names):
+            raise SystemExit(f"{name}: {len(labels)} rows for {len(obs_names)} cells")
+        values = pd.Series(labels.to_numpy(), index=obs_names)
+    else:
+        keys = table[barcode_column].astype(str).str.strip()
+        names = pd.Index(obs_names).astype(str)
+        if strip_suffix:
+            keys = keys.str.replace(r"[-.]\\d+$", "", regex=True)
+            names = names.str.replace(r"[-.]\\d+$", "", regex=True)
+        by_key = pd.Series(labels.to_numpy(), index=keys.to_numpy())
+        by_key = by_key[by_key.notna()]
+        by_key = by_key[~by_key.index.duplicated()]
+        values = pd.Series(by_key.reindex(names).to_numpy(), index=obs_names)
+    base = (pd.Series(existing, index=obs_names).astype(object) if existing is not None
+            else pd.Series("Unassigned", index=obs_names, dtype=object))
+    return base.where(values.isna(), values).astype("category")
+'''
+
+_HELPERS["imported_labels"] = _HELPERS["imported_labels"].replace("@BLANKS@", repr(sorted(label_import.BLANK)))
+
 _HELPERS["read_hashtags"] = '''
 def read_hashtags(path, cells, features, sources):
     """The tag counts scView demultiplexed, read again from the input file (cells x
@@ -910,7 +947,7 @@ _HELPER_ORDER = ("looks_like_counts", "keep_raw_counts", "find_counts", "var_fro
                  "mad_thresholds", "apply_thresholds", "fixed_drop", "type_mito_drop", "refilter_types",
                  "markers_key", "louvain",
                  "harmony", "scanorama", "lognorm_scoring", "subcluster", "gene_programs", "infer_cnv",
-                 "read_hashtags", "hashing", "vdj", "aucell")
+                 "read_hashtags", "hashing", "vdj", "aucell", "imported_labels")
 
 # Helpers another helper calls.
 _HELPER_NEEDS = {
@@ -1992,6 +2029,140 @@ _HELPERS["atac_fragments"] = _atac_fragments_helper()
 _HELPER_ORDER += ("atac_fragments",)
 
 
+def _subset_helper() -> str:
+    """A subset's cells from its parent (core/subset.py): the barcodes, the counts as scView
+    took them, scView's columns renamed by core/subset.py's own code, the parent's UMAP."""
+    import inspect
+
+    from scview.core import subset as sub
+
+    lines = [f"PARENT_PREFIX = {_lit(sub.PARENT_PREFIX)}",
+             f"PIPELINE_OBS = {_lit(sub.PIPELINE_OBS)}",
+             f"PIPELINE_OBS_PATTERN = {_lit(sub.PIPELINE_OBS_PATTERN)}",
+             f"PIPELINE_VAR = {_lit(sub.PIPELINE_VAR)}",
+             f"SUBSET_RESULT_OBSM = {_lit(sorted([*sub._RESULT_OBSM, *sub._REMADE_OBSM]))}", ""]
+    for obj in (sub._parent_name, sub.obs_names_map, sub.clean_var):
+        lines += ["", inspect.getsource(obj).rstrip("\n")]
+    return "\n".join(lines) + '''
+
+
+def subset_barcodes(packed):
+    """The subset's barcodes, as scView packed them (zlib, base64, one per line)."""
+    import base64
+    import zlib
+
+    return zlib.decompress(base64.b64decode("".join(packed))).decode("utf-8").split("\\n")
+
+
+def subset_counts(adata):
+    """(counts, genes) as scView takes them for a subset: the counts from before an ambient RNA
+    correction, else the first of layers['counts'], .raw and X that holds counts."""
+    if "counts_uncorrected" in adata.layers:
+        return adata.layers["counts_uncorrected"], adata.var
+    if "counts" in adata.layers and looks_like_counts(adata.layers["counts"]):
+        return adata.layers["counts"], adata.var
+    if adata.raw is not None and looks_like_counts(adata.raw.X):
+        return adata.raw.X, adata.raw.var
+    if looks_like_counts(adata.X):
+        return adata.X, adata.var
+    sys.exit("No raw counts in the parent's layers['counts'], .raw or X: pass the file scView took them from.")
+
+
+def subset_of_parent(parent, cells, columns=(), drop=()):
+    """The new dataset: the cells' counts in X, obs (scView's results as parent_*, ``drop`` left
+    out), the parent's UMAP as X_umap_parent and the per-cell obsm entries that are data, not
+    results. ``columns``: the parent's obs columns the subset carried (INPUT must have them)."""
+    pos = parent.obs_names.get_indexer(pd.Index(cells))
+    if (pos < 0).any():
+        sys.exit(f"{int((pos < 0).sum()):,} of the subset's cells are not in INPUT: pass the parent dataset.")
+    missing = [c for c in columns if c not in parent.obs.columns]
+    if missing:
+        sys.exit(f"INPUT lacks {len(missing)} column(s) the subset carried ({', '.join(missing[:5])}): it is not "
+                 "the parent as scView held it. Download the parent's .h5ad from scView (hand labels are not in "
+                 "its replay script's output).")
+    M, var = subset_counts(parent)
+    X = M[pos]
+    X = sp.csr_matrix(X, dtype=np.float32) if sp.issparse(X) else sp.csr_matrix(np.asarray(X, dtype=np.float32))
+    obs = parent.obs.iloc[pos][[c for c in parent.obs.columns if c not in set(drop)]].copy()
+    obs = obs.rename(columns=obs_names_map(obs.columns))
+    for c in obs.columns:
+        if obs[c].dtype.name == "category":
+            obs[c] = obs[c].cat.remove_unused_categories()
+    var = clean_var(var.copy())
+    var.index = var.index.astype(str)
+    obs.index = obs.index.astype(str)
+    out = ad.AnnData(X=X, obs=obs, var=var)
+    umap = "X_umap" if "X_umap" in parent.obsm else next((k for k in parent.obsm if k.lower() == "x_umap"), None)
+    if umap is not None and np.ndim(parent.obsm[umap]) == 2 and np.shape(parent.obsm[umap])[1] >= 2:
+        out.obsm["X_umap_parent"] = np.asarray(parent.obsm[umap])[pos, :2].astype(np.float32)
+    if "X_umap_original" in parent.obsm:
+        out.obsm["X_umap_original"] = np.asarray(parent.obsm["X_umap_original"])[pos]
+    for k in parent.obsm:
+        if str(k).startswith("X_") or k in SUBSET_RESULT_OBSM:
+            continue
+        v = parent.obsm[k]
+        if isinstance(v, pd.DataFrame):
+            v = v.iloc[pos].copy()
+            v.index = obs.index
+        else:
+            v = v[pos]
+        out.obsm[k] = v
+    return out
+'''
+
+
+_HELPERS["label_filter"] = '''
+def filter_hits(obs, spec):
+    """Cells matching a recorded filter of category and range conditions (scView core/cell_filter.py)."""
+    def cond(c):
+        s = obs[c["column"]]
+        if c["kind"] == "category":
+            return s.notna().to_numpy() & s.astype(str).isin(set(c["values"])).to_numpy()
+        v = pd.to_numeric(s, errors="coerce").to_numpy(dtype=float)
+        m = ~np.isnan(v)
+        if c.get("min") is not None:
+            m &= v >= c["min"]
+        if c.get("max") is not None:
+            m &= v <= c["max"]
+        return m
+
+    def combine(op, masks):
+        return np.logical_and.reduce(masks) if op == "and" else np.logical_or.reduce(masks)
+
+    return combine(spec["op"], [combine(i["op"], [cond(c) for c in i["conditions"]]) if i["kind"] == "group"
+                                else cond(i) for i in spec["items"]])
+
+
+def label_by_filter(adata, column, label, spec, n_cells, new_column):
+    """A hand label given by a filter, as scView gave it (core/user_labels.py label_cells)."""
+    missing = [c["column"] for i in spec["items"] for c in (i["conditions"] if i["kind"] == "group" else [i])
+               if c["column"] not in adata.obs.columns]
+    if missing:
+        sys.exit(f"Labelling {column}: INPUT has no column {missing[0]!r}, which the filter reads.")
+    hit = filter_hits(adata.obs, spec)
+    if int(hit.sum()) != n_cells:
+        sys.exit(f"Labelling {column} = {label!r}: the filter matches {int(hit.sum()):,} cells here and matched "
+                 f"{n_cells:,} in scView, so INPUT is not the data scView labelled.")
+    old = None if new_column or column not in adata.obs.columns else adata.obs[column]
+    if old is None:
+        col = pd.Categorical(["Unassigned"] * adata.n_obs, categories=["Unassigned"])
+    else:
+        col = old.values if old.dtype.name == "category" else old.astype(str).astype("category").values
+    cats = list(col.categories)
+    codes = np.array(col.codes, dtype=np.int64)
+    if label not in cats:
+        cats.append(label)
+    codes[hit] = cats.index(label)
+    adata.obs[column] = pd.Categorical.from_codes(codes, categories=cats).remove_unused_categories()
+'''
+_HELPER_ORDER += ("label_filter",)
+
+
+_HELPERS["subset"] = _subset_helper()
+_HELPER_ORDER += ("subset",)
+_HELPER_NEEDS["subset"] = ("looks_like_counts",)
+
+
 def _need(ctx: _Ctx, *names: str) -> None:
     for name in names:
         if name not in ctx.helpers:
@@ -2056,7 +2227,8 @@ if "counts" in adata.layers or adata.raw is not None:
         "highly_variable", "means", "dispersions", "dispersions_norm", "variances",
         "residual_variances", "highly_variable_rank", "highly_variable_nbatches",
         "highly_variable_intersection") if c in adata.var.columns], inplace=True)
-    for k in [k for k in list(adata.obsm.keys()) if k.startswith("X_") and k not in ("X_umap_original", "X_pca_original")]:
+    for k in [k for k in list(adata.obsm.keys())
+              if k.startswith("X_") and k not in ("X_umap_original", "X_pca_original", "X_umap_parent")]:
         del adata.obsm[k]
     for k in list(adata.obsp.keys()):
         del adata.obsp[k]
@@ -3044,6 +3216,54 @@ def _integrate(p: dict, ctx: _Ctx) -> Snippet:
     ], "merge of datasets: start from the merged file")
 
 
+# Characters of packed barcodes per line of the script
+_PACKED_WIDTH = 96
+
+
+def _subset(p: dict, ctx: _Ctx) -> Snippet:
+    """The cells of the parent this dataset was made of (core/subset.py), from the barcodes
+    kept in uns['scview_subset_cells']; the recorded rule is a comment."""
+    import base64
+    import zlib
+
+    from scview.core import subset as sub
+
+    head = [
+        f"# This dataset is a subset of scView dataset {comment_text(repr(str(p.get('parent_name'))), 120)} "
+        f"(id {comment_text(p.get('parent_id'), 40)}):",
+        f"# {comment_text(p.get('n_cells'), 12)} of {comment_text(p.get('n_parent_cells'), 12)} cells, "
+        f"chosen by {comment_text(p.get('described'), 200)}.",
+        "# INPUT is that dataset as scView held it when the subset was made: download it from scView",
+        f"# (Download > .h5ad on that dataset, or GET /api/v1/datasets/{comment_text(p.get('parent_id'), 40)}"
+        "/export/h5ad), or",
+        "# run ITS replay script (GET .../recipe/script on the parent) and pass that output; hand labels",
+        "# are not in a replay's output, so a subset that carried them needs the download.",
+        f"# The counts came from {comment_text(p.get('counts_source') or 'the parent', 120)}.",
+    ]
+    cells = ctx.adata.uns.get(sub.CELLS_KEY) if hasattr(ctx.adata, "uns") else None
+    if cells is None or len(cells) == 0:
+        return Snippet(NOT_REPLAYABLE, head + ["# The cells' barcodes were not kept: start from this dataset's own",
+                                               "# stored file instead. Recorded:", *_param_comment(p)],
+                       "barcodes not kept")
+    packed = base64.b64encode(zlib.compress("\n".join(map(str, cells)).encode("utf-8"), 9)).decode("ascii")
+    chunks = [packed[i:i + _PACKED_WIDTH] for i in range(0, len(packed), _PACKED_WIDTH)]
+    _need(ctx, "subset")
+    note = ""
+    status = EXACT
+    if " of the " in str(p.get("counts_source") or ""):  # recover_counts' source-file fallback
+        status, note = APPROXIMATE, "counts from the parent's source file"
+        head.append("# NOTE: scView read them from that file, by barcode: pass it as INPUT if the parent's "
+                    "own file has none.")
+    return Snippet(status, head + [
+        "SUBSET_CELLS = subset_barcodes((",
+        *[f"    {c!r}" for c in chunks],
+        "))",
+        f"adata = subset_of_parent(adata, SUBSET_CELLS, columns={_lit([str(c) for c in p.get('parent_columns') or []])}, "
+        f"drop={_lit([str(c) for c in p.get('dropped_columns') or []])})",
+        f"assert adata.n_obs == {int(len(cells))}",
+    ], note)
+
+
 def _subcluster(p: dict, ctx: _Ctx) -> Snippet:
     from scview.core import subcluster as sub
 
@@ -3151,6 +3371,16 @@ def _annotation_confidence(p: dict, ctx: _Ctx) -> Snippet:
 
 def _label_cells(p: dict, ctx: _Ctx) -> Snippet:
     column = str(p.get("column") or "")
+    flt = p.get("filter")
+    if isinstance(flt, dict) and p.get("label") is not None and p.get("n_cells") is not None:
+        # A labelling by a filter on metadata (MCP set_labels, the UI's Filter): the same cells again.
+        _need(ctx, "label_filter")
+        return Snippet(EXACT, [
+            f"# Cells matching a filter labelled {comment_text(repr(str(p.get('label'))), 80)} in "
+            f"{comment_text(repr(column), 80)}.",
+            f"label_by_filter(adata, {_lit(column)}, {_lit(str(p.get('label')))}, {_lit(flt)}, "
+            f"{_lit(int(p.get('n_cells')))}, {_lit(bool(p.get('new_column')))})",
+        ])
     return Snippet(NOT_REPLAYABLE, [
         "# Cells labelled by hand (lasso, legend or filter selection); which cells is not",
         "# recorded. To carry the final labels over, join the column from scView's cell",
@@ -3175,6 +3405,31 @@ def _combine_columns(p: dict, ctx: _Ctx) -> Snippet:
         "# A column of each cell's values of these columns joined (a cell missing one: none).",
         f"adata.obs[{_lit(column)}] = ({parts}).where(~({gone})).astype('category')",
     ])
+
+
+def _import_labels(p: dict, ctx: _Ctx) -> Snippet:
+    column = str(p.get("column") or "")
+    name, label_col = p.get("file"), p.get("label_column")
+    if not (column and name and label_col):  # a mapping or a list of values sent inline
+        return Snippet(NOT_REPLAYABLE, [
+            "# Cells labelled from a per-cell table sent inline (not a file); to carry the labels",
+            "# over, join the column from scView's cell metadata export by barcode, e.g.:",
+            "#   meta = pd.read_csv('cell_metadata.csv', index_col=0)",
+            f"#   adata.obs[{comment_text(repr(column), 80)}] = meta.loc[adata.obs_names, "
+            f"{comment_text(repr(column), 80)}].astype('category')",
+            "# Recorded:",
+            *_param_comment(p),
+        ], "labels sent inline: table not recorded")
+    ctx.helpers.add("imported_labels")
+    existing = "None" if p.get("new_column", True) else f"adata.obs[{_lit(column)}]"
+    how = (f"by cell name ({p.get('barcode_column')})" if p.get("barcode_column") else "by order")
+    return Snippet(APPROXIMATE, [
+        f"# Labels imported from the table {comment_text(name, 120)}, {how}: "
+        f"{comment_text(p.get('n_matched'), 20)} of {comment_text(p.get('n_rows'), 20)} rows matched.",
+        f"adata.obs[{_lit(column)}] = imported_labels({_lit(name)}, {_lit(p.get('sep') or ',')}, "
+        f"{_lit(p.get('barcode_column'))}, {_lit(label_col)}, adata.obs_names, "
+        f"strip_suffix={bool(p.get('strip_suffix'))}, existing={existing})",
+    ], "needs the imported table beside the script")
 
 
 def _annotation_crosscheck(p: dict, ctx: _Ctx) -> Snippet:
@@ -4289,6 +4544,7 @@ def _remove_score(p: dict, ctx: _Ctx) -> Snippet:
 _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "ingest": _ingest,
     "integrate": _integrate,
+    "subset": _subset,
     "reset_to_counts": _reset_to_counts,
     "qc_metrics": _qc_metrics,
     "doublet_detection": _doublet_detection,
@@ -4319,6 +4575,7 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "label_cells": _label_cells,
     "undo_label_cells": _label_cells,
     "combine_columns": _combine_columns,
+    "import_labels": _import_labels,
     "doublet_threshold": _doublet_threshold,
     "annotation_crosscheck": _annotation_crosscheck,
     "merge_clusters": _merge_clusters,

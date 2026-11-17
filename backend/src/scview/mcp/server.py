@@ -38,7 +38,7 @@ scView: single-cell RNA-seq analysis running locally; these tools call the same 
 - Conditions with donors: be donor-aware. differential_expression(method="pseudobulk") within a cell type,
   per_donor_expression, composition_test (donors as replicates), not cell-level p alone. Read the warnings.
 - Cell types: annotate_celltypist (celltypist_models: pick your tissue's), marker_db_check, annotation_crosscheck.
-  Name clusters or build a column (e.g. sample = donor AND day) with set_labels and a cell filter.
+  set_labels names clusters or builds a column (donor AND day); import_labels: a per-cell table; subset_dataset: some cells.
 - enrichment takes a differential_expression result_id (ORA of up/down genes, or GSEA), a gene list,
   or a marker group. plot returns a PNG (embedding, violin, dotplot, ATAC coverage).
 - Spatial: plot(embedding="spatial"), spatial_autocorr, spatial_domains, nhood_enrichment, cooccurrence,

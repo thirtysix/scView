@@ -12,6 +12,7 @@ import { GroupLabelsToggle } from "@/components/unified/GroupLabelsToggle";
 import { Lasso, RotateCcw, X } from "lucide-react";
 import { formatNumber, prettyObsLabel, prettyEmbeddingLabel, isRedundantClusterCol } from "@/lib/formatting";
 import { LabelSelectionControls } from "@/components/unified/LabelSelection";
+import { SubsetSelectionControls } from "@/components/unified/SubsetSelection";
 import { CellFilterControl } from "@/components/unified/CellFilter";
 import { GatesControl } from "@/components/unified/GatesControl";
 import { AskSelectionButton } from "@/components/unified/AskSelectionButton";
@@ -412,6 +413,7 @@ export function UnifiedToolbar({ onResetView, numCells, groupSelect = null }: Un
           </span>
         )}
         <LabelSelectionControls />
+        <SubsetSelectionControls />
       </div>
 
       {/* Cell count */}

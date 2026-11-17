@@ -21,6 +21,7 @@ import { AnnotationControl } from "@/components/panels/AnnotationControl";
 import { AnnotationConfidenceCard } from "@/components/panels/AnnotationConfidenceCard";
 import { AnnotationCrosscheckCard } from "@/components/annotation/AnnotationCrosscheckCard";
 import { ReferenceMappingCard } from "@/components/annotation/ReferenceMappingCard";
+import { LabelImportCard } from "@/components/annotation/LabelImportCard";
 import { MeanVariancePlot } from "@/components/panels/MeanVariancePlot";
 import { MitoByType } from "@/components/qc/MitoByType";
 import { MitoModeControl, recordedMitoParams } from "@/components/qc/MitoModeControl";
@@ -29,6 +30,7 @@ import { PcaDiagnostics } from "@/components/panels/PcaDiagnostics";
 import { ObjectInspector } from "@/components/panels/ObjectInspector";
 import { ConversionReport } from "@/components/panels/ConversionReport";
 import { PublicSourceCard } from "@/components/panels/PublicSourceCard";
+import { SubsetSourceCard } from "@/components/panels/SubsetSourceCard";
 import { PreflightRunNote } from "@/components/common/PreflightNote";
 import { FastLeidenInfo } from "@/components/common/FastLeidenInfo";
 import { TargetedPanelNote, type TargetedPanelInfo } from "@/components/qc/TargetedPanelNote";
@@ -1216,6 +1218,7 @@ export function DataAssessmentPanel() {
       </p>
       {dataset?.conversion && <ConversionReport report={dataset.conversion} />}
       {dataset?.public_source && <PublicSourceCard source={dataset.public_source} />}
+      {dataset?.subset_of && <SubsetSourceCard source={dataset.subset_of} />}
 
       {/* Two columns: controls + steps on the left, QC plots on the right */}
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
@@ -1360,6 +1363,9 @@ export function DataAssessmentPanel() {
             datasetId={datasetId}
             onCrosscheck={(columns) => setCrosscheckPreset((p) => ({ columns, key: (p?.key ?? 0) + 1 }))}
           />
+
+          {/* Per-cell labels from a table (an author annotation), matched by cell name */}
+          <LabelImportCard datasetId={datasetId} />
 
           {/* How well each cell's label fits (conformal prediction sets) */}
           <AnnotationConfidenceCard datasetId={datasetId} />

@@ -151,9 +151,11 @@ async def get_dataset(dataset_id: DatasetId) -> str:
             # The route lists both for a bool column (its colour slots): name the one present.
             vals = (await _get(f"{_ds(dataset_id)}/metadata/{c['name']}", format="json"))["values"]
             values[c["name"]] = sorted({str(v) for v in vals if v is not None})
-    out = pick(d, "id", "name", "status", "n_cells", "n_genes", "error_message", "active_clustering",
+    out = pick(d, "id", "name", "status", "source", "n_cells", "n_genes", "error_message", "active_clustering",
                "user_annotation_columns", "app_annotation_columns", "available_embeddings",
                "default_expression_layer")
+    if isinstance(d.get("subset_of"), dict):  # made of some cells of another dataset (subset_dataset)
+        out["subset_of"] = pick(d["subset_of"], "id", "name", "described", "n_cells", "n_parent_cells")
     out["expression_layers"] = [
         (layer.get("key") or layer.get("name")) if isinstance(layer, dict) else layer
         for layer in d.get("expression_layers") or []]
@@ -814,8 +816,33 @@ async def _run_result(job: jobs.Job) -> dict[str, Any]:
     return out
 
 
+# Every tool that starts a run says whether it may convert the dataset to large-dataset layout
+# (``_start_run``'s ``allow_large_mode`` has no default): such a tool takes this argument,
+# default False, and checks it first (``_refuse_conversion``). QA round 7: CellTypist on a
+# 46,700-cell dataset converted it for good, unasked, when only run_pipeline checked.
+AllowLargeMode = Annotated[bool, Field(description=(
+    "Let a run that does not fit in memory convert the dataset to large-dataset layout for good "
+    "(cell-level DE and other whole-matrix tools are then refused on it; pseudobulk DE stays; "
+    ".raw leaves its layers). Default false: such a run is refused, naming what it would turn off."))]
+
+
+async def _refuse_conversion(dataset_id: str, steps: list[str], p: dict[str, Any]) -> None:
+    """A ToolError when the run would convert the dataset (preflight, by the run's own rule:
+    ``large_run.mode_rule``), naming what that turns off and how to allow it."""
+    mode = (await _get(f"{_ds(dataset_id)}/preflight", **_preflight_query(steps, p))).get("mode") or {}
+    if mode.get("converts"):
+        skip = (mode.get("without_doublets") or {}).get("text")
+        raise ToolError(
+            f"Not run: {mode.get('reason')} That converts the dataset for good: "
+            f"{mode.get('layout_after')}; no longer available on it: "
+            f"{'; '.join(mode.get('turns_off') or [])}. "
+            + (f"{skip} Leave doublet_detection out, or " if skip else "")
+            + ("run" if skip else "Run") + " cell-level DE and the other tools first, free "
+            "memory, or pass allow_large_mode=true to convert it.")
+
+
 async def _start_run(dataset_id: str, steps: list[str], p: dict[str, Any], kind: str,
-                     finish: Callable = _run_result, allow_large_mode: bool = True) -> jobs.Job:
+                     finish: Callable = _run_result, *, allow_large_mode: bool) -> jobs.Job:
     if any(j.dataset_id == dataset_id for j in jobs.running()):
         busy = next(j for j in jobs.running() if j.dataset_id == dataset_id)
         raise ToolError(f"Job {busy.id} ({busy.kind}) is still running on this dataset; "
@@ -831,11 +858,7 @@ async def _start_run(dataset_id: str, steps: list[str], p: dict[str, Any], kind:
 
 @tool(WRITE)
 async def run_pipeline(dataset_id: DatasetId, steps: Steps, params: Params = None,
-                       allow_large_mode: Annotated[bool, Field(description=(
-                           "Let a run that does not fit in memory convert the dataset to "
-                           "large-dataset layout for good (cell-level DE and other whole-matrix tools "
-                           "are then refused on it; pseudobulk DE stays; .raw leaves its layers). Default false: such a "
-                           "run is refused, naming what it would turn off."))] = False) -> str:
+                       allow_large_mode: AllowLargeMode = False) -> str:
     """Run pipeline steps on a dataset and save the result (a job: returns job_id at once;
     follow it with job_status, stop it with cancel_job). Check preflight first on a big dataset.
     Steps that need no expression matrix (neighbors, clustering, embeddings on the stored PCA)
@@ -846,36 +869,43 @@ async def run_pipeline(dataset_id: DatasetId, steps: Steps, params: Params = Non
     if "cell_type_annotation" in steps:
         await _check_annotation(p)
     if not allow_large_mode:
-        mode = (await _get(f"{_ds(dataset_id)}/preflight", **_preflight_query(steps, p))).get("mode") or {}
-        if mode.get("converts"):
-            skip = (mode.get("without_doublets") or {}).get("text")
-            raise ToolError(
-                f"Not run: {mode.get('reason')} That converts the dataset for good: "
-                f"{mode.get('layout_after')}; no longer available on it: "
-                f"{'; '.join(mode.get('turns_off') or [])}. "
-                + (f"{skip} Leave doublet_detection out, or " if skip else "")
-                + ("run" if skip else "Run") + " cell-level DE and the other tools first, free "
-                "memory, or pass allow_large_mode=true to convert it.")
+        await _refuse_conversion(dataset_id, steps, p)
     job = await _start_run(dataset_id, steps, p, "pipeline", allow_large_mode=allow_large_mode)
     return dumps({"job_id": job.id, "status": job.status, "dataset_id": dataset_id, "steps": steps,
                   "params": p, "next": "job_status(job_id, wait_seconds=50) until complete"})
 
 
 @tool(READ)
-async def get_recipe(dataset_id: DatasetId) -> str:
-    """The dataset's recorded processing, in order: each step with its parameters, how the
-    replay script reproduces it, its measured time and peak memory (measured: seconds,
-    peak_gb, for runs scView watched; peak_gb is the server's whole use), and the source the
-    data came from."""
-    d = await _get(f"{_ds(dataset_id)}/recipe")
+async def get_recipe(
+    dataset_id: DatasetId,
+    offset: Annotated[int, Field(ge=0, description=(
+        "Step to start from, counted among the steps shown (after the steps filter): page with next_offset."))] = 0,
+    limit: Annotated[int, Field(ge=1, le=compact.MAX_LIMIT, description=(
+        "Steps per page (default 30, max 200); a page also stops when its text gets long."))] = 30,
+    steps: Annotated[list[str] | None, Field(description=(
+        "Only these step kinds (e.g. ['qc_metrics', 'filtering', 'clustering']); step_counts in the "
+        "reply lists every kind with its count."))] = None,
+) -> str:
+    """The dataset's recorded processing, in order, a page at a time: each step with its index in
+    the whole recipe, its parameters, how the replay script reproduces it, its measured time and
+    peak memory (measured: seconds, peak_gb, for runs scView watched; peak_gb is the server's
+    whole use), and the source the data came from. n_total counts every step and step_counts
+    each kind (many hand labellings can bury a pipeline run: filter with steps)."""
+    d = await _get(f"{_ds(dataset_id)}/recipe", step=steps or None)
     try:  # the measured time and memory per step sit in the full record only
         history = ((await api.get(f"{_ds(dataset_id)}/provenance")).get("recorded") or {}).get("history") or []
     except api.RouteError:
         history = []
     used = {h.get("commit_id"): h.get("resources") for h in history if isinstance(h.get("resources"), dict)}
-    steps = []
-    for s in d.get("recipe") or []:
-        e = pick(s, "step", "tool", "params", "timestamp")
+    picked = d.get("recipe") or []
+    out: dict[str, Any] = {"dataset_id": dataset_id, "n_total": d.get("n_total", len(picked)),
+                           "step_counts": d.get("step_counts")}
+    if steps:
+        out["n_matched"] = len(picked)
+    out.update(offset=offset, steps=[])
+    budget = _max_chars(limit) - len(json.dumps({**out, "source": d.get("source")}, default=str)) - 200
+    for s in picked[offset:offset + limit]:
+        e = {"index": s.get("index"), **pick(s, "step", "tool", "params", "timestamp")}
         res = used.get(s.get("commit_id"))
         if res:
             seconds = res.get("elapsed_s", res.get("seconds"))
@@ -887,8 +917,15 @@ async def get_recipe(dataset_id: DatasetId) -> str:
         rep = s.get("replay")
         if isinstance(rep, dict):
             e["replay"] = rep.get("status")
-        steps.append(e)
-    return dumps({"dataset_id": dataset_id, "steps": steps, "source": d.get("source")})
+        budget -= len(json.dumps(compact.rounded(e), separators=(",", ":"), default=str)) + 1
+        if budget < 0 and out["steps"]:
+            break
+        out["steps"].append(e)
+    end = offset + len(out["steps"])
+    if end < len(picked):
+        out["next_offset"] = end
+    out["source"] = d.get("source")
+    return dumps(out, _max_chars(limit) + 1000)
 
 
 @tool(READ)
@@ -985,13 +1022,18 @@ async def annotate_celltypist(
     overwrite: Annotated[bool, Field(description=(
         "Replace target_column when it is a column that came with the data (an author or curated "
         "annotation); without it such a column is refused."))] = False,
+    allow_large_mode: AllowLargeMode = False,
 ) -> str:
     """Label cells with a CellTypist reference model (the pipeline's cell_type_annotation step;
     a job). The result names the labels' confidence and the model's gene overlap. The model is
-    downloaded on first use."""
+    downloaded on first use. Like run_pipeline, a run that would convert the dataset to
+    large-dataset layout is refused unless allow_large_mode is true."""
     model = await _known_celltypist_model(model)
     p = {"annotation_method": "celltypist", "celltypist_model": model, "annotation_groupby": groupby,
          "annotation_target": target_column, "annotation_overwrite": overwrite}
+    steps = ["cell_type_annotation"]
+    if not allow_large_mode:
+        await _refuse_conversion(dataset_id, steps, p)
 
     async def finish(job: jobs.Job) -> dict[str, Any]:
         out = _pipeline_result(job)
@@ -1002,7 +1044,7 @@ async def annotate_celltypist(
             out["celltypist_summary_error"] = e.detail
         return out
 
-    job = await _start_run(dataset_id, ["cell_type_annotation"], p, "celltypist", finish)
+    job = await _start_run(dataset_id, steps, p, "celltypist", finish, allow_large_mode=allow_large_mode)
     return dumps({"job_id": job.id, "status": job.status, "dataset_id": dataset_id,
                   "target_column": target_column, "next": "job_status(job_id, wait_seconds=50)"})
 
@@ -1187,7 +1229,8 @@ async def cluster_evidence(
     """Why each group of a column was labelled or flagged, in plain words from scView's own rules
     (never a probability): its markers against random genes (best marker-database p vs what 1 in
     10 random lists reach), median genes and % mito against the typical cluster with the cluster
-    QC flags that fired, a doublet-like cluster's two parents, database types as shares of the
+    QC flags that fired, a doublet-like cluster's two parents, a cluster mostly from one donor
+    (80%+ of its cells; the donor and their share of all cells), database types as shares of the
     evidence (named groupings only), and the label scView gave ('Low-quality cells') or would give
     itself in an AI annotation, or the note the AI got. Markers must be computed first; the
     marker lines need the marker databases (marker_db_check downloads them)."""
@@ -1214,8 +1257,9 @@ async def set_labels(
     idx = await _indices(dataset_id, filter)
     if len(idx) == 0:
         raise ToolError("No cell matches the filter; nothing was labelled.")
-    r = await _post(f"{_ds(dataset_id)}/labels", {"column": column, "label": label,
-                                                    "indices": idx.tolist(), "new_column": new_column})
+    r = await _post(f"{_ds(dataset_id)}/labels", {"column": column, "label": label, "indices": idx.tolist(),
+                                                    "new_column": new_column,
+                                                    "filter": filter.model_dump(mode="json")})
     out = pick(r, "column", "label", "created", "n_labels", "note")
     out.update(dataset_id=dataset_id, n_labelled=int(len(idx)),
                n_changed=sum(len(g.get("indices") or []) for g in r.get("previous") or []
@@ -1254,6 +1298,63 @@ async def subcluster(
     r = await _post(f"{_ds(dataset_id)}/clustering/subcluster",
                     {"column": column, "group": group, "resolution": resolution})
     return dumps({"dataset_id": dataset_id, **r})
+
+
+_FULL_RUN = ["qc_metrics", "doublet_detection", "filtering", "normalization", "log_transform",
+             "highly_variable_genes", "scaling", "pca", "neighbors", "clustering", "embeddings", "marker_genes"]
+
+
+@tool(WRITE)
+async def subset_dataset(
+    dataset_id: DatasetId,
+    column: Annotated[str | None, Field(description=(
+        "Obs column of the groups to keep (with values), e.g. the cell type column. Give either "
+        "column + values or filter."))] = None,
+    values: Annotated[list[str] | None, Field(description="The groups of column to keep, as listed.")] = None,
+    filter: Annotated[CellFilter | None, Field(description=(
+        "Cells by conditions instead of groups (the cell filter grammar, see set_labels), e.g. a gene "
+        "above a value."))] = None,
+    mask: Annotated[str | None, Field(max_length=700_000, description=(
+        "Or the cells as a packed base64 bitmask over the dataset's cells in their current order (cell i "
+        "is bit i % 8, least significant first, of byte i // 8), as the UI's /cells/filter returns: a "
+        "lasso or any hand-made selection."))] = None,
+    name: Annotated[str | None, Field(description=(
+        "The new dataset's name (default '<parent> - <groups>')."))] = None,
+    dry_run: Annotated[bool, Field(description=(
+        "True: say how many cells and what would be carried, make nothing."))] = False,
+) -> str:
+    """Make a NEW dataset of some cells (a cell type, a lineage for a trajectory, cells to re-cluster),
+    leaving this one unchanged. It holds their counts, obs (scView's own clusters/annotations renamed
+    parent_*, to compare after re-clustering), the parent's UMAP as X_umap_parent and per-cell
+    modalities; not PCA, the graph or stored results. Then process it with run_pipeline on the new id."""
+    given = sum([filter is not None, mask is not None, bool(column or values)])
+    if given == 0 or (filter is None and mask is None and not (column and values)):
+        raise ToolError("Give column + values (the groups to keep), or filter, or mask.")
+    if given > 1:
+        raise ToolError("Give one of column + values, filter or mask, not several.")
+    body: dict[str, Any] = {"dry_run": dry_run}
+    if filter is not None:
+        body["filter"] = filter.model_dump(mode="json")
+    elif mask is not None:
+        body["mask"] = mask
+    else:
+        body["groups"] = {"column": column, "values": list(values or [])}
+    if name:
+        body["name"] = name
+    r = await _post(f"{_ds(dataset_id)}/subset", body)
+    out = {k: r.get(k) for k in ("dataset_id", "name", "n_cells", "n_parent_cells", "n_genes", "described",
+                                 "counts_source", "carried", "not_carried", "renamed", "steps_note")
+           if r.get(k) is not None}
+    steps = r.get("steps") or _FULL_RUN
+    if dry_run:
+        out["steps"] = steps
+        out["next"] = "subset_dataset again without dry_run to make it."
+    else:
+        out["parent_id"] = dataset_id
+        out["next"] = (f"run_pipeline(dataset_id='{r['dataset_id']}', steps={steps}) processes it from its "
+                       "counts (add batch_correction with params.batch_key when the cells span batches); the "
+                       "parent's clusters and QC values are the parent_* columns.")
+    return dumps(out)
 
 
 # --- statistics -----------------------------------------------------------------------------------
@@ -1319,6 +1420,9 @@ async def differential_expression(
     layer: Annotated[Literal["protein", "protein_counts"] | None, Field(description=(
         "Test the CITE-seq proteins instead of the genes (cell-level tests only): protein = their CLR "
         "values (Seurat's ADT normalisation), protein_counts = their counts log-normalised. Default: genes."))] = None,
+    genes: Annotated[list[str] | None, Field(max_length=50, description=(
+        "Genes to report whatever their result (up to 50): each one's row, or why it was not tested "
+        "(pseudobulk: which filter dropped it, with its counts per donor sample)."))] = None,
     limit: Limit = DEFAULT_LIMIT,
 ) -> str:
     """Differential expression: A vs B of one column (optionally within one cell type), one
@@ -1326,7 +1430,10 @@ async def differential_expression(
     (layer='protein'). Returns the result_id (for enrichment and
     get_result), counts significant at padj_max and |log2FC| >= lfc_min, the top up and down
     genes, and the route's warnings (confounding with batch, cell-type composition shift,
-    too few donors, transcriptome size). Across conditions prefer method='pseudobulk'."""
+    too few donors, transcriptome size); pseudobulk adds gene_filter (genes each filter dropped).
+    genes=[...] reports named genes whatever their result, or why untested. Across conditions
+    prefer method='pseudobulk'."""
+    asked = list(genes or [])  # `genes` is the route's rows below
     if group_a is not None or group_b is not None:
         if not (column and group_a and group_b):
             raise ToolError("Between groups needs column, group_a and group_b.")
@@ -1340,6 +1447,8 @@ async def differential_expression(
                 raise ToolError("Proteins are tested cell-level (wilcoxon, t-test, logreg); per donor: "
                                 "per_donor_expression(layer='protein').")
             body["layer"] = layer
+        if asked and method == "pseudobulk":
+            body["genes"] = asked
         if covariates or donor_key or numeric_covariates:
             if method != "pseudobulk":
                 raise ToolError("covariates, numeric_covariates and donor_key are for method='pseudobulk'.")
@@ -1411,7 +1520,27 @@ async def differential_expression(
     if comp.get("groups") and comp.get("warn"):
         out["composition_shift"] = [pick(g, "group", "share_a", "share_b", "diff_points", "p")
                                     for g in comp["groups"][:5] if g.get("flagged")]
-    return dumps(out, _max_chars(limit))
+    if r.get("gene_filter"):  # pseudobulk: what each filter left out
+        out["gene_filter"] = r["gene_filter"]
+    if asked:
+        out["asked_genes"] = r.get("asked_genes") or _asked_rows(asked, r)
+    return dumps(out, _max_chars(limit) + (1500 if asked else 0))
+
+
+def _asked_rows(asked: list[str], r: dict[str, Any]) -> list[dict[str, Any]]:
+    """Cell-level: each asked gene's row, or why it has none."""
+    all_genes = {str(g.get("gene")).lower(): g for g in r.get("genes") or []}
+    out = []
+    for gene in dict.fromkeys(asked):
+        g = all_genes.get(str(gene).lower())
+        if g:
+            out.append({"gene": g.get("gene"), "status": "tested",
+                        **{k: num(g.get(k)) for k in ("logfoldchange", "pval_adj", "pval", "stat") if k in g}})
+        else:
+            out.append({"gene": gene, "status": "not_tested", "reason": (
+                f"detected in under {r.get('min_pct')} of the cells on both sides (min_pct), or not a gene "
+                "of this dataset" if r.get("n_genes_skipped") else "not a gene of this dataset")})
+    return out
 
 
 @tool(READ)
@@ -1599,16 +1728,24 @@ async def milo(
         "Donors in both conditions as pairs (default: paired when every donor is in both)."))] = None,
     label_key: Annotated[str | None, Field(description="Cell types to label neighbourhoods by.")] = None,
     prop: Annotated[float | None, Field(gt=0, le=1, description="Share of cells sampled as index cells.")] = None,
+    k: Annotated[int | None, Field(ge=3, le=100, description=(
+        "Neighbours per cell of a k-NN graph Milo builds for this run (default: the dataset's own graph "
+        "and its k). The dataset's graph is not changed."))] = None,
+    n_pcs: Annotated[int | None, Field(ge=2, description=(
+        "PCs of the graph's representation for that graph (default: all of them); with k, the paper's "
+        "Milo settings (e.g. k 20, 30 PCs) without a pca + neighbors rerun."))] = None,
 ) -> str:
     """Milo neighbourhood differential abundance between two conditions, donors as replicates,
     no clusters needed (a job: returns job_id; job_status gives the result: neighbourhoods
     significant at spatial FDR, the labels they fall in, the graph's k and representation,
-    and which sample fills each one: samples_in_significant). Cells in neither condition are
-    not counted but the neighbourhoods span the whole graph (the plan warns). Rebuild the graph
-    on another representation with run_pipeline(["neighbors"], {"neighbors_use_rep": "X_pca"}).
-    The dataset is not changed."""
+    and which sample fills each one: samples_in_significant; result_id for get_result). The
+    test is miloR's: edgeR quasi-likelihood with TMM. Cells in neither condition are not counted
+    but the neighbourhoods span the whole graph (the plan warns). Rebuild the graph on another
+    representation with run_pipeline(["neighbors"], {"neighbors_use_rep": "X_pca"}). Each pair of
+    conditions is stored as its own result. The dataset is not changed."""
     body = {"condition_key": condition_key, "sample_key": sample_key, "conditions": conditions,
-            "covariates": covariates, "paired": paired, "label_key": label_key, "prop": prop}
+            "covariates": covariates, "paired": paired, "label_key": label_key, "prop": prop,
+            "k": k, "n_pcs": n_pcs}
     plan = await _post(f"{_ds(dataset_id)}/milo/plan", body)
     job = jobs.new("milo", dataset_id, f"{_ds(dataset_id)}/milo/run", body,
                    progress_line=_line, finish=_milo_result)
@@ -2170,9 +2307,11 @@ async def plot(
             if arrows is None and graph is None:
                 return plots.embedding(xy, values, title, label, note, focus, tissue=tissue), note
             note += _overlay_note(arrows, graph)
-            label_nodes = not (graph is not None and color_by == (graph.get("paga") or {}).get("groupby"))
+            # Coloured by the PAGA column: its nodes carry the names (the groups' own labels
+            # were dropped where they collided, leaving 3 of 8 nodes unnamed in QA round 7).
+            same = graph is not None and color_by == (graph.get("paga") or {}).get("groupby")
             return plots.embedding(xy, values, title, label, note, focus, tissue=tissue, arrows=arrows,
-                                   graph=graph, label_nodes=label_nodes), note
+                                   graph=graph, label_groups=not same), note
         if not gene and not value_column:
             raise ToolError("A violin plot needs a gene or a value_column.")
         if gene and value_column:

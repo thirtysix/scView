@@ -189,29 +189,31 @@ def test_group_links_capped_are_scanpys_connectivities():
     assert np.allclose(np.minimum(ratio, 1), sp.csr_matrix(a.uns["paga"]["connectivities"]).toarray(), atol=1e-9)
 
 
-def _picks_adata(picks: dict[str, dict[str, float]], n: int = 100, k: int = 10, seed: int = 3) -> ad.AnnData:
-    """Groups of ``n`` cells on a hand-made kNN graph (``k`` recorded as its neighbours):
-    ``picks[g][h]`` neighbours each cell of g takes among h's cells (under 1: that share of
-    g's cells take one)."""
+def _picks_adata(picks: dict[str, dict[str, float]], n: int = 100, k: int = 10, seed: int = 3,
+                 sizes: dict[str, int] | None = None) -> ad.AnnData:
+    """Groups of ``n`` cells (``sizes`` per group) on a hand-made kNN graph (``k`` recorded as
+    its neighbours): ``picks[g][h]`` neighbours each cell of g takes among h's cells (under 1:
+    that share of g's cells take one)."""
     import scipy.sparse as sp
 
     rng = np.random.default_rng(seed)
     names = list(picks)
-    start = {g: i * n for i, g in enumerate(names)}
+    size = {g: (sizes or {}).get(g, n) for g in names}
+    start = dict(zip(names, np.cumsum([0] + [size[g] for g in names])[:-1].tolist()))
     rows, cols = [], []
     for g in names:
-        for c in range(start[g], start[g] + n):
+        for c in range(start[g], start[g] + size[g]):
             for h, m in picks[g].items():
                 m = int(m) if m >= 1 else int(rng.random() < m)
-                pool = [x for x in range(start[h], start[h] + n) if x != c]
+                pool = [x for x in range(start[h], start[h] + size[h]) if x != c]
                 for x in rng.choice(pool, size=m, replace=False):
                     rows.append(c)
                     cols.append(int(x))
-    total = len(names) * n
+    total = sum(size.values())
     dist = sp.csr_matrix((np.ones(len(rows)), (rows, cols)), shape=(total, total))
     a = ad.AnnData(np.zeros((total, 2), dtype="float32"))
     a.obs_names = [f"c{i}" for i in range(total)]
-    a.obs["grp"] = pd.Categorical(np.repeat(names, n))
+    a.obs["grp"] = pd.Categorical(np.repeat(names, [size[g] for g in names]))
     a.obsp["distances"] = dist
     a.obsp["connectivities"] = ((dist + dist.T) > 0).astype(np.float64)
     a.uns["neighbors"] = {"connectivities_key": "connectivities", "distances_key": "distances",
@@ -298,9 +300,58 @@ def test_dpt_warns_when_groups_sit_off_the_roots_lineage():
     (w,) = [x for x in got["warnings"] if "not on a path" in x]
     assert w.startswith("1 groups of grp (120 of 480 cells, 25%) are not on a path from 'P1'")
     assert f"'Q' ({q['median_pseudotime']:.2g})" in w and "'P1', 'P2', 'P3'" in w
+    assert "New dataset…" in w and "subset_dataset" in w  # how to make the lineage's own dataset
     # Q's own root: P1 - P3 are off its lineage the same way
     other = compute_dpt(a, "grp", "Q")
     assert [x["group"] for x in other["root_checks"]["lineage"]["off_lineage"]] == ["P1", "P2", "P3"]
+
+
+def test_a_small_group_between_two_lineages_does_not_join_them():
+    """QA-7 (B4): 33 cycling myeloid cells linked macrophages to 734 mast cells; measured against
+    the smaller group the bridge passed the 1% rule and DPT put mast cells last with no warning.
+    Here B (12 cells) links P3 and Q (300 cells): a third of B's cells take one Q neighbour, and
+    Q's own edges barely reach B."""
+    picks = {"P1": {"P1": 8, "P2": 2}, "P2": {"P2": 6, "P1": 2, "P3": 2}, "P3": {"P3": 8, "P2": 2},
+             "B": {"B": 5, "P3": 4, "Q": 1}, "Q": {"Q": 10, "B": 0.01}}
+    a = _picks_adata(picks, n=120, sizes={"B": 12, "Q": 300})
+    got = compute_dpt(a, "grp", "P1")
+    lineage = got["root_checks"]["lineage"]
+    (q,) = lineage["off_lineage"]
+    assert q["group"] == "Q" and q["via"] == "B" and q["widest_share"] < 0.01
+    assert "B" in lineage["lineage"]  # the bridge itself hangs on P3: on the lineage
+    assert any("not on a path from 'P1'" in w and "small group in between" in w for w in got["warnings"])
+    # Against the smaller group (before v0.81.0) the same route passed
+    from scview.core.trajectory import group_links
+    codes = a.obs["grp"].cat.codes.to_numpy()
+    both, _ = group_links(a.obsp["distances"], codes, 5)
+    out_edges = np.bincount(codes, weights=np.diff(a.obsp["distances"].tocsr().indptr), minlength=5)
+    b, qi = list(a.obs["grp"].cat.categories).index("B"), list(a.obs["grp"].cat.categories).index("Q")
+    assert both[b, qi] / (2 * min(out_edges[b], out_edges[qi])) >= 0.01
+
+
+def test_widest_routes_take_the_best_weakest_link_and_small_groups_are_pipes():
+    from scview.core.trajectory import widest_routes
+
+    out = np.array([1000.0, 1000.0, 1000.0, 1000.0])
+    both = np.zeros((4, 4))
+    for (i, j), e in {(0, 1): 1000, (1, 3): 600, (3, 2): 1800, (0, 2): 40}.items():
+        both[i, j] = both[j, i] = e
+    best, prev = widest_routes(both, out, 0)
+    assert best[0] == np.inf and best[1] == 0.5 and best[3] == 0.3
+    assert best[2] == 0.3 and prev[2] == 3  # 0 -> 1 -> 3 -> 2 beats the direct 0.02
+    # Group 1 shrunk to a 40-edge group in between: a pipe of min(1000, 600) edges against 1000
+    out[1] = 40.0
+    both[0, 2] = both[2, 0] = 0
+    best, _ = widest_routes(both, out, 0)
+    assert np.isclose(best[3], 600 / 2000)
+    both[1, 3] = both[3, 1] = 12  # 15% of the small group's edges, 0.6% of group 3's
+    best, prev = widest_routes(both, out, 0)
+    assert np.isclose(best[3], 12 / 2000) and best[3] < 0.01  # before v0.81.0: 12 / 80 = 0.15
+    assert np.isclose(best[2], 12 / 2000) and prev[2] == 3
+    # A small ROOT is no pipe: its links count against itself
+    best, _ = widest_routes(both, out, 1)
+    assert np.isclose(best[0], 1000 / 80)
+    assert widest_routes(np.zeros((2, 2)), np.ones(2), 0)[0][1] == 0
 
 
 def test_dpt_along_one_lineage_says_nothing():
@@ -308,6 +359,7 @@ def test_dpt_along_one_lineage_says_nothing():
     got = compute_dpt(a, "stage", "early")
     lineage = got["root_checks"]["lineage"]
     assert lineage["off_lineage"] == [] and set(lineage["lineage"]) == {"early", "mid", "late"}
+    assert lineage["weakest_on"]["widest_share"] >= 0.01  # how close the check came
     assert not any("not on a path" in w for w in got["warnings"])
 
 

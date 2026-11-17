@@ -140,9 +140,10 @@ export function describeMilo(r: MiloResult): string {
   const reps = r.conditions.map((k) => `${k} ${r.n_samples[k] ?? 0}`).join(", ");
   return (
     `${r.n_nhoods.toLocaleString()} neighbourhoods (${Math.round(r.prop * 100)}% of cells sampled, ` +
-    `refined; mean ${Math.round(r.mean_nhood_size)} cells) on the ${r.representation} graph. ` +
-    `Per neighbourhood a negative binomial GLM (DESeq2) ${r.formula}, ${r.design} by ` +
-    `${r.sample_key} (${reps} samples); spatial FDR = Benjamini-Hochberg weighted by each ` +
+    `refined; mean ${Math.round(r.mean_nhood_size)} cells) on the ${r.representation} graph` +
+    `${r.n_neighbors ? ` (k ${r.n_neighbors}${r.own_graph ? ", built for this run" : ""})` : ""}. ` +
+    `Per neighbourhood a negative binomial GLM ${r.formula}, ${r.design} by ` +
+    `${r.sample_key} (${reps} samples), tested with edgeR's quasi-likelihood F-test (TMM, as miloR); spatial FDR = Benjamini-Hochberg weighted by each ` +
     `neighbourhood's density, as in Milo (Dann et al. 2022).`
   );
 }

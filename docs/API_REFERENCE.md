@@ -89,6 +89,46 @@ DELETE /datasets/{dataset_id}
 {"message": "Dataset deleted."}
 ```
 
+### Make a Dataset from Some Cells (subset)
+
+```
+POST /datasets/{dataset_id}/subset
+```
+
+A new dataset of the chosen cells; the parent is never changed. Choose the cells with exactly
+one of `filter` (the `POST /cells/filter` grammar), `groups` (`{"column", "values"}`) or `mask`
+(the packed base64 bitmask `/cells/filter` returns, over the dataset's cells in their current
+order). Optional `name` (default `<parent> - <groups>`), `dry_run` (say what it would hold,
+make nothing).
+
+```json
+{"groups": {"column": "cell_type", "values": ["CD14 Mono"]}}
+```
+
+The new dataset holds the cells' counts (found as a joint embedding finds them: the counts
+before an ambient RNA correction, `layers['counts']`, `.raw`, `X`, else the source files),
+obs with unused categories dropped and the parent's scView results (`scview_*` columns, QC
+metrics, doublet calls, cell cycle) renamed `parent_*` (one generation: a parent's own `parent_*`
+columns are left out), hand-label columns still editable, var without the parent's variable-gene
+and scaling columns,
+the parent's UMAP as `X_umap_parent`, per-cell obsm data (protein, hashtags, guides, TCR/BCR,
+spatial positions), tissue images of the sections kept, and the input files read by barcode
+(ATAC peaks and fragments, spliced/unspliced counts, outlines). Not carried: PCA, the
+neighbour graph, other layouts and stored results. Its metadata carries `source: "subset"`
+and `subset_of` (`id`, `name`, `how`, `n_cells`, `n_parent_cells`, `carried`, `not_carried`);
+its recipe starts with a `subset` step, which the replay script repeats from the parent.
+
+A new subset assesses as unprocessed (only steps run on it count). `steps` is the run it
+needs: without filtering and doublet detection when the parent was filtered / scored
+(`steps_note` says so; per-sample bounds within one cell type remove real cells), which Data
+Assessment follows too.
+
+**Response** (200): `dataset_id`, `name`, `n_cells`, `n_parent_cells`, `n_genes`,
+`described`, `counts_source`, `carried`, `not_carried`, `renamed`, `steps`, `steps_note`,
+`resources` (seconds, peak_gb), `next`. Refused: fewer
+than 50 cells or every cell (400), an unknown column, group or gene (404), a mask over
+another number of cells (400), a large dataset (422).
+
 ---
 
 ## Embeddings
@@ -594,6 +634,47 @@ or with fewer than 30 cells in the branch's own groups or in the other branches.
 
 ---
 
+## Labels
+
+### Import a Per-Cell Label Table
+
+```
+POST /datasets/{dataset_id}/labels/import
+Content-Type: application/json
+```
+
+Writes per-cell labels (an author annotation, a collaborator's table) into a user annotation
+column in one call. Give one of `labels` (cell name -> label), `values` (one label per cell, in
+the dataset's order) or `table` (CSV/TSV text with a header row).
+
+```json
+{"column": "author_fine", "labels": {"AAACCTGAGAAGGCCT-1": "M2", "AAACCTGAGACAGACC-1": "IDA macrophage"},
+ "new_column": true, "strip_suffix": false, "min_match": 0.9, "dry_run": false}
+```
+
+With `table`: `barcode_column` (default the first column), `label_column` (default the one
+other column), `match` `name` (default) or `order` (row i labels cell i), `filename` (kept in the
+record so the replay script can read the file again). Blank and `NA` labels are skipped.
+The answer: `n_rows`, `n_matched`, `n_extra` (rows naming no cell, with `extra_examples`),
+`n_unmatched_cells` (cells the table leaves out, `Unassigned` in a new column), `n_duplicates`,
+`labels` (each label's count, top 20). Refused (400) when under `min_match` of the labelled rows
+name a cell (the message shows both barcode formats; `hint` suggests `strip_suffix` when removing
+a `-1` suffix would match), when by order the row and cell counts differ, or when one barcode
+has two labels. `new_column: false` writes into an existing user column; cells the table leaves
+out keep their value.
+
+```
+POST /datasets/{dataset_id}/labels/import-file
+Content-Type: multipart/form-data
+```
+
+The same with the table as a file (`.csv`, `.tsv`, gzipped too) and the other fields as form
+fields: `curl -F file=@labels.csv -F column=author_fine -F label_column=annotation .../labels/import-file`.
+MCP: `import_labels` (inline `labels` / `values` / `table`, or `path` on the server under
+`MCP_IMPORT_DIRS`).
+
+---
+
 ## Export
 
 ### Export Data
@@ -606,18 +687,20 @@ Content-Type: application/json
 **Request body:**
 ```json
 {
-  "type": "markers",
+  "data_type": "markers",
   "format": "csv",
-  "options": {
-    "groupby": "0"
+  "params": {
+    "column": "leiden",
+    "group": "0"
   }
 }
 ```
 
 **Response**: `application/octet-stream` (file download)
 
-Supported export types: `markers`, `metadata`, `expression`
-Supported formats: `csv`, `xlsx`
+`data_type`: `markers` (`params.column`, optional `params.group`, `params.n_genes`, default 100),
+`metadata` (every obs column) or `expression` (`params.genes`: a list of gene names).
+`format`: `csv` or `xlsx`. An unknown field is refused (422), not ignored.
 
 ---
 
@@ -664,7 +747,7 @@ and read as expression layers `protein` (CLR), `protein_counts` and `protein_dsb
 | Route | Body / query | What |
 |-------|--------------|------|
 | `POST /datasets/{id}/de` | `{"indices", "label", "method", "min_pct", "layer"}` | `layer`: `protein` (CLR) or `protein_counts` tests the proteins instead of the genes |
-| `POST /datasets/{id}/de/compare` | `{"split_by", "group_a", "group_b", "within_column", "within_value", "method", "layer", ...}` | A vs B; `layer` as above, cell-level methods only (pseudobulk is refused with `layer`) |
+| `POST /datasets/{id}/de/compare` | `{"split_by", "group_a", "group_b", "within_column", "within_value", "method", "layer", "genes", ...}` | A vs B; `layer` as above, cell-level methods only (pseudobulk is refused with `layer`). Pseudobulk answers `gene_filter` (genes dropped by low counts, the 20,000-gene cap, or no fit, and the rule) and, for `genes` (up to 50), `asked_genes`: each one's result or why it was not tested |
 | `GET /datasets/{id}/expression/per-donor` | `gene`, `groupby`, `sample`, `condition`, `method`, `conditions`, `reference`, `groups`, `all_cells`, `layer` | one value per donor; `all_cells=true`: the whole dataset as one group; `layer=protein`: a protein's mean CLR per donor |
 | `GET /datasets/{id}/protein/dsb` / `POST` | `{"mode", "rna_window", "prot_window", "isotypes", "denoise"}` | DSB normalisation (empty droplets or ModelNegativeADTnorm) |
 | `GET /datasets/{id}/wnn` | `groupby` | WNN RNA + protein: what a run would use, the saved result |
@@ -772,7 +855,8 @@ private mode). The tools for the routes above: `guide_assignment`, `mixscape`, `
 `plot(kind="coverage")`, and `layer="protein"` on `differential_expression` /
 `per_donor_expression`. Trajectory and velocity: `paga`, `pseudotime`, `pseudotime_genes`,
 `velocity`, `get_velocity`, `velocity_direction`, `plot(overlay=["velocity", "paga"])`,
-`plot(kind="phase")` and `plot(kind="violin", value_column=...)`. `upload_instructions` gives the curl recipes above;
+`plot(kind="phase")` and `plot(kind="violin", value_column=...)`. `subset_dataset` wraps
+`POST /datasets/{id}/subset` (groups or a filter) and names the `run_pipeline` call for the new id. `upload_instructions` gives the curl recipes above;
 `import_server_path` imports a file or folder on the server under `MCP_IMPORT_DIRS` (off when
 unset, always off with `DEPLOYMENT_MODE=public`).
 
