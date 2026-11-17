@@ -86,6 +86,8 @@ export const GENES_HELP: Record<string, string> = {
   // DE
   "de.mode":
     "Selection vs rest: cells you lasso, or a group you click in the legend, against all other cells. Between groups: two values of one column, such as treated and control, optionally within one cell type.",
+  "de.gene-filter":
+    "Pseudobulk tests a gene only when it has at least 10 counts in at least as many donor samples as the smaller side has. Genes below that carry too few counts for a donor-level test, so they are not tested at all, rather than tested and found unchanged.",
   "de.compare": "The column holding the two groups to compare, such as condition, treatment or sample.",
   "de.groups":
     "Group A (left) against group B (right). Up genes are higher in A, down genes higher in B. The arrow button swaps them.",

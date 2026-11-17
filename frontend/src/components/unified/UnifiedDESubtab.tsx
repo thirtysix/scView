@@ -30,7 +30,7 @@ import { AddToGeneListMenu } from "@/components/common/AddToGeneListMenu";
 import { Help } from "@/components/common/Help";
 import { CapNote } from "@/components/common/Caption";
 import { downloadCsv } from "@/lib/csv";
-import { describePrefilter, formatPct, genesPassing, minPctChoices } from "@/lib/deDetection";
+import { describeGeneFilter, describePrefilter, formatPct, genesPassing, minPctChoices } from "@/lib/deDetection";
 import { describeSize } from "@/lib/transcriptomeSize";
 import { compositionRule } from "@/lib/deComposition";
 import {
@@ -771,8 +771,14 @@ export function UnifiedDESubtab({ onGeneClick, onScoreGeneSet }: Props) {
                 {describePbModel(result)}: donors (
                 <code>{result.replicate_key}</code>) {result.label.split(" (")[0]}{" "}
                 {result.n_samples_a}, {refLabel} {result.n_samples_b}; counts summed from{" "}
-                <code>{result.counts_source}</code>; {result.n_genes_tested?.toLocaleString()} genes
-                tested.
+                <code>{result.counts_source}</code>;{" "}
+                {result.gene_filter ? (
+                  <Help id="de.gene-filter">
+                    <span data-testid="de-gene-filter">{describeGeneFilter(result.gene_filter)}</span>
+                  </Help>
+                ) : (
+                  <>{result.n_genes_tested?.toLocaleString()} genes tested.</>
+                )}
                 {(result.dropped_samples?.length ?? 0) > 0 &&
                   ` Left out (under 10 cells): ${result.dropped_samples!.join(", ")}.`}
                 {(result.covariate_notes ?? []).map((n) => ` ${n}`).join("")}

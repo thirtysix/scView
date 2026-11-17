@@ -21,6 +21,7 @@ import { AnnotationControl } from "@/components/panels/AnnotationControl";
 import { AnnotationConfidenceCard } from "@/components/panels/AnnotationConfidenceCard";
 import { AnnotationCrosscheckCard } from "@/components/annotation/AnnotationCrosscheckCard";
 import { ReferenceMappingCard } from "@/components/annotation/ReferenceMappingCard";
+import { LabelImportCard } from "@/components/annotation/LabelImportCard";
 import { MeanVariancePlot } from "@/components/panels/MeanVariancePlot";
 import { MitoByType } from "@/components/qc/MitoByType";
 import { MitoModeControl, recordedMitoParams } from "@/components/qc/MitoModeControl";
@@ -1362,6 +1363,9 @@ export function DataAssessmentPanel() {
             datasetId={datasetId}
             onCrosscheck={(columns) => setCrosscheckPreset((p) => ({ columns, key: (p?.key ?? 0) + 1 }))}
           />
+
+          {/* Per-cell labels from a table (an author annotation), matched by cell name */}
+          <LabelImportCard datasetId={datasetId} />
 
           {/* How well each cell's label fits (conformal prediction sets) */}
           <AnnotationConfidenceCard datasetId={datasetId} />

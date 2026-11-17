@@ -95,3 +95,24 @@ export function detectionBins(detection: number[], perDecade = 10, minLog = -3):
     minLog,
   };
 }
+
+/** Pseudobulk's gene filter (backend core/pseudobulk.py gene_fates): genes each filter left out. */
+export interface PseudobulkGeneFilter {
+  n_genes: number;
+  n_tested: number;
+  rule: string;
+  dropped: { low_counts: number; gene_cap: number; not_fit: number };
+}
+
+/** The genes pseudobulk did not test, by filter, for the line under its result ("" when none or an older backend). */
+export function describeGeneFilter(f: PseudobulkGeneFilter | null | undefined): string {
+  if (!f) return "";
+  const { low_counts, gene_cap, not_fit } = f.dropped;
+  const parts = [
+    low_counts > 0 ? `${fmt(low_counts)} with too few counts (${f.rule.replace(/^tested when it has /, "a gene needs ").replace(/ \(the smaller side's number\)$/, "")})` : "",
+    gene_cap > 0 ? `${fmt(gene_cap)} past the ${fmt(f.n_tested + not_fit)}-gene cap (fewest counts)` : "",
+    not_fit > 0 ? `${fmt(not_fit)} the model could not estimate` : "",
+  ].filter(Boolean);
+  if (parts.length === 0) return `All ${fmt(f.n_genes)} genes tested.`;
+  return `${fmt(f.n_tested)} of ${fmt(f.n_genes)} genes tested; not tested: ${parts.join("; ")}.`;
+}

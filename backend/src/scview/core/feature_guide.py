@@ -92,6 +92,10 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
      "rest, told when a cluster's markers do not beat 9 of 10 random gene lists of the same size"),
     ("Data Assessment > Label from a reference dataset", "reference mapping",
      "label cells from another annotated library dataset; flags cells not in the reference"),
+    ("Data Assessment > Import labels from a file", "author labels, label table",
+     "a per-cell label table (CSV/TSV, e.g. an author annotation from GEO) into a new label column, matched by cell "
+     "name (or by order, one row per cell); Check the match first: rows matched, rows naming no cell, cells left out; "
+     "refused when most names differ, with a hint (a '-1' ending, a sample prefix)"),
     ("Data Assessment > Annotation confidence", "", "label-fit flags per cell"),
     ("Data Assessment > Annotation cross-check", "", "agreement between two annotations"),
     ("Data Assessment > Annotation cross-check > Marker database check", "",
@@ -252,7 +256,8 @@ FULL_ONLY = ("Unified View > Accessibility >", "Unified View > Embedding > Tissu
              "Data Assessment > Cell-type annotation", "Data Assessment > Cluster QC", "Unified View > Compare",
              "Data Assessment > Annotation cross-check > Marker database check",
              "Data Assessment > QC Distributions > QC per sample", "Data Assessment > Cell/Gene Filtering",
-             "Data Assessment > Cell hashing >", "Unified View > Perturbation >")
+             "Data Assessment > Cell hashing >", "Unified View > Perturbation >",
+             "Data Assessment > Import labels from a file")
 
 
 def compact_guide() -> str:
