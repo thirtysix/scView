@@ -509,3 +509,14 @@ def test_replay_names_a_missing_parent_column(tmp_path):
     done = subprocess.run([sys.executable, str(f), str(p), str(tmp_path / "o.h5ad")], capture_output=True,
                           text=True, timeout=300, cwd=tmp_path)
     assert done.returncode != 0 and "INPUT lacks 1 column(s) the subset carried (author_fine)" in done.stderr
+
+
+def test_steps_note_names_only_what_was_left_out():
+    """Lead check 2026-11-17: doublets left out, filtering kept, but the note warned about filtering."""
+    steps, note = subset.default_steps({"filtered": None, "doublets": "Doublet detection ran on the parent"})
+    assert "filtering" in steps and "doublet_detection" not in steps
+    assert note.startswith("Left out: doublet_detection.") and "Filtering again" not in note
+    assert note.endswith("Add the step to do it anyway.")
+    steps, note = subset.default_steps({"filtered": "The parent was filtered by scView", "doublets": "ran"})
+    assert "filtering" not in steps and "Filtering again" in note and note.endswith("to do them anyway.")
+    assert subset.default_steps({"filtered": None, "doublets": None}) == (subset.FULL_RUN, None)

@@ -602,8 +602,11 @@ def default_steps(qc: dict[str, str | None]) -> tuple[list[str], str | None]:
     if not skip:
         return steps, None
     why = "; ".join(q for q in (qc.get("filtered"), qc.get("doublets")) if q)
-    return steps, (f"Left out: {' and '.join(skip)}. {why}. Filtering again applies per-sample bounds within "
-                   "these cells alone and can remove real ones (low-RNA cell types); add the steps to do it anyway.")
+    note = f"Left out: {' and '.join(skip)}. {why}."
+    if "filtering" in skip:
+        note += (" Filtering again applies per-sample bounds within these cells alone and can remove real ones "
+                 "(low-RNA cell types).")
+    return steps, note + f" Add {'the steps' if len(skip) > 1 else 'the step'} to do {'them' if len(skip) > 1 else 'it'} anyway."
 
 
 def record(sub: ad.AnnData, *, parent: dict[str, Any], sel: Selection, n_parent: int,
