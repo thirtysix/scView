@@ -23,7 +23,7 @@ import {
   type ChatSource,
   type ViewContext,
 } from "@/api/assistant";
-import { withConversionConsent } from "@/api/pipelineRun";
+import { runErrorText, withConversionConsent } from "@/api/pipelineRun";
 import { MarkdownLite } from "@/components/assistant/MarkdownLite";
 import { SelectionChip } from "@/components/assistant/SelectionChip";
 import { selectionContext } from "@/lib/copilotSelection";
@@ -413,7 +413,7 @@ export function AssistantChat({ surface = "drawer" }: { surface?: "drawer" | "pa
           useViewStore.getState().setPanel("unified");
         }
       } catch (e) {
-        const msg = errorMessage(e);
+        const msg = runErrorText(e);
         setTurns((prev) =>
           prev.map((t, i) =>
             i === prev.length - 1 ? { ...t, content: t.content.replace("_Running…_", `❌ ${msg}`) } : t,

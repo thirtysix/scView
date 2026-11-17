@@ -127,6 +127,17 @@ export async function withConversionConsent<T>(
   }
 }
 
+/** What a run's failure says in the UI: a declined conversion in plain words (the refusal's own
+ *  text names the API flag), anything else as the server's reason. */
+export const DECLINED_CONVERSION =
+  "Not run: it would have switched the dataset to large-dataset mode, and you chose not to. Close other " +
+  "datasets or raise scView's memory limit to run it in memory.";
+
+export function runErrorText(e: unknown): string {
+  const msg = errorMessage(e);
+  return isConversionRefusal(msg) ? DECLINED_CONVERSION : msg;
+}
+
 const gb = (n: number) => (n >= 10 ? n.toFixed(0) : n.toFixed(1));
 
 /** One watchdog event as a plain sentence. */

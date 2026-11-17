@@ -5,7 +5,7 @@ import { useViewStore } from "@/stores/viewStore";
 import { useOnScreenStore } from "@/stores/onScreenStore";
 import { apiFetch } from "@/api/client";
 import { runPipelineSteps } from "@/api/assistant";
-import { withConversionConsent } from "@/api/pipelineRun";
+import { runErrorText, withConversionConsent } from "@/api/pipelineRun";
 import { getDataset } from "@/api/datasets";
 import { collectionLabel } from "@/api/genesets";
 import { runGsea, type EnrichmentResult, type GseaResponse, type GseaTerm } from "@/api/enrichment";
@@ -222,7 +222,7 @@ export function UnifiedEnrichmentSubtab({
       if (err) throw new Error(err);
       setCurrentDataset(await getDataset(datasetId));
     } catch (e) {
-      setMarkersError(errorMessage(e));
+      setMarkersError(runErrorText(e));
     } finally {
       setIsComputingMarkers(false);
     }

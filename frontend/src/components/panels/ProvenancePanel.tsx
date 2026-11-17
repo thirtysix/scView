@@ -18,7 +18,7 @@ import {
 } from "@/api/provenance";
 import { getDataset } from "@/api/datasets";
 import { keptRerunParams, lastRunText, paramChips } from "@/lib/provenanceParams";
-import { withConversionConsent } from "@/api/pipelineRun";
+import { runErrorText, withConversionConsent } from "@/api/pipelineRun";
 import { RecipeViewer } from "@/components/panels/RecipeViewer";
 import { ResultsList } from "@/components/panels/ResultsList";
 import { useDatasetStore } from "@/stores/datasetStore";
@@ -62,7 +62,7 @@ export function ProvenancePanel() {
   const [plan, setPlan] = useState<RerunPlan | null>(null);
   const [paramValue, setParamValue] = useState("");
   const [rerunning, setRerunning] = useState(false);
-  const [rerunMsg, setRerunMsg] = useState<string | null>(null);
+  const [rerunMsg, setRerunMsg] = useState<{ text: string; failed: boolean } | null>(null);
 
   const load = useCallback(async (id: string) => {
     setLoading(true);
@@ -117,9 +117,9 @@ export function ProvenancePanel() {
         setCurrentDataset(await getDataset(dataset.id)); // propagate new state to other panels
         setEditingIdx(null);
         const ran = (result?.steps_run as string[]) ?? [];
-        setRerunMsg(`Re-ran: ${ran.map(stepLabel).join(", ")}.`);
+        setRerunMsg({ text: `Re-ran: ${ran.map(stepLabel).join(", ")}.`, failed: false });
       } catch (e) {
-        setRerunMsg(e instanceof Error ? e.message : "Re-run failed.");
+        setRerunMsg({ text: runErrorText(e) || "Re-run failed.", failed: true });
       } finally {
         setRerunning(false);
       }
@@ -154,7 +154,12 @@ export function ProvenancePanel() {
       )}
       {error && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>}
       {rerunMsg && (
-        <div className="rounded-lg bg-emerald-50 p-3 text-sm text-emerald-700">{rerunMsg}</div>
+        <div
+          className={`rounded-lg p-3 text-sm ${rerunMsg.failed ? "bg-amber-50 text-amber-900" : "bg-emerald-50 text-emerald-700"}`}
+          data-testid="rerun-msg"
+        >
+          {rerunMsg.text}
+        </div>
       )}
 
       {prov && !prov.has_history && (
