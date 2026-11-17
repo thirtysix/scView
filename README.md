@@ -63,7 +63,7 @@ reviewer can audit. scView closes both gaps:
   resolution 1.0") via confirm-gated, allow-listed actions, **answers "what is this?"** from a ✦ on any
   cluster, gene, marker, or pathway, and can **write a methods paragraph** from the provenance recipe.
 - **Drive it from your own AI agent (MCP).** Claude Code or any MCP client connects to `/mcp` and gets
-  74 tools over the same code the UI runs: import, processing, donor-aware statistics, enrichment,
+  75 tools over the same code the UI runs: import, processing, donor-aware statistics, enrichment,
   spatial analysis and plots ([how](#use-scview-from-your-ai-agent-mcp)).
 - **AI-assisted assessment.** A deterministic assessor reports the state of ~15 preprocessing
   steps; an LLM advisor recommends the next steps with reasons and sized parameters; *you* always

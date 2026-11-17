@@ -6,6 +6,72 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.81.0] - 2026-11-17
+
+A new dataset from any chosen cells, for re-clustering one compartment or running a trajectory on one lineage;
+preflight and the run decide large-dataset mode by one rule, and no run converts a dataset without a yes. Found by
+re-analysing Garrido-Trigo et al. 2023 (IBD colon, 46,700 cells, 6 healthy / 6 Crohn's / 6 ulcerative colitis
+donors; myeloid subclustering) through scView's MCP, plus v0.80 leftovers.
+
+### Added
+- New dataset from a selection (Unified View > New dataset..., `POST /datasets/{id}/subset`, MCP `subset_dataset`):
+  the chosen cells (a filter, groups, or a lasso or legend selection) become a new dataset; the parent is unchanged.
+  It keeps their counts, labels (scView's own QC, doublet and cluster columns as `parent_*`), the parent's UMAP as
+  UMAP (parent), per-cell modalities and tissue images, and starts unprocessed: the default run computes its own
+  variable genes, PCA, neighbours, clusters and UMAP. On cells the parent already filtered, filtering and doublet
+  detection are left out by default, and the reply and Data Assessment say why. Its recipe starts with a replayable
+  `subset` step; the replay script reads the parent's .h5ad download and checks it. Reck 2025 kidney: the 6,609
+  proximal tubule nuclei order PT S1 -> S2 -> S3 -> Injured -> Inflammatory with no lineage warning. IBD colon:
+  re-clustering the 3,771 myeloid cells matches the authors' fine labels at ARI 0.675 (0.156 from the whole
+  dataset).
+- A subset's Data Assessment links to its parent; MCP `get_dataset` shows `source` and `subset_of`. Hand-label
+  columns stay editable on a subset; picking whole groups records the groups.
+- The pseudotime lineage warning and the MCP pseudotime reply point at making a dataset of the lineage's cells.
+- Import per-cell labels (an author annotation) in one call (`POST /datasets/{id}/labels/import`, a CSV/TSV upload,
+  MCP `import_labels`, UI Import labels): by barcode or by order, with a match report (matched, extra, left out) and a
+  refusal when the barcodes do not fit; an import from a file replays from that file. QA round 7 needed 91 calls.
+- Cluster QC, cluster evidence, the co-pilot and MCP `cluster_evidence` flag a cluster mostly from one donor (80% or
+  more of its cells, from a donor holding under half of all cells): IBD colon N2 neutrophils are 95% from one
+  Crohn's patient, M1 CXCL5 macrophages 92%.
+- Milo: Graph k and PCs settings (`k`, `n_pcs`); each comparison is its own stored result with a `result_id`.
+- Pseudobulk says how many genes each filter dropped (`gene_filter`, a caption under the results), and why a named
+  gene was not tested (`genes`, MCP `differential_expression(genes=...)`).
+- MCP `get_recipe` pages long histories and filters by step kind. 75 MCP tools in all.
+
+### Known limitations
+- The one-time marker-database download before the first annotation (about 1.5 minutes) is not in the run's time
+  estimate.
+- Milo results stored before 0.81.0 keep their old key, so an older run of the same comparison can still show as the
+  current one; run the comparison again.
+
+### Changed
+- Preflight and the run decide large-dataset mode by one rule. Before a dataset is open, the preflight predicts what
+  the run will see once it is (its estimated load counted as used). Kang with doublet detection: the preflight asked
+  for a conversion below 4.5 GB while the run itself needed it only below 3.5 GB; both now say 3.5 GB.
+- No run converts a dataset to large-dataset mode without a yes: every run route, every MCP tool that starts a run
+  (including `annotate_celltypist`) and every UI run button refuses the conversion unless allowed
+  (`allow_large_mode`, now false by default; the UI asks first, the refusal says how). A script calling
+  `/assessment/run` that relied on a silent conversion now gets a 409. QA round 7: CellTypist on 46,700 cells had
+  converted a dataset unasked.
+- Milo's test is now miloR's own: edgeR quasi-likelihood with TMM (was DESeq2). Neighbourhoods with no reference
+  cells no longer get a negative fold change (0 -> 2 cells read -1.66): on IBD colon myeloid cells UC vs healthy
+  finds 124 shifted neighbourhoods (102 up) where it found 73, all down. Kang: 672 significant (671 before), fold
+  changes r 0.997.
+- AI annotation no longer calls colonocytes and goblet cells low quality (5,608 cells in IBD colon): gut epithelium
+  has much mitochondrial RNA by nature. The marker databases download before the first annotation; without them,
+  damaged clusters go to the AI with their QC numbers instead of being labelled blind.
+- Labels made by a filter on metadata (no gene conditions) are recorded with the filter and replay exactly.
+
+### Fixed
+- Pseudotime: a small group between two lineages no longer joins them (33 cycling cells had put mast cells and
+  basophils at the end of a macrophage trajectory with no warning).
+- Export refuses an unknown field (422) instead of ignoring it; per-donor warnings name only the tested conditions;
+  the MCP PAGA plot names every node.
+- Preflight on old (anndata < 0.7) files such as Kang 2018 costs doublet detection by their real capture channels:
+  1.8 GB at the peak instead of 2.7 GB (measured 1.8).
+- Cluster QC shows the server's reason instead of the raw error body (one-group clusterings); History's re-run
+  shows a failure as a note, not in the green success box.
+
 ## [0.80.0] - 2026-11-15
 
 Kidney labels match marker databases and Cell Ontology; AI annotation no longer runs another method in its place;
