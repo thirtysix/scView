@@ -1,7 +1,9 @@
 import { API_BASE } from "@/lib/constants";
 import type { UploadItem } from "@/lib/ingestUpload";
 import type { ConversionProgress } from "./types";
+import { fileAt } from "@/lib/uploadProgress";
 import { apiFetch, readError } from "./client";
+import { xhrUpload, type UploadOptions } from "./upload";
 
 // --- Types (mirror backend scview.core.ingestion models) ------------------
 
@@ -183,21 +185,42 @@ export const UPLOAD_BATCH = 400;
 
 /** Stage files, each with its path inside the uploaded folder (`paths`, one per file in
  * order): same-named files in different folders stay apart. A large folder goes in
- * batches of `UPLOAD_BATCH` files; the state after the last one is returned. */
-export async function uploadIngestFiles(sid: string, items: UploadItem[]): Promise<IngestState> {
+ * batches of `UPLOAD_BATCH` files; the state after the last one is returned. Progress is
+ * over the whole set; an abort stops the batch being sent (earlier batches stay staged). */
+export async function uploadIngestFiles(
+  sid: string,
+  items: UploadItem[],
+  opts: UploadOptions = {},
+): Promise<IngestState> {
+  const sizes = items.map((it) => it.file.size);
+  const all = sizes.reduce((a, b) => a + b, 0);
+  const report = (sent: number) => {
+    const i = fileAt(sizes, sent);
+    opts.onProgress?.({
+      loaded: Math.min(all, sent),
+      total: all,
+      file: items[i]?.path.split("/").pop() ?? "",
+      fileIndex: i + 1,
+      fileCount: items.length,
+    });
+  };
   let state: IngestState | null = null;
+  let before = 0;
   for (let i = 0; i < items.length; i += UPLOAD_BATCH) {
+    const batch = items.slice(i, i + UPLOAD_BATCH);
+    const bytes = batch.reduce((a, it) => a + it.file.size, 0);
     const form = new FormData();
-    for (const { file, path } of items.slice(i, i + UPLOAD_BATCH)) {
+    for (const { file, path } of batch) {
       form.append("files", file);
       form.append("paths", path);
     }
-    const res = await fetch(`${API_BASE}/ingest/session/${sid}/files`, {
-      method: "POST",
-      body: form,
+    state = await xhrUpload<IngestState>(`${API_BASE}/ingest/session/${sid}/files`, form, {
+      what: items.length === 1 ? items[0]!.file.name : `${items.length} files`,
+      signal: opts.signal,
+      onProgress: (loaded, total) => report(before + (total > 0 ? loaded / total : 0) * bytes),
     });
-    if (!res.ok) throw new Error(detailOf(await readError(res)) || `Upload error ${res.status}.`);
-    state = (await res.json()) as IngestState;
+    before += bytes;
+    report(before);
   }
   return state ?? getIngestState(sid);
 }

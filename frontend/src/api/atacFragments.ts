@@ -1,5 +1,6 @@
 import { API_BASE } from "@/lib/constants";
-import { apiFetch, BACKEND_DOWN_MESSAGE } from "./client";
+import { apiFetch } from "./client";
+import { uploadErrorText } from "./upload";
 import { streamEvents } from "./clustering";
 import type { WatchdogEvent } from "./pipelineRun";
 
@@ -114,18 +115,6 @@ export function getFragments(datasetId: string): Promise<FragmentStatus> {
 
 export function deleteFragments(datasetId: string): Promise<{ deleted: boolean }> {
   return apiFetch(`/datasets/${datasetId}/atac/fragments`, { method: "DELETE" });
-}
-
-/** The detail sentence of an error body, or the body itself. */
-export function uploadErrorText(status: number, body: string): string {
-  if ([502, 503, 504].includes(status) && (!body.trim() || /^\s*<(!doctype|html)/i.test(body))) return BACKEND_DOWN_MESSAGE;
-  try {
-    const detail = (JSON.parse(body) as { detail?: unknown }).detail;
-    if (typeof detail === "string") return detail;
-  } catch {
-    /* not JSON */
-  }
-  return body || `The upload failed (HTTP ${status}).`;
 }
 
 /** One file as the raw request body: the browser reads it from disk as it sends, never whole
