@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { X } from "lucide-react";
 import { getSystemMemory, type SystemMemory } from "@/api/system";
+import { moreMemoryAdvice, setHosted } from "@/lib/memoryAdvice";
 
 const POLL_MS = 15_000;
 const GB = 1024 ** 3;
@@ -15,6 +16,11 @@ export function memoryShare(m: SystemMemory | null): number | null {
 }
 
 export function memoryTitle(m: SystemMemory): string {
+  if (m.hosted && m.limit_bytes)
+    return (
+      `scView may use ${gb(m.limit_bytes)} GB on this site. ` +
+      moreMemoryAdvice({ hosted: true, limitBytes: m.limit_bytes })
+    );
   if (m.limited && m.limit_bytes)
     return (
       `scView may use ${gb(m.limit_bytes)} GB (SCVIEW_MEMORY_GB in the .env file in the scView ` +
@@ -34,6 +40,11 @@ export function restartNotice(m: SystemMemory | null): string | null {
   if (!r) return null;
   const at = new Date(r.restarted_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   const lost = "Anything not yet saved, such as a run in progress, was lost.";
+  if (m!.hosted && m!.limit_bytes)
+    return (
+      `scView stopped at ${at} and restarted, most likely because it ran out of memory: it may use ` +
+      `${gb(m!.limit_bytes)} GB. ${lost} ${moreMemoryAdvice({ hosted: true, limitBytes: m!.limit_bytes })}`
+    );
   if (m!.limited && m!.limit_bytes)
     return (
       `scView stopped at ${at} and restarted, most likely because it ran out of memory: it may use ` +
@@ -61,7 +72,10 @@ export function MemoryIndicator({ collapsed }: { collapsed: boolean }) {
     let live = true;
     const load = () =>
       getSystemMemory()
-        .then((m) => live && setMem(m))
+        .then((m) => {
+          setHosted(m.hosted);
+          if (live) setMem(m);
+        })
         .catch(() => {
           /* an older backend, or it is restarting: keep the last reading */
         });

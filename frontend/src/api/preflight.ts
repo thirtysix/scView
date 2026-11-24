@@ -18,7 +18,9 @@ export interface PreflightVerdict {
   limit_bytes: number | null;
   used_bytes: number | null;
   limited: boolean;
-  source: "container limit" | "machine" | "unknown";
+  source: "container limit" | "machine" | "unknown" | "converter";
+  /** A hosted site (DEPLOYMENT_MODE=public): memory comes from the site admin, not .env */
+  hosted?: boolean;
   /** Rough time as [low, high] seconds */
   seconds: [number, number];
   /** Other datasets scView holds in memory, and whether closing them would free enough */
@@ -31,6 +33,8 @@ export interface PreflightVerdict {
   breakdown: { label: string; bytes: number }[];
   /** What the numbers rest on (estimated rows, a guess, steps not measured, time caveat) */
   notes: string[];
+  /** How the estimate is made, when not from the file's header (the R converter's) */
+  basis?: string;
 }
 
 export interface PreflightStep {
@@ -109,6 +113,8 @@ export interface UnitPreflight {
   label: string;
   format: string;
   verdict: PreflightVerdict;
+  /** An R object not converted yet: the R converter's memory for it (core/conversion_preflight.py) */
+  converter?: PreflightVerdict | null;
 }
 
 export interface IngestPreflight {

@@ -162,14 +162,35 @@ def _mean_var(M) -> tuple[np.ndarray, np.ndarray]:
     return mean, np.maximum(sq - mean**2, 0.0)
 
 
+SHIFTED_LOG_ENTRIES = 1 << 22  # stored values scaled at a time (their row scale: 32 MB, never whole)
+
+
 def shifted_log(counts, target_sum: float = 1e4):
-    """log1p(counts / cell total x target_sum), sparse in, sparse out."""
+    """log1p(counts / cell total x target_sum), sparse in, sparse (CSR, float64) out.
+
+    One float64 CSR copy of the counts, scaled and logged in place: ``diags @ counts.astype``
+    held the cast copy, the product and its CSR at once (+4.5 GB over 1.6 GB of CSC counts,
+    23,578 x 34,209, the marker genes a first open computes; the backend died at 6 GB).
+    The values are the product's bit for bit (one multiply per value)."""
     totals = np.asarray(counts.sum(axis=1), dtype=np.float64).ravel()
     scale = np.divide(target_sum, totals, out=np.zeros_like(totals), where=totals > 0)
     if sp.issparse(counts):
-        out = sp.diags(scale) @ counts.astype(np.float64)
-        out = sp.csr_matrix(out)
-        out.data = np.log1p(out.data)
+        if counts.format == "csr":
+            out = counts.astype(np.float64, copy=True)
+        else:  # tocsr builds new arrays: the copy itself, cast without another
+            out = sp.csr_matrix(counts).astype(np.float64, copy=False)
+            if out.data is getattr(counts, "data", None):
+                out = out.copy()
+        out.sum_duplicates()  # as the product did (in place; a no-op on canonical counts)
+        ptr, n = out.indptr, out.shape[0]
+        r0 = 0
+        while r0 < n:  # whole cells, about SHIFTED_LOG_ENTRIES values at a time
+            r1 = max(r0 + 1, min(n, int(np.searchsorted(ptr, ptr[r0] + SHIFTED_LOG_ENTRIES, "right")) - 1))
+            out.data[ptr[r0]:ptr[r1]] *= np.repeat(scale[r0:r1], np.diff(ptr[r0:r1 + 1]))
+            r0 = r1
+        np.log1p(out.data, out=out.data)
+        if not out.data.all():  # the product kept no zeros (stored ones, cells with no counts)
+            out.eliminate_zeros()
         return out
     return np.log1p(np.asarray(counts, dtype=np.float64) * scale[:, None])
 

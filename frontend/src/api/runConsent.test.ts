@@ -94,11 +94,11 @@ describe("every UI caller of a run route", () => {
 
 describe("runErrorText", () => {
   it("turns a declined conversion into a plain sentence and leaves other errors as the server's reason", async () => {
-    const { runErrorText, DECLINED_CONVERSION } = await import("@/api/pipelineRun");
+    const { runErrorText, declinedConversion } = await import("@/api/pipelineRun");
     const refusal = new Error(
       'API error 409: {"detail":"In memory the run needs 1.8 GB. Nothing was run: run it again allowing large-dataset mode to convert it (allow_large_mode true), or free memory first."}',
     );
-    expect(runErrorText(refusal)).toBe(DECLINED_CONVERSION);
+    expect(runErrorText(refusal)).toBe(declinedConversion());
     expect(runErrorText(new Error('API error 400: {"detail":"No clusters."}'))).toBe("No clusters.");
   });
 });

@@ -45,6 +45,26 @@ export interface UnitFiltering {
   note: string | null;
 }
 
+/** One label column of the joint dataset from one column per dataset (backend CombineColumns). */
+export interface CombineColumns {
+  name: string;
+  /** Dataset id -> its column; a dataset left out has no value for its cells. */
+  columns: Record<string, string>;
+  /** Write "<dataset label>: value", keeping equal values of two datasets apart. */
+  prefix?: boolean;
+}
+
+/** A combination as the plan checked it. */
+export interface CombinedColumn extends CombineColumns {
+  labels: Record<string, string>;
+  n_values: number;
+  /** Values in more than one dataset's column (kept as one value unless prefixed). */
+  shared_values: string[];
+  /** Dataset id -> its cells, and those with no value in its column (none in the combined one). */
+  n_cells?: Record<string, number>;
+  n_missing?: Record<string, number>;
+}
+
 export interface IntegrationPlan {
   datasets: IntegrationDatasetCheck[];
   merge: IntegrationMergePlan | null;
@@ -59,6 +79,18 @@ export interface IntegrationPlan {
   preflight?: PreflightVerdict | null;
   /** Per dataset, what the run's filtering of datasets scView never filtered does. */
   filtering?: UnitFiltering[];
+  /** Dataset id -> the columns it can give to a combined label column. */
+  label_columns?: Record<string, string[]>;
+  /** Label-like columns each in one dataset only: combining them names every cell. */
+  label_suggestion?: {
+    name: string;
+    columns: Record<string, string>;
+    shared_values: string[];
+    n_cells?: Record<string, number>;
+    n_missing?: Record<string, number>;
+  } | null;
+  /** The combinations asked for, as checked. */
+  combined?: CombinedColumn[];
   ok: boolean;
 }
 
@@ -71,6 +103,8 @@ export interface IntegrateRequest {
   method?: IntegrationMethod;
   /** Filter the datasets scView never filtered first (default true). */
   filter_units?: boolean;
+  /** Label columns made of one column per dataset. */
+  combine?: CombineColumns[];
   params?: Record<string, number>;
 }
 
@@ -129,10 +163,14 @@ export async function getJointSummary(datasetId: string): Promise<JointSummary> 
 }
 
 /** Read-only compatibility check (counts available, shared genes, annotations). */
-export async function planIntegration(datasetIds: string[], labels?: string[]): Promise<IntegrationPlan> {
+export async function planIntegration(
+  datasetIds: string[],
+  labels?: string[],
+  combine?: CombineColumns[],
+): Promise<IntegrationPlan> {
   return apiFetch<IntegrationPlan>("/integrate/plan", {
     method: "POST",
-    body: JSON.stringify({ dataset_ids: datasetIds, labels }),
+    body: JSON.stringify({ dataset_ids: datasetIds, labels, ...(combine?.length ? { combine } : {}) }),
   });
 }
 

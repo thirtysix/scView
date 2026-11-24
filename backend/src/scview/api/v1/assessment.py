@@ -16,7 +16,7 @@ from scview.core.sse import keepalive
 from scview.config import Settings
 from scview.dependencies import get_dataset_manager, get_settings_dep
 from scview.core.dataset_manager import DatasetManager, DatasetMemoryError
-from scview.core.assessor import assess_preprocessing, recorded_normalization_method
+from scview.core.assessor import assess_preprocessing, assessment_need, recorded_normalization_method
 from scview.core import (
     cluster_evidence, cluster_qc, doublets, library_concordance, qc_filter, qc_groups, qc_report,
     sample_pseudobulk, sex_check,
@@ -101,14 +101,18 @@ async def get_assessment(
                 # A curated cell_type beside the authors' labels: mappings that look wrong.
                 "label_curation": label_curation.check(adata)}
 
-    try:
-        # Samples the matrix to judge its scale: ~1.6 s on Kang, so off the loop, and two
-        # lanes per dataset with identical requests shared (core/assessment_gate.py).
-        return await assessment_gate.run(dataset_id, ("assessment", id(adaptor.adata)), _assess, adaptor.adata,
-                                         lane=False)
-    except Exception as e:
-        logger.error("Assessment failed for %s: %s", dataset_id, e, exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Assessment failed: {e}")
+    # Its samples are held in the memory budget while it runs (a first open also assesses
+    # for the co-pilot's insight and the QC facts: one at a time, ``assess_preprocessing``).
+    need = assessment_need(adaptor.adata)
+    async with working_copy.reading(dm, dataset_id, need, "Assessing this dataset"):
+        try:
+            # Samples the matrix to judge its scale: ~1.6 s on Kang, so off the loop, and two
+            # lanes per dataset with identical requests shared (core/assessment_gate.py).
+            return await assessment_gate.run(dataset_id, ("assessment", id(adaptor.adata)), _assess,
+                                             adaptor.adata, lane=False)
+        except Exception as e:
+            logger.error("Assessment failed for %s: %s", dataset_id, e, exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Assessment failed: {e}")
 
 
 # ---------------------------------------------------------------------------

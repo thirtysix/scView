@@ -1,5 +1,6 @@
 """Marker gene endpoints."""
 
+import asyncio
 import logging
 
 import math
@@ -189,6 +190,22 @@ def _compute_and_save(dm: DatasetManager, dataset_id: str, adaptor, column: str)
         logger.warning("Could not save markers for '%s': %s", column, e)
 
 
+def _markers_need(adaptor, column: str) -> int:
+    """Memory computing ``column``'s markers adds (``preflight.markers_need``); 0 when it
+    cannot be estimated (an unknown column is refused by the computation itself)."""
+    from scview.core import preflight
+
+    try:
+        adata = adaptor.adata
+        if column not in adata.obs.columns:
+            return 0
+        n_groups = min(int(adata.obs[column].nunique()), MAX_MARKER_GROUPS)
+        return preflight.markers_need(adaptor, n_groups)
+    except Exception as e:  # never block the markers on their estimate
+        logger.warning("No memory estimate for markers of '%s': %s", column, e)
+        return 0
+
+
 def _specificity_target(adata, column: str) -> tuple[str, str] | None:
     """(uns key, obs column) of stored markers that lack their specificity columns:
     markers saved before they existed, or a file's own."""
@@ -270,11 +287,18 @@ async def get_markers(
                 if adaptor is None:
                     raise HTTPException(status_code=404, detail="Dataset not found.")
                 if not adaptor.has_markers(column=groupby_column):
+                    need = 0
                     if not adaptor.is_large:  # a large dataset is not read in
                         await working_copy.make_room(dm, dataset_id, adaptor)
+                        need = await asyncio.to_thread(_markers_need, adaptor, groupby_column)
                     # Seconds to tens of seconds: in a worker thread, so the server
-                    # keeps answering meanwhile.
-                    await held.run(_compute_and_save, dm, dataset_id, adaptor, groupby_column)
+                    # keeps answering meanwhile. Its memory is held (a first open computes
+                    # these beside the page's other requests): a 507 when it cannot fit.
+                    what = working_copy.subject(dm, dataset_id, need,
+                                                f"Marker genes for '{groupby_column}'")
+                    async with working_copy.reading(dm, dataset_id, need, what) as read:
+                        await read.run_with(held, _compute_and_save, dm, dataset_id, adaptor,
+                                            groupby_column)
         adaptor = await ensure_specificity(dm, dataset_id, adaptor, groupby_column)
         df = adaptor.get_markers(
             groupby=groupby if groupby else None,

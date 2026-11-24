@@ -3208,12 +3208,27 @@ def _unit_filtering_lines(rec: dict) -> list[str]:
 def _integrate(p: dict, ctx: _Ctx) -> Snippet:
     p = dict(p)
     filtering = p.pop("unit_filtering", None)
+    combined = p.pop("combined_labels", None)
     return Snippet(NOT_REPLAYABLE, [
         "# This dataset was made by merging other scView datasets; the merge is not",
         "# replayed. Start from the merged counts file (the input above). Recorded:",
         *_param_comment(p),
         *(_unit_filtering_lines(filtering) if isinstance(filtering, dict) else []),
+        *(_combined_label_lines(combined) if isinstance(combined, list) else []),
     ], "merge of datasets: start from the merged file")
+
+
+def _combined_label_lines(combined: list) -> list[str]:
+    """The label columns the merge combined (one column per dataset; already in the merged file)."""
+    out = ["# Label columns combined from one column per dataset (in the merged file already):"]
+    for c in combined:
+        if not isinstance(c, dict):
+            continue
+        cols = c.get("columns") or {}
+        parts = ", ".join(f"{comment_text(lab, 60)}: {comment_text(repr(col), 60)}" for lab, col in cols.items())
+        how = " (values prefixed with the dataset label)" if c.get("prefix") else ""
+        out.append(f"#   {comment_text(repr(c.get('name')), 80)} <- {parts}{how}")
+    return out
 
 
 # Characters of packed barcodes per line of the script

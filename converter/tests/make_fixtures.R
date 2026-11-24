@@ -274,7 +274,7 @@ if (requireNamespace("SeuratObject", quietly = TRUE)) {
   so[["ADT"]] <- suppressWarnings(SeuratObject::CreateAssay5Object(counts = adt11))
   rds(so, "seurat")
   expected$seurat <- list(
-    n_obs = 40, n_vars = 30, x_sum = sum(m11), x_format = "csc_matrix",
+    n_obs = 40, n_vars = 30, x_sum = sum(m11), x_format = "csr_matrix",
     layers = structure(list(), names = character(0)),
     obsm = list(X_pca = c(40, 4), X_umap = c(40, 2)),
     protein = list(columns = c("CD3", "CD4", "CD8"), sum = sum(adt11)),
@@ -293,10 +293,77 @@ if (requireNamespace("SeuratObject", quietly = TRUE)) {
   stopifnot(length(SeuratObject::Layers(sp[["RNA"]])) == 2)
   rds(sp, "seurat_split")
   expected$seurat_split <- list(
-    n_obs = 30, n_vars = 25, x_sum = sum(m11b), x_format = "csc_matrix",
+    n_obs = 30, n_vars = 25, x_sum = sum(m11b), x_format = "csr_matrix",
     layers = structure(list(), names = character(0)),
     obs_names_head = colnames(m11b)[1:4], x_rows_match_obs = "nCount_RNA",
     source_class = "Seurat"
+  )
+}
+
+# ---- 11c. Seurat v5 with data, scale.data and graphs: X is still the counts -----
+# The layers scView does not write are dropped before X is written in blocks; X must be
+# the counts cell by cell (the test runs with tiny blocks: many of them).
+if (requireNamespace("SeuratObject", quietly = TRUE)) {
+  m11c <- sparse_counts(28, 35, 1); dimnames(m11c) <- list(paste0("g", 1:28), paste0("d", 1:35))
+  m11c[, 7] <- 0  # a cell with no counts at all: an empty row in X
+  sl <- suppressWarnings(SeuratObject::CreateSeuratObject(counts = m11c))
+  SeuratObject::LayerData(sl, layer = "data") <- lognorm(m11c)
+  SeuratObject::LayerData(sl, layer = "scale.data") <- matrix(rnorm(10 * 35), 10, 35,
+                                                                dimnames = list(rownames(m11c)[1:10], colnames(m11c)))
+  g <- Matrix::sparseMatrix(i = 1:35, j = c(2:35, 1), x = 1, dims = c(35, 35),
+                            dimnames = list(colnames(m11c), colnames(m11c)))
+  sl[["RNA_snn"]] <- SeuratObject::as.Graph(g)
+  rds(sl, "seurat_layers")
+  expected$seurat_layers <- list(
+    n_obs = 35, n_vars = 28, x_sum = sum(m11c), x_format = "csr_matrix",
+    layers = structure(list(), names = character(0)),
+    x_cells = unname(as.list(as.data.frame(as.matrix(m11c)))), source_class = "Seurat"
+  )
+}
+
+# ---- 11d. two Seurat v5 objects merged: split counts layers with different genes ----
+# As JoinLayers() joins them (0.81.0 converted the joined layer): genes in the assay's
+# order, a gene missing from one sample 0 in its cells.
+if (requireNamespace("SeuratObject", quietly = TRUE)) {
+  ma <- sparse_counts(20, 12, 1); dimnames(ma) <- list(paste0("g", 1:20), paste0("a", 1:12))
+  mb <- sparse_counts(18, 9, 1); dimnames(mb) <- list(paste0("g", c(3:16, 21:24)), paste0("b", 1:9))
+  oa <- suppressWarnings(SeuratObject::CreateSeuratObject(counts = ma))
+  ob <- suppressWarnings(SeuratObject::CreateSeuratObject(counts = mb))
+  mg <- merge(oa, ob)
+  stopifnot(length(SeuratObject::Layers(mg[["RNA"]], search = "counts")) == 2)
+  # cells interleaved, so the object's order is not the layers' order
+  mg <- mg[, c(rbind(colnames(mg)[1:9], colnames(mg)[13:21]), colnames(mg)[10:12])]
+  rds(mg, "seurat_merged")
+  joined <- SeuratObject::LayerData(SeuratObject::JoinLayers(mg[["RNA"]]), layer = "counts")
+  joined <- joined[, colnames(mg)]
+  expected$seurat_merged <- list(
+    n_obs = 21, n_vars = nrow(joined), x_sum = sum(joined), x_format = "csr_matrix",
+    layers = structure(list(), names = character(0)),
+    var_names_head = rownames(joined), obs_names_head = colnames(mg),
+    x_cells = unname(as.list(as.data.frame(as.matrix(joined)))), source_class = "Seurat"
+  )
+}
+
+# ---- 11e. a Seurat v3-style assay (Assay, not Assay5), and one with data only ----
+if (requireNamespace("SeuratObject", quietly = TRUE)) {
+  old_opt <- options(Seurat.object.assay.version = "v3")
+  m11e <- sparse_counts(15, 20, 1); dimnames(m11e) <- list(paste0("g", 1:15), paste0("e", 1:20))
+  s3 <- suppressWarnings(SeuratObject::CreateSeuratObject(counts = m11e))
+  stopifnot(!inherits(s3[["RNA"]], "Assay5"))
+  rds(s3, "seurat_v3")
+  expected$seurat_v3 <- list(
+    n_obs = 20, n_vars = 15, x_sum = sum(m11e), x_format = "csr_matrix",
+    layers = structure(list(), names = character(0)),
+    x_cells = unname(as.list(as.data.frame(as.matrix(m11e)))), source_class = "Seurat"
+  )
+  options(old_opt)
+  ln <- lognorm(m11e)
+  sd5 <- suppressWarnings(SeuratObject::CreateSeuratObject(
+    SeuratObject::CreateAssay5Object(data = ln)))
+  rds(sd5, "seurat_data_only")
+  expected$seurat_data_only <- list(
+    n_obs = 20, n_vars = 15, x_sum = sum(ln), x_format = "csr_matrix",
+    layers = structure(list(), names = character(0)), source_class = "Seurat"
   )
 }
 
@@ -310,7 +377,7 @@ pos <- read.csv(file.path(fixtures, "visium_positions.csv"))
 for (v in c("visium_v1", "visium_v2")) {
   file.copy(file.path(fixtures, paste0(v, ".rds")), file.path(out, paste0(v, ".rds")), overwrite = TRUE)
   expected[[v]] <- list(
-    n_obs = 60, n_vars = 120, x_format = "csc_matrix",
+    n_obs = 60, n_vars = 120, x_format = "csr_matrix",
     x_sum = sum(attr(readRDS(file.path(out, paste0(v, ".rds"))), "meta.data")$nCount_Spatial),
     layers = structure(list(), names = character(0)), source_class = "Seurat",
     spatial = list(barcodes = pos$barcode, x = pos$imagecol, y = pos$imagerow,

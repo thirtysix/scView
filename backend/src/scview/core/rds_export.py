@@ -409,6 +409,11 @@ async def trigger_export(input_path: str, output_path: str, fmt: str, converter_
         data = None
     if not isinstance(data, dict):
         data = {}
+    if data.get("error_kind") == "out_of_memory":
+        limit = data.get("memory_limit_bytes")
+        raise conversion.ConversionError(conversion.out_of_memory_message(
+            "writing the .rds file", int(limit) if isinstance(limit, (int, float)) else None, None,
+            hosted=conversion.hosted(), tip=False))
     if resp.status_code == 404 and not data.get("error", "").startswith("Input"):
         raise conversion.ConversionError(
             "This R converter cannot write .rds files yet: update scView so the converter "

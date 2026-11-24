@@ -31,6 +31,7 @@ from scview.core.ingestion.merge import MergeJoin
 from scview.core.integration import (
     LABEL_COLUMN,
     METHOD_HARMONY,
+    CombineColumns,
     METHODS,
     IntegrationPlan,
     build_plan,
@@ -59,6 +60,8 @@ router = APIRouter()
 class IntegratePlanRequest(BaseModel):
     dataset_ids: list[str]
     labels: list[str] | None = None  # optional per-dataset labels for the `dataset` column
+    # One label column from one column per dataset (the plan's ``label_suggestion`` offers one)
+    combine: list[CombineColumns] = Field(default_factory=list, max_length=8)
 
 
 class IntegrateRequest(IntegratePlanRequest):
@@ -102,6 +105,7 @@ async def _plan(body: IntegratePlanRequest, dm: DatasetManager, settings: Settin
         checks, units,
         max_datasets=settings.MAX_INTEGRATE_DATASETS,
         max_cells=settings.MAX_INTEGRATE_CELLS,
+        combine=body.combine,
     )
     est = None
     genes = joint_genes(plan, join)
@@ -193,6 +197,7 @@ async def run_integration(
             control=control,
             on_merged=merged.set,
             filter_units_first=body.filter_units,
+            combined=plan.combined,
         ):
             if event == "pipeline_complete":
                 ended.update(data)

@@ -606,12 +606,53 @@ def _read_index(dataset_id: str) -> list[dict[str, Any]]:
     path = _dir(dataset_id) / INDEX
     try:
         data = json.loads(path.read_text())
-        return list(data.get("results") or [])
+        out = list(data.get("results") or [])
     except FileNotFoundError:
         return []
     except (ValueError, OSError) as exc:
         logger.warning("results index for %s unreadable (%s); starting a new one", dataset_id, exc)
         return []
+    if _upgrade_keys(out):  # callers hold _lock
+        _restatus(out)
+        try:
+            _write_index(dataset_id, out)
+        except OSError as exc:  # read as upgraded anyway; written with the next change
+            logger.warning("results index for %s: upgraded keys not saved (%s)", dataset_id, exc)
+    return out
+
+
+_MILO_LABEL = re.compile(r"^Milo neighbourhoods: (.+ vs .+) \(.*\)$")
+
+
+def _upgrade_keys(entries: list[dict[str, Any]]) -> bool:
+    """Give results stored under an older key the key they would get now. Milo before v0.81.0
+    keyed a run by its condition column only (``cond|sample|settings``), so two comparisons of
+    one column superseded each other and a new run of the same comparison (keyed
+    ``cond:B vs A|sample|settings``) did not supersede the old one. The comparison is in the
+    label of both. True when any key changed."""
+    changed = False
+    for e in entries:
+        if e.get("kind") != "milo":
+            continue
+        head, sep, rest = str(e.get("key", "")).partition("|")
+        m = _MILO_LABEL.match(str(e.get("label", "")))
+        if not sep or " vs " in head or m is None:
+            continue
+        e["key"] = f"{head}:{m.group(1)}|{rest}"
+        changed = True
+    return changed
+
+
+def _restatus(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Primary / superseded again after keys changed, as ``_retain`` marks them; nothing dropped."""
+    seen: dict[tuple[str, str], int] = {}
+    for e in sorted(entries, key=lambda e: e["created_at"], reverse=True):
+        k = (e["kind"], e["key"])
+        n = seen.get(k, 1 if e.get("archived") else 0)
+        seen[k] = n + 1
+        if e["status"] != "pinned":
+            e["status"] = "primary" if n == 0 else "superseded"
+    return entries
 
 
 def _write_index(dataset_id: str, entries: list[dict[str, Any]]) -> None:

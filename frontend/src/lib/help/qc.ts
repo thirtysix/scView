@@ -27,9 +27,13 @@ export const QC_HELP: Record<string, string> = {
   "hashing.split_by":
     "Call the tags within each lane or channel, on the tags it has counts for. Use it when lanes were counted against different tag panels: a tag that is 0 in a whole lane breaks a call over all cells. The suggested column is the one whose lanes explain those zeros.",
   "labelimport.card":
-    "Bring per-cell labels from a table into a new label column: an author annotation from GEO or a collaborator's file, one row per cell with its name and label. Check the match first: it says how many rows name a cell here, which do not, and which cells the table leaves out.",
+    "Bring per-cell labels from a table into a label column, new or made here before: an author annotation from GEO or a collaborator's file, one row per cell with its name and label. Check the match first: it says how many rows name a cell here, which do not, and which cells the table leaves out.",
   "labelimport.barcodes":
     "The table's column of cell names, written as this dataset names its cells (barcode, sample prefix and all). With none, row 1 labels the first cell and so on: only safe when the table has exactly this dataset's cells in this order.",
+  "labelimport.target":
+    "Where the labels go: a new column (cells the table leaves out are Unassigned) or a label column made here before (a joint embedding's combined column too). Into an existing one, the matched cells get the table's label and every other cell keeps its own; the check says how many change. Author and scView columns cannot be written.",
+  "labelimport.sample":
+    "By order, row 1 labels the first cell. A table whose samples come in another order has the right row count and labels every cell wrongly, so the rows are checked sample by sample against the dataset's column with the same values. Pick the table's sample column, or let it find one.",
   "labelimport.strip":
     "Match AAACCTG-1 and AAACCTG.1 to AAACCTG: removes a '-1' or '.1' ending from the names on both sides. Use it when the check says most rows would match without it.",
   "labelimport.min-match":

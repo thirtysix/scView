@@ -1,6 +1,6 @@
 /**
  * "Import labels from a file" (Data Assessment): a per-cell label table (an author
- * annotation from GEO, a collaborator's file) into a new user label column. The
+ * annotation from GEO, a collaborator's file) into a new or an existing user label column. The
  * backend matches and checks it (core/label_import.py); this reads the table's header
  * so the user can pick its columns, with the backend's own separator rule.
  */
@@ -8,6 +8,10 @@ import { columnNameError } from "@/lib/labels";
 
 /** The barcode choice that means "no barcode column: row i labels cell i". */
 export const BY_ORDER = "\u0000order";
+/** The destination choice that means "a new column" (else an existing user column's name). */
+export const NEW_COLUMN = "\u0000new";
+/** The by-order sample check choice that means "let the server find a sample column". */
+export const ANY_SAMPLE = "\u0000any";
 
 export interface TableHeader {
   columns: string[];
@@ -95,6 +99,12 @@ export interface LabelImportReport {
   n_labels: number;
   labels: { label: string; n_cells: number }[];
   n_imported_labels?: number;
+  /** Cells whose label differs from the column's before the import. */
+  n_changed?: number;
+  /** Cells left Unassigned after the import. */
+  n_unassigned?: number;
+  /** By order: the sample column the rows were checked against (null: none found). */
+  order_check?: { table_column: string; dataset_column: string; n_samples: number; lined_up: boolean } | null;
   hint?: string;
   note?: string;
   dry_run?: boolean;
@@ -102,6 +112,16 @@ export interface LabelImportReport {
 
 const n = (v: number) => v.toLocaleString("en-US");
 const examples = (xs?: string[]) => (xs && xs.length ? ` (e.g. ${xs.slice(0, 3).join(", ")})` : "");
+
+/** The new column's labels after an import, saying Unassigned only when a cell is
+ *  (QA-8: "8 labels with Unassigned" when every cell had a table label). */
+export function savedLabelsText(r: LabelImportReport): string {
+  const labels = r.n_imported_labels ?? r.labels.length;
+  const word = labels === 1 ? "label" : "labels";
+  const left = r.n_unassigned ?? 0;
+  if (left === 0) return `${n(labels)} ${word}`;
+  return `${n(labels)} ${word}; ${n(left)} cell${left === 1 ? " is" : "s are"} Unassigned`;
+}
 
 /** The match report in sentences, matched first. */
 export function describeReport(r: LabelImportReport): string[] {
@@ -112,9 +132,22 @@ export function describeReport(r: LabelImportReport): string[] {
       : `${n(r.n_matched)} of ${n(labelled)} labelled rows name a cell of this dataset` +
         (r.share_matched != null ? ` (${(100 * r.share_matched).toFixed(1)}%).` : "."),
   ];
+  if (r.match === "order" && r.order_check)
+    lines.push(
+      `The rows line up with the dataset's '${r.order_check.dataset_column}' sample by sample ` +
+        `(table column '${r.order_check.table_column}', ${n(r.order_check.n_samples)} samples).`,
+    );
+  else if (r.match === "order")
+    lines.push("No sample column to check the order by: the rows must follow the dataset's cells exactly.");
   if (r.n_extra > 0) lines.push(`${n(r.n_extra)} rows name no cell here${examples(r.extra_examples)}.`);
   if (r.n_unmatched_cells > 0)
-    lines.push(`${n(r.n_unmatched_cells)} cells are not in the table and stay Unassigned${examples(r.unmatched_examples)}.`);
+    lines.push(
+      `${n(r.n_unmatched_cells)} cells are not in the table and ` +
+        (r.created ? "stay Unassigned" : `keep their label in ${r.column}`) +
+        `${examples(r.unmatched_examples)}.`,
+    );
+  if (!r.created && r.n_changed != null)
+    lines.push(`${n(r.n_changed)} of the ${n(r.n_matched)} matched cells get a different label in ${r.column}.`);
   if (r.n_blank > 0) lines.push(`${n(r.n_blank)} rows have no label and are skipped.`);
   if (r.n_duplicates > 0) lines.push(`${n(r.n_duplicates)} repeated rows (same cell, same label) count once.`);
   return lines;

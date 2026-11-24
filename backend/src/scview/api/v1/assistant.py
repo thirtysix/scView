@@ -25,13 +25,13 @@ from scview.core.assistant import (
     build_app_context,
     build_feature_context,
     build_insight,
-    polish_insight,
     stream_answer,
     write_methods,
 )
 from scview.core.guards import enforce_query_limits
 from scview.core.rag.retrieve import retrieve_context
-from scview.core import cluster_evidence, results_store, selection_facts
+from scview.core import cluster_evidence, results_store, selection_facts, working_copy
+from scview.core.assessor import assessment_need
 from scview.core.rag.router import RouteState, classify_intent, mentions_app_ui, wants_methods
 
 logger = logging.getLogger(__name__)
@@ -169,26 +169,24 @@ async def rag_status(settings: Settings = Depends(get_settings_dep)) -> dict:
 @router.get("/datasets/{dataset_id}/assistant/insight", response_model=DatasetInsight)
 async def assistant_insight(
     dataset_id: str,
-    polish: bool = True,
     dm: DatasetManager = Depends(get_dataset_manager),
-    settings: Settings = Depends(get_settings_dep),
 ) -> DatasetInsight:
     """A one-line 'I notice…' nudge for when a dataset opens.
 
     The nudge is chosen deterministically from the preprocessing state + obs
-    structure (cheap, reproducible) — including a QC-anomaly check. When an LLM
-    key is configured and ``polish`` is set, an actionable nudge is reworded into
-    a friendlier sentence (facts preserved; deterministic text is the fallback).
+    structure (cheap, reproducible), including a QC-anomaly check. The UI asks for it
+    on every open, so it never calls the language model: nothing from a dataset goes
+    to the model until the user asks (a click, a chat message, an AI run option).
     The ``question`` is a click-to-ask follow-up the co-pilot answers or executes."""
     adaptor = await dm.get_or_load_dataset(dataset_id)
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
     try:
-        # The per-cluster QC check may read the counts matrix: keep it off the loop.
-        insight = await asyncio.to_thread(build_insight, adaptor)
-        if polish:
-            insight = await polish_insight(insight, settings.llm_api_key, settings.chat_model)
-        return insight
+        # The per-cluster QC check may read the counts matrix: keep it off the loop. The
+        # assessment it starts from is held in the memory budget (shared with the page's own).
+        need = assessment_need(adaptor.adata)
+        async with working_copy.reading(dm, dataset_id, need, "Assessing this dataset") as read:
+            return await read.run(build_insight, adaptor)
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("insight failed for %s: %s", dataset_id, exc)
         return DatasetInsight(insight="")

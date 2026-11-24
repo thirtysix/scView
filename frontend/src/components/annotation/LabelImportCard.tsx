@@ -1,16 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import { FileUp, Loader2 } from "lucide-react";
-import { importLabelFile } from "@/api/labels";
+import { importLabelFile, listLabelColumns } from "@/api/labels";
 import { Help } from "@/components/common/Help";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
 import { columnNameError } from "@/lib/labels";
 import {
+  ANY_SAMPLE,
   BY_ORDER,
+  NEW_COLUMN,
   defaultColumns,
   describeReport,
   inCardWords,
   parseHeader,
   readFirstLine,
+  savedLabelsText,
   suggestImportName,
   type LabelImportReport,
 } from "@/lib/labelImport";
@@ -23,9 +26,11 @@ const count = (v: number) => v.toLocaleString("en-US");
 
 /**
  * "Import labels from a file": a per-cell label table (an author annotation, a
- * collaborator's file) into a new user label column. Check first: the backend's dry run
- * says how many rows match, which name no cell and which cells the table leaves out, and
- * refuses a table whose barcodes do not fit (core/label_import.py). Then import.
+ * collaborator's file) into a new user label column, or into an existing one (matched cells
+ * are overwritten, the rest keep their label). Check first: the backend's dry run says how
+ * many rows match, which name no cell, which cells the table leaves out and how many change,
+ * and refuses a table whose barcodes do not fit or whose rows, by order, do not line up with
+ * the dataset's samples (core/label_import.py). Then import.
  */
 export function LabelImportCard({ datasetId }: { datasetId: string }) {
   const dataset = useDatasetStore((s) => s.currentDataset);
@@ -37,6 +42,9 @@ export function LabelImportCard({ datasetId }: { datasetId: string }) {
   const [barcode, setBarcode] = useState<string>(BY_ORDER);
   const [label, setLabel] = useState("");
   const [name, setName] = useState("");
+  const [target, setTarget] = useState<string>(NEW_COLUMN);
+  const [userColumns, setUserColumns] = useState<string[]>([]);
+  const [sample, setSample] = useState<string>(ANY_SAMPLE);
   const [strip, setStrip] = useState(false);
   const [minMatch, setMinMatch] = useState(90);
   const [busy, setBusy] = useState<"check" | "import" | null>(null);
@@ -50,7 +58,23 @@ export function LabelImportCard({ datasetId }: { datasetId: string }) {
     setReport(null);
     setError(null);
     setSaved(null);
+    setTarget(NEW_COLUMN);
   }, [datasetId]);
+
+  // The user label columns an import can go into (scView's own and author columns cannot).
+  useEffect(() => {
+    let cancelled = false;
+    listLabelColumns(datasetId)
+      .then((r) => {
+        if (!cancelled) setUserColumns(r.columns);
+      })
+      .catch(() => {
+        if (!cancelled) setUserColumns([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [datasetId, saved]);
 
   const pickFile = async (f: File | null) => {
     setFile(f);
@@ -67,6 +91,7 @@ export function LabelImportCard({ datasetId }: { datasetId: string }) {
     setBarcode(picks.barcode);
     setLabel(picks.label);
     setName(suggestImportName(picks.label, existing));
+    setSample(ANY_SAMPLE);
   };
 
   // Any change of what would be sent makes an earlier check stale.
@@ -75,7 +100,9 @@ export function LabelImportCard({ datasetId }: { datasetId: string }) {
     setError(null);
   };
 
-  const nameProblem = columnNameError(name, existing);
+  const isNew = target === NEW_COLUMN || !userColumns.includes(target);
+  const column = isNew ? name.trim() : target;
+  const nameProblem = isNew ? columnNameError(name, existing) : null;
   const ready = !!file && !!label && !nameProblem && busy === null;
 
   const run = async (dryRun: boolean) => {
@@ -84,12 +111,14 @@ export function LabelImportCard({ datasetId }: { datasetId: string }) {
     setError(null);
     try {
       const r = await importLabelFile(datasetId, file, {
-        column: name.trim(),
+        column,
         barcodeColumn: barcode === BY_ORDER ? null : barcode,
         labelColumn: label,
         stripSuffix: strip,
         minMatch: minMatch / 100,
         dryRun,
+        newColumn: isNew,
+        sampleColumn: barcode === BY_ORDER && sample !== ANY_SAMPLE ? sample : null,
       });
       if (dryRun) {
         setReport(r);
@@ -174,17 +203,61 @@ export function LabelImportCard({ datasetId }: { datasetId: string }) {
               </select>
             </label>
             <label className="flex items-center gap-1">
-              New column
-              <input
-                value={name}
-                aria-label="New column name"
+              <Help id="labelimport.target">Into</Help>
+              <select
+                className="rounded border border-slate-300 bg-white px-1 py-0.5 text-slate-700"
+                value={isNew ? NEW_COLUMN : target}
+                aria-label="Import into"
                 onChange={(e) => {
-                  setName(e.target.value);
+                  setTarget(e.target.value);
                   changed();
                 }}
-                className="w-40 rounded border border-slate-300 px-1.5 py-0.5 text-slate-700"
-              />
+              >
+                <option value={NEW_COLUMN}>a new column</option>
+                {userColumns.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
             </label>
+            {isNew && (
+              <label className="flex items-center gap-1">
+                New column
+                <input
+                  value={name}
+                  aria-label="New column name"
+                  onChange={(e) => {
+                    setName(e.target.value);
+                    changed();
+                  }}
+                  className="w-40 rounded border border-slate-300 px-1.5 py-0.5 text-slate-700"
+                />
+              </label>
+            )}
+            {barcode === BY_ORDER && (
+              <label className="flex items-center gap-1">
+                <Help id="labelimport.sample">Check the order by</Help>
+                <select
+                  className="rounded border border-slate-300 bg-white px-1 py-0.5 text-slate-700"
+                  value={sample}
+                  aria-label="Sample column"
+                  onChange={(e) => {
+                    setSample(e.target.value);
+                    changed();
+                  }}
+                >
+                  <option value={ANY_SAMPLE}>any sample column</option>
+                  {columns
+                    .filter((c) => c !== label)
+                    .map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                </select>
+              </label>
+            )}
             {barcode !== BY_ORDER && (
               <>
                 <label className="flex items-center gap-1">
@@ -242,7 +315,7 @@ export function LabelImportCard({ datasetId }: { datasetId: string }) {
               className="flex items-center gap-1 rounded bg-blue-500 px-2.5 py-1 font-medium text-white hover:bg-blue-600 disabled:opacity-50"
             >
               {busy === "import" && <Loader2 className="h-3 w-3 animate-spin" />}
-              Import into {name.trim() || "the new column"}
+              Import into {column || "the new column"}
             </button>
           </div>
         )}
@@ -257,8 +330,16 @@ export function LabelImportCard({ datasetId }: { datasetId: string }) {
 
         {saved && (
           <p className="flex flex-wrap items-center gap-2 rounded bg-emerald-50 px-2 py-1.5 text-[11px] text-emerald-800">
-            Saved {count(saved.n_matched)} cells into <code>{saved.column}</code> ({saved.n_labels} labels with
-            Unassigned).
+            {saved.created ? (
+              <>
+                Saved {count(saved.n_matched)} cells into <code>{saved.column}</code> ({savedLabelsText(saved)}).
+              </>
+            ) : (
+              <>
+                Updated <code>{saved.column}</code>: {count(saved.n_changed ?? saved.n_matched)} of{" "}
+                {count(saved.n_matched)} matched cells changed label; the other cells kept theirs.
+              </>
+            )}
             <button onClick={() => colourBy(saved.column)} className="font-medium text-blue-600 hover:underline">
               Colour by it
             </button>

@@ -4,7 +4,8 @@ import { fireEvent, render, screen } from "@testing-library/react";
 const { getSystemMemory } = vi.hoisted(() => ({ getSystemMemory: vi.fn() }));
 vi.mock("@/api/system", () => ({ getSystemMemory }));
 
-import { MemoryIndicator, memoryShare, restartNotice } from "./MemoryIndicator";
+import { MemoryIndicator, memoryShare, memoryTitle, restartNotice } from "./MemoryIndicator";
+import { isHosted, setHosted } from "@/lib/memoryAdvice";
 
 const GB = 1024 ** 3;
 
@@ -12,6 +13,7 @@ describe("MemoryIndicator", () => {
   beforeEach(() => {
     getSystemMemory.mockReset();
     sessionStorage.clear();
+    setHosted(false);
   });
 
   it("shows use against the container limit and says where it is set", async () => {
@@ -62,5 +64,24 @@ describe("MemoryIndicator", () => {
     };
     expect(restartNotice(m)).toMatch(/possibly because the computer ran out of memory/);
     expect(restartNotice({ ...m, unclean_restart: null })).toBeNull();
+  });
+
+  it("on a hosted site names the site admin, never .env", async () => {
+    const restarted = { restarted_at: "2026-10-20T13:00:00+00:00", previous_start: null };
+    const m = {
+      limit_bytes: 6 * GB, used_bytes: 1.8 * GB, available_bytes: 4.2 * GB, limited: true,
+      source: "container limit" as const, unclean_restart: restarted, hosted: true,
+    };
+    getSystemMemory.mockResolvedValue(m);
+    render(<MemoryIndicator collapsed={false} />);
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/Ask the site admin for more memory \(this site has 6.0 GB\)\./);
+    expect(alert.textContent).not.toMatch(/SCVIEW_MEMORY_GB|\.env/);
+    const gauge = await screen.findByLabelText("Memory 1.8 / 6.0 GB");
+    expect(gauge.getAttribute("title")).toBe(
+      "scView may use 6.0 GB on this site. Ask the site admin for more memory (this site has 6.0 GB).",
+    );
+    expect(isHosted()).toBe(true); // other texts (a declined conversion) read it
+    expect(memoryTitle({ ...m, hosted: false })).toMatch(/SCVIEW_MEMORY_GB/);
   });
 });

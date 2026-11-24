@@ -49,15 +49,21 @@ convert_rds_to_h5ad <- function(input_path, output_path, progress_path = NULL) {
     version_info <- detect_seurat_version(obj)
     cat(sprintf("[convert] Detected Seurat version: %s\n", version_info))
 
+    # Handed over in an environment, so manual_convert holds the only reference and
+    # can free the object (its data / scale.data layers, graphs) once it is read.
+    object_name <- loaded$name
+    box <- new.env(parent = emptyenv())
+    box$obj <- obj
+    rm(obj, loaded)
     result <- tryCatch(
-      manual_convert(obj, output_path, version_info),
+      manual_convert(box, output_path, version_info, progress),
       error = function(e) {
         list(success = FALSE, error = paste0("Conversion failed: ", conditionMessage(e)))
       }
     )
     result$report <- list(
       source_class = "Seurat", detail = paste("Seurat", version_info),
-      object_name = loaded$name %||% "", kept = as.list(result$kept %||% character(0)),
+      object_name = object_name %||% "", kept = as.list(result$kept %||% character(0)),
       skipped = as.list(result$skipped %||% character(0))
     )
     result$kept <- NULL
@@ -266,42 +272,234 @@ detect_seurat_version <- function(obj) {
 
   return("unknown")
 }
-
 # ---------------------------------------------------------------------------
-# Manual conversion via reticulate + Python anndata
+# Seurat: the parts that are written, then the matrix in blocks of cells
 # ---------------------------------------------------------------------------
+#
+# Memory: the object as read is the floor (readRDS holds all of it). The rest stays
+# near it: the counts layer is taken as it is stored (no dimnames copy, no transpose),
+# everything else the h5ad keeps is small, and then the object goes, so its data /
+# scale.data layers, graphs and other assays are freed before anything is written.
+# X goes to the h5ad's csr_matrix group in blocks of cells: a genes x cells dgCMatrix
+# is, array for array, the CSR form of the cells x genes matrix (as write_csr in
+# convert_sce.R). Values and their type (float64) are the ones 0.81.0 wrote, which
+# stored X as csc_matrix; CSR is what the backend's chunked reader needs.
 
-#' Extract Seurat slots and write an h5ad file using the Python
-#' anndata package through reticulate.
-#' Join the per-sample layers (counts.1, counts.2, data.1, ...) of every Seurat v5 assay that
-#' has them. An assay that cannot be joined is left as it is (and reported).
-join_split_layers <- function(obj) {
-  assays <- tryCatch(SeuratObject::Assays(obj), error = function(e) character(0))
-  for (a in assays) {
-    if (!inherits(obj[[a]], "Assay5")) next
-    lyr <- tryCatch(SeuratObject::Layers(obj[[a]]), error = function(e) character(0))
-    if (!any(grepl("^(counts|data)\\.", lyr))) next
-    joined <- tryCatch(SeuratObject::JoinLayers(obj[[a]]), error = function(e) {
-      cat(sprintf("[convert] Could not join the layers of %s: %s\n", a, conditionMessage(e)))
-      NULL
-    })
-    if (!is.null(joined)) {
-      obj[[a]] <- joined
-      cat(sprintf("[convert] Joined %d split layers of assay %s\n", length(lyr), a))
-    }
-  }
-  obj
+#' Join the per-sample layers (counts.1, counts.2, data.1, ...) of one Seurat v5 assay.
+#' An assay that cannot be joined comes back as it is.
+join_assay_layers <- function(assay, name) {
+  if (!inherits(assay, "Assay5")) return(assay)
+  lyr <- tryCatch(SeuratObject::Layers(assay), error = function(e) character(0))
+  if (!any(grepl("^(counts|data)\\.", lyr))) return(assay)
+  tryCatch({
+    joined <- SeuratObject::JoinLayers(assay)
+    cat(sprintf("[convert] Joined %d split layers of assay %s\n", length(lyr), name))
+    joined
+  }, error = function(e) {
+    cat(sprintf("[convert] Could not join the layers of %s: %s\n", name, conditionMessage(e)))
+    assay
+  })
 }
 
-manual_convert <- function(obj, output_path, version_info) {
+#' The stored pieces of one layer of an assay: the layer itself ("counts"), else its
+#' per-sample layers ("counts.1", ...). Each piece is list(m, rows, cells): m as
+#' stored (genes x cells), rows its genes' positions in `genes` (NULL when they are
+#' all of them, in order). NULL when the assay has no such layer, or it is empty.
+layer_pieces <- function(assay, layer) {
+  if (inherits(assay, "Assay5")) {
+    stored <- methods::slot(assay, "layers")
+    names_ <- if (layer %in% names(stored)) layer else grep(paste0("^", layer, "\\."), names(stored), value = TRUE)
+    if (length(names_) == 0) return(NULL)
+    feats <- lapply(names_, function(l) SeuratObject::Features(assay, layer = l))
+    cells <- lapply(names_, function(l) SeuratObject::Cells(assay, layer = l))
+    all_feats <- SeuratObject::Features(assay)
+    genes <- all_feats[all_feats %in% unique(unlist(feats))]
+    pieces <- lapply(seq_along(names_), function(k) {
+      rows <- match(feats[[k]], genes)
+      if (identical(rows, seq_along(genes))) rows <- NULL
+      list(m = stored[[names_[k]]], rows = rows, cells = cells[[k]])
+    })
+  } else {
+    m <- tryCatch(methods::slot(assay, layer), error = function(e) NULL)
+    if (is.null(m)) return(NULL)
+    genes <- rownames(m)
+    pieces <- list(list(m = m, rows = NULL, cells = colnames(m)))
+  }
+  if (length(genes) == 0 || sum(vapply(pieces, function(p) ncol(p$m), numeric(1))) == 0) return(NULL)
+  list(layer = layer, genes = genes, pieces = pieces)
+}
+
+#' X of a Seurat object: the main assay's counts (joined across samples), else its
+#' data, as stored pieces plus the cell order to write them in (the object's, which
+#' is the metadata's), or NULL.
+seurat_x <- function(obj, main_assay) {
+  assay <- tryCatch(obj[[main_assay]], error = function(e) NULL)
+  if (is.null(assay)) return(NULL)
+  x <- layer_pieces(assay, "counts")
+  if (is.null(x)) x <- layer_pieces(assay, "data")
+  if (is.null(x)) return(NULL)
+  stored <- unlist(lapply(x$pieces, `[[`, "cells"))
+  cells <- colnames(obj)
+  x$cells <- if (!identical(stored, cells) && setequal(stored, cells)) cells else stored
+  dense <- vapply(x$pieces, function(p) is.matrix(p$m), logical(1))
+  x$dense <- all(dense)
+  for (k in seq_along(x$pieces)) {
+    p <- x$pieces[[k]]
+    if (!x$dense && !inherits(p$m, "dgCMatrix")) p$m <- to_dgc(p$m)
+    if (!is.null(p$rows) && is.unsorted(p$rows)) {
+      o <- order(p$rows)
+      p$m <- p$m[o, , drop = FALSE]
+      p$rows <- p$rows[o]
+    }
+    x$pieces[k] <- list(p)
+  }
+  x
+}
+
+#' Where each output cell is stored: piece number and column, in output order.
+x_locations <- function(x) {
+  piece <- rep(seq_along(x$pieces), vapply(x$pieces, function(p) ncol(p$m), numeric(1)))
+  col <- unlist(lapply(x$pieces, function(p) seq_len(ncol(p$m))))
+  at <- match(x$cells, unlist(lapply(x$pieces, `[[`, "cells")))
+  list(piece = piece[at], col = col[at])
+}
+
+#' Write X (cells x genes) into the open h5py file `f`.
+write_seurat_x <- function(f, x, py) {
+  loc <- x_locations(x)
+  if (x$dense) write_seurat_dense(f, x, loc, py) else write_seurat_csr(f, x, loc, py)
+}
+
+write_seurat_csr <- function(f, x, loc, py) {
+  n_cells <- length(x$cells)
+  n_genes <- length(x$genes)
+  # entries per output cell, straight from the column pointers
+  per_cell <- numeric(n_cells)
+  for (k in seq_along(x$pieces)) {
+    sel <- which(loc$piece == k)
+    per_cell[sel] <- diff(x$pieces[[k]]$m@p)[loc$col[sel]]
+  }
+  indptr <- c(0, cumsum(per_cell))
+  nnz <- indptr[n_cells + 1]
+  ptr_type <- if (nnz > .Machine$integer.max) "int64" else "int32"
+
+  g <- f$create_group("X")
+  reticulate::py_set_item(g$attrs, "encoding-type", "csr_matrix")
+  reticulate::py_set_item(g$attrs, "encoding-version", "0.1.0")
+  reticulate::py_set_item(g$attrs, "shape", py$np$array(c(n_cells, n_genes), dtype = "int64"))
+  int <- py$builtins$int  # a Python int: nnz and offsets can pass R's integer range
+  shape <- reticulate::tuple(int(nnz))
+  if (nnz > 0) {
+    data <- g$create_dataset("data", shape = shape, dtype = "float64", chunks = TRUE)
+    indices <- g$create_dataset("indices", shape = shape, dtype = "int32", chunks = TRUE)
+  } else {
+    data <- g$create_dataset("data", shape = shape, dtype = "float64")
+    indices <- g$create_dataset("indices", shape = shape, dtype = "int32")
+  }
+
+  step <- block_values()
+  a <- 1L
+  while (a <= n_cells) {
+    b <- max(a, findInterval(indptr[a] + step, indptr[-1]))
+    b <- min(b, n_cells)
+    blk <- csr_block(x, loc, a, b)
+    if (length(blk$x) > 0) {
+      at <- py$builtins$slice(int(indptr[a]), int(indptr[b + 1]))
+      reticulate::py_set_item(data, at, py$np$asarray(np_array(blk$x), dtype = "float64"))
+      reticulate::py_set_item(indices, at, py$np$asarray(np_array(blk$i), dtype = "int32"))
+    }
+    rm(blk)
+    release_chunk()
+    a <- b + 1L
+  }
+  g$create_dataset("indptr", data = py$np$asarray(np_array(indptr), dtype = ptr_type))
+  invisible(NULL)
+}
+
+#' Output cells a..b as CSR rows: list(x, i), entries in output order, genes as
+#' 0-based positions in x$genes. Gathered from the stored arrays (no `[` copy of
+#' the piece, explicit zeros kept as 0.81.0's transpose kept them).
+csr_block <- function(x, loc, a, b) {
+  pk <- loc$piece[a:b]
+  cl <- loc$col[a:b]
+  ks <- unique(pk)
+  out_x <- vector("list", length(ks))
+  out_i <- vector("list", length(ks))
+  lens <- numeric(length(pk))
+  for (n in seq_along(ks)) {
+    k <- ks[n]
+    p <- x$pieces[[k]]
+    sel <- which(pk == k)
+    from <- p$m@p[cl[sel]]
+    len <- p$m@p[cl[sel] + 1L] - from
+    lens[sel] <- len
+    idx <- sequence(len, from = from + 1L)
+    out_x[[n]] <- p$m@x[idx]
+    i <- p$m@i[idx]
+    out_i[[n]] <- if (is.null(p$rows)) i else p$rows[i + 1L] - 1L
+  }
+  if (length(ks) == 1L) return(list(x = out_x[[1]], i = out_i[[1]]))
+  # several pieces in this block: their segments back into output order
+  vx <- unlist(out_x); vi <- unlist(out_i)
+  start <- numeric(length(pk))
+  off <- 0
+  for (n in seq_along(ks)) {
+    sel <- which(pk == ks[n])
+    start[sel] <- off + c(0, cumsum(lens[sel]))[seq_along(sel)]
+    off <- off + sum(lens[sel])
+  }
+  idx <- sequence(lens, from = start + 1)
+  list(x = vx[idx], i = vi[idx])
+}
+
+#' Dense stored counts (a plain matrix): written dense as 0.81.0 did, integer
+#' storage as int32, else float64, in blocks of cells.
+write_seurat_dense <- function(f, x, loc, py) {
+  n_cells <- length(x$cells)
+  n_genes <- length(x$genes)
+  int <- all(vapply(x$pieces, function(p) is.integer(p$m), logical(1)))
+  dtype <- if (int) "int32" else "float64"
+  ds <- f$create_dataset("X", shape = reticulate::tuple(as.integer(n_cells), as.integer(n_genes)), dtype = dtype)
+  reticulate::py_set_item(ds$attrs, "encoding-type", "array")
+  reticulate::py_set_item(ds$attrs, "encoding-version", "0.2.0")
+  step <- max(1L, as.integer(floor(block_values() / max(1, n_genes))))
+  for (a in seq(1L, n_cells, by = step)) {
+    b <- min(a + step - 1L, n_cells)
+    blk <- matrix(if (int) 0L else 0, n_genes, b - a + 1L)
+    pk <- loc$piece[a:b]; cl <- loc$col[a:b]
+    for (k in unique(pk)) {
+      sel <- which(pk == k)
+      p <- x$pieces[[k]]
+      rows <- p$rows %||% seq_len(n_genes)
+      blk[rows, sel] <- p$m[, cl[sel], drop = FALSE]
+    }
+    arr <- py$np$ascontiguousarray(reticulate::r_to_py(unname(blk), convert = FALSE)$T, dtype = dtype)
+    reticulate::py_set_item(ds, py$builtins$slice(as.integer(a - 1L), as.integer(b)), arr)
+    rm(blk, arr)
+    release_chunk()
+  }
+  invisible(NULL)
+}
+
+#' A Seurat object to h5ad. `obj` is the object, or an environment holding it as
+#' `obj` (the entry point passes one, so the object can be freed here once its
+#' parts are read: nothing else refers to it then).
+manual_convert <- function(obj, output_path, version_info, progress = NULL) {
+
+  if (is.environment(obj)) {
+    box <- obj
+    obj <- box$obj
+    rm("obj", envir = box)
+  }
+  say <- function(stage, message) if (is.null(progress)) cat(sprintf("[convert] %s\n", message)) else progress(stage, message)
 
   suppressMessages(library(reticulate))
 
   ad <- tryCatch(import("anndata"), error = function(e) {
     stop("Python anndata package is not available: ", conditionMessage(e))
   })
-  np  <- tryCatch(import("numpy"),   error = function(e) NULL)
-  sp  <- tryCatch(import("scipy.sparse", convert = FALSE), error = function(e) NULL)
+  np <- tryCatch(import("numpy"), error = function(e) NULL)
+  py <- py_modules()
 
   # ---- expression matrix ---------------------------------------------------
   cat("[convert] Extracting expression matrix ...\n")
@@ -317,70 +515,24 @@ manual_convert <- function(obj, output_path, version_info) {
                    "filtered_feature_bc_matrix.h5 or an .h5mu for its peaks"), paste(chromatin, collapse = ", "))
   } else character(0)
 
-  # Seurat v5 keeps one layer per sample after split() / merge() (counts.1, counts.2, ...), and
-  # GetAssayData() cannot read those: join them first.
-  obj <- join_split_layers(obj)
-
-  # RNA as before; a Visium object's genes are in its Spatial assay.
+  # RNA as before; a Visium object's genes are in its Spatial assay. Seurat v5 keeps one
+  # layer per sample after split() / merge() (counts.1, counts.2, ...): they are read
+  # piece by piece, in the object's cell order, as JoinLayers() would join them.
   main_assay <- seurat_main_assay(obj)
-
-  # SeuratObject >= 5.0.0 uses `layer` instead of the defunct `slot` argument
-  counts <- tryCatch(
-    {
-      SeuratObject::GetAssayData(obj, assay = main_assay, layer = "counts")
-    },
-    error = function(e) {
-      cat(sprintf("[convert] Could not get counts: %s\n", conditionMessage(e)))
-      NULL
-    }
-  )
-
-  if (is.null(counts)) {
-    # Try data layer as fallback
-    counts <- tryCatch(
-      SeuratObject::GetAssayData(obj, assay = main_assay, layer = "data"),
-      error = function(e) NULL
-    )
-  }
-
-  if (is.null(counts)) {
+  x <- seurat_x(obj, main_assay)
+  if (is.null(x)) {
     return(list(success = FALSE, error = "Could not extract expression matrix from Seurat object"))
   }
-  # Joined layers come back sample by sample; the metadata is in the object's cell order.
-  cells <- colnames(obj)
-  if (!identical(colnames(counts), cells) && setequal(colnames(counts), cells)) {
-    counts <- counts[, cells, drop = FALSE]
-  }
-
-  # anndata expects cells x genes (obs x var)
-  counts_t <- Matrix::t(counts)
-
-  # Convert sparse matrix to Python scipy sparse via its components
-  # dgCMatrix is Compressed Sparse Column (CSC) format, so use csc_matrix
-  cat("[convert] Converting matrix to Python format ...\n")
-  if (inherits(counts_t, "dgCMatrix")) {
-    X <- sp$csc_matrix(
-      tuple(
-        r_to_py(as.vector(counts_t@x)),
-        r_to_py(as.integer(counts_t@i)),
-        r_to_py(as.integer(counts_t@p))
-      ),
-      shape = tuple(
-        as.integer(nrow(counts_t)),
-        as.integer(ncol(counts_t))
-      )
-    )
-  } else {
-    # Dense fallback
-    X <- r_to_py(as.matrix(counts_t))
-  }
+  cells <- x$cells
+  cat(sprintf("[convert]   X: the %s layer of %s (%d cells x %d genes)\n",
+              x$layer, main_assay, length(cells), length(x$genes)))
 
   # ---- metadata (obs) ------------------------------------------------------
   cat("[convert] Extracting cell metadata ...\n")
-  obs_df <- tryCatch(obj@meta.data, error = function(e) data.frame(row.names = colnames(counts)))
+  obs_df <- tryCatch(obj@meta.data, error = function(e) data.frame(row.names = cells))
 
   # ---- var (gene names) -----------------------------------------------------
-  var_df <- data.frame(row.names = rownames(counts))
+  var_df <- data.frame(row.names = x$genes)
 
   # ---- dimensional reductions (obsm) ----------------------------------------
   cat("[convert] Extracting dimensional reductions ...\n")
@@ -409,28 +561,42 @@ manual_convert <- function(obj, output_path, version_info) {
   adt_name <- setdiff(intersect(ADT_ASSAYS, assays), main_assay)[1]
   if (!is.na(adt_name)) {
     adt <- tryCatch(
-      SeuratObject::GetAssayData(obj, assay = adt_name, layer = "counts"),
+      SeuratObject::GetAssayData(join_assay_layers(obj[[adt_name]], adt_name), layer = "counts"),
       error = function(e) NULL
     )
-    if (!is.null(adt) && nrow(adt) > 0 && nrow(adt) <= 1000 &&
-        identical(colnames(adt), colnames(counts))) {
+    if (!is.null(adt) && !identical(colnames(adt), cells) && setequal(colnames(adt), cells)) {
+      adt <- adt[, cells, drop = FALSE]
+    }
+    if (!is.null(adt) && nrow(adt) > 0 && nrow(adt) <= 1000 && identical(colnames(adt), cells)) {
       protein_df <- as.data.frame(as.matrix(Matrix::t(adt)))
       cat(sprintf("[convert]   added %s assay: %d proteins\n", adt_name, ncol(protein_df)))
     }
+    rm(adt)
   }
 
   # ---- spatial: Visium images (VisiumV1, VisiumV2) ---------------------------
-  tissue <- tryCatch(seurat_images(obj, colnames(counts), np),
+  tissue <- tryCatch(seurat_images(obj, cells, np),
                      error = function(e) list(skipped = paste0("tissue images: ", conditionMessage(e))))
   if (!is.null(tissue$obs)) {
     for (col in names(tissue$obs)) obs_df[[col]] <- tissue$obs[[col]]
   }
 
-  # ---- build AnnData object ------------------------------------------------
-  cat("[convert] Building AnnData object ...\n")
+  # Everything written is read: the object goes, with the layers and graphs it holds.
+  rm(obj)
+  invisible(gc(verbose = FALSE))
+
+  # ---- write: the tables, then X in blocks ---------------------------------
+  say("writing", "Writing cell and gene tables")
+  partial <- paste0(output_path, ".partial")
+  if (file.exists(partial)) file.remove(partial)
+  ok <- FALSE
+  f <- NULL
+  on.exit(if (!ok) {
+    if (!is.null(f)) try(f$close(), silent = TRUE)
+    if (file.exists(partial)) file.remove(partial)
+  }, add = TRUE)
 
   adata <- ad$AnnData(
-    X   = X,
     obs = r_to_py(obs_df),
     var = r_to_py(var_df)
   )
@@ -451,20 +617,29 @@ manual_convert <- function(obj, output_path, version_info) {
     reticulate::py_set_item(reticulate::py_get_attr(adata, "uns"), "spatial",
                             reticulate::r_to_py(tissue$uns))
   }
+  adata$write_h5ad(partial)
+  rm(adata, obsm, protein_df, obs_df, var_df)
+  invisible(gc(verbose = FALSE))
 
-  # ---- write ---------------------------------------------------------------
+  say("writing", sprintf("Writing X (the %s layer, %s cells x %s genes)", x$layer,
+                         fmt_n(length(cells)), fmt_n(length(x$genes))))
   cat(sprintf("[convert] Writing h5ad to %s ...\n", output_path))
-  adata$write_h5ad(output_path)
+  f <- py$h5py$File(partial, "r+")
+  write_seurat_x(f, x, py)
+  f$close()
+  f <- NULL
+  rm(x)
+  invisible(gc(verbose = FALSE))
 
-  if (file.exists(output_path)) {
-    return(list(
-      success = TRUE,
-      message = paste0("Converted via manual extraction (", version_info, ")"),
-      kept = tissue$kept, skipped = c(tissue$skipped, chromatin_note)
-    ))
-  } else {
-    return(list(success = FALSE, error = "h5ad file was not created"))
-  }
+  if (file.exists(output_path)) file.remove(output_path)
+  if (!file.rename(partial, output_path)) stop("could not move the h5ad into place")
+  ok <- TRUE
+
+  list(
+    success = TRUE,
+    message = paste0("Converted via manual extraction (", version_info, ")"),
+    kept = tissue$kept, skipped = c(tissue$skipped, chromatin_note)
+  )
 }
 
 # ---------------------------------------------------------------------------

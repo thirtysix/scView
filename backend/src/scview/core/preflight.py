@@ -81,6 +81,7 @@ half to twice the point estimate, which held every measured run (Kang 124 s with
 
 from __future__ import annotations
 
+import contextvars
 import gzip
 import json
 import os
@@ -92,6 +93,7 @@ from typing import Any
 
 import numpy as np
 
+from scview.core import memory_budget
 from scview.core import scaling as _scaling
 
 GiB = 1 << 30
@@ -1056,6 +1058,15 @@ DBL_CLS_SECONDS_PER_POINT = 2.4e-4
 WARMUP = {"doublet_detection": 150 * MiB, "neighbors": 100 * MiB, "marker_genes": 100 * MiB,
           "enrichment": 80 * MiB, "embeddings": 20 * MiB}
 WARMUP_MODULE = "umap"  # imported by the first neighbour graph: warm-up already paid
+# A first run without doublet detection keeps memory its doublet step's warm-up would have
+# stood for (freed arrays the allocator keeps after the first big passes), from where that
+# step would have run: per cell, at most that warm-up. Refit 2026-11-23 on cold runs of the
+# UI's steps without doublets (6 GB / 2 CPUs; cgroup anon every 0.25 s, need = peak - before,
+# two runs each): Kang 0.72-0.80 GB measured, 0.73 estimated before, 0.84 now; emont 2022 fat
+# (20,000 cells) 1.71 measured, 1.46 before (-15%), 1.61 now (-6%); paul15 0.35, 0.38 before,
+# 0.40 now. The run's own record put the residual at +0.13 to +0.22 GB from filtering or
+# neighbours on, on Kang and emont.
+NO_DOUBLET_KEPT_PER_CELL = 8_000
 NEIGHBORS_PER_CELL = 12_000
 # Scaling (core/scaling.py) holds one chunk of a sparse X's stored values at a time
 # (int64 column numbers, the values and their squares in float32 and float64: ~33 bytes
@@ -1308,10 +1319,36 @@ def _channel_hvg(counts, idx: np.ndarray) -> int:
     return int(round(at_sample * (idx.size / DBL_HVG_SAMPLE) ** slope))
 
 
-def doublet_plan(adata, params=None) -> DoubletPlan | None:
+# Counting those variable genes is itself work: scanpy's filters, normalisation and selection
+# on the sample hold several copies of its values. On 5,000 deep cells (23,578 x 34,209
+# counts, 5,525 values a cell: 27.6M values) the plan took +1.7 GB peak RSS (62 bytes a
+# value) and 10 s, on every preflight of a run with doublet detection; a first open's Data
+# Assessment page asks for one, and at 3 GB it stopped the backend. So a dataset's plan is
+# kept per counts matrix (``_plans``), and it is counted only with room for it beside the
+# working reserve (``doublet_plan``'s ``room``; a preflight holds it as a read), else the
+# header rule stands in.
+DBL_PLAN_BYTES_PER_VALUE = 64
+_plans: dict[int, tuple] = {}  # id(counts) -> (weakref to counts, key, plan)
+
+
+def plan_sample_bytes(counts, largest: int) -> int:
+    """Memory counting the variable genes of a channel of ``largest`` cells of ``counts``
+    takes at its peak (its first, largest sample: ``DBL_HVG_SAMPLE`` cells)."""
+    n = max(1, int(counts.shape[0]))
+    nnz = getattr(counts, "nnz", None)
+    per_cell = (int(nnz) / n) if nnz is not None else int(counts.shape[1])
+    return int(min(largest, DBL_HVG_SAMPLE) * per_cell * DBL_PLAN_BYTES_PER_VALUE)
+
+
+def doublet_plan(adata, params=None, room=None) -> DoubletPlan | None:
     """The doublet step's channels on a live AnnData (in memory), and Scrublet's variable
     genes in the largest channel (``_channel_hvg``: its own selection on samples,
-    ``scrublet_lean.n_variable_genes``). None when they can't be read."""
+    ``scrublet_lean.n_variable_genes``). None when they can't be read. Kept per counts
+    matrix and channels (``_plans``). ``room(need)``: a release once ``need`` bytes are held
+    for the count, or None when they cannot be (the plan then has the channels alone);
+    default the preflight's (``plan_room``, in ``dataset_preflight``), else the budget's."""
+    import weakref
+
     from scview.core import doublets, scrublet_lean
     from scview.core.pipeline import StepSkipped, _doublet_matrix
 
@@ -1327,10 +1364,61 @@ def doublet_plan(adata, params=None) -> DoubletPlan | None:
         return plan
     try:
         counts, _ = _doublet_matrix(adata)
-        cost_channels(plan, counts, ch.codes)
+        codes = np.asarray(ch.codes)
+        key = (tuple(counts.shape), getattr(counts, "nnz", None), tuple(sizes),
+               hash(codes.tobytes()))
+        kept = _plans.get(id(counts))
+        if kept is not None and kept[0]() is counts and kept[1] == key:
+            return DoubletPlan(list(kept[2].channels), kept[2].hvg,
+                               None if kept[2].costed is None else list(kept[2].costed))
+        release = (room or _PLAN_ROOM.get() or _budget_room)(plan_sample_bytes(counts, max(sizes)))
+        if release is None:
+            return plan
+        try:
+            cost_channels(plan, counts, codes)
+        finally:
+            release()
+        try:
+            _plans[id(counts)] = (weakref.ref(counts, lambda _r, i=id(counts): _plans.pop(i, None)), key, plan)
+        except TypeError:  # no weak references to it: not kept
+            pass
     except (StepSkipped, ValueError, TypeError, IndexError):
         pass
     return plan
+
+
+def _fits_beside(need: int, outstanding=lambda used: 0) -> bool:
+    """``need`` more bytes fit beside what is used, what other work still needs and the
+    working reserve (always, without a container limit)."""
+    from scview.core.dataset_manager import working_reserve
+
+    b = memory_budget.read_budget()
+    if not (b.limited and b.limit_bytes is not None and b.used_bytes is not None):
+        return True
+    free = b.limit_bytes - b.used_bytes - outstanding(b.used_bytes)
+    return need <= free - working_reserve(b.limit_bytes)
+
+
+def _budget_room(need: int):
+    """``doublet_plan``'s room without a dataset manager: the budget alone."""
+    return (lambda: None) if _fits_beside(need) else None
+
+
+# The room of the preflight running in this thread (``dataset_preflight``): its run-mode
+# check plans the doublet step again through ``run_need``.
+_PLAN_ROOM: contextvars.ContextVar = contextvars.ContextVar("scview_plan_room", default=None)
+
+
+def plan_room(dm, dataset_id: str):
+    """``doublet_plan``'s ``room`` for a preflight: the count is held as a read on the
+    dataset (``DatasetManager.hold_read``) when it fits beside what other work still needs
+    and the working reserve, else None (not counted: the header rule)."""
+    def room(need: int):
+        if not _fits_beside(need, dm.outstanding):
+            return None
+        return dm.hold_read(dataset_id, need, "Estimating doublet detection")
+
+    return room
 
 
 def cost_channels(plan: DoubletPlan, counts, codes: np.ndarray) -> DoubletPlan:
@@ -1848,7 +1936,13 @@ def estimate_run(shape: tuple[int, int] | Header, nnz: int | None = None, dense:
     out: list[StepEstimate] = []
     total = 0.0
     warm_held = 0
+    # A cold run without doublet detection: what it keeps in that step's place (above).
+    kept_from = (ALL_STEPS.index("doublet_detection") if not warm and "doublet_detection" not in
+                 (steps or []) else None)
     for step in [x for x in ALL_STEPS if x in set(steps or [])]:
+        if kept_from is not None and ALL_STEPS.index(step) > kept_from:
+            warm_held += min(WARMUP["doublet_detection"], NO_DOUBLET_KEPT_PER_CELL * s.n)
+            kept_from = None
         before = s.resident() + warm_held
         model = _STEP_MODELS[step]
         t, s, secs = (_step_doublet(s, params, doublets) if model is _step_doublet
@@ -2243,6 +2337,178 @@ class Available:
     source: str
 
 
+# ---------------------------------------------------------------------------
+# First-use downloads a run waits for
+# ---------------------------------------------------------------------------
+#
+# Some steps fetch reference data the first time they run on an install, into the data
+# volume (or the MSigDB volume), and wait for it: the annotation step's marker databases
+# and Cell Ontology (the AI's damaged-cluster check and CL ids, the marker-score annotator),
+# a CellTypist model, and the mouse MSigDB collections for a mouse dataset's enrichment. The
+# first annotation run of QA round 7 took 114 s against an estimate of 20 s.
+# Each is costed at a fixed, deliberately slow rate, plus what does not scale with bytes.
+# Measured 2026-11-23 from the laptop (``python -m scview.core.marker_db`` on an empty
+# volume): PanglaoDB 0.3 MB in 1.6 s, the Cell Ontology 3.3 MB in 0.6 s, ACT's 498 small
+# files (0.8 MB) over plain http in 55 s; CellMarker's host timed out (91 s, then 20 s for
+# the 2.0 fallback), so 170 s in all without it. QA round 7's whole first fetch with
+# CellMarker 3.0 (72 MB) took about 94 s: its zips came at about 2 MB/s. At 1 MB/s the
+# estimate is 73 s of bytes + 60 s fixed = about 2 min (94 s measured with it, 170 s
+# when CellMarker times out).
+DOWNLOAD_BYTES_PER_SECOND = 1.0 * MiB
+# Each part of the marker databases: (bytes, seconds that do not scale with them). ACT is
+# 498 requests (55 s); CellMarker 3.0's tables are read from its zips. The 2.0 fallback is
+# fetched only when 3.0 fails, and is not counted.
+MARKER_DB_PARTS = {"cellmarker3": (71_811_000, 5.0), "ontology": (3_347_518, 0.0),
+                   "act": (763_884, 55.0), "panglao": (311_558, 0.0)}
+MARKER_DB_DOWNLOAD_BYTES = sum(b for b, _ in MARKER_DB_PARTS.values())  # 76 MB
+MARKER_DB_FIXED_SECONDS = sum(t for _, t in MARKER_DB_PARTS.values())
+CELLTYPIST_MODEL_BYTES = 10 * MiB  # a model (Immune_All_Low.pkl: 2.9 MB) and the model index
+MSIGDB_MOUSE_BYTES = 27 * MiB  # MH, M1-M8 (msigdb_fetch)
+
+
+@dataclass
+class FirstDownload:
+    step: str
+    what: str  # "the marker databases"
+    bytes: int
+    seconds: float
+
+    def to_dict(self) -> dict:
+        return {"step": self.step, "what": self.what, "bytes": self.bytes, "seconds": self.seconds}
+
+
+def _download(step: str, what: str, nbytes: int, unpack: float = 0.0) -> FirstDownload:
+    return FirstDownload(step, what, int(nbytes), nbytes / DOWNLOAD_BYTES_PER_SECOND + unpack)
+
+
+def _marker_db_pending() -> tuple[int, float]:
+    """(bytes, fixed seconds) of the marker database parts a run would fetch now: missing,
+    and not failed within ``marker_db.FAILURE_COOLDOWN`` (then it is not tried again)."""
+    import time as _time
+
+    from scview.core import marker_db
+
+    if not marker_db.auto_download_enabled():
+        return 0, 0.0  # nothing is fetched: the step goes on without them
+    dest = marker_db.marker_db_dir()
+    failures = marker_db.read_manifest(dest).get("failures", {})
+    nbytes, fixed = 0, 0.0
+    for name, (b, t) in MARKER_DB_PARTS.items():
+        if marker_db._installed(dest, name) or not marker_db._needed(dest, name):
+            continue
+        if _time.time() - failures.get(name, {}).get("at_epoch", 0) < marker_db.FAILURE_COOLDOWN:
+            continue
+        nbytes, fixed = nbytes + b, fixed + t
+    return nbytes, fixed
+
+
+def _celltypist_missing(model: str) -> bool:
+    import os
+    import pathlib
+
+    folder = os.getenv("CELLTYPIST_FOLDER", os.path.join(str(pathlib.Path.home()), ".celltypist"))
+    name = model if model.endswith(".pkl") else model + ".pkl"
+    return not os.path.isfile(os.path.join(folder, "data", "models", name))
+
+
+def _mouse_msigdb_missing(params, adata) -> bool:
+    import os
+
+    from scview.config import get_settings
+    from scview.core import msigdb_fetch
+    from scview.core.msigdb_loader import DEFAULT_COLLECTIONS
+
+    if not get_settings().MSIGDB_AUTO_DOWNLOAD:
+        return False
+    asked = [str(c).lower() for c in (_p(params, "enrichment_collections", None) or [])]
+    if not asked:
+        return False
+    mouse = any(c in msigdb_fetch.MOUSE_IDS for c in asked)
+    if not mouse and adata is not None and sorted(asked) == sorted(DEFAULT_COLLECTIONS):
+        from scview.core.species import detect_species
+
+        mouse = detect_species(adata).species == "mouse"  # the mouse defaults instead
+    return mouse and bool(msigdb_fetch.missing_mouse(Path(os.environ.get("MSIGDB_DIR", "/msigdb"))))
+
+
+def first_downloads(steps: list[str], params, adata=None) -> list[FirstDownload]:
+    """What ``steps`` would download first on this install and wait for (none is present
+    yet and its download is on), each with its time at ``DOWNLOAD_BYTES_PER_SECOND``.
+    ``adata``: the open dataset, for the species of its enrichment (mouse collections)."""
+    out: list[FirstDownload] = []
+    try:
+        if "cell_type_annotation" in steps:
+            method = _annotation_method(params)
+            if method == "llm":
+                from scview.config import get_settings
+
+                db = bool(get_settings().llm_api_key)  # no key and no fallback: nothing runs
+            else:
+                db = method == "marker_score" and str(
+                    _p(params, "annotation_marker_sets", "databases") or "databases").lower() != "builtin"
+            pending = _marker_db_pending() if db else (0, 0.0)
+            if pending[0]:
+                out.append(_download("cell_type_annotation", "the marker databases", *pending))
+            model = str(_p(params, "celltypist_model", "Immune_All_Low.pkl") or "Immune_All_Low.pkl")
+            if method == "celltypist" and _celltypist_missing(model):
+                out.append(_download("cell_type_annotation", "the CellTypist model", CELLTYPIST_MODEL_BYTES))
+        if "enrichment" in steps and _mouse_msigdb_missing(params, adata):
+            out.append(_download("enrichment", "the mouse MSigDB collections", MSIGDB_MOUSE_BYTES))
+    except Exception:  # noqa: BLE001 - an estimate: never fail the preflight over it
+        return out
+    return out
+
+
+def downloads_text(downloads: list[FirstDownload]) -> str:
+    """", including about 2 min to download the marker databases once (76 MB)"; "" for none."""
+    if not downloads:
+        return ""
+    secs = sum(d.seconds for d in downloads)
+    whats = [d.what for d in downloads]
+    what = whats[0] if len(whats) == 1 else ", ".join(whats[:-1]) + " and " + whats[-1]
+    mb = sum(d.bytes for d in downloads) / 10**6
+    return f", including about {_dur(secs)} to download {what} once ({mb:.0f} MB)"
+
+
+def _add_downloads(out: dict, downloads: list[FirstDownload]) -> dict:
+    """``dataset_preflight``'s result with the downloads' time in their steps (what the run
+    watchdog compares against) and in the run's time, said in its sentence."""
+    if not downloads:
+        return out
+    by_step: dict[str, float] = {}
+    for d in downloads:
+        by_step[d.step] = by_step.get(d.step, 0.0) + d.seconds
+    total = sum(by_step.values())
+    seen: set[int] = set()
+
+    def bump(steps: list[dict]) -> None:
+        for e in steps:
+            if id(e) in seen or e.get("step") not in by_step:
+                continue
+            seen.add(id(e))
+            add = by_step[e["step"]]
+            e["seconds"] = [float(e["seconds"][0]) + add, float(e["seconds"][1]) + add]
+
+    def fix(v: dict) -> None:
+        if id(v) in seen or "seconds" not in v:
+            return
+        seen.add(id(v))
+        old = (float(v["seconds"][0]), float(v["seconds"][1]))
+        new = (old[0] + total, old[1] + total)
+        v["seconds"] = list(new)
+        before = f", {time_text(old)}."
+        if before in v.get("sentence", ""):
+            v["sentence"] = v["sentence"].replace(before, f", {time_text(new)}{downloads_text(downloads)}.", 1)
+
+    bump(out.get("steps") or [])
+    fix(out.get("verdict") or {})
+    inner = out.get("in_memory_estimate") or {}
+    bump(inner.get("steps") or [])
+    fix(inner.get("verdict") or {})
+    out["downloads"] = [d.to_dict() for d in downloads]
+    return out
+
+
 def available_memory(cgroup: Path | None = None, meminfo: Path | None = None) -> Available:
     """``read_budget()`` (which leaves out file cache the kernel can drop, as
     ``docker stats`` does, so this agrees with the sidebar gauge)."""
@@ -2319,6 +2585,8 @@ def _raise_limit(a: Available, need: int) -> str | None:
     # So that the estimate is under 70% of what is free: room for its error.
     used = a.limit_bytes - a.available_bytes
     target = int(np.ceil((used + need / FITS_BELOW) / GiB))
+    if memory_budget.hosted():  # its users cannot edit .env or restart it
+        return memory_budget.more_memory_advice(limit_bytes=a.limit_bytes, target_gb=target)
     if a.limited:
         return (f"Raise SCVIEW_MEMORY_GB in the .env file in the scView folder from "
                 f"{_gb(a.limit_bytes)} to at least {target} GB (at most the computer's free "
@@ -2373,9 +2641,12 @@ def make_verdict(*, need: int, peak: int, stage: str, seconds: tuple[float, floa
         if r:
             suggestions.append(r)
         if cached.count:
+            others = (f"the {cached.count} other open dataset{'s' if cached.count > 1 else ''} "
+                      f"({_about(cached.bytes)})")
             suggestions.append(
-                f"Close the {cached.count} other open dataset{'s' if cached.count > 1 else ''} "
-                f"({_about(cached.bytes)}): restart scView and open only this one"
+                (f"Ask the site admin to restart scView, then open only this one: {others} would close"
+                 if memory_budget.hosted() else
+                 f"Close {others}: restart scView and open only this one")
                 + ("; that would free enough." if frees else "."))
         for text, alt_need in alternatives:
             if alt_need < need * 0.95:
@@ -2385,6 +2656,8 @@ def make_verdict(*, need: int, peak: int, stage: str, seconds: tuple[float, floa
         "peak_bytes": int(peak), "peak_stage": stage,
         "available_bytes": avail.available_bytes, "limit_bytes": avail.limit_bytes,
         "used_bytes": avail.used_bytes, "limited": avail.limited, "source": avail.source,
+        # A hosted site (DEPLOYMENT_MODE=public): its users ask the admin for memory.
+        "hosted": memory_budget.hosted(),
         "seconds": list(seconds),
         "cached": {"count": cached.count, "bytes": cached.bytes, "frees_enough": bool(frees)},
         "suggestions": suggestions, "error_band": ERROR_BAND,
@@ -2504,6 +2777,21 @@ def _half_cells(h: Header) -> Header:
     return h2
 
 
+def _converter_verdict(mgr, path: str, memo: list) -> dict | None:
+    """``conversion_preflight.converter_verdict`` for a staged R file; the converter's
+    memory read once per call (``memo``). None when the file cannot be read."""
+    from scview.config import get_settings
+    from scview.core import conversion, conversion_preflight
+
+    try:
+        if not memo:
+            url = getattr(mgr, "converter_url", None) or get_settings().CONVERTER_URL
+            memo.append(conversion_preflight.converter_memory(url))
+        return conversion_preflight.converter_verdict(path, memo[0], hosted=conversion.hosted())
+    except OSError:
+        return None
+
+
 def session_preflight(mgr, sid: str, dm) -> dict:
     """Per staged unit (and the merge of several): header, load estimate, verdict."""
     from scview.core.ingestion.bundling import UnitFormat, build_bundle
@@ -2521,6 +2809,10 @@ def session_preflight(mgr, sid: str, dm) -> dict:
     except streamed.StreamUnsupported:
         choice = None
     blocks = bool(choice and choice.streamed)
+    # R objects not converted yet: the converter's own estimate too (its memory asked once).
+    converted = {c["label"] for c in mgr.get_state(sid).get("converted", [])} if any(
+        u.format == UnitFormat.seurat for u in loadable) else set()
+    conv_mem: list = []
     units, residents, peaks, secs = [], [], [], [0.0, 0.0]
     for u in loadable:
         h = read_unit_header(u, opts.genes_in_rows)
@@ -2550,6 +2842,8 @@ def session_preflight(mgr, sid: str, dm) -> dict:
                       "load": {"resident_bytes": est.resident_bytes, "peak_bytes": est.peak_bytes,
                                "peak_stage": est.peak_stage, "seconds": list(est.seconds)},
                       "streamed": blocks, "verdict": v})
+        if u.format == UnitFormat.seurat and u.label not in converted:
+            units[-1]["converter"] = _converter_verdict(mgr, u.files[0].path, conv_mem)
         residents.append(est.resident_bytes)
         peaks.append(est.peak_bytes)
         secs = [secs[0] + est.seconds[0], secs[1] + est.seconds[1]]
@@ -2678,6 +2972,27 @@ def _panel_size(adaptor, files: list) -> int | None:
 
 
 def dataset_preflight(dm, dataset_id: str, steps: list[str], overrides: dict | None = None) -> dict:
+    """``_dataset_preflight`` with the first-use downloads its steps would wait for
+    (``first_downloads``) in the steps' and the run's time, and listed in ``downloads``."""
+    from scview.core.pipeline import PipelineParams
+
+    token = _PLAN_ROOM.set(plan_room(dm, dataset_id))
+    try:
+        out = _dataset_preflight(dm, dataset_id, steps, overrides)
+    finally:
+        _PLAN_ROOM.reset(token)
+    params = PipelineParams()
+    for k, v in (overrides or {}).items():
+        if hasattr(params, k):
+            setattr(params, k, v)
+    adaptor = dm.get_dataset(dataset_id)
+    adata = getattr(adaptor, "adata", None)
+    if adata is not None and getattr(adata, "isbacked", False):
+        adata = None
+    return _add_downloads(out, first_downloads(list(steps), params, adata))
+
+
+def _dataset_preflight(dm, dataset_id: str, steps: list[str], overrides: dict | None = None) -> dict:
     """The run estimate for ``steps`` on a dataset, with its verdict. The shape comes
     from the cached dataset, else from the header of its file (never loaded here).
     ``mode`` says whether the run would go to large-dataset mode (``params.chunked``:
@@ -3004,6 +3319,45 @@ def rows_bytes(mm: Matrix | None, n_rows: int) -> int:
     share = min(1.0, n_rows / mm.n_cells)
     idx = np.dtype(mm.index_dtype).itemsize if mm.sparse else 0
     return int((mm.nbytes - (mm.n_cells + 1) * idx) * share + (n_rows + 1) * idx)
+
+
+# Marker genes computed for a column when a page asks for them (the markers route; a first
+# open of a dataset with author labels and no stored markers): on counts, the shifted log's
+# CSR copy (``normalization.shifted_log``: float64 values + int32 indices) and the Wilcoxon
+# blocks. Measured 2026-11-23 on 23,578 x 34,209 CSC counts (130M values, 6 groups): +1.94 GB
+# peak RSS, estimate 1.86 (-4%); before the shifted log held one copy, +4.48 GB.
+SHIFTED_LOG_BYTES_PER_VALUE = 12
+
+
+def markers_need(adaptor, n_groups: int) -> int:
+    """Peak memory computing one column's markers (``n_groups`` groups) adds to the dataset
+    as it is held: the log copy when the ranked matrix holds counts (``marker_matrix.choose``)
+    and the ranking's working set (``_step_markers``). A backed dataset's matrix is read in
+    first (``working_copy.make_room`` holds that room): counted from its file header."""
+    import scipy.sparse as sp
+
+    from scview.core import marker_matrix, matrix_genes
+    from scview.core.working_copy import on_disk
+
+    adata = adaptor.adata
+    _, choice = marker_matrix.choose(adata)
+    if choice is not None:
+        M, counts, where = choice.M, choice.counts, choice.where
+    else:
+        src = adata.raw if adata.raw is not None else adata
+        M, counts, where = src.X, False, "raw/X" if adata.raw is not None else "X"
+    n_cells, n_genes = (int(x) for x in M.shape)
+    if on_disk(M):
+        mm = read_header(adaptor.h5ad_path, "h5ad").matrix(where or "X")
+        nnz = int(mm.nnz) if mm is not None else n_cells * n_genes
+    else:
+        nnz = int(M.nnz) if sp.issparse(M) else n_cells * n_genes
+    if choice is not None and choice.cols is not None:
+        n_genes = len(choice.cols)
+    need = nnz * SHIFTED_LOG_BYTES_PER_VALUE + (n_cells + 1) * 8 if counts else 0
+    groups = max(2, int(n_groups))
+    return int(need + matrix_genes.block_entries(nnz) * MARKERS_MEMORY_PER_VALUE
+               + groups * n_genes * 8 * 12 + n_cells * 16)
 
 
 # Measured on Kang opened backed (X 74 MiB, peak RSS over the open): every cell 210 MiB

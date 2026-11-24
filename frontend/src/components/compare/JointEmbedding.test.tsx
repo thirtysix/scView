@@ -21,7 +21,17 @@ vi.mock("@/api/pipelineRun", async (importOriginal) => ({
   cancelPipelineRun,
 }));
 
-import { DroppedColumns, JointEmbedding, UnitFilteringNote, defaultJointName, unitFilteringText } from "./JointEmbedding";
+import {
+  CombineLabels,
+  DroppedColumns,
+  JointEmbedding,
+  UnitFilteringNote,
+  combineSpec,
+  defaultJointName,
+  missingText,
+  prefixPatch,
+  unitFilteringText,
+} from "./JointEmbedding";
 import type { UnitFiltering } from "@/api/integration";
 
 const ds = (id: string): DatasetInfo => ({
@@ -97,6 +107,98 @@ describe("JointEmbedding run: memory estimate, watchdog, Cancel", () => {
     expect(cancelPipelineRun).toHaveBeenCalledWith("j1");
     expect(within(cancel).getByText("Cancelling...")).toBeInTheDocument();
     expect(screen.getByText(/Cancelling: PCA finishes first/)).toBeInTheDocument();
+  });
+});
+
+describe("JointEmbedding combined label column", () => {
+  const SUGGESTED: IntegrationPlan = {
+    ...PLAN,
+    label_columns: { s1: ["Celltype", "orig.ident"], s2: ["cell_line", "orig.ident"] },
+    label_suggestion: { name: "Celltype", columns: { s1: "Celltype", s2: "cell_line" }, shared_values: [] },
+    combined: [],
+  };
+
+  it("sets up the suggested combination, re-checks it with the plan and sends it with the run", async () => {
+    listDatasets.mockResolvedValue([ds("s1"), ds("s2")]);
+    planIntegration.mockImplementation(async (_ids: string[], _labels: string[], combine?: unknown[]) =>
+      combine
+        ? {
+            ...SUGGESTED,
+            combined: [{ name: "Celltype", columns: { s1: "Celltype", s2: "cell_line" }, labels: { s1: "s1", s2: "s2" },
+              prefix: false, n_values: 8, shared_values: ["parental"], n_cells: { s1: 1919, s2: 968 },
+              n_missing: { s1: 0, s2: 150 } }],
+          }
+        : SUGGESTED,
+    );
+    runIntegration.mockReturnValue(new Promise(() => {}));
+    render(<JointEmbedding />);
+    const picker = await screen.findByTestId("joint-picker");
+    for (const box of within(picker).getAllByRole("checkbox")) fireEvent.click(box);
+    const box = await screen.findByTestId("combine-labels", {}, { timeout: 3000 });
+    expect(box.textContent).toContain("s1: Celltype, s2: cell_line");
+    expect((within(box).getByLabelText("Combined column name") as HTMLInputElement).value).toBe("Celltype");
+    expect((within(box).getByLabelText("Column of s2") as HTMLSelectElement).value).toBe("cell_line");
+    const summary = await screen.findByTestId("combined-summary", {}, { timeout: 3000 });
+    expect(summary.textContent).toContain("'Celltype' names the cells of 2 datasets with 8 values");
+    expect(summary.textContent).toContain("1 value is in more than one dataset (parental)");
+    const missing = within(box).getAllByTestId("combine-missing");
+    expect(missing.map((m) => m.textContent)).toEqual(["all 1,919 cells have a value", "150 of 968 cells have no value"]);
+    expect(missing[1]!.className).toContain("text-amber-700");
+    const asked = planIntegration.mock.calls.at(-1)!;
+    expect(asked[2]).toEqual([{ name: "Celltype", columns: { s1: "Celltype", s2: "cell_line" }, prefix: false }]);
+
+    fireEvent.click(screen.getByRole("button", { name: /Build joint embedding/ }));
+    expect(runIntegration.mock.calls.at(-1)![0].combine).toEqual(asked[2]);
+  });
+});
+
+describe("prefixPatch: the dataset label and a name equal to a combined column", () => {
+  const d = { on: true, name: "Celltype", columns: { a: "Celltype", b: "cell_line" }, prefix: false };
+  it("renames the suggested name, keeps a typed one (the plan refuses it then)", () => {
+    expect(prefixPatch(d, "Celltype", true)).toEqual({ prefix: true, name: "Celltype_combined" });
+    expect(prefixPatch({ ...d, name: "cell_line" }, "Celltype", true)).toEqual({ prefix: true }); // typed
+    expect(prefixPatch({ ...d, name: "line" }, "Celltype", true)).toEqual({ prefix: true }); // no clash
+    expect(prefixPatch(d, "Celltype", false)).toEqual({ prefix: false });
+    expect(prefixPatch(d, null, true)).toEqual({ prefix: true }); // no suggestion
+  });
+
+  it("in the box: ticking the label renames the default name, not a typed one", () => {
+    const plan = {
+      ...PLAN,
+      label_columns: { s1: ["Celltype"], s2: ["cell_line"] },
+      label_suggestion: { name: "Celltype", columns: { s1: "Celltype", s2: "cell_line" }, shared_values: [] },
+      combined: [],
+    } as IntegrationPlan;
+    const onChange = vi.fn();
+    const draft = { on: true, name: "Celltype", columns: { s1: "Celltype", s2: "cell_line" }, prefix: false };
+    const { rerender } = render(<CombineLabels plan={plan} draft={draft} onChange={onChange} />);
+    fireEvent.click(screen.getByRole("checkbox", { name: /Put the dataset label before each value/ }));
+    expect(onChange).toHaveBeenLastCalledWith({ ...draft, prefix: true, name: "Celltype_combined" });
+    rerender(<CombineLabels plan={plan} draft={{ ...draft, name: "cell_line" }} onChange={onChange} />);
+    fireEvent.click(screen.getByRole("checkbox", { name: /Put the dataset label before each value/ }));
+    expect(onChange).toHaveBeenLastCalledWith({ ...draft, name: "cell_line", prefix: true });
+  });
+});
+
+describe("missingText", () => {
+  const checked = [{ columns: { a: "Celltype", b: "Cell_line" }, n_cells: { a: 10, b: 968 }, n_missing: { a: 0, b: 150 } }];
+  it("says per dataset how many cells the chosen column leaves without a value", () => {
+    expect(missingText(checked, "b", "Cell_line")).toEqual({ text: "150 of 968 cells have no value", warn: true });
+    expect(missingText(checked, "a", "Celltype")).toEqual({ text: "all 10 cells have a value", warn: false });
+    expect(missingText(checked, "b", "cell_line")).toBeNull(); // another column: not checked yet
+    expect(missingText(checked, "b", "")).toBeNull();
+    expect(missingText([{ columns: { a: "x" } }], "a", "x")).toBeNull(); // an older backend: no counts
+  });
+});
+
+describe("combineSpec", () => {
+  it("sends a combination only when it is on, named and has two datasets' columns", () => {
+    const d = { on: true, name: " line ", columns: { a: "Celltype", b: "", c: "cell_line" }, prefix: true };
+    expect(combineSpec(d, ["a", "b", "c"])).toEqual({ name: "line", columns: { a: "Celltype", c: "cell_line" }, prefix: true });
+    expect(combineSpec({ ...d, on: false }, ["a", "b", "c"])).toBeNull();
+    expect(combineSpec({ ...d, name: "" }, ["a", "c"])).toBeNull();
+    expect(combineSpec(d, ["a", "b"])).toBeNull(); // c is no longer selected
+    expect(combineSpec(null, ["a"])).toBeNull();
   });
 });
 

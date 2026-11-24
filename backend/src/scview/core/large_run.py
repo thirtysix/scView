@@ -122,7 +122,7 @@ from scview.core.pipeline import (
     subset_lean,
 )
 from scview.core.run_watchdog import (
-    RunCancelled, RunControl, cancelled_reason, default_before_step, others_stop, room_for_step,
+    RunCancelled, RunControl, cancelled_reason, default_before_step, others_stop, raise_limit, room_for_step,
 )
 from scview.core.uns_keys import BATCH_MIXING_KEY, repair_slash_keys
 
@@ -1374,8 +1374,8 @@ class LargeRun:
         return (f"Stopped before {label}: in large-dataset mode it needs about {need / GB:.1f} GB "
                 f"more at its peak, and scView has {avail.available_bytes / GB:.1f} GB free of its "
                 f"{avail.limit_bytes / GB:.1f} GB limit, so the system would have stopped the "
-                "backend. Nothing was saved: the dataset is as it was before the run. Raise "
-                "SCVIEW_MEMORY_GB in .env (then restart scView), or leave this step out.")
+                "backend. Nothing was saved: the dataset is as it was before the run. "
+                + raise_limit(avail.limit_bytes))
 
     def shape_for_estimate(self):
         """The ``preflight.ChunkedShape`` of the run now (filtering cuts the stored values

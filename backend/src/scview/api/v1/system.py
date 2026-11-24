@@ -7,7 +7,7 @@ from fastapi import APIRouter
 
 from scview.config import get_settings
 from scview.core import version_check
-from scview.core.memory_budget import read_budget, unclean_restart
+from scview.core.memory_budget import hosted, read_budget, unclean_restart
 
 router = APIRouter()
 
@@ -18,8 +18,9 @@ async def system_memory() -> dict:
     and has left (``available_bytes``); ``limited`` when it is the container limit
     set by SCVIEW_MEMORY_GB rather than the machine's memory. ``unclean_restart``
     is set when the previous backend was killed, most often for running out of
-    memory, and restarted."""
-    return {**read_budget().to_dict(), "unclean_restart": unclean_restart()}
+    memory, and restarted. ``hosted``: a hosted site (DEPLOYMENT_MODE=public), whose users
+    cannot change its memory: the UI's advice names the site admin, not .env."""
+    return {**read_budget().to_dict(), "unclean_restart": unclean_restart(), "hosted": hosted()}
 
 
 @router.get("/system/version")

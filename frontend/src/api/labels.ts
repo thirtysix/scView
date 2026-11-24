@@ -109,6 +109,10 @@ export async function importLabelFile(
     stripSuffix: boolean;
     minMatch: number;
     dryRun: boolean;
+    /** False: into an existing user label column (cells the table leaves out keep their label). */
+    newColumn?: boolean;
+    /** By order: the table's sample column to check row by row (default: one the server finds). */
+    sampleColumn?: string | null;
   },
 ): Promise<LabelImportReport> {
   const form = new FormData();
@@ -117,6 +121,8 @@ export async function importLabelFile(
   form.append("label_column", opts.labelColumn);
   if (opts.barcodeColumn) form.append("barcode_column", opts.barcodeColumn);
   form.append("match", opts.barcodeColumn ? "name" : "order");
+  if (opts.newColumn === false) form.append("new_column", "false");
+  if (!opts.barcodeColumn && opts.sampleColumn) form.append("sample_column", opts.sampleColumn);
   form.append("strip_suffix", String(opts.stripSuffix));
   form.append("min_match", String(opts.minMatch));
   form.append("dry_run", String(opts.dryRun));

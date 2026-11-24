@@ -215,6 +215,7 @@ class ImportRequest(BaseModel):
     barcode_column: str | None = None  # table: default its first column
     label_column: str | None = None  # table: default its one other column
     match: Literal["name", "order"] = "name"  # table: by barcode, or row i = cell i
+    sample_column: str | None = None  # table by order: the sample column checked row by row
     new_column: bool = True
     strip_suffix: bool = False
     min_match: float = Field(label_import.MIN_MATCH, ge=0, le=1)
@@ -231,7 +232,8 @@ def _table_of(body: ImportRequest) -> label_import.LabelTable:
     if body.values is not None:
         return label_import.LabelTable(labels=list(body.values), source={"input": "values"})
     return label_import.read_table(body.table.encode("utf-8"), body.filename or "", body.barcode_column,
-                                   body.label_column, by_order=body.match == "order")
+                                   body.label_column, by_order=body.match == "order",
+                                   sample_column=body.sample_column)
 
 
 async def _import(dm: DatasetManager, dataset_id: str, make_table: Callable[[], label_import.LabelTable],
@@ -264,8 +266,10 @@ async def import_label_table(
 ):
     """A per-cell label table into a user annotation column, matched by cell name (or by
     order with one row per cell): says how many rows matched, the rows naming no cell
-    (``n_extra``) and the cells left out (``n_unmatched_cells``); refused when under
-    ``min_match`` of the labelled rows name a cell. ``dry_run`` only reports."""
+    (``n_extra``), the cells left out (``n_unmatched_cells``) and the cells whose label changes
+    (``n_changed``); refused when under ``min_match`` of the labelled rows name a cell, or, by
+    order, when the table's sample column does not line up with the dataset's
+    (``order_check``). ``dry_run`` only reports."""
     return await _import(dm, dataset_id, lambda: _table_of(body), body.model_dump())
 
 
@@ -277,6 +281,7 @@ async def import_label_file(
     barcode_column: str | None = Form(None),
     label_column: str | None = Form(None),
     match: Literal["name", "order"] = Form("name"),
+    sample_column: str | None = Form(None),
     new_column: bool = Form(True),
     strip_suffix: bool = Form(False),
     min_match: float = Form(label_import.MIN_MATCH, ge=0, le=1),
@@ -293,6 +298,6 @@ async def import_label_file(
     return await _import(
         dm, dataset_id,
         lambda: label_import.read_table(data, name, barcode_column or None, label_column or None,
-                                        by_order=match == "order"),
+                                        by_order=match == "order", sample_column=sample_column or None),
         {"column": column, "new_column": new_column, "strip_suffix": strip_suffix, "min_match": min_match,
          "dry_run": dry_run})

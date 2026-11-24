@@ -198,3 +198,56 @@ def mark_stopped(marker: Path = RUN_MARKER) -> None:
 def unclean_restart() -> dict | None:
     """Set when this backend started after the previous one was killed (see ``mark_running``)."""
     return _unclean_restart
+
+
+# ---------------------------------------------------------------------------
+# How to get more memory, in words: a local install vs a hosted site
+# ---------------------------------------------------------------------------
+
+LOCAL_RAISE = "Raise SCVIEW_MEMORY_GB in .env (then restart scView)"
+
+
+def hosted() -> bool:
+    """scView runs as a hosted site (``DEPLOYMENT_MODE=public``): its users cannot edit its
+    .env or restart it, so memory advice sends them to the site admin."""
+    try:
+        from scview.config import get_settings
+
+        return bool(get_settings().is_public)
+    except Exception:  # noqa: BLE001 - settings unreadable: the local wording
+        return False
+
+
+def _gb_text(n: int) -> str:
+    gb = n / 1024**3
+    return f"{gb:.0f}" if gb >= 10 else f"{gb:.1f}"
+
+
+def more_memory_advice(alternative: str = "", *, limit_bytes: int | None = None,
+                       target_gb: int | None = None, service: str = "",
+                       hosted_site: bool | None = None) -> str:
+    """The ONE sentence on how to give scView more memory, ending in a full stop: on a hosted
+    site (``hosted``) "Ask the site admin for more memory (this site has 6.0 GB)", else
+    ``LOCAL_RAISE``. Every message a user sees that says how to get more memory comes from
+    here (507s, preflight, a stopped run, the joint embedding, public import, R export).
+
+    ``alternative``: what else would do (", or leave this step out"), without its "or".
+    ``limit_bytes``: the limit to name (default: the budget's own). ``target_gb``: what the
+    work needs in all, said on a hosted site (preflight says it locally in its own words).
+    ``service``: another container ("the R converter"): the admin is asked for its memory.
+    ``hosted_site``: the mode when the caller already knows it (default: ``hosted()``)."""
+    tail = f", or {alternative}" if alternative else ""
+    if not (hosted() if hosted_site is None else hosted_site):
+        return f"{LOCAL_RAISE}{tail}."
+    if limit_bytes is None:
+        try:
+            limit_bytes = read_budget().limit_bytes if not service else None
+        except Exception:  # noqa: BLE001
+            limit_bytes = None
+    has = []
+    if limit_bytes:
+        has.append(f"{'it' if service else 'this site'} has {_gb_text(limit_bytes)} GB")
+    if target_gb:
+        has.append(f"this needs at least {target_gb} GB")
+    who = f"to give {service} more memory" if service else "for more memory"
+    return f"Ask the site admin {who}{' (' + '; '.join(has) + ')' if has else ''}{tail}."

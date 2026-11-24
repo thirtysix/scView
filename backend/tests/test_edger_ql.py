@@ -3,7 +3,8 @@
 The reference numbers in ``fixtures/edger_ql/`` come from ``fixtures/edger_ql/edger_ql.R``
 (glmQLFit legacy=FALSE + glmQLFTest on simulated counts): two groups 4 v 4 with genes silent in
 one group, very low counts 3 v 3, a paired design (4 donors x 2 conditions) and a group +
-continuous covariate design testing the covariate.
+continuous covariate design testing the covariate; robust=TRUE fits of three of them and of a
+case with hypervariable and nearly constant genes (edgeR 4.10.0 / limma 3.68.1).
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from scview.core import edger_ql as eq
 from scview.core import voom
 
 FIX = Path(__file__).parent / "fixtures" / "edger_ql"
-CASES = ("two_group", "low", "paired", "covariate")
+CASES = ("two_group", "low", "paired", "covariate", "outliers")
 
 
 def _case(name: str):
@@ -78,10 +79,63 @@ def test_two_group_close_to_r():
     np.testing.assert_allclose(res.F, genes["F"], rtol=2e-3, atol=1e-6)
 
 
-def test_robust_not_implemented():
-    C, X, _g, _f = _case("two_group")
-    with pytest.raises(NotImplementedError):
-        eq.glm_ql(C, X, 1, robust=True)
+ROBUST = ("two_group_robust", "paired_robust", "covariate_robust", "outliers_robust")
+
+
+@pytest.mark.parametrize("name", ROBUST)
+def test_robust_matches_r(name):
+    """glmQLFit(robust = TRUE): the robust prior, a smaller prior df for the same outlier genes as
+    R's, and the tests."""
+    C, X, genes, fit = _case(name)
+    res = eq.glm_ql(C, X, int(fit["coef"]) - 1, robust=True)
+    assert np.shape(res.df_prior) == (C.shape[1],)
+    np.testing.assert_allclose(res.df_prior, genes["df_prior"], rtol=5e-3)
+    np.testing.assert_allclose(res.s2_prior, genes["s2_prior"], rtol=2e-3)
+    np.testing.assert_allclose(res.s2_post, genes["s2_post"], rtol=5e-3)
+    top = genes["df_prior"].max()
+    r_out = genes["df_prior"] < top * (1 - 1e-6)
+    assert ((res.df_prior < res.df_prior.max() * (1 - 1e-6)) == r_out).all()
+    d = _dlog10p(res.pvalue, genes["PValue"])
+    assert np.median(d) < 1e-4
+    assert np.max(d) < 0.02
+    assert np.mean((res.padj < 0.05) == (genes["FDR"] < 0.05)) > 0.99
+
+
+def test_robust_changes_the_outlier_case():
+    """On the case with hypervariable genes the robust prior df is larger for the bulk of genes and
+    smaller for the outliers than the plain one."""
+    C, X, _g, _f = _case("outliers")
+    plain = eq.glm_ql(C, X, 1)
+    rob = eq.glm_ql(C, X, 1, robust=True)
+    assert np.median(rob.df_prior) > plain.df_prior
+    assert rob.df_prior.min() < plain.df_prior
+
+
+def test_fit_f_dist_robust_matches_limma():
+    """limma's fitFDistUnequalDF1(robust = TRUE) on scaled F draws (fixtures/edger_ql/fitf_robust.tsv):
+    outliers on both sides, df below 0.01, and a case with no outlier (the plain fit back)."""
+    t = np.genfromtxt(FIX / "fitf_robust.tsv", names=True, delimiter="\t")
+    for c in np.unique(t["case"]):
+        g = t[t["case"] == c]
+        scale, df2, shrunk = eq.fit_f_dist_robust_unequal_df(g["x"], g["df1"], g["cov"])
+        np.testing.assert_allclose(scale, g["scale"], rtol=1e-7)
+        assert df2 == pytest.approx(g["df2"][0], rel=1e-7)
+        np.testing.assert_allclose(shrunk, g["shrunk"], rtol=1e-7)
+    plain = t[t["case"] == 3]
+    s0, d0 = eq.fit_f_dist_unequal_df(plain["x"], plain["df1"], plain["cov"])
+    _s, _d, shrunk = eq.fit_f_dist_robust_unequal_df(plain["x"], plain["df1"], plain["cov"])
+    assert (shrunk == d0).all()
+
+
+def test_prior_weights_of_one_change_nothing():
+    rng = np.random.default_rng(3)
+    x = rng.f(4, 20, 200)
+    d = rng.uniform(1, 8, 200)
+    cov = rng.normal(size=200)
+    a = eq.fit_f_dist_unequal_df(x, d, cov)
+    b = eq.fit_f_dist_unequal_df(x, d, cov, prior_weights=np.ones(200))
+    np.testing.assert_array_equal(a[0], b[0])
+    assert a[1] == b[1]
 
 
 def test_rejects_bad_designs():

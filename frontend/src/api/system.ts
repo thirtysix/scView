@@ -11,6 +11,8 @@ export interface SystemMemory {
   source: "container limit" | "machine" | "unknown";
   /** Set when the previous backend was killed (most often out of memory) and restarted */
   unclean_restart?: { restarted_at: string; previous_start: string | null } | null;
+  /** A hosted site (DEPLOYMENT_MODE=public): its users ask the site admin for memory, not .env */
+  hosted?: boolean;
 }
 
 export function getSystemMemory(): Promise<SystemMemory> {

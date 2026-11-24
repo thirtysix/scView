@@ -93,8 +93,9 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Data Assessment > Label from a reference dataset", "reference mapping",
      "label cells from another annotated library dataset; flags cells not in the reference"),
     ("Data Assessment > Import labels from a file", "author labels, label table",
-     "a per-cell label table (CSV/TSV, e.g. an author annotation from GEO) into a new label column, matched by cell "
-     "name (or by order, one row per cell); Check the match first: rows matched, rows naming no cell, cells left out; "
+     "a per-cell label table (CSV/TSV, e.g. an author annotation from GEO) into a new or an existing label column, "
+     "matched by cell name (or by order, one row per cell, checked sample by sample when the table has a sample "
+     "column); Check the match first: rows matched, rows naming no cell, cells left out, cells that change; "
      "refused when most names differ, with a hint (a '-1' ending, a sample prefix)"),
     ("Data Assessment > Annotation confidence", "", "label-fit flags per cell"),
     ("Data Assessment > Annotation cross-check", "", "agreement between two annotations"),
@@ -232,7 +233,10 @@ FEATURES: tuple[tuple[str, str, str], ...] = (
     ("Trajectory", "", "PAGA, pseudotime and the genes that change along it"),
     ("Compare > Joint embedding", "Harmony, Scanorama, BBKNN",
      "merge 2 to 32 library datasets, corrected with Harmony, Scanorama or BBKNN; datasets scView never "
-     "filtered are filtered first with a single run's QC (the plan lists what each loses; it can be switched off)"),
+     "filtered are filtered first with a single run's QC (the plan lists what each loses; it can be switched off); "
+     "Combine label columns into one: one column per dataset (Celltype here, cell_line there) becomes one column "
+     "naming every cell (the box says how many cells of each dataset have no value); it is a label column like "
+     "one made by hand, so labels can be imported into it (Data Assessment > Import labels from a file)"),
     ("Compare > Composition > Between conditions", "",
      "cell-type proportions between conditions, donors as replicates"),
     ("Compare > Composition > Neighbourhoods (Milo)", "", "neighbourhood differential abundance"),

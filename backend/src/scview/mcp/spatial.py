@@ -565,6 +565,13 @@ DatasetIds = Annotated[list[str], Field(min_length=2, max_length=50, description
     "The datasets to pool (2 or more; the server caps how many, 8 by default)."))]
 Labels = Annotated[list[str] | None, Field(description=(
     "A name per dataset for the joint 'dataset' column, in the same order (default: their names)."))]
+Combine = Annotated[list[dict[str, Any]] | None, Field(max_length=8, description=(
+    "Label columns of the joint dataset made of one column per dataset, e.g. [{'name': 'cell_line', "
+    "'columns': {'<dataset_id>': 'Celltype', '<dataset_id>': 'cell_line'}, 'prefix': false}]: each "
+    "dataset's cells keep their own column's values (prefix true writes '<label>: value'; then the name "
+    "must not be one of the columns combined). joint_embedding_plan's label_suggestion offers one when "
+    "label columns are each in one dataset only (label_columns: what each dataset can give). The joint "
+    "dataset's combined column is a user annotation column: import_labels / set_labels can fix it."))]
 
 
 def _plan_reply(p: dict[str, Any], n: int) -> dict[str, Any]:
@@ -582,17 +589,25 @@ def _plan_reply(p: dict[str, Any], n: int) -> dict[str, Any]:
     rec = merge.get("reconciliation") or {}
     if rec.get("needed"):
         out["merge"]["gene_names"] = pick(rec, "feasible", "message", "overlap_before", "overlap_after")
+    # Combining label columns, as the route gives them (a combine argument is built from these)
+    out["label_columns"] = {k: v[:30] for k, v in (p.get("label_columns") or {}).items()}
+    out["label_suggestion"] = p.get("label_suggestion")
+    out["combined"] = [pick(c, "name", "columns", "prefix", "n_values", "shared_values", "n_cells", "n_missing")
+                       for c in p.get("combined") or []]
     out.update(_rest(p, ("datasets", "merge", "shared_columns", "dropped_columns", *out), n))
     return out
 
 
 @tool(READ)
-async def joint_embedding_plan(dataset_ids: DatasetIds, labels: Labels = None, limit: Limit = DEFAULT_LIMIT) -> str:
+async def joint_embedding_plan(dataset_ids: DatasetIds, labels: Labels = None, combine: Combine = None,
+                               limit: Limit = DEFAULT_LIMIT) -> str:
     """Before joint_embedding: whether the datasets can be pooled (counts found, genes
     shared), the cells and genes of the joint dataset, the obs columns it keeps and those it
     leaves out with why, design notes (a condition only in one dataset), and its memory and
-    time (preflight). Changes nothing."""
-    p = await _post("/integrate/plan", _body(dataset_ids=dataset_ids, labels=labels))
+    time (preflight). label_suggestion: label columns each in one dataset only, to combine into
+    one (pass it as combine; combined says what a combine gives; n_missing: per dataset, cells
+    with no value in its column, so none in the combined one). Changes nothing."""
+    p = await _post("/integrate/plan", _body(dataset_ids=dataset_ids, labels=labels, combine=combine))
     return dumps(_plan_reply(p, clamp(limit)), _max_chars(limit))
 
 
@@ -600,6 +615,7 @@ async def joint_embedding_plan(dataset_ids: DatasetIds, labels: Labels = None, l
 async def joint_embedding(
     dataset_ids: DatasetIds,
     labels: Labels = None,
+    combine: Combine = None,
     name: Annotated[str | None, Field(max_length=120, description="The joint dataset's name.")] = None,
     method: Annotated[Literal["harmony", "scanorama", "bbknn", "none"], Field(description=(
         "Batch correction across the datasets (default harmony); none: one plain embedding."))] = "harmony",
@@ -614,7 +630,7 @@ async def joint_embedding(
     sources are not changed. A job: returns job_id at once (minutes); job_status gives the
     new dataset_id; cancel_job stops it and keeps nothing. Check joint_embedding_plan first."""
     p = _check_params(params)
-    plan = await _post("/integrate/plan", _body(dataset_ids=dataset_ids, labels=labels))
+    plan = await _post("/integrate/plan", _body(dataset_ids=dataset_ids, labels=labels, combine=combine))
     if not plan.get("ok"):
         raise ToolError("Not started: " + "; ".join(plan.get("blocking") or ["the plan was refused."]))
     seen: dict[str, Any] = {}
@@ -636,7 +652,8 @@ async def joint_embedding(
         out["next"] = "get_dataset(dataset_id); plot(dataset_id, embedding='spatial') draws each section"
         return out
 
-    body = _body(dataset_ids=dataset_ids, labels=labels, name=name, method=method, join=join, params=p or None)
+    body = _body(dataset_ids=dataset_ids, labels=labels, combine=combine, name=name, method=method, join=join,
+                 params=p or None)
     job = jobs.new("joint_embedding", None, "/integrate/run-stream", body, progress_line=progress, finish=finish,
                    cancel_route=cancel)
     return dumps({"job_id": job.id, "status": job.status, "est_cells": plan.get("est_cells"),

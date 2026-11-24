@@ -71,7 +71,7 @@ def test_nothing_readable(tmp_path):
 async def test_endpoint(client):
     body = (await client.get("/api/v1/system/memory")).json()
     assert set(body) == {"limit_bytes", "used_bytes", "limited", "source", "cache_bytes", "available_bytes",
-                         "unclean_restart"}
+                         "unclean_restart", "hosted"}
 
 
 def test_run_marker_recognises_a_killed_backend(tmp_path):

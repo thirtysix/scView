@@ -103,6 +103,14 @@ describe("PreflightNote", () => {
     expect(tip).toHaveTextContent("Not measured, estimated from what the step allocates: batch correction.");
   });
 
+  it("on a hosted site the free memory is the site's limit, not SCVIEW_MEMORY_GB", async () => {
+    render(<PreflightNote verdict={verdict("tight", { hosted: true })} />);
+    await hoverTip(screen.getByText(/About 3.1 GB more than now/));
+    const tip = screen.getByRole("tooltip");
+    expect(tip).toHaveTextContent("Free now: 5.2 GB of 8.0 GB (this site's limit); file cache");
+    expect(tip).not.toHaveTextContent("SCVIEW_MEMORY_GB");
+  });
+
   it("a label names the sample", () => {
     render(<PreflightNote verdict={verdict("fits")} label="sampleA" />);
     expect(screen.getByText("sampleA:")).toBeInTheDocument();
@@ -210,6 +218,29 @@ describe("PreflightRunNote and fast Leiden", () => {
 });
 
 describe("PreflightIngestNotes", () => {
+  it("an .rds not converted yet: the converter's estimate first, then opening it", async () => {
+    api.getIngestPreflight.mockResolvedValue({
+      session_id: "s1",
+      units: [{
+        label: "SCA", format: "seurat", verdict: verdict("fits", { sentence: "Opening fits." }),
+        converter: verdict("wont_fit", {
+          sentence: "Converting SCA.rds takes about 3.6 GB in the R converter.", source: "converter",
+          basis: "Estimated from the size of the R object once decompressed.",
+          suggestions: ["Raise SCVIEW_MEMORY_GB in the .env file to at least 5 GB."],
+        }),
+      }],
+      merge: null,
+    });
+    render(<PreflightIngestNotes sessionId="s1" />);
+    await waitFor(() => expect(screen.getByText(/Converting SCA.rds takes about 3.6 GB/)).toBeInTheDocument());
+    expect(screen.getByText("Then, once converted:")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("at least 5 GB");
+    const tip = await hoverTip(screen.getByText(/Converting SCA.rds takes about 3.6 GB/));
+    expect(tip).toContain("Estimated from the size of the R object once decompressed.");
+    expect(tip).toContain("(the R converter's limit)");
+    expect(tip).not.toContain("read from the file's header");
+  });
+
   it("one note per sample, labelled when there are several, plus the merge", async () => {
     api.getIngestPreflight.mockResolvedValue({
       session_id: "s1",
