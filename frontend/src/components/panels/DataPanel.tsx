@@ -32,12 +32,14 @@ import {
   type UnitFormat,
 } from "@/api/ingest";
 import { getDataset, listDatasets, uploadDataset } from "@/api/datasets";
+import { isAbort } from "@/api/upload";
+import { useUploadMeter } from "@/hooks/useUploadMeter";
 import { getPublicImportStatus } from "@/api/publicImport";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
 import { DatasetLibrary } from "@/components/panels/DatasetLibrary";
 import { PublicImport } from "@/components/panels/PublicImport";
-import { PreflightIngestNotes, PreflightNote } from "@/components/common/PreflightNote";
+import { PreflightIngestNotes } from "@/components/common/PreflightNote";
 import type { PreflightVerdict } from "@/api/preflight";
 import { SequencingQcSideFiles } from "@/components/qc/SequencingQcSideFiles";
 import { ClonotypeUnitFiles } from "@/components/unified/ClonotypeUnitFiles";
@@ -57,6 +59,7 @@ import {
   type UploadItem,
 } from "@/lib/ingestUpload";
 import { HdBinChoice, type HdChoice } from "@/components/panels/HdBinChoice";
+import { UploadProgressCard, type UploadPhase } from "@/components/panels/UploadProgressCard";
 
 const FORMAT_LABELS: Record<UnitFormat, string> = {
   tenx_mex: "10x MEX (matrix + barcodes + features)",
@@ -101,7 +104,16 @@ export function DataPanel() {
   const [options, setOptions] = useState<IngestOptions>(DEFAULT_OPTIONS);
 
   const [busy, setBusy] = useState(false);
+  // Set at once (state lags a render): a second drop while one upload runs starts nothing.
+  const busyRef = useRef(false);
   const [busyNote, setBusyNote] = useState<string | null>(null);
+  // The upload under way, shown in the progress card in place of the drop zone.
+  const [upload, setUpload] = useState<{ names: string; rObject: boolean; phase: UploadPhase } | null>(null);
+  const meter = useUploadMeter();
+  const { start: meterStart, onProgress: meterProgress, stop: meterStop } = meter;
+  const uploadAbort = useRef<AbortController | null>(null);
+  // "Upload cancelled…": what was kept, after a Cancel.
+  const [cancelNote, setCancelNote] = useState<string | null>(null);
   // While an R object converts: the converter's memory estimate for it.
   const [rPreflight, setRPreflight] = useState<PreflightVerdict | null>(null);
   const [committing, setCommitting] = useState(false);
@@ -143,11 +155,21 @@ export function DataPanel() {
   // Data Assessment after.
   const handleRObject = useCallback(
     async (file: File) => {
+      if (busyRef.current) return;
+      busyRef.current = true;
       setBusy(true);
       setError(null);
-      setBusyNote(`Uploading ${file.name}…`);
+      setCancelNote(null);
+      const abort = new AbortController();
+      uploadAbort.current = abort;
+      setUpload({ names: file.name, rObject: true, phase: "uploading" });
+      meterStart();
       try {
-        const result = await uploadDataset(file);
+        const result = await uploadDataset(file, { onProgress: meterProgress, signal: abort.signal });
+        uploadAbort.current = null;
+        meterStop();
+        setBusyNote(conversionNote(null));
+        setUpload({ names: file.name, rObject: true, phase: "converting" });
         let dataset = await getDataset(result.id);
         const started = Date.now();
         while (dataset.status === "converting" && Date.now() - started < CONVERT_WAIT_MS) {
@@ -166,14 +188,20 @@ export function DataPanel() {
           if (dataset.status === "ready") setPanel("assessment");
         }
       } catch (e) {
-        setError(e instanceof Error ? e.message : "The R file could not be uploaded.");
+        // The route saves nothing before the whole file has arrived: a cancelled upload leaves nothing.
+        if (isAbort(e)) setCancelNote(`Upload of ${file.name} cancelled. Nothing was kept.`);
+        else setError(e instanceof Error ? e.message : "The R file could not be uploaded.");
       } finally {
+        uploadAbort.current = null;
+        meterStop();
+        busyRef.current = false;
         setBusy(false);
         setBusyNote(null);
         setRPreflight(null);
+        setUpload(null);
       }
     },
-    [setAvailableDatasets, setCurrentDataset, setPanel]
+    [setAvailableDatasets, setCurrentDataset, setPanel, meterStart, meterProgress, meterStop]
   );
 
   // The merge plan for the session's samples (an .rds among them once converted).
@@ -187,9 +215,34 @@ export function DataPanel() {
     }
   }, []);
 
+  // After a cancelled folder upload: a session made for it is discarded; one that already held
+  // samples is shown again as the server has it now.
+  const afterCancel = useCallback(async (sid: string, fresh: boolean) => {
+    if (fresh) {
+      try {
+        await discardIngestSession(sid);
+      } catch {
+        /* best effort */
+      }
+      setSessionId(null);
+      setState(null);
+      setMergePlan(null);
+      setCancelNote("Upload cancelled. Nothing was kept.");
+      return;
+    }
+    try {
+      const now = await getIngestState(sid);
+      setState(now);
+      await refreshMergePlan(sid, now);
+    } catch {
+      /* the list below stays as it was */
+    }
+    setCancelNote("Upload cancelled. Files sent before it stay below; Start over clears them.");
+  }, [refreshMergePlan]);
+
   const addFiles = useCallback(
     async (picked: UploadItem[], hdBin?: HdChoice) => {
-      if (picked.length === 0) return;
+      if (picked.length === 0 || busyRef.current) return;
       // A single R file → the converter path.
       if (picked.length === 1) {
         const first = picked[0]!.file;
@@ -216,25 +269,60 @@ export function DataPanel() {
       const { keep, skipped } = splitJunk(one.keep);
       setNotSent(skippedNote([...one.skipped, ...skipped]));
       if (keep.length === 0) return;
+      busyRef.current = true;
       setBusy(true);
       setError(null);
+      setCancelNote(null);
+      const abort = new AbortController();
+      uploadAbort.current = abort;
+      setUpload({ names: keep.length === 1 ? keep[0]!.file.name : `${keep.length} files`, rObject: false, phase: "uploading" });
+      meterStart();
+      let sid = sessionId;
+      const fresh = !sid;
       try {
-        let sid = sessionId;
         if (!sid) {
           sid = (await createIngestSession()).session_id;
           setSessionId(sid);
         }
-        const next = await uploadIngestFiles(sid, keep);
+        const next = await uploadIngestFiles(sid, keep, { onProgress: meterProgress, signal: abort.signal });
+        uploadAbort.current = null;
         setState(next);
         await refreshMergePlan(sid, next);
       } catch (e) {
-        setError(e instanceof Error ? e.message : "Failed to add files.");
+        if (isAbort(e) && sid) {
+          // The batch being sent is dropped by the server; earlier batches (400 files each) were staged.
+          await afterCancel(sid, fresh);
+        } else {
+          setError(e instanceof Error ? e.message : "Failed to add files.");
+        }
       } finally {
+        uploadAbort.current = null;
+        meterStop();
+        busyRef.current = false;
         setBusy(false);
+        setUpload(null);
       }
     },
-    [sessionId, handleRObject, refreshMergePlan]
+    [sessionId, handleRObject, refreshMergePlan, afterCancel, meterStart, meterProgress, meterStop]
   );
+
+  const cancelUpload = useCallback(() => uploadAbort.current?.abort(), []);
+
+  // While files go up: leaving or reloading the page asks first, and a file dropped outside the
+  // card does not make the browser open it (which would stop the upload).
+  useEffect(() => {
+    if (!upload || upload.phase !== "uploading") return;
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
+    const block = (e: DragEvent) => e.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    window.addEventListener("dragover", block);
+    window.addEventListener("drop", block);
+    return () => {
+      window.removeEventListener("beforeunload", warn);
+      window.removeEventListener("dragover", block);
+      window.removeEventListener("drop", block);
+    };
+  }, [upload]);
 
   // Convert the session's R objects now (minutes for a large one), following the
   // converter's stages; the merge plan is fetched again once they are in.
@@ -337,6 +425,8 @@ export function DataPanel() {
   const validation = state?.validation;
   const hasDense = bundle?.units.some((u) => u.format === "dense_table") ?? false;
   const loadable = bundle?.units.filter((u) => u.format !== "unknown") ?? [];
+  // No new files while an upload runs, a dataset is created or the R objects convert.
+  const locked = busy || committing || converting;
   const canCommit = !!validation?.ok && loadable.length > 0 && !committing && !busy && !converting;
   // An .rds among other samples, not converted yet: "Convert now" puts it in the merge plan.
   const convertedLabels = new Set((state?.converted ?? []).map((c) => c.label));
@@ -359,31 +449,58 @@ export function DataPanel() {
         </p>
       </div>
 
-      {/* Drop zone */}
+      {/* While files go up: the progress card in place of the drop zone */}
+      {upload && (
+        <UploadProgressCard
+          names={upload.names}
+          phase={upload.phase}
+          progress={meter.progress}
+          rate={meter.rate}
+          left={meter.left}
+          rObject={upload.rObject}
+          stage={busyNote}
+          preflight={rPreflight}
+          onCancel={cancelUpload}
+        />
+      )}
+
+      {/* Drop zone: takes nothing while a dataset is being created or converted */}
       <div
+        aria-hidden={upload ? true : undefined}
+        aria-disabled={locked || undefined}
         onDragOver={(e) => {
           e.preventDefault();
-          setDragActive(true);
+          if (!locked) setDragActive(true);
         }}
         onDragLeave={() => setDragActive(false)}
-        onDrop={handleDrop}
-        className={`flex flex-col items-center justify-center rounded-xl border-2 border-dashed p-8 text-center transition-colors ${
+        onDrop={(e) => {
+          if (locked) {
+            e.preventDefault();
+            setDragActive(false);
+            return;
+          }
+          handleDrop(e);
+        }}
+        className={`${upload ? "hidden" : "flex"} flex-col items-center justify-center rounded-xl border-2 border-dashed p-8 text-center transition-colors ${
           dragActive ? "border-primary bg-primary/5" : "border-slate-300 bg-white"
-        }`}
+        } ${locked ? "opacity-60" : ""}`}
       >
         <FileUp className="h-8 w-8 text-slate-400" />
         <p className="mt-2 text-sm font-medium text-slate-700">Drag files here, or</p>
+        {locked && !upload && (
+          <p className="mt-1 text-xs text-slate-500">Wait for the dataset to be created before adding files.</p>
+        )}
         <div className="mt-2 flex gap-2">
           <button
             onClick={() => fileInput.current?.click()}
-            disabled={busy}
+            disabled={locked}
             className="rounded-lg bg-primary px-3 py-1.5 text-sm text-white hover:bg-primary/90 disabled:opacity-50"
           >
             Choose files
           </button>
           <button
             onClick={() => folderInput.current?.click()}
-            disabled={busy}
+            disabled={locked}
             className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50"
           >
             <FolderUp className="h-4 w-4" /> Choose folder
@@ -391,7 +508,7 @@ export function DataPanel() {
           {publicEnabled && (
             <button
               onClick={() => setPublicOpen((o) => !o)}
-              disabled={busy}
+              disabled={locked}
               aria-expanded={publicOpen}
               className="flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50"
             >
@@ -433,15 +550,12 @@ export function DataPanel() {
 
       {publicEnabled && publicOpen && <PublicImport onClose={() => setPublicOpen(false)} />}
 
-      {busy && (
-        <div className="flex items-center gap-2 text-sm text-slate-500">
-          <Loader2 className="h-4 w-4 animate-spin text-primary" />{" "}
-          {busyNote ?? "Inspecting files…"}
+      {error && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>}
+      {cancelNote && (
+        <div className="rounded-lg bg-slate-50 p-3 text-sm text-slate-600" data-testid="upload-cancelled">
+          {cancelNote}
         </div>
       )}
-      {busy && rPreflight && <PreflightNote verdict={rPreflight} />}
-
-      {error && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>}
 
       {hdPick && (
         <HdBinChoice

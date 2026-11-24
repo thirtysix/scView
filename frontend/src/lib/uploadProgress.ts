@@ -114,6 +114,6 @@ export function formatSize(total: number): string {
 
 /** "3.2 MB/s", "450 kB/s". */
 export function formatRate(bytesPerSecond: number): string {
-  if (bytesPerSecond >= 1e6) return `${(bytesPerSecond / 1e6).toFixed(1)} MB/s`;
+  if (bytesPerSecond >= 999.5e3) return `${(bytesPerSecond / 1e6).toFixed(1)} MB/s`; // never "1000 kB/s"
   return `${Math.round(bytesPerSecond / 1e3)} kB/s`;
 }

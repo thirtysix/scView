@@ -99,5 +99,7 @@ describe("formatting", () => {
   it("writes the speed", () => {
     expect(formatRate(3.24 * MB)).toBe("3.2 MB/s");
     expect(formatRate(450_400)).toBe("450 kB/s");
+    expect(formatRate(999_600)).toBe("1.0 MB/s");
+    expect(formatRate(999_400)).toBe("999 kB/s");
   });
 });
