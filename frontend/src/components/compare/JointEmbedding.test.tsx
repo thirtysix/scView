@@ -136,8 +136,10 @@ describe("JointEmbedding combined label column", () => {
     for (const box of within(picker).getAllByRole("checkbox")) fireEvent.click(box);
     const box = await screen.findByTestId("combine-labels", {}, { timeout: 3000 });
     expect(box.textContent).toContain("s1: Celltype, s2: cell_line");
-    expect((within(box).getByLabelText("Combined column name") as HTMLInputElement).value).toBe("Celltype");
-    expect((within(box).getByLabelText("Column of s2") as HTMLSelectElement).value).toBe("cell_line");
+    // the inputs render once the suggestion has set the draft (a later render than the box: CI Node 20 is slower)
+    const nameInput = (await within(box).findByLabelText("Combined column name", {}, { timeout: 3000 })) as HTMLInputElement;
+    expect(nameInput.value).toBe("Celltype");
+    expect(((await within(box).findByLabelText("Column of s2")) as HTMLSelectElement).value).toBe("cell_line");
     const summary = await screen.findByTestId("combined-summary", {}, { timeout: 3000 });
     expect(summary.textContent).toContain("'Celltype' names the cells of 2 datasets with 8 values");
     expect(summary.textContent).toContain("1 value is in more than one dataset (parental)");
