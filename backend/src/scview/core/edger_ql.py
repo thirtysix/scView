@@ -19,7 +19,9 @@ The steps, in edgeR v4's order:
    exact NB moments read from a table (``UnitMoments``).
 5. Empirical Bayes with unequal df (limma's fitFDistUnequalDF1): s2 ~ s0^2 F(d, d0) with
    log-scale moments for the scale (weights 1/trigamma(d/2), a weighted lowess trend on
-   AveLogCPM) and profile likelihood for d0 (Smyth 2004, Phipson et al 2016).
+   AveLogCPM) and profile likelihood for d0 (Smyth 2004, Phipson et al 2016). With
+   ``robust=True`` (as miloR calls glmQLFit) genes whose s2 is an outlier on either side are
+   down-weighted in that fit, and right-tail outliers get a smaller d0 of their own.
 6. Quasi F-test: LR (null model refitted at phi) / (df_test s2_post) on F(df_test, d0 + df),
    the denominator df capped at the pooled residual df G (n - p).
 
@@ -676,12 +678,15 @@ _EB_MIN_DF = 0.01
 
 
 def fit_f_dist_unequal_df(x: np.ndarray, df1: np.ndarray, covariate: np.ndarray | None = None,
-                          span: float | None = None) -> tuple[np.ndarray, float]:
+                          span: float | None = None, prior_weights: np.ndarray | None = None,
+                          ) -> tuple[np.ndarray, float]:
     """(scale per gene, df2) of x_g ~ scale_g F(df1_g, df2): log-scale weighted moments for the
     scale (weights 1/trigamma(df1/2), a weighted lowess trend in the covariate) and profile
-    maximum likelihood for df2."""
+    maximum likelihood for df2. ``prior_weights`` multiply both: the trend weights and each gene's
+    log-likelihood term (black-box, limma's ``prior.weights``, to ~1e-11)."""
     x = np.asarray(x, dtype=np.float64)
     d = np.asarray(df1, dtype=np.float64)
+    pw = np.ones_like(x) if prior_weights is None else np.asarray(prior_weights, dtype=np.float64)
     use = np.isfinite(x) & (d >= _EB_MIN_DF)  # below that df a gene gets weight 0 (black-box)
     x = np.where(use, x, 1.0)
     pos = x[use] > 0
@@ -689,24 +694,86 @@ def fit_f_dist_unequal_df(x: np.ndarray, df1: np.ndarray, covariate: np.ndarray 
         x = np.where(use & (x <= 0), 1e-12 * np.median(x[use]), x)
     dd = np.where(use, d, 1.0)
     z = np.log(x) - special.digamma(dd / 2) + np.log(dd / 2)
-    w = np.where(use, 1.0 / special.polygamma(1, dd / 2), 0.0)
+    w = np.where(use, pw / special.polygamma(1, dd / 2), 0.0)
     if covariate is None:
         trend = np.full_like(z, np.sum(w * z) / np.sum(w))
     else:
         cov = np.asarray(covariate, dtype=np.float64)
         sp = choose_lowess_span(len(x), small_n=500) if span is None else span
         trend = weighted_lowess(cov, z, w, sp, lowess_delta(cov, 200))
-    xu, du, tu = x[use], d[use], trend[use]
+    xu, du, tu, pu = x[use], d[use], trend[use], pw[use]
 
     def nll(u):
         d0 = 2 * u / (1 - u)
         ls = tu + special.digamma(d0 / 2) - math.log(d0 / 2)
-        return -np.sum(_f_logpdf(xu * np.exp(-ls), du, d0) - ls)
+        return -np.sum(pu * (_f_logpdf(xu * np.exp(-ls), du, d0) - ls))
 
     u = brent_min(nll, _U_RANGE[0], _U_RANGE[1], _U_TOL)
     d0 = 2 * u / (1 - u)
     scale = np.exp(trend + special.digamma(d0 / 2) - math.log(d0 / 2))
     return scale, float(d0)
+
+
+_ROBUST_Q = 0.3  # genes whose two-sided outlier FDR is below this are down-weighted (black-box)
+
+
+def fit_f_dist_robust_unequal_df(x: np.ndarray, df1: np.ndarray, covariate: np.ndarray | None = None,
+                                 span: float | None = None,
+                                 ) -> tuple[np.ndarray, float, np.ndarray]:
+    """(scale per gene, df2, df2 per gene) as ``fit_f_dist_unequal_df`` but robust to outlying
+    values (limma's fitFDistUnequalDF1 robust=TRUE, Phipson et al 2016; black-box, to ~1e-9 on
+    74 random cases). Three steps:
+
+    1. the plain fit; each value's two-sided tail p under it, Benjamini-Hochberg across values;
+       nothing below ``_ROBUST_Q`` returns the plain fit (one df2 for all);
+    2. the fit again with prior weight q for each value with q < ``_ROBUST_Q`` (1 for the rest):
+       outliers on either side count less in the scale trend and in df2;
+    3. a smaller df2 for each right-tail outlier, as fitFDistRobustly gives it: the chance of
+       not being an outlier, min(1, p / ((n - rank + 0.5) / n)) from the plain fit's right tail p
+       and the rank of x / scale, mixes df2 with an outlier df2 (log 0.5 / log p of the most
+       extreme value, refined once at that df2); then pooled so it never rises as p falls."""
+    from scipy import stats
+
+    x = np.asarray(x, dtype=np.float64)
+    d = np.asarray(df1, dtype=np.float64)
+    n = len(x)
+    s0, d0 = fit_f_dist_unequal_df(x, d, covariate, span)
+    d = np.where(d >= _EB_MIN_DF, d, 1.0)  # the plain fit's stand-in df (black-box)
+    F0 = x / s0
+    lp = stats.f.logsf(F0, d, d0)
+    p = np.exp(lp)
+    q = _bh(2 * np.minimum(p, 1 - p))
+    if not (q < _ROBUST_Q).any():
+        return s0, d0, np.full(n, d0)
+    s, d2 = fit_f_dist_unequal_df(x, d, covariate, span, np.where(q < _ROBUST_Q, q, 1.0))
+    rank = stats.rankdata(F0)
+    log_not_outlier = np.minimum(lp - (np.log(n - rank + 0.5) - math.log(n)), 0.0)
+    not_outlier = np.exp(log_not_outlier)
+    i = int(np.argmin(lp))
+    if lp[i] == -np.inf:
+        shrunk = not_outlier * d2
+    else:
+        out = math.log(0.5) / lp[i] * d2
+        out = math.log(0.5) / float(stats.f.logsf(F0[i], d[i], out)) * out
+        shrunk = not_outlier * d2 - np.expm1(log_not_outlier) * out
+    o = np.argsort(lp, kind="stable")
+    ordered = shrunk[o]
+    running = np.cumsum(ordered) / np.arange(1, n + 1)
+    imin = int(np.argmin(running))
+    ordered[: imin + 1] = running[imin]
+    shrunk[o] = np.maximum.accumulate(ordered)
+    return s, d2, shrunk
+
+
+def _bh(p: np.ndarray) -> np.ndarray:
+    """Benjamini-Hochberg adjusted p values (NaN stays NaN, the rest are adjusted among themselves)."""
+    from scipy import stats
+
+    out = np.full(len(p), np.nan)
+    fin = np.isfinite(p)
+    if fin.any():
+        out[fin] = stats.false_discovery_control(np.clip(p[fin], 0.0, 1.0), method="bh")
+    return out
 
 
 def _f_logpdf(q, d1, d2):
@@ -744,6 +811,8 @@ def glm_ql(counts: np.ndarray, X: np.ndarray, coef: int = -1, *, robust: bool = 
            lib_size: np.ndarray | None = None, norm_factors: np.ndarray | None = None) -> QLResult:
     """edgeR v4 quasi-likelihood test of one coefficient: ``glmQLFit(y, X)`` (legacy=FALSE, NB
     dispersion from the most abundant genes, abundance trend) then ``glmQLFTest(fit, coef)``.
+    ``robust`` as glmQLFit's: the prior is fitted robustly and outlier genes get a smaller prior
+    df of their own (``fit_f_dist_robust_unequal_df``; ``df_prior`` is then per gene).
 
     ``counts`` is samples x genes (raw counts), ``X`` samples x coefficients of full column rank
     with at least two columns; ``coef`` indexes X's columns (Python order, -1 = last).
@@ -759,8 +828,6 @@ def glm_ql(counts: np.ndarray, X: np.ndarray, coef: int = -1, *, robust: bool = 
     p = X.shape[1]
     if p < 2 or np.linalg.matrix_rank(X) < p or n <= p:
         raise ValueError("The design needs >= 2 columns, full column rank and more samples than columns.")
-    if robust:
-        raise NotImplementedError("robust=True is not implemented yet.")
     coef = coef % p
     lib0 = C.sum(axis=1) if lib_size is None else np.asarray(lib_size, dtype=np.float64)
     nf = tmm_factors(C, lib0) if norm_factors is None else np.asarray(norm_factors, dtype=np.float64)
@@ -778,8 +845,14 @@ def glm_ql(counts: np.ndarray, X: np.ndarray, coef: int = -1, *, robust: bool = 
     beta, mu = glm_fit(C, X, off, phi, groups)
     D, F, _uda, _udf = adjusted_deviance(C, mu, X, psi, avg, groups, um)
     with np.errstate(divide="ignore", invalid="ignore"):
-        s2 = D / F
-    s2_prior, d0 = fit_f_dist_unequal_df(s2, F, alc)
+        # genes with round-off residual df (perfect fits) go in as s2 = 0 (black-box: R's are all
+        # < 3e-7, the smallest kept 0.89); the plain fit leaves them out either way, the robust one
+        # counts them as left-tail outliers
+        s2 = np.where(F < _EB_MIN_DF, 0.0, D / F)
+    if robust:
+        s2_prior, _d0, d0 = fit_f_dist_robust_unequal_df(s2, F, alc)
+    else:
+        s2_prior, d0 = fit_f_dist_unequal_df(s2, F, alc)
     s2_post = np.where(F > 0, (F * np.nan_to_num(s2) + d0 * s2_prior) / (F + d0), s2_prior)
     keep = [j for j in range(p) if j != coef]
     X0 = X[:, keep]

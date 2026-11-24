@@ -346,7 +346,14 @@ def log_only_stop(step: str, adata: Any) -> str | None:
 
 # What a stopped run says it kept, and how to make a step fit (``memory_stop``).
 NOTHING_SAVED = "Nothing was saved: the dataset is as it was before the run."
-RAISE_LIMIT = "Raise SCVIEW_MEMORY_GB in .env (then restart scView), or leave this step out."
+
+
+def raise_limit(limit_bytes: int | None = None) -> str:
+    """How to make a stopped step fit: more memory (``memory_budget.more_memory_advice``: the
+    site admin on a hosted site), or leave the step out."""
+    from scview.core.memory_budget import more_memory_advice
+
+    return more_memory_advice("leave this step out", limit_bytes=limit_bytes)
 
 
 def others_stop(lead: str, need: int, avail: Any, others: int, waited: float = 0.0,
@@ -459,11 +466,11 @@ def default_before_step(step: str, adata: Any, params: Any) -> str | None:
 
 
 def memory_stop(step: str, need: int, *, label: str | None = None, saved: str = NOTHING_SAVED,
-                fix: str = RAISE_LIMIT) -> str | None:
+                fix: str | None = None) -> str | None:
     """The memory half of ``default_before_step`` for a step needing ``need`` more bytes
     at its peak: None when it fits (after waiting for other work, ``room_for_step``), else
     the stop sentence. ``label`` names the step in it (default: its name), ``saved`` says
-    what the stop kept and ``fix`` how to make it fit: a joint embedding
+    what the stop kept and ``fix`` how to make it fit (default ``raise_limit``): a joint embedding
     (core/integration.py) keeps no dataset and has no step to leave out."""
     from scview.core import preflight
 
@@ -480,7 +487,8 @@ def memory_stop(step: str, need: int, *, label: str | None = None, saved: str = 
                            saved)
     return (f"Stopped before {label}: it needs about {need / GB:.1f} GB more at its peak, and scView "
             f"has {avail.available_bytes / GB:.1f} GB free of its {avail.limit_bytes / GB:.1f} GB limit, "
-            f"so the system would have stopped the backend. {saved} {fix}")
+            f"so the system would have stopped the backend. {saved} "
+            f"{fix if fix is not None else raise_limit(avail.limit_bytes)}")
 
 
 _DEFAULT = object()

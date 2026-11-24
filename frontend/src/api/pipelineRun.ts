@@ -1,5 +1,6 @@
 import { apiFetch, readError } from "@/api/client";
 import { errorMessage } from "@/lib/errorMessage";
+import { isHosted } from "@/lib/memoryAdvice";
 import { clearedText } from "@/lib/runErrors";
 
 /** A warning the run watchdog sends into a run's stream (backend core/run_watchdog.py). */
@@ -129,13 +130,17 @@ export async function withConversionConsent<T>(
 
 /** What a run's failure says in the UI: a declined conversion in plain words (the refusal's own
  *  text names the API flag), anything else as the server's reason. */
-export const DECLINED_CONVERSION =
-  "Not run: it would have switched the dataset to large-dataset mode, and you chose not to. Close other " +
-  "datasets or raise scView's memory limit to run it in memory.";
+export function declinedConversion(): string {
+  return (
+    "Not run: it would have switched the dataset to large-dataset mode, and you chose not to. Close other " +
+    `datasets or ${isHosted() ? "ask the site admin for more memory" : "raise scView's memory limit"} to run ` +
+    "it in memory."
+  );
+}
 
 export function runErrorText(e: unknown): string {
   const msg = errorMessage(e);
-  return isConversionRefusal(msg) ? DECLINED_CONVERSION : msg;
+  return isConversionRefusal(msg) ? declinedConversion() : msg;
 }
 
 const gb = (n: number) => (n >= 10 ? n.toFixed(0) : n.toFixed(1));

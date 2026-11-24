@@ -13,7 +13,12 @@ vi.mock("@/api/ingest", () => ({
   getMergePlan: vi.fn(), setIngestOptions: vi.fn(), uploadIngestFiles: vi.fn(),
 }));
 vi.mock("@/components/panels/DatasetLibrary", () => ({ DatasetLibrary: () => null }));
-vi.mock("@/components/common/PreflightNote", () => ({ PreflightIngestNotes: () => null }));
+vi.mock("@/components/common/PreflightNote", () => ({
+  PreflightIngestNotes: () => null,
+  PreflightNote: ({ verdict, label }: { verdict: { sentence: string; level: string }; label?: string }) => (
+    <p data-testid="converter-note" data-level={verdict.level}>{label ? `${label}: ${verdict.sentence}` : verdict.sentence}</p>
+  ),
+}));
 
 import { DataPanel } from "./DataPanel";
 import { useDatasetStore } from "@/stores/datasetStore";
@@ -68,6 +73,27 @@ describe("DataPanel: an R file", () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
     expect(useDatasetStore.getState().currentDataset?.status).toBe("ready");
     expect(useViewStore.getState().activePanel).toBe("assessment");
+  });
+
+  it("shows the converter's memory estimate while it converts, and the memory sentence if it runs out", async () => {
+    const estimate = {
+      level: "wont_fit", sentence: "Converting SCA.rds takes about 3.6 GB in the R converter, roughly 10 to 40 s.",
+    };
+    const oom = "The converter ran out of memory converting SCA.rds (it has 3.0 GB; this object needs about 3.6 GB).";
+    uploadDataset.mockResolvedValue({ id: "d1", name: "SCA", status: "converting" });
+    getDataset
+      .mockResolvedValueOnce({ ...base, status: "converting", conversion_progress: null, conversion_preflight: estimate })
+      .mockResolvedValueOnce({ ...base, status: "error", error_message: oom });
+
+    render(<DataPanel />);
+    await act(async () => drop(new File(["x"], "SCA.rds")));
+    const note = screen.getByTestId("converter-note");
+    expect(note.textContent).toBe(estimate.sentence);
+    expect(note.getAttribute("data-level")).toBe("wont_fit");
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    expect(screen.getByText(oom)).toBeTruthy();
+    expect(screen.queryByTestId("converter-note")).toBeNull(); // only while it converts
   });
 
   it("shows the converter's own sentence when it refuses the object", async () => {

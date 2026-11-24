@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, AlertTriangle, CheckCircle2, Circle, Layers, Loader2, MinusCircle, XCircle } from "lucide-react";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
@@ -10,9 +10,11 @@ import {
   type IntegrationEvent,
   type IntegrationMethod,
   type IntegrationPlan,
+  type CombineColumns,
   type DroppedColumn,
   type UnitFiltering,
 } from "@/api/integration";
+import { Help } from "@/components/common/Help";
 import { CRITERION_LABELS } from "@/components/qc/RemovalAudit";
 import type { FilterCriterion } from "@/api/qc";
 import { formatNumber, prettyObsLabel } from "@/lib/formatting";
@@ -51,6 +53,24 @@ export function defaultJointName(labels: string[]): string {
   if (labels.length < 2) return "";
   if (labels.length <= 4) return `joint: ${labels.join(" + ")}`;
   return `joint: ${labels.slice(0, 3).join(" + ")} + ${labels.length - 3} more`;
+}
+
+/** The combined label column being set up: one column per dataset id ("" = none). */
+export interface CombineDraft {
+  on: boolean;
+  name: string;
+  columns: Record<string, string>;
+  prefix: boolean;
+}
+
+/** The draft as the backend takes it, or null when it would combine nothing (off, unnamed,
+ *  or fewer than two datasets with a column). */
+export function combineSpec(d: CombineDraft | null, ids: string[]): CombineColumns | null {
+  if (!d?.on || !d.name.trim()) return null;
+  const columns: Record<string, string> = {};
+  for (const id of ids) if (d.columns[id]) columns[id] = d.columns[id]!;
+  if (Object.keys(columns).length < 2) return null;
+  return { name: d.name.trim(), columns, prefix: d.prefix };
 }
 
 /** The datasets the picker shows for a filter text (name, case-insensitive), selected ones always. */
@@ -93,6 +113,7 @@ export function JointEmbedding() {
   const [resolution, setResolution] = useState(0.5);
 
   const [plan, setPlan] = useState<IntegrationPlan | null>(null);
+  const [combine, setCombine] = useState<CombineDraft | null>(null);
   const [planning, setPlanning] = useState(false);
   const [planError, setPlanError] = useState<string | null>(null);
 
@@ -121,16 +142,36 @@ export function JointEmbedding() {
   );
   const labelList = useMemo(() => selected.map(labelFor), [selected, labelFor]);
   const labelKey = labelList.join("\u0000");
+  const spec = useMemo(() => combineSpec(combine, selected), [combine, selected]);
+  const specKey = JSON.stringify(spec);
+  const selectionKey = `${selected.join("\u0000")}\u0001${labelKey}`;
+  const lastSelection = useRef(selectionKey);
 
-  // Re-check compatibility whenever the selection (or a label) settles.
+  // A new selection starts the combined column over (from the next plan's suggestion).
   useEffect(() => {
-    setPlan(null);
+    setCombine(null);
+  }, [selected]);
+
+  // The first plan with a suggestion sets the combined column up (on: the source columns stay).
+  useEffect(() => {
+    const s = plan?.label_suggestion;
+    if (combine === null && s) setCombine({ on: true, name: s.name, columns: { ...s.columns }, prefix: false });
+  }, [plan, combine]);
+
+  // Re-check compatibility whenever the selection (or a label, or the combined column) settles.
+  useEffect(() => {
+    // Only a new selection clears the plan; a combined-column edit keeps it on screen meanwhile.
+    if (lastSelection.current !== selectionKey) setPlan(null);
+    lastSelection.current = selectionKey;
     setPlanError(null);
-    if (selected.length < 2) return;
+    if (selected.length < 2) {
+      setPlan(null);
+      return;
+    }
     let cancelled = false;
     const t = setTimeout(() => {
       setPlanning(true);
-      planIntegration(selected, labelList)
+      planIntegration(selected, labelList, spec ? [spec] : undefined)
         .then((p) => !cancelled && setPlan(p))
         .catch((e) => !cancelled && setPlanError(errorMessage(e)))
         .finally(() => !cancelled && setPlanning(false));
@@ -139,9 +180,9 @@ export function JointEmbedding() {
       cancelled = true;
       clearTimeout(t);
     };
-    // labelKey stands in for labelList (a new array every render).
+    // labelKey stands in for labelList (a new array every render), specKey for spec.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected, labelKey]);
+  }, [selected, labelKey, specKey]);
 
   const toggle = (id: string) =>
     setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
@@ -216,6 +257,7 @@ export function JointEmbedding() {
           name: name.trim() || defaultName,
           method,
           filter_units: filterUnits,
+          ...(spec ? { combine: [spec] } : {}),
           params: { clustering_resolution: resolution },
         },
         onEvent,
@@ -400,6 +442,14 @@ export function JointEmbedding() {
                     </span>
                   ))}
                 </p>
+              )}
+              {plan.label_columns && Object.values(plan.label_columns).filter((c) => c.length > 0).length >= 2 && (
+                <CombineLabels
+                  plan={plan}
+                  draft={combine}
+                  onChange={setCombine}
+                  disabled={running}
+                />
               )}
               {plan.filtering && plan.filtering.length > 0 && (
                 <UnitFilteringNote rows={plan.filtering} on={filterUnits} onChange={setFilterUnits} disabled={running} />
@@ -594,6 +644,153 @@ export function DroppedColumns({ columns, nDatasets }: { columns: DroppedColumn[
       <summary className="cursor-pointer">{what} (show which and why)</summary>
       <div className="mt-1">{lines}</div>
     </details>
+  );
+}
+
+const NONE = "";
+
+/** Ticking the dataset label on: a name that is still the suggested one and equals a column
+ *  it combines becomes "<name>_combined" (the plan refuses that name with the label on: the
+ *  source column would be replaced). A name the user typed is kept, and the plan says why. */
+export function prefixPatch(d: CombineDraft, suggested: string | null, prefix: boolean): Partial<CombineDraft> {
+  const name = d.name.trim();
+  if (prefix && suggested != null && name === suggested && Object.values(d.columns).includes(name))
+    return { prefix, name: `${name}_combined` };
+  return { prefix };
+}
+
+/** One dataset's line under its column choice: how many of its cells have no value there
+ *  (QA-8: a column empty for 150 of 968 cells was combined with nothing said). Null until the
+ *  plan has checked this choice. */
+export function missingText(
+  checked: { columns: Record<string, string>; n_cells?: Record<string, number>; n_missing?: Record<string, number> }[],
+  id: string,
+  column: string,
+): { text: string; warn: boolean } | null {
+  if (!column) return null;
+  const c = checked.find((x) => x.columns[id] === column && x.n_missing?.[id] != null && x.n_cells?.[id] != null);
+  if (!c) return null;
+  const missing = c.n_missing![id]!;
+  const cells = c.n_cells![id]!;
+  if (missing === 0) return { text: `all ${cells.toLocaleString("en-US")} cells have a value`, warn: false };
+  return {
+    text: `${missing.toLocaleString("en-US")} of ${cells.toLocaleString("en-US")} cells have no value`,
+    warn: true,
+  };
+}
+
+/** One label column of the joint dataset from one column per dataset: the plan suggests it
+ *  when label columns are each in one dataset only (a `Celltype` here, a `cell_line` there). */
+export function CombineLabels({
+  plan,
+  draft,
+  onChange,
+  disabled,
+}: {
+  plan: IntegrationPlan;
+  draft: CombineDraft | null;
+  onChange: (d: CombineDraft) => void;
+  disabled?: boolean;
+}) {
+  const d = draft ?? { on: false, name: "", columns: {}, prefix: false };
+  const s = plan.label_suggestion;
+  const set = (patch: Partial<CombineDraft>) => onChange({ ...d, ...patch });
+  const done = plan.combined?.find((c) => c.name === d.name.trim());
+  const picked = plan.datasets.filter((x) => d.columns[x.id]).length;
+  // What the plan checked, this combination first, then the suggestion (same column, same counts)
+  const checked = [...(done ? [done] : []), ...(s ? [s] : [])];
+  return (
+    <div className="rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-600" data-testid="combine-labels">
+      <label className="flex items-center gap-2 font-medium text-slate-700">
+        <input
+          type="checkbox"
+          checked={d.on}
+          onChange={(e) => set({ on: e.target.checked })}
+          disabled={disabled}
+          className="h-3.5 w-3.5"
+        />
+        <Help id="joint.combine">Combine label columns into one</Help>
+      </label>
+      {s && (
+        <p className="mt-0.5 text-slate-500">
+          Each dataset names its cells in a column the others lack (
+          {plan.datasets
+            .filter((x) => s.columns[x.id])
+            .map((x) => `${x.label}: ${s.columns[x.id]}`)
+            .join(", ")}
+          ), so in the joint dataset no column names every cell.
+        </p>
+      )}
+      {d.on && (
+        <div className="mt-1.5 space-y-1.5">
+          <label className="flex items-center gap-1.5">
+            Column name
+            <input
+              aria-label="Combined column name"
+              value={d.name}
+              onChange={(e) => set({ name: e.target.value })}
+              disabled={disabled}
+              className="w-40 rounded border border-slate-300 px-1.5 py-0.5 text-slate-700"
+            />
+          </label>
+          <ul className="space-y-1">
+            {plan.datasets.map((x) => (
+              <li key={x.id} className="flex items-center gap-1.5">
+                <span className="w-32 truncate text-slate-600" title={x.label}>
+                  {x.label}
+                </span>
+                <select
+                  aria-label={`Column of ${x.label}`}
+                  value={d.columns[x.id] ?? NONE}
+                  onChange={(e) => set({ columns: { ...d.columns, [x.id]: e.target.value } })}
+                  disabled={disabled}
+                  className="rounded border border-slate-300 bg-white px-1 py-0.5 text-slate-700"
+                >
+                  <option value={NONE}>none (no value)</option>
+                  {(plan.label_columns?.[x.id] ?? []).map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+                <MissingNote m={missingText(checked, x.id, d.columns[x.id] ?? NONE)} />
+              </li>
+            ))}
+          </ul>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={d.prefix}
+              onChange={(e) => set(prefixPatch(d, s?.name ?? null, e.target.checked))}
+              disabled={disabled}
+              className="h-3.5 w-3.5"
+            />
+            <Help id="joint.combine-prefix">Put the dataset label before each value</Help>
+          </label>
+          {picked < 2 && <p className="text-amber-700">Pick a column in two or more datasets.</p>}
+          {done && (
+            <p className="text-slate-500" data-testid="combined-summary">
+              '{done.name}' names the cells of {Object.keys(done.columns).length} datasets with{" "}
+              {done.n_values.toLocaleString()} values; the source columns stay as they are. You can import labels
+              into it or rename its values afterwards, as with a column you made.
+              {done.shared_values.length > 0 &&
+                ` ${done.shared_values.length} value${done.shared_values.length === 1 ? " is" : "s are"} in more than one dataset (${done.shared_values
+                  .slice(0, 3)
+                  .join(", ")})${done.prefix ? ", kept apart by the label." : ": kept as one value unless the dataset label goes first."}`}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MissingNote({ m }: { m: { text: string; warn: boolean } | null }) {
+  if (!m) return null;
+  return (
+    <span className={m.warn ? "text-amber-700" : "text-slate-500"} data-testid="combine-missing">
+      {m.text}
+    </span>
   );
 }
 

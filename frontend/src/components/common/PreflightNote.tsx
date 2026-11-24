@@ -39,7 +39,14 @@ function Breakdown({ verdict }: { verdict: PreflightVerdict }) {
       {v.available_bytes != null && v.limit_bytes != null && (
         <span className="block">
           Free now: {gb(v.available_bytes)} GB of {gb(v.limit_bytes)} GB
-          {v.limited ? " (the SCVIEW_MEMORY_GB limit)" : " (no limit is set: the memory this machine gives scView)"};
+          {v.source === "converter"
+            ? " (the R converter's limit)"
+            : v.hosted
+            ? " (this site's limit)"
+            : v.limited
+              ? " (the SCVIEW_MEMORY_GB limit)"
+              : " (no limit is set: the memory this machine gives scView)"}
+          ;
           file cache the system can drop is counted as free.
         </span>
       )}
@@ -50,9 +57,13 @@ function Breakdown({ verdict }: { verdict: PreflightVerdict }) {
         </span>
       )}
       <span className="block">
-        Memory is estimated from the data's shape and storage (cells, genes, stored values, read
-        from the file's header) with coefficients measured on test datasets, where it came within{" "}
-        {Math.round(v.error_band * 100)}% of the measured peak.
+        {v.basis ?? (
+          <>
+            Memory is estimated from the data's shape and storage (cells, genes, stored values, read
+            from the file's header) with coefficients measured on test datasets, where it came within{" "}
+            {Math.round(v.error_band * 100)}% of the measured peak.
+          </>
+        )}
       </span>
       <span className="block">
         Time is rough: measured with 2 CPUs (more CPUs barely speed the steps up; fewer slow them
@@ -331,7 +342,14 @@ export function PreflightIngestNotes({
   return (
     <div className="space-y-1.5" aria-label="Memory estimate">
       {data.units.map((u) => (
-        <PreflightNote key={u.label} verdict={u.verdict} label={many ? u.label : undefined} />
+        <div key={u.label} className="space-y-1.5">
+          {/* the converter's sentence names the file: no label */}
+          {u.converter && <PreflightNote verdict={u.converter} />}
+          <PreflightNote
+            verdict={u.verdict}
+            label={u.converter ? `${many ? u.label : "Then"}, once converted` : many ? u.label : undefined}
+          />
+        </div>
       ))}
       {data.merge && <PreflightNote verdict={data.merge} label="Merging them" />}
     </div>

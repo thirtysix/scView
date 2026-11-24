@@ -15,7 +15,8 @@ PMID 34594043). Follows pertpy's ``Milo`` (the milopy port) step by step:
 3. **Test.** A negative binomial GLM per neighbourhood, ``~ [donor +]
    [covariate +] condition``, and edgeR's quasi-likelihood F-test of the
    condition with TMM factors over the neighbourhood counts: miloR's own test
-   (``testNhoods``), run by core/edger_ql.py. Until v0.81.0 DESeq2 (pydeseq2,
+   (``testNhoods``, glmQLFit robust=TRUE since v0.82.0), run by core/edger_ql.py.
+   Until v0.81.0 DESeq2 (pydeseq2,
    pertpy's ``pydeseq2`` solver) fitted it, which turned the sign of
    neighbourhoods with no reference cells (``_glm_ql``). On Kang (Harmony graph,
    ``~ donor + stim``) the two call 672 and 671 neighbourhoods at spatial
@@ -294,6 +295,8 @@ class MiloResult:
     # its own graph (k / n_pcs asked) rather than reading the dataset's
     n_pcs: int | None = None
     own_graph: bool = False
+    # v0.82.0: edgeR's prior fitted robustly (glmQLFit robust=TRUE, as miloR); False in older results
+    robust: bool = False
 
     def sample_summary(self) -> dict[str, Any] | None:
         """Which samples fill the significant neighbourhoods: how many of them have half or
@@ -339,7 +342,7 @@ class MiloResult:
             "reference": self.conditions[0], "design": self.design,
             "covariates": self.covariates, "formula": self.formula,
             "representation": self.representation, "n_neighbors": self.n_neighbors,
-            "n_pcs": self.n_pcs, "own_graph": self.own_graph,
+            "n_pcs": self.n_pcs, "own_graph": self.own_graph, "robust": self.robust,
             "prop": self.prop, "seed": SEED,
             "n_cells": self.n_cells, "n_samples": self.n_samples,
             "n_nhoods": int(len(self.index)),
@@ -638,12 +641,13 @@ def design_warnings(adata, condition_key: str, keep: np.ndarray,
 
 
 def _glm_ql(counts: np.ndarray, s_cond: np.ndarray, chosen: list[str],
-            donors: np.ndarray | None, covariates: list[np.ndarray],
+            donors: np.ndarray | None, covariates: list[np.ndarray], robust: bool = True,
             ) -> tuple[np.ndarray, np.ndarray]:
     """(log2 fold change, p) per row of ``counts`` (neighbourhoods x samples): miloR's
     ``testNhoods`` defaults, edgeR's quasi-likelihood F-test of the condition with TMM factors
     and each sample's counted cells as its library size (core/edger_ql.py, = R edgeR 4.6.3,
-    glmQLFit legacy=FALSE; miloR also passes robust=TRUE, not implemented there). The logFC is
+    glmQLFit legacy=FALSE, robust=TRUE as miloR passes it since v0.82.0: a few neighbourhoods
+    whose variance is an outlier no longer pull the prior for the rest). The logFC is
     edgeR's, from the fit with a prior count of 0.125: a neighbourhood with no cell of one
     condition gets a finite logFC of the right sign.
 
@@ -661,7 +665,7 @@ def _glm_ql(counts: np.ndarray, s_cond: np.ndarray, chosen: list[str],
     from scview.core import edger_ql
 
     X = design_matrix(s_cond, chosen, donors, covariates)
-    res = edger_ql.glm_ql(np.asarray(counts, dtype=np.float64).T, X, coef=-1)
+    res = edger_ql.glm_ql(np.asarray(counts, dtype=np.float64).T, X, coef=-1, robust=robust)
     return np.asarray(res.logFC, dtype=np.float64), np.asarray(res.pvalue, dtype=np.float64)
 
 
@@ -718,7 +722,7 @@ def iter_milo(adata, p: Plan, *, label_key: str | None = None,
 
     n_s = counts.shape[1]
     yield {"step": "test", "message": f"Fitting a negative binomial model per neighbourhood "
-           f"(edgeR quasi-likelihood, about {estimate_seconds(len(nh.index), n_s):.0f} s)"}
+           f"(edgeR quasi-likelihood, robust, about {estimate_seconds(len(nh.index), n_s):.0f} s)"}
     t = time.perf_counter()
     tested = counts.sum(axis=1) > 0
     log_fc = np.full(len(nh.index), np.nan)
@@ -806,6 +810,7 @@ def iter_milo(adata, p: Plan, *, label_key: str | None = None,
         n_edges_total=n_edges, membership=nh.membership, warnings=warnings, notes=notes,
         dropped_samples=p.dropped_samples, timings=timings, n_neighbors=p.n_neighbors,
         top_sample=top_sample, top_sample_share=top_share, n_pcs=p.n_pcs, own_graph=p.own_graph,
+        robust=True,
     )}
 
 

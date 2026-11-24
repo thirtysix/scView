@@ -1,8 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 
-const { importLabelFile, refresh } = vi.hoisted(() => ({ importLabelFile: vi.fn(), refresh: vi.fn() }));
-vi.mock("@/api/labels", async (orig) => ({ ...(await orig<typeof import("@/api/labels")>()), importLabelFile }));
+const { importLabelFile, listLabelColumns, refresh } = vi.hoisted(() => ({
+  importLabelFile: vi.fn(),
+  listLabelColumns: vi.fn(),
+  refresh: vi.fn(),
+}));
+vi.mock("@/api/labels", async (orig) => ({
+  ...(await orig<typeof import("@/api/labels")>()),
+  importLabelFile,
+  listLabelColumns,
+}));
 vi.mock("@/hooks/useDatasetRefresh", () => ({ useDatasetRefresh: () => refresh }));
 
 import { LabelImportCard } from "./LabelImportCard";
@@ -27,11 +35,14 @@ beforeEach(() => {
     currentDataset: { id: "ds", name: "Kang", obs_columns: [{ name: "cluster" }, { name: "stim" }] } as never,
   });
   refresh.mockResolvedValue({});
+  listLabelColumns.mockResolvedValue({ columns: [], unassigned: "Unassigned" });
 });
 
 describe("LabelImportCard", () => {
   it("reads the header, checks the match, then imports and offers to colour by it", async () => {
-    importLabelFile.mockResolvedValueOnce(REPORT).mockResolvedValueOnce({ ...REPORT, dry_run: undefined });
+    importLabelFile
+      .mockResolvedValueOnce(REPORT)
+      .mockResolvedValueOnce({ ...REPORT, dry_run: undefined, n_imported_labels: 13, n_unassigned: 500 });
     render(<LabelImportCard datasetId="ds" />);
     pick("cell_barcode,donor,author_type\nCTRL_A.1,d1,B\n");
     const labels = (await screen.findByLabelText("Label column")) as HTMLSelectElement;
@@ -50,11 +61,12 @@ describe("LabelImportCard", () => {
     expect(report.textContent).toContain("4,081");
     expect(importLabelFile.mock.calls[0]![2]).toEqual({
       column: "author_type", barcodeColumn: "cell_barcode", labelColumn: "author_type", stripSuffix: false,
-      minMatch: 0.9, dryRun: true,
+      minMatch: 0.9, dryRun: true, newColumn: true, sampleColumn: null,
     });
 
     fireEvent.click(importButton);
-    await screen.findByText(/Saved 13,336 cells into/);
+    const saved = await screen.findByText(/Saved 13,336 cells into/);
+    expect(saved.textContent).toContain("(13 labels; 500 cells are Unassigned)");
     expect(importLabelFile.mock.calls[1]![2].dryRun).toBe(false);
     expect(refresh).toHaveBeenCalledWith("ds", "author_type");
     fireEvent.click(screen.getByRole("button", { name: "Colour by it" }));
@@ -92,5 +104,44 @@ describe("LabelImportCard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Check the match" }));
     await screen.findByTestId("label-import-report");
     expect(importLabelFile.mock.calls[0]![2].barcodeColumn).toBeNull();
+  });
+
+  it("imports into an existing label column and says how many cells changed", async () => {
+    listLabelColumns.mockResolvedValue({ columns: ["my_types"], unassigned: "Unassigned" });
+    const into = { ...REPORT, column: "my_types", created: false, n_changed: 120, n_matched: 13336 };
+    importLabelFile.mockResolvedValueOnce(into).mockResolvedValueOnce({ ...into, dry_run: undefined });
+    render(<LabelImportCard datasetId="ds" />);
+    pick("cell_barcode,author_type\nCTRL_A.1,B\n");
+    const target = (await screen.findByLabelText("Import into")) as HTMLSelectElement;
+    await waitFor(() => expect(target.options.length).toBe(2));
+    fireEvent.change(target, { target: { value: "my_types" } });
+    expect(screen.queryByLabelText("New column name")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Check the match" }));
+    const report = await screen.findByTestId("label-import-report");
+    expect(report.textContent).toContain("120 of the 13,336 matched cells get a different label in my_types.");
+    expect(report.textContent).toContain("500 cells are not in the table and keep their label in my_types");
+    expect(importLabelFile.mock.calls[0]![2]).toMatchObject({ column: "my_types", newColumn: false });
+    fireEvent.click(screen.getByRole("button", { name: /Import into my_types/ }));
+    await screen.findByText(/Updated/);
+    expect(screen.getByText(/120 of 13,336 matched cells changed label/)).toBeTruthy();
+  });
+
+  it("by order offers the table's other columns to check the order by", async () => {
+    importLabelFile.mockResolvedValueOnce({
+      ...REPORT, match: "order",
+      order_check: { table_column: "donor", dataset_column: "sample", n_samples: 8, lined_up: true },
+    });
+    render(<LabelImportCard datasetId="ds" />);
+    pick("donor,author_type\nd1,B\n", "order.csv");
+    const names = (await screen.findByLabelText("Cell name column")) as HTMLSelectElement;
+    fireEvent.change(names, { target: { value: "\u0000order" } });
+    fireEvent.change(screen.getByLabelText("Label column"), { target: { value: "author_type" } });
+    const sample = screen.getByLabelText("Sample column") as HTMLSelectElement;
+    expect(Array.from(sample.options).map((o) => o.textContent)).toEqual(["any sample column", "donor"]);
+    fireEvent.change(sample, { target: { value: "donor" } });
+    fireEvent.click(screen.getByRole("button", { name: "Check the match" }));
+    const report = await screen.findByTestId("label-import-report");
+    expect(report.textContent).toContain("The rows line up with the dataset's 'sample' sample by sample");
+    expect(importLabelFile.mock.calls[0]![2]).toMatchObject({ barcodeColumn: null, sampleColumn: "donor" });
   });
 });

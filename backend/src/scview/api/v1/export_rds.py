@@ -23,6 +23,7 @@ from scview.config import Settings
 from scview.core import cellxgene_export as cx
 from scview.core import large_mode, rds_export
 from scview.core.dataset_manager import DatasetManager
+from scview.core.memory_budget import more_memory_advice
 from scview.core.obs_writes import dataset_edit
 from scview.dependencies import get_dataset_manager, get_settings_dep
 
@@ -69,9 +70,10 @@ async def _plan(dm: DatasetManager, dataset_id: str, fmt: str):
 def _too_big(mem: dict) -> str:
     gb = 1024 ** 3
     return (f"Building this R object needs about {mem['needs_bytes'] / gb:.1f} GB in the R converter, "
-            f"more than its {mem['limit_bytes'] / gb:.1f} GB limit. Raise SCVIEW_MEMORY_GB, or subset "
-            "the dataset first, or download the .h5ad and read it in R with zellkonverter or "
-            "SeuratDisk.")
+            f"more than its {mem['limit_bytes'] / gb:.1f} GB limit. "
+            + more_memory_advice("subset the dataset first, or download the .h5ad and read it in R with "
+                                 "zellkonverter or SeuratDisk", limit_bytes=mem["limit_bytes"],
+                                 service="the R converter"))
 
 
 @router.get("/datasets/{dataset_id}/export/rds/info")

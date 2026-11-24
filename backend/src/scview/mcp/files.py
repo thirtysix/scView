@@ -274,7 +274,8 @@ def _read_label_file(path: str) -> tuple[str, str]:
 async def import_labels(
     dataset_id: DatasetId,
     column: Annotated[str, Field(min_length=1, max_length=64, description=(
-        "The user annotation column to write: a new one (new_column) or one set_labels / an import made."))],
+        "The user annotation column to write: a new one (new_column), or one set_labels, an import or a "
+        "joint embedding's combined label column made."))],
     labels: Annotated[dict[str, str | None] | None, Field(description=(
         "Cell name (barcode, as in the dataset's obs names) -> label. For a few thousand cells; "
         "a bigger table goes as path or through the REST upload (see the tool's description)."))] = None,
@@ -292,6 +293,10 @@ async def import_labels(
     match: Annotated[Literal["name", "order"], Field(description=(
         "table/path: by cell name (default), or by order: row i labels cell i, refused unless the "
         "row count equals the cell count."))] = "name",
+    sample_column: Annotated[str | None, Field(description=(
+        "table/path by order: the table's sample column, checked row by row against the dataset's "
+        "column with those values (refused, naming the samples, when they do not line up). Default: "
+        "any other column of the table whose values are a dataset column."))] = None,
     new_column: Annotated[bool, Field(description=(
         "Create the column (cells the table leaves out: 'Unassigned'). False: write into an existing "
         "user column; cells the table leaves out keep their label."))] = True,
@@ -304,8 +309,9 @@ async def import_labels(
     """Bring per-cell labels (an author annotation from GEO, a collaborator's table) into a user
     annotation column in one call, matched by cell name or by order. Says how many rows matched,
     rows naming no cell (n_extra, with examples), cells the table leaves out, and each label's
-    count; refused when under min_match of the rows match (a barcode format that differs) or, by
-    order, when the counts differ. Recorded; a table read from a file replays from that file.
+    count (n_changed: cells whose label changes); refused when under min_match of the rows match (a
+    barcode format that differs) or, by order, when the counts differ or the table's sample column
+    does not line up with the dataset's sample by sample. Recorded; a table read from a file replays from that file.
     A big table on your machine: curl -F file=@labels.csv -F column=NAME [-F label_column=...]
     http://127.0.0.1:8080/api/v1/datasets/<id>/labels/import-file (same fields as form fields)."""
     given = [k for k, v in (("labels", labels), ("values", values), ("table", table), ("path", path))
@@ -321,7 +327,7 @@ async def import_labels(
     else:
         text, name = (await asyncio.to_thread(_read_label_file, path)) if path else (table, None)
         body.update(table=text, filename=name, barcode_column=barcode_column, label_column=label_column,
-                    match=match)
+                    match=match, sample_column=sample_column)
     r = await _post(f"/datasets/{dataset_id}/labels/import", body)
     out = {"dataset_id": dataset_id, **r}
     if not dry_run:

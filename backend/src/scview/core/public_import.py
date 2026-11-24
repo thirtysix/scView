@@ -619,6 +619,7 @@ def plan_verdict(plan) -> dict:
     """``memory_verdict`` of a ``dataset_manager.LoadPlan``."""
     from scview.core import memory_budget
     from scview.core.dataset_manager import LOAD_MARGIN, working_reserve
+    from scview.core.memory_budget import more_memory_advice
 
     budget = memory_budget.read_budget()
     gb = 1024**3
@@ -640,7 +641,7 @@ def plan_verdict(plan) -> dict:
     else:
         out.update(verdict="wont_fit", message=(
             f"Needs about {plan.backed / gb:.1f} GB even with its matrices on disk; scView has "
-            f"{budget.limit_bytes / gb:.1f} GB. Raise SCVIEW_MEMORY_GB in .env (then restart scView)."))
+            f"{budget.limit_bytes / gb:.1f} GB. {more_memory_advice(limit_bytes=budget.limit_bytes)}"))
     return out
 
 

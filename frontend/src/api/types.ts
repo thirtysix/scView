@@ -1,3 +1,4 @@
+import type { PreflightVerdict } from "./preflight";
 import type { PublicSource } from "./publicImport";
 
 export interface ExpressionLayerInfo {
@@ -37,6 +38,8 @@ export interface DatasetInfo {
   conversion?: ConversionReport | null;
   /** The converter's latest stage, while status is "converting" */
   conversion_progress?: ConversionProgress | null;
+  /** The R converter's memory estimate for this conversion (a warning, never a refusal) */
+  conversion_preflight?: PreflightVerdict | null;
   /** A large dataset (backend core/large_mode.py): its matrices stay on disk; null otherwise */
   large?: LargeDatasetInfo | null;
   /** Where a public dataset came from (a CELLxGENE Discover import), to cite it */

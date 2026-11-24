@@ -85,7 +85,7 @@ what scView *did*, and only infers what it *didn't observe*.
 > **assess (deterministic, reproducible) → advise (LLM, natural language) → user approves → run → record (provenance).**
 
 ### 1f. The language model provider
-Every chat call (co-pilot, router, follow-ups, actions, QC report, advisor, insight polish,
+Every chat call (co-pilot, router, follow-ups, actions, QC report, advisor,
 methods writer, claims check, LLM annotation) goes to one OpenAI-compatible endpoint. The clients
 are built in one place, `core/llm.py` (`async_client` / `sync_client`), from these settings:
 
@@ -340,9 +340,9 @@ opens, picking the most useful next step by walking the preprocessing state in p
 order (raw counts → doublet load → condition/batch split → cluster → annotate → done), with
 a click-to-ask follow-up. Backend `build_insight` (no LLM, reproducible) +
 `GET /datasets/{id}/assistant/insight`; frontend `InsightBanner` (dismissal remembered per
-dataset+insight); it includes a **QC-anomaly** branch (high mitochondrial content) and, when
-an LLM key is set, **optionally rewords** an actionable nudge into a friendlier sentence
-(`polish_insight`; facts + question preserved, deterministic text is the fallback).
+dataset+insight); it includes a **QC-anomaly** branch (high mitochondrial content). It never
+calls the language model (v0.82: the LLM rewording was removed, since the UI asks for the
+insight on every open and nothing from a dataset goes to the model until the user asks).
 **Conversation persistence** — per-dataset threads survive reloads via localStorage
 (`scview.chat.v1.<id>`), with a Clear control.
 **Cross-encoder reranking** — when `RAG_RERANK_MODEL` is set, retrieval over-fetches

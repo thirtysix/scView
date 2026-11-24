@@ -37,7 +37,8 @@ import { useDatasetStore } from "@/stores/datasetStore";
 import { useViewStore } from "@/stores/viewStore";
 import { DatasetLibrary } from "@/components/panels/DatasetLibrary";
 import { PublicImport } from "@/components/panels/PublicImport";
-import { PreflightIngestNotes } from "@/components/common/PreflightNote";
+import { PreflightIngestNotes, PreflightNote } from "@/components/common/PreflightNote";
+import type { PreflightVerdict } from "@/api/preflight";
 import { SequencingQcSideFiles } from "@/components/qc/SequencingQcSideFiles";
 import { ClonotypeUnitFiles } from "@/components/unified/ClonotypeUnitFiles";
 import { commitConversionNote, conversionNote, isRFile } from "@/lib/conversion";
@@ -101,6 +102,8 @@ export function DataPanel() {
 
   const [busy, setBusy] = useState(false);
   const [busyNote, setBusyNote] = useState<string | null>(null);
+  // While an R object converts: the converter's memory estimate for it.
+  const [rPreflight, setRPreflight] = useState<PreflightVerdict | null>(null);
   const [committing, setCommitting] = useState(false);
   // While a commit converts the session's .rds files: which one, and the converter's stage.
   const [commitNote, setCommitNote] = useState<string | null>(null);
@@ -149,6 +152,7 @@ export function DataPanel() {
         const started = Date.now();
         while (dataset.status === "converting" && Date.now() - started < CONVERT_WAIT_MS) {
           setBusyNote(conversionNote(dataset.conversion_progress));
+          setRPreflight(dataset.conversion_preflight ?? null);
           await new Promise((r) => setTimeout(r, 2000));
           dataset = await getDataset(result.id);
         }
@@ -166,6 +170,7 @@ export function DataPanel() {
       } finally {
         setBusy(false);
         setBusyNote(null);
+        setRPreflight(null);
       }
     },
     [setAvailableDatasets, setCurrentDataset, setPanel]
@@ -434,6 +439,7 @@ export function DataPanel() {
           {busyNote ?? "Inspecting files…"}
         </div>
       )}
+      {busy && rPreflight && <PreflightNote verdict={rPreflight} />}
 
       {error && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>}
 

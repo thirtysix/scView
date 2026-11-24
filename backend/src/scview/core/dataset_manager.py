@@ -87,7 +87,7 @@ class DatasetMemoryError(Exception):
         super().__init__(
             f"{what} needs about {need / gb:.1f} GB at its peak; scView has "
             f"{available / gb:.1f} GB free of its {limit / gb:.1f} GB limit, even with the other "
-            "datasets closed. Raise SCVIEW_MEMORY_GB in .env (then restart scView).")
+            f"datasets closed. {memory_budget.more_memory_advice(limit_bytes=limit)}")
         self.dataset_id = dataset_id
 
 

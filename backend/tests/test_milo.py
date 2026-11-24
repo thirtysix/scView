@@ -179,6 +179,56 @@ def test_a_neighbourhood_of_the_tested_condition_only_goes_up():
     assert (lfc[-2:] > 0).all()
 
 
+def test_test_is_edger_robust(monkeypatch):
+    """miloR's glmQLFit(robust = TRUE): Milo asks edgeR for the robust prior, and a neighbourhood
+    whose counts are wildly overdispersed gets a smaller prior df than the rest."""
+    from scview.core import edger_ql
+
+    seen = []
+    real = edger_ql.glm_ql
+
+    def spy(*a, **kw):
+        seen.append(kw.get("robust"))
+        res = real(*a, **kw)
+        seen.append(res.df_prior)
+        return res
+
+    monkeypatch.setattr(edger_ql, "glm_ql", spy)
+    rng = np.random.default_rng(1)
+    lib = rng.choice([200, 400, 800], size=8).astype(float)
+    C = rng.poisson(np.outer(rng.gamma(4, 0.01, 200), lib))
+    C[0] = [0, 0, 0, 90, 0, 1, 0, 120]  # one wild neighbourhood
+    milo._glm_ql(C, np.array(["A"] * 4 + ["B"] * 4), ["A", "B"], None, [])
+    assert seen[0] is True
+    df_prior = seen[1]
+    assert np.shape(df_prior) == (200,) and df_prior[0] < np.median(df_prior)
+
+
+def test_old_milo_keys_read_as_one_result_per_comparison():
+    """Before v0.81.0 a Milo run was keyed by its condition column only: CD vs HC superseded UC vs
+    HC, and a v0.81 run of UC vs HC (keyed by the comparison) left the old one primary beside it.
+    Read now, the old keys name the comparison."""
+    import json
+
+    from scview.core import results_store
+
+    old = [("UC", "HC"), ("CD", "HC")]
+    for test, ref in old:
+        results_store.keep("dsm", "milo", {"x": test}, key="Group|donor|k=20, X_pca",
+                           label=f"Milo neighbourhoods: {test} vs {ref} (k=20, X_pca)").result()
+    rows = results_store.entries("dsm", "milo")
+    assert sorted(e["status"] for e in rows) == ["primary", "primary"]
+    assert {e["key"] for e in rows} == {"Group:UC vs HC|donor|k=20, X_pca", "Group:CD vs HC|donor|k=20, X_pca"}
+    on_disk = json.loads((results_store.root() / "dsm" / results_store.INDEX).read_text())["results"]
+    assert {e["key"] for e in on_disk} == {e["key"] for e in rows}  # written back once
+    results_store.keep("dsm", "milo", {"x": "new"}, key="Group:UC vs HC|donor|k=20, X_pca",
+                       label="Milo neighbourhoods: UC vs HC (k=20, X_pca)").result()
+    rows = results_store.entries("dsm", "milo")
+    status = {(e["label"], e["status"]) for e in rows}
+    assert ("Milo neighbourhoods: CD vs HC (k=20, X_pca)", "primary") in status
+    assert sorted(st for lab, st in status if "UC vs HC" in lab) == ["primary", "superseded"]
+
+
 def test_label_medians_follow_one_sided_neighbourhoods():
     """A type found only in B (none of A's samples has a cell): its label summary goes up."""
     a = synthetic(shift=1.0)
@@ -357,6 +407,7 @@ async def test_run_streams_off_the_loop_and_reaches_the_copilot(
     assert result["n_significant"] > 0 and result["label_key"] == "type"
     assert "X_umap" in result["layouts"]
     assert len(result["result_id"]) == 32 and result["own_graph"] is False
+    assert result["robust"] is True
     assert len(threads) == 1 and threads[0] is not MAIN
 
     r = await client.post("/api/v1/datasets/ds/milo/cells", json={"nhoods": [0, 1]})

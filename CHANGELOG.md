@@ -4,7 +4,62 @@ All notable changes to scView are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.82.0] - 2026-11-24
+
+Memory fixes from a hosted test run, where a user merged two cell-line Seurat objects: Seurat
+conversion needs about a quarter of the memory, a deep 1.6 GB file opens in a 6 GB backend, and a hosted site's
+memory advice sends users to the site admin. Joint embeddings can combine label columns that each dataset names
+differently. Opening a dataset no longer sends anything to the AI model.
+
+### Added
+- Joint embedding: label columns that each dataset names differently (`Celltype` in one, `cell_line` in the other)
+  can be combined into one column that names every cell. The plan suggests it when label columns are each present
+  in only one dataset; the source columns stay, and the recipe and replay script record it (REST and MCP `combine`).
+  The suggestion prefers a column named for what it holds (cell type, cell line, annotation) over a generic one
+  (`old.ident`), then the one with the fewest cells without a value, counting Seurat's "SeuratProject"
+  placeholder as none; the plan says per dataset how many cells have none ("150 of 968 cells have no value"). The combined column is a label column like one you
+  made: you can import a table into it, label a selection in it or rename its values.
+- Before converting an .rds, scView estimates the converter's memory from the object's decompressed size (within
+  10% on four objects) and warns when the converter's limit is too small.
+- Run estimates include first-time downloads ("about 2 min to download the marker databases once (76 MB)").
+- Import labels from a file can write into an existing label column: matched cells are overwritten, the rest keep
+  theirs, and the check says how many change.
+
+### Changed
+- Seurat .rds conversion needs about a quarter of the memory: a 23,578-cell x 34,209-gene object that 0.81.0 could
+  not convert in 12 GB converts in 3.6 GB. The layers are joined piece by piece, data and scale.data are freed
+  first, and X is written in blocks. Converted X is stored as CSR, so large-dataset mode can read converted files.
+- Milo fits edgeR's prior robustly (`glmQLFit(robust=TRUE)`, as miloR does): a few overdispersed neighbourhoods no
+  longer pull the prior for the rest. Checked against R edgeR; on Kang the 280 significant neighbourhoods are the
+  same either way.
+- On a hosted site (`DEPLOYMENT_MODE=public`) memory advice says to ask the site admin, naming the site's limit,
+  instead of editing .env: preflight, the restart notice, the memory gauge, 507 replies, stopped runs, the joint
+  embedding, public import, R export and the converter.
+- Nothing from a dataset goes to the AI model until you ask: a co-pilot message or question chip, Write methods,
+  Check claims, Get AI suggestions, Write report, or the AI cell-type annotator. The "I notice..." note shown on
+  opening a dataset was reworded by the model on every open, and that text can name metadata columns and values;
+  scView now writes it alone. A test replays the requests the UI makes on opening and visiting every panel and
+  checks that no model is called.
+- Label import by order checks the rows sample by sample when the table has a sample column, and refuses a table
+  whose samples are in another order (the counts per sample can agree while the rows do not).
+
+### Fixed
+- Opening a deep 1.6 GB file no longer stops a 6 GB backend: marker genes on counts take 1.9 GB instead of 4.5 GB
+  (the shifted log kept three copies of the counts) and are refused with a message when they cannot fit.
+- The data assessment runs once per dataset at a time, and its samples take 76 MB instead of 0.57 GB.
+- The run estimate's doublet check no longer takes 1.7 GB on every preflight.
+- Run estimates without doublet detection were up to 15% low on larger datasets.
+- A conversion that runs out of memory says so, with the converter's limit, what the object needs and what to do,
+  instead of "The R converter service could not be reached". Each conversion runs in a child process, so the
+  converter stays up.
+- Seurat v5 objects with only a `data` layer convert; merged objects whose split layers have different genes give
+  what `JoinLayers` gives.
+- A combined label column with the dataset label before each value can no longer take the name of a column it
+  combines (it replaced that column, found on real data). A suggested name becomes `<name>_combined`; a name you
+  typed is refused with a note.
+- Label import mentions Unassigned only when some cells are.
+- Milo results stored before v0.81 read as one result per comparison, so an earlier comparison is no longer marked
+  superseded.
 
 ## [0.81.0] - 2026-11-17
 

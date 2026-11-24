@@ -6,6 +6,7 @@ import {
   inCardWords,
   parseHeader,
   readFirstLine,
+  savedLabelsText,
   separatorOf,
   suggestImportName,
   type LabelImportReport,
@@ -61,7 +62,24 @@ describe("match report", () => {
 
   it("by order counts cells", () => {
     const r = { ...base, match: "order" as const, n_rows: 13836, n_matched: 13836, n_extra: 0, n_unmatched_cells: 0 };
-    expect(describeReport(r)).toEqual(["13,836 of 13,836 cells get a label, row by row in the dataset's order."]);
+    expect(describeReport(r)).toEqual([
+      "13,836 of 13,836 cells get a label, row by row in the dataset's order.",
+      "No sample column to check the order by: the rows must follow the dataset's cells exactly.",
+    ]);
+    const checked = { ...r, order_check: { table_column: "donor", dataset_column: "ind", n_samples: 8, lined_up: true } };
+    expect(describeReport(checked)[1]).toBe(
+      "The rows line up with the dataset's 'ind' sample by sample (table column 'donor', 8 samples).",
+    );
+  });
+
+  it("into an existing column: the rest keep their label, and how many change", () => {
+    const r = { ...base, created: false, column: "mine", n_changed: 42 };
+    expect(describeReport(r)).toEqual([
+      "13,336 of 13,366 labelled rows name a cell of this dataset (99.8%).",
+      "30 rows name no cell here (e.g. BOGUS_0, BOGUS_1).",
+      "500 cells are not in the table and keep their label in mine (e.g. CTRL_A.1).",
+      "42 of the 13,336 matched cells get a different label in mine.",
+    ]);
   });
 });
 
@@ -70,4 +88,20 @@ it("names the card's controls, not the API's options", () => {
     '13,336 of 13,366 rows would match: tick "Ignore a -1 or .1 ending".',
   );
   expect(inCardWords("or lower min_match if the table")).toBe('or lower "Rows that must match" if the table');
+});
+
+describe("savedLabelsText", () => {
+  const r = {
+    column: "sample", created: true, match: "name", n_rows: 2887, n_blank: 0, n_cells: 2887, n_matched: 2887,
+    n_extra: 0, n_duplicates: 0, n_unmatched_cells: 0, n_labels: 8,
+    labels: Array.from({ length: 8 }, (_, i) => ({ label: `L${i}`, n_cells: 1 })),
+  } as LabelImportReport;
+  it("says Unassigned only when a cell is (QA-8)", () => {
+    expect(savedLabelsText({ ...r, n_unassigned: 0 })).toBe("8 labels");
+    expect(savedLabelsText(r)).toBe("8 labels"); // an older backend: no count
+    expect(savedLabelsText({ ...r, n_labels: 9, n_unassigned: 1 })).toBe("8 labels; 1 cell is Unassigned");
+    expect(savedLabelsText({ ...r, labels: r.labels.slice(0, 1), n_imported_labels: 25, n_unassigned: 1200 })).toBe(
+      "25 labels; 1,200 cells are Unassigned",
+    );
+  });
 });

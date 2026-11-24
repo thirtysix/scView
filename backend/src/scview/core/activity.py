@@ -211,7 +211,7 @@ def lognorm_matrix(adata, read: bool = False):
 def lognorm_bytes(adaptor, n_rows: int | None = None) -> int:
     """Memory ``lognorm_matrix(read=True)`` adds on a backed dataset (``n_rows``: of
     ``Lognorm.rows`` of that many cells), from the file header: the rows read, and when they
-    are counts the shifted log's two float64 copies. 0 when the matrix is in memory."""
+    are counts the shifted log's float64 copy. 0 when the matrix is in memory."""
     from scview.core import preflight
 
     adata = adaptor.adata
@@ -225,8 +225,8 @@ def lognorm_bytes(adaptor, n_rows: int | None = None) -> int:
         return 0
     n = int(adata.n_obs if n_rows is None else n_rows)
     need = preflight.rows_bytes(mm, n)
-    if choice.counts:  # astype(float64) and the scaled copy: values and indices
-        need += 2 * 12 * int(mm.nnz * min(1.0, n / mm.n_cells))
+    if choice.counts:  # the shifted log's one float64 CSR copy: values and indices
+        need += preflight.SHIFTED_LOG_BYTES_PER_VALUE * int(mm.nnz * min(1.0, n / mm.n_cells))
     return int(need)
 
 

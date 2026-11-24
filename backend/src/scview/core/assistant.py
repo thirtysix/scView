@@ -1324,7 +1324,6 @@ class DatasetInsight(BaseModel):
     insight: str
     question: str | None = None  # a click-to-ask follow-up for the co-pilot
     severity: str = "info"  # "info" | "suggestion"
-    polished: bool = False  # True if an LLM rephrased the deterministic text
 
 
 _CONDITION_HINT_RE = re.compile(
@@ -1507,40 +1506,6 @@ def build_insight(adaptor) -> DatasetInsight:
         insight="This dataset looks fully processed: " + ", ".join(bits) + ".",
         question="What cell types are in my data?",
     )
-
-
-async def polish_insight(insight: DatasetInsight, api_key: str, model: str = DEFAULT_MODEL) -> DatasetInsight:
-    """Optionally rephrase a deterministic nudge into one friendlier sentence,
-    preserving its facts and its click-to-ask ``question``. Returns the original
-    unchanged with no API key / on failure (the deterministic text is the source
-    of truth — the LLM only rewords)."""
-    if not api_key or not insight.insight or insight.severity != "suggestion":
-        return insight
-    try:
-        client = async_client(api_key)
-        resp = await client.chat.completions.create(
-            model=model,
-            **chat_extra(model),
-            messages=[
-                {"role": "system", "content": (
-                    "Rephrase this single-cell analysis tip into ONE friendly, concise "
-                    "sentence (max 28 words) for a biologist opening their dataset. Keep "
-                    "it factual; do NOT add numbers, tools, or claims not in the input. "
-                    "Return only the sentence, no quotes."
-                )},
-                {"role": "user", "content": insight.insight},
-            ],
-            temperature=0.4,
-            max_tokens=80 + reply_room(model),
-        )
-        text = (resp.choices[0].message.content or "").strip().strip('"')
-        if text:
-            return DatasetInsight(
-                insight=text, question=insight.question, severity=insight.severity, polished=True
-            )
-    except Exception as exc:  # pragma: no cover - best-effort
-        logger.debug("insight polish failed: %s", exc)
-    return insight
 
 
 # ---------------------------------------------------------------------------
@@ -2372,7 +2337,10 @@ async def answer_query(
             sources=[], grounded=True, route=["action"], actions=actions, followups=[],
         )
 
-    context, sources = _assemble(
+    # The dataset's facts read its matrices (the preprocessing assessment samples them):
+    # in a worker thread, so the event loop keeps answering.
+    context, sources = await asyncio.to_thread(
+        _assemble,
         adaptor, extra_context=extra_context, extra_sources=extra_sources,
         app_context=app_context, app_sources=app_sources, view_context=view_context,
         include_data_grounding=include_data_grounding, data_facets=data_facets, query=query,
@@ -2470,7 +2438,10 @@ async def stream_answer(
         yield {"type": "done", "followups": [], "actions": [a.model_dump() for a in actions]}
         return
 
-    context, sources = _assemble(
+    # The dataset's facts read its matrices (the preprocessing assessment samples them):
+    # in a worker thread, so the event loop keeps answering.
+    context, sources = await asyncio.to_thread(
+        _assemble,
         adaptor, extra_context=extra_context, extra_sources=extra_sources,
         app_context=app_context, app_sources=app_sources, view_context=view_context,
         include_data_grounding=include_data_grounding, data_facets=data_facets, query=query,

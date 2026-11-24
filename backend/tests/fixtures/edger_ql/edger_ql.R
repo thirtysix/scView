@@ -3,6 +3,8 @@
 #   Rscript edger_ql.R
 # Writes <case>.counts.tsv (genes x samples), <case>.design.tsv, <case>.genes.tsv (per gene),
 # <case>.fit.tsv (per fit). Only edgeR's outputs are used; no edgeR code is copied anywhere.
+# The robust cases other than two_group_robust (paired_robust, covariate_robust, outliers*) were added
+# with edgeR 4.10.0 / limma 3.68.1; rerunning rewrites the older .fit/.genes files with ~1e-10 changes.
 suppressPackageStartupMessages({ library(edgeR); library(limma) })
 set.seed(20261104)
 nb <- function(mu, phi) matrix(rnbinom(length(mu), mu = mu, size = 1 / phi), nrow(mu))
@@ -55,10 +57,39 @@ C <- nb(mu0 * deff * exp(outer(lfc, cond)) * rep(exp(rnorm(8, 0, 0.3)), each = G
 # 3.68.1, which reproduce the 4.6.3 numbers of the other cases to ~1e-10.
 C <- C[rowSums(C > 0) >= 2, , drop = FALSE]
 write_case("paired", C, model.matrix(~donor + cond), 5)
+write_case("paired_robust", C, model.matrix(~donor + cond), 5, robust = TRUE, data = FALSE)
 
 # group + continuous covariate, testing the covariate
 G <- 400; n <- 10; g <- rep(0:1, each = 5); z <- rnorm(n)
 mu0 <- exp(rnorm(G, 2, 1.8)); b <- ifelse(runif(G) < 0.1, rnorm(G, 0, 0.8), 0)
 C <- nb(mu0 * exp(outer(b, z)) * rep(exp(rnorm(n, 0, 0.3)), each = G), 0.1)
 write_case("covariate", C, model.matrix(~factor(g) + z), 3)
+write_case("covariate_robust", C, model.matrix(~factor(g) + z), 3, robust = TRUE, data = FALSE)
+
+# robust=TRUE as miloR calls glmQLFit: 3 v 3 with 4% hypervariable genes (dispersion x 15) and
+# 3% that are nearly constant (dispersion / 50), so outliers sit on both sides of the trend
+G <- 500; n <- 6; g <- rep(0:1, each = 3)
+mu0 <- exp(rnorm(G, 2.5, 1.5)); lfc <- ifelse(runif(G) < 0.1, rnorm(G, 0, 1.5), 0)
+phi <- 0.08 * exp(rnorm(G, 0, 0.3)); u <- runif(G)
+phi[u < 0.04] <- phi[u < 0.04] * 15; phi[u > 0.97] <- phi[u > 0.97] / 50
+M <- outer(mu0, exp(rnorm(n, 0, 0.3))) * exp(outer(lfc, g))
+C <- matrix(rnbinom(length(M), mu = M, size = 1 / rep(phi, n)), G)
+C <- C[rowSums(C > 0) >= 2, , drop = FALSE]
+write_case("outliers", C, model.matrix(~factor(g)), 2)
+write_case("outliers_robust", C, model.matrix(~factor(g)), 2, robust = TRUE, data = FALSE)
+# limma's fitFDistUnequalDF1(robust = TRUE) itself, on scaled F draws with a trend in a covariate:
+# outliers on both sides, some df below 0.01 (left out of the fit), and one case with no outlier
+# below the 0.3 FDR cut (the plain fit back, no per-value df)
+fitf <- function(case, n, d2, k, tiny) {
+  df1 <- runif(n, 0.3, 12); cov <- rnorm(n)
+  x <- exp(0.3 * cov) * rf(n, df1, d2)
+  if (k > 0) { j <- sample(n, k); x[j] <- x[j] * exp(c(-1, 1)[1 + (seq_len(k) %% 2)] * runif(k, 3, 5)) }
+  if (tiny > 0) df1[sample(n, tiny)] <- runif(tiny, 0, 0.009)
+  r <- limma:::fitFDistUnequalDF1(x, df1, covariate = cov, robust = TRUE)
+  data.frame(case = case, x = x, df1 = df1, cov = cov, scale = r$scale, df2 = r$df2,
+             shrunk = if (is.null(r$df2.shrunk)) r$df2 else r$df2.shrunk)
+}
+set.seed(20261123)
+ff <- rbind(fitf(1, 300, 20, 8, 0), fitf(2, 200, 60, 6, 5), fitf(3, 60, 10, 0, 0))
+write.table(format(ff, digits = 15), "fitf_robust.tsv", sep = "\t", row.names = FALSE, quote = FALSE)
 cat(R.version.string, "edgeR", as.character(packageVersion("edgeR")), "limma", as.character(packageVersion("limma")), "\n")

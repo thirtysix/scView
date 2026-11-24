@@ -40,6 +40,7 @@ from scview.core.ingestion.merge import MergeJoin, MergePlan, merge_units, plan_
 from scview.core.ingestion.session import _make_readonly, _safe_name
 from scview.core.pipeline import PipelineParams, looks_like_counts, run_pipeline_streamed
 from scview.core.uns_keys import BATCH_MIXING_KEY
+from scview.core.user_labels import USER_COLUMNS_KEY, user_columns
 
 if TYPE_CHECKING:
     from scview.core.dataset_manager import DatasetManager
@@ -519,6 +520,208 @@ def filter_units(units: dict[str, Unit]) -> list[str]:
     return cut
 
 
+# ---------------------------------------------------------------------------
+# One label column from one column per dataset
+# ---------------------------------------------------------------------------
+
+# Names that read as a cell label (picked first when a dataset has several only-here columns).
+_LABEL_NAME_RE = re.compile(
+    r"cell[ ._-]?(type|line|class|state|subtype)|celltype|cellline|annotation|label|ident(ity)?$|"
+    r"^(type|subtype|lineage|population|sample)s?$", re.I)
+_NOT_COMBINABLE = {"source_cluster", "source_dataset", LABEL_COLUMN, CLONOTYPE_COL}
+MAX_COMBINED_NAME = 64
+
+
+class CombineColumns(BaseModel):
+    """One label column of the joint dataset made of one column per dataset (``combine_labels``):
+    each dataset's cells keep their own column's values as they are; a dataset left out has no
+    value. ``prefix`` writes '<dataset label>: value', for values one dataset uses with another
+    meaning than the next (off by default: the same name is most often the same label)."""
+
+    name: str = Field(min_length=1, max_length=MAX_COMBINED_NAME)
+    columns: dict[str, str]  # dataset id -> its column
+    prefix: bool = False
+
+
+class CombinedColumn(BaseModel):
+    """A combination as the plan checked it (and the run records)."""
+
+    name: str
+    columns: dict[str, str]  # dataset id -> column
+    labels: dict[str, str] = Field(default_factory=dict)  # dataset id -> the dataset's label
+    prefix: bool = False
+    n_values: int = 0
+    shared_values: list[str] = Field(default_factory=list)  # in more than one dataset's column
+    # Per dataset id in ``columns``: its cells, and those with no value in its column (they
+    # have none in the combined column either)
+    n_cells: dict[str, int] = Field(default_factory=dict)
+    n_missing: dict[str, int] = Field(default_factory=dict)
+
+
+class LabelSuggestion(BaseModel):
+    """Label-like columns that are each in one dataset only: combining them gives one column
+    that names every cell (the plan suggests it; nothing is combined unless the run asks)."""
+
+    name: str
+    columns: dict[str, str]  # dataset id -> column
+    shared_values: list[str] = Field(default_factory=list)
+    n_cells: dict[str, int] = Field(default_factory=dict)
+    n_missing: dict[str, int] = Field(default_factory=dict)  # as ``CombinedColumn``
+
+
+def _values_of(s: pd.Series) -> list[str]:
+    return sorted({str(v) for v in s.dropna().unique()})
+
+
+# Values that name no label: Seurat's default project name (``orig.ident`` / ``old.ident`` of cells that
+# were never given one) and empty strings. QA-8 lead check: a complete ``old.ident`` held "SeuratProject" for
+# exactly the 150 cells ``Cell_line`` left empty, and was suggested over the complete ``cell_line``.
+_PLACEHOLDER_VALUES = frozenset({"seuratproject", "", "nan", "none", "null"})
+# Names that say what the label is (a cell type or line, an annotation) rank above generic ones (ident, label,
+# sample), which rank above any other column.
+_SPECIFIC_LABEL_RE = re.compile(r"cell[ ._-]?(type|line|class|state|subtype)|celltype|cellline|annotation", re.I)
+
+
+def _n_missing(s: pd.Series) -> int:
+    """Cells with no value in the column: missing, empty or Seurat's placeholder "SeuratProject"."""
+    filled = s.dropna()
+    placeholder = filled.astype(str).str.strip().str.lower().isin(_PLACEHOLDER_VALUES)
+    return int(s.isna().sum() + placeholder.sum())
+
+
+def _name_rank(column: str) -> int:
+    """0 for a name that says what the label is, 1 for a generic label name, 2 for any other."""
+    if _SPECIFIC_LABEL_RE.search(column):
+        return 0
+    return 1 if _LABEL_NAME_RE.search(column) else 2
+
+
+def _cell_counts(units: dict[str, Unit], columns: dict[str, str]) -> tuple[dict[str, int], dict[str, int]]:
+    """Per dataset id in ``columns``: its cells, and those with no value in its column."""
+    by_id = {u.dataset_id: u for u in units.values()}
+    return ({d: int(by_id[d].adata.n_obs) for d in columns},
+            {d: _n_missing(by_id[d].adata.obs[c]) for d, c in columns.items()})
+
+
+def label_columns(units: dict[str, Unit]) -> dict[str, list[str]]:
+    """Per dataset id, the columns one can combine: the carried categorical / text columns
+    with a value (not numbers, flags, clonotypes, the dataset or cluster columns). One value
+    is enough: a dataset's single sample name combines with the next one's."""
+    out: dict[str, list[str]] = {}
+    for u in units.values():
+        cols = []
+        for c in u.adata.obs.columns:
+            s = u.adata.obs[c]
+            if (str(c) in _NOT_COMBINABLE or _is_number(s) or pd.api.types.is_bool_dtype(s)
+                    or s.nunique(dropna=True) < 1):
+                continue
+            cols.append(str(c))
+        out[u.dataset_id] = cols
+    return out
+
+
+def suggest_label_columns(units: dict[str, Unit], candidates: dict[str, list[str]]
+                          ) -> LabelSuggestion | None:
+    """When two or more datasets each have label-like columns no other dataset has, one of
+    each under the first one's name: a cell-type / cell-line / annotation name first, then a
+    generic label name (ident, label, sample), then the one with the fewest cells without a value
+    (QA-8: ``Cell_line`` with 150 of 968 cells empty was picked over a complete ``cell_line``; an
+    ``old.ident`` holding "SeuratProject" for those cells counts them as empty), then obs order. Only columns of 2 or more values
+    count. None when no two datasets have such a column."""
+    seen: dict[str, int] = {}
+    for u in units.values():
+        for c in u.adata.obs.columns:
+            seen[str(c)] = seen.get(str(c), 0) + 1
+    picks: dict[str, str] = {}
+    for u in units.values():
+        own = [c for c in candidates.get(u.dataset_id, [])
+               if seen.get(c) == 1 and u.adata.obs[c].nunique(dropna=True) >= 2]
+        if own:
+            obs = u.adata.obs
+            picks[u.dataset_id] = sorted(own, key=lambda c: (_name_rank(c), _n_missing(obs[c]),
+                                                            own.index(c)))[0]
+    if len(picks) < 2:
+        return None
+    by_id = {u.dataset_id: u for u in units.values()}
+    n_cells, n_missing = _cell_counts(units, picks)
+    return LabelSuggestion(name=next(iter(picks.values())), columns=picks,
+                           shared_values=_shared_values({d: by_id[d].adata.obs[c] for d, c in picks.items()}),
+                           n_cells=n_cells, n_missing=n_missing)
+
+
+def _shared_values(cols: dict[str, pd.Series]) -> list[str]:
+    count: dict[str, int] = {}
+    for s in cols.values():
+        for v in _values_of(s):
+            count[v] = count.get(v, 0) + 1
+    return sorted(v for v, n in count.items() if n > 1)
+
+
+def combine_labels(units: dict[str, Unit], specs: list[CombineColumns]
+                   ) -> tuple[list[CombinedColumn], list[str]]:
+    """Write each combined column into the units' obs (in place, before ``merge_joint``) and
+    say what was combined; the problems (blocking the plan) instead when a spec cannot be met.
+    A combined column may take the name of a column it combines (the first dataset's, by
+    default): its values for that dataset's cells are the column's own. With ``prefix`` they
+    are not, and the source column would be lost (QA-8), so that name is refused; any other
+    column of that name in a dataset is a clash."""
+    by_id = {u.dataset_id: u for u in units.values()}
+    candidates = label_columns(units)
+    done: list[CombinedColumn] = []
+    problems: list[str] = []
+    names: set[str] = set()
+    for spec in specs:
+        name = spec.name.strip()
+        bad = None
+        if not name or name.startswith("scview_") or name in _NOT_COMBINABLE:
+            bad = f"'{name}' cannot be the combined column's name."
+        elif name in names:
+            bad = f"Two combined columns are named '{name}'."
+        unknown = [d for d in spec.columns if d not in by_id]
+        if bad is None and unknown:
+            bad = f"The combined column '{name}' names a dataset that is not in this joint run ({unknown[0]})."
+        if bad is None and len(spec.columns) < 2:
+            bad = f"The combined column '{name}' needs a column from two or more datasets."
+        if bad is None:
+            for did, col in spec.columns.items():
+                u = by_id[did]
+                if col not in candidates[did]:
+                    bad = (f"'{col}' is not a label column of {u.label}"
+                           + (" (it is not carried into the joint dataset)." if col not in u.adata.obs.columns
+                              else " (numbers and true/false flags cannot be combined)."))
+                    break
+            for u in units.values():
+                if bad is None and name in u.adata.obs.columns and spec.columns.get(u.dataset_id) != name:
+                    bad = (f"'{name}' is also a column of {u.label}: give the combined column another name, "
+                           f"or pick '{name}' as {u.label}'s column.")
+            own = [by_id[d].label for d, c in spec.columns.items() if c == name]
+            if bad is None and spec.prefix and own:
+                bad = (f"'{name}' is {own[0]}'s own column: with the dataset label before each value, the "
+                       f"combined column would replace it. Give the combined column another name.")
+        if bad is not None:
+            problems.append(bad)
+            continue
+        names.add(name)
+        parts = {did: by_id[did].adata.obs[col] for did, col in spec.columns.items()}
+        shared = _shared_values(parts)
+        for u in units.values():
+            src = parts.get(u.dataset_id)
+            if src is None:
+                u.adata.obs[name] = pd.Series([None] * u.adata.n_obs, index=u.adata.obs.index, dtype=object)
+                continue
+            vals = src.astype(object).where(src.notna(), None)
+            if spec.prefix:
+                vals = vals.map(lambda v, lab=u.label: None if v is None else f"{lab}: {v}")
+            u.adata.obs[name] = vals
+        n_values = len({v for u in units.values() for v in _values_of(u.adata.obs[name])})
+        n_cells, n_missing = _cell_counts(units, spec.columns)
+        done.append(CombinedColumn(name=name, columns=dict(spec.columns),
+                                   labels={d: by_id[d].label for d in spec.columns}, prefix=spec.prefix,
+                                   n_values=n_values, shared_values=shared[:20],
+                                   n_cells=n_cells, n_missing=n_missing))
+    return done, problems
+
+
 class IntegrationPlan(BaseModel):
     datasets: list[DatasetCheck] = Field(default_factory=list)
     merge: MergePlan | None = None
@@ -533,6 +736,11 @@ class IntegrationPlan(BaseModel):
     preflight: dict[str, Any] | None = None
     # Per dataset, what the run's filtering does (on unless the run sets filter_units false)
     filtering: list[UnitFiltering] = Field(default_factory=list)
+    # Combining label columns: each dataset's candidate columns (by id), a suggestion when
+    # label-like columns are each in one dataset only, and the combinations asked for, checked
+    label_columns: dict[str, list[str]] = Field(default_factory=dict)
+    label_suggestion: LabelSuggestion | None = None
+    combined: list[CombinedColumn] = Field(default_factory=list)
     ok: bool = False
 
 
@@ -620,9 +828,17 @@ def build_plan(
     *,
     max_datasets: int,
     max_cells: int,
+    combine: list[CombineColumns] | None = None,
 ) -> IntegrationPlan:
+    """The plan; ``combine`` is applied to the units first (``combine_labels``), so the run
+    that follows merges the combined columns."""
     plan = IntegrationPlan(datasets=checks)
     blocking = plan.blocking
+    if len(units) >= 2:
+        plan.label_columns = label_columns(units)
+        plan.label_suggestion = suggest_label_columns(units, plan.label_columns)
+        plan.combined, problems = combine_labels(units, list(combine or []))
+        blocking.extend(problems)
     if len(checks) < 2:
         blocking.append("Pick at least two datasets to integrate.")
     if len(checks) > max_datasets:
@@ -764,6 +980,7 @@ def filtering_record(units: dict[str, Unit], on: bool, cut: list[str]) -> dict[s
 def record_integration_provenance(
     joint: ad.AnnData, units: dict[str, Unit], *, join: MergeJoin, method: str,
     apply_reconciliation: bool, filtering: dict[str, Any] | None = None,
+    combined: list[CombinedColumn] | None = None,
 ) -> None:
     """Source block + an ``integrate`` history entry (with the run's filtering of the
     datasets never filtered, ``filtering_record``). Never raises."""
@@ -786,10 +1003,23 @@ def record_integration_provenance(
             joint, step="integrate", tool="scview.integration",
             params={"datasets": [u.dataset_id for u in units.values()], "join": join.value,
                     "method": method, "label_column": LABEL_COLUMN,
-                    **({"unit_filtering": filtering} if filtering is not None else {})},
+                    **({"unit_filtering": filtering} if filtering is not None else {}),
+                    **({"combined_labels": [
+                        {"name": c.name, "prefix": c.prefix,
+                         "columns": {c.labels.get(d, d): col for d, col in c.columns.items()}}
+                        for c in combined]} if combined else {})},
         )
     except Exception as e:  # provenance must never block integration
         logger.warning("Could not record integration provenance: %s", e)
+
+
+def register_combined(joint: ad.AnnData, combined: list[CombinedColumn] | None) -> list[str]:
+    """Make the combined label columns user annotation columns (``user_labels``), as a column
+    the user made: labels can be imported into them, set by hand and renamed. Returns them."""
+    names = [c.name for c in combined or [] if c.name in joint.obs.columns]
+    if names:
+        joint.uns[USER_COLUMNS_KEY] = json.dumps(list(dict.fromkeys([*user_columns(joint), *names])))
+    return names
 
 
 def persist_joint(
@@ -1110,8 +1340,13 @@ MERGE_LABEL = "merging the datasets"
 JOINT_NOTHING_KEPT = ("Nothing was kept: the joint dataset was removed, and the source datasets "
                       "are unchanged.")
 MERGE_NOTHING_KEPT = "Nothing was kept: the source datasets are unchanged."
-JOINT_FIX = ("Raise SCVIEW_MEMORY_GB in .env (then restart scView), or integrate fewer or "
-             "smaller datasets.")
+
+
+def joint_fix() -> str:
+    """How to make a joint embedding fit (``memory_budget.more_memory_advice``)."""
+    from scview.core.memory_budget import more_memory_advice
+
+    return more_memory_advice("integrate fewer or smaller datasets")
 
 
 def _nested_bytes(d: Any) -> int:
@@ -1236,7 +1471,7 @@ def joint_preflight(est: JointEstimate, avail: preflight.Available, cached: pref
             gib = 1024**3
             blocking = (f"The joint run needs about {need / gib:.1f} GB at its peak ({stage}), and scView "
                         f"would have about {room / gib:.1f} GB of its {avail.limit_bytes / gib:.1f} GB "
-                        f"limit even with every other dataset closed. {JOINT_FIX}")
+                        f"limit even with every other dataset closed. {joint_fix()}")
     return {"verdict": v, "blocking": blocking}
 
 
@@ -1249,12 +1484,12 @@ def joint_before_step(merge_need: int):
     def check(step: str, adata: Any, params: Any) -> str | None:
         if step == "merge":
             return run_watchdog.memory_stop(step, merge_need, label=MERGE_LABEL,
-                                            saved=MERGE_NOTHING_KEPT, fix=JOINT_FIX)
+                                            saved=MERGE_NOTHING_KEPT, fix=joint_fix())
         reason = run_watchdog.log_only_stop(step, adata)
         if reason:
             return reason
         return run_watchdog.memory_stop(step, preflight.step_peak_for(adata, step, params),
-                                        saved=JOINT_NOTHING_KEPT, fix=JOINT_FIX)
+                                        saved=JOINT_NOTHING_KEPT, fix=joint_fix())
 
     return check
 
@@ -1273,6 +1508,7 @@ def run_integration_streamed(
     control: RunControl | None = None,
     on_merged: Callable[[], None] | None = None,
     filter_units_first: bool = True,
+    combined: list[CombinedColumn] | None = None,
 ) -> Generator[tuple[str, dict[str, Any]], None, None]:
     """Merge, persist and process; yields (event, data) for SSE progress.
 
@@ -1284,7 +1520,8 @@ def run_integration_streamed(
     (``release_units``), then ``on_merged()`` is called: the pipeline holds the joint
     counts only. With ``filter_units_first`` the datasets scView never filtered are cut to
     the cells their filtering keeps before merging (``filter_units``; recorded in the
-    ``integrate`` entry).
+    ``integrate`` entry). ``combined``: the label columns the plan combined into the units
+    (``combine_labels``), for the record.
     """
     yield ("stage", {"stage": "merge", "message": f"Merging {len(units)} datasets",
                      "dataset_id": dataset_id})
@@ -1299,12 +1536,14 @@ def run_integration_streamed(
                          "message": f"Filtering {n} dataset{'s' if n != 1 else ''} scView never filtered"})
         cut = filter_units(units)
     joint = merge_joint(units, join=join, apply_reconciliation=apply_reconciliation, copy=False)
+    register_combined(joint, combined)
     release_units(units)
     if on_merged is not None:
         on_merged()
     record_integration_provenance(joint, units, join=join, method=method,
                                   apply_reconciliation=apply_reconciliation,
-                                  filtering=filtering_record(units, filter_units_first, cut))
+                                  filtering=filtering_record(units, filter_units_first, cut),
+                                  combined=combined)
 
     yield ("stage", {"stage": "persist", "message": "Saving the joint dataset"})
     src = persist_joint(data_dir, dataset_id, name, joint, units)

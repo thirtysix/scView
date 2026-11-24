@@ -12,8 +12,10 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 rm -rf "$OUT"
 mkdir -p "$OUT"
 Rscript "$HERE/make_fixtures.R" "$OUT"
-# a few cells per block, so the dense assays are written in many blocks
+# a few cells per block, so the dense assays (and a Seurat X) are written in many blocks
 SCVIEW_CONVERT_BLOCK_VALUES=100 Rscript "$HERE/convert_fixtures.R" "$OUT"
 python3 "$HERE/check_h5ad.py" "$OUT"
 python3 "$HERE/make_export_fixtures.py" "$OUT"
 Rscript "$HERE/export_fixtures.R" "$OUT"
+# The server: conversions in a child process, a killed or OOM-killed one said as such
+(cd "$HERE/.." && Rscript tests/server_tests.R)

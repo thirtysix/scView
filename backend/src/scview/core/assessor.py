@@ -8,9 +8,14 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
+import weakref
+from concurrent.futures import Future
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
+import pandas as pd
 from pydantic import BaseModel
 from scipy import sparse
 
@@ -347,34 +352,38 @@ def _sample_totals(X: Any, n_rows: int) -> tuple[bool, np.ndarray] | None:
     """(logged, per-cell totals of expm1(X) if logged else X) over the first
     ``n_rows`` cells, or None for scaled or unreadable values. Read in chunks of
     rows: the whole sample dense, with its copies, took 1 GB on a 20k-gene dataset,
-    and three requests compute it at once when a dataset opens."""
-    if sparse.issparse(X):  # the stored values alone: zeros add nothing to either total
-        sub = sparse.csr_matrix(X[:n_rows], dtype=np.float64, copy=True)
-        d = sub.data
-        ok = np.isfinite(d)
-        d[~ok] = 0.0
-        lo = min(0.0, float(d[ok].min())) if ok.any() else 0.0
-        hi = max(0.0, float(d[ok].max())) if ok.any() else 0.0
-        if lo < 0:
-            return None
-        logged = hi <= 20
-        if logged:
-            np.expm1(d, out=d)
-        return logged, np.asarray(sub.sum(axis=1)).ravel()
-    lo, hi, any_finite = np.inf, -np.inf, False
+    and three requests compute it at once when a dataset opens. A sparse matrix's stored
+    values alone (zeros add nothing to either total), in chunks too: 2,000 deep cells as
+    one float64 copy took 0.27 GB."""
+    lo, hi, any_finite, was_sparse = np.inf, -np.inf, False, False
     raw_sums, log_sums = [], []
     for start in range(0, n_rows, _SCALE_CHUNK):
-        block = _dense_sample(X[start:min(n_rows, start + _SCALE_CHUNK)], _SCALE_CHUNK)
+        part = X[start:min(n_rows, start + _SCALE_CHUNK)]
+        if sparse.issparse(part):
+            was_sparse = True
+            sub = sparse.csr_matrix(part, dtype=np.float64, copy=True)
+            block, rows = sub.data, None
+        else:
+            sub, block = None, _dense_sample(part, _SCALE_CHUNK)
         ok = np.isfinite(block)
         if ok.any():
             any_finite = True
             lo, hi = min(lo, float(block[ok].min())), max(hi, float(block[ok].max()))
         block[~ok] = 0.0
-        raw_sums.append(block.sum(axis=1))
-        with np.errstate(over="ignore"):
-            log_sums.append(np.expm1(block, out=block).sum(axis=1))
-    if not any_finite or lo < 0:
+        if sub is not None:
+            rows = np.repeat(np.arange(sub.shape[0]), np.diff(sub.indptr))
+            raw_sums.append(np.bincount(rows, weights=block, minlength=sub.shape[0]))
+            with np.errstate(over="ignore"):
+                np.expm1(block, out=block)
+            log_sums.append(np.bincount(rows, weights=block, minlength=sub.shape[0]))
+        else:
+            raw_sums.append(block.sum(axis=1))
+            with np.errstate(over="ignore"):
+                log_sums.append(np.expm1(block, out=block).sum(axis=1))
+    if not raw_sums or (any_finite and lo < 0) or not (any_finite or was_sparse):
         return None
+    if not any_finite:  # a sparse sample with nothing stored: zero totals, as before
+        hi = 0.0
     logged = hi <= 20
     return logged, np.concatenate(log_sums if logged else raw_sums)
 
@@ -510,6 +519,31 @@ def _dense_sample(X: Any, n_rows: int, n_cols: int | None = None) -> np.ndarray:
     return np.array(arr, dtype=np.float64, copy=True)
 
 
+def _sample_max(X: Any, n_rows: int) -> float:
+    """``np.nanmax`` of the first ``n_rows`` cells of X, a block of rows at a time and a
+    sparse matrix from its stored values: the 1,000 x 34,209 sample dense in float64 took
+    0.4 GB, and the assessment ran twice at once on a first open (core/assessor.py's
+    ``assess_preprocessing``)."""
+    best, seen = np.nan, False
+    for start in range(0, n_rows, _SCALE_CHUNK):
+        block = X[start:min(n_rows, start + _SCALE_CHUNK)]
+        if sparse.issparse(block):
+            data = np.asarray(block.data, dtype=np.float64)
+            stored = data.size
+            total = block.shape[0] * block.shape[1]
+            if stored < total:  # zeros not stored count as values
+                data = np.append(data, 0.0)
+        else:
+            data = _dense_sample(block, _SCALE_CHUNK).ravel()
+        seen = seen or data.size > 0
+        if data.size and not np.isnan(data).all():
+            m = float(np.nanmax(data))
+            best = m if np.isnan(best) else max(best, m)
+    if not seen:
+        raise ValueError("no values to sample")  # as np.nanmax of an empty sample
+    return float(best)
+
+
 def _is_raw_counts(adata: Any) -> bool:
     """True if X looks like raw counts — non-negative and integer-valued, even
     when stored as float (10x matrices are float-typed counts). This is the
@@ -545,15 +579,11 @@ def _check_log_transform(adata: Any) -> StepStatus:
         # Prefer raw.X (pre-scaling data) for a cleaner signal; fall back to X
         if has_raw and not raw_counts:
             raw_X = adata.raw.X
-            n_sample = min(1000, raw_X.shape[0])
-            sample = _dense_sample(raw_X, n_sample).ravel()
+            max_val = _sample_max(raw_X, min(1000, raw_X.shape[0]))
             source = "raw.X"
         else:
-            n_sample = min(1000, adata.n_obs)
-            sample = _dense_sample(adata.X, n_sample).ravel()
+            max_val = _sample_max(adata.X, min(1000, adata.n_obs))
             source = "X"
-
-        max_val = float(np.nanmax(sample))
 
         if max_val < 0:
             return StepStatus(
@@ -1000,8 +1030,98 @@ def _check_dissociation_stress(adata: Any) -> StepStatus:
 # ---------------------------------------------------------------------------
 
 
+# One assessment of a dataset at a time, shared. A first open asks for it from several
+# places at once (the Data Assessment page, the co-pilot's insight and facts, the QC report
+# facts): the log showed two running together when a 1.6 GB file killed a 6 GB backend. A
+# call while one runs on the same AnnData, with nothing it reads changed (``_fingerprint``),
+# waits for it and gets its result. Nothing is kept once it ends: the assessment also reads
+# obs values (doublet calls, labels), which change in place, and a call after it costs time,
+# not memory beside it.
+_PROBE = 2048  # stored values at each end of X / .raw's X compared (an in-place transform)
+
+
+@dataclass
+class _Shared:
+    ref: Any  # weakref to the AnnData (ids are reused once an object is gone)
+    key: tuple | None = None  # the running assessment's ``_fingerprint``
+    running: Future | None = None
+
+
+_shared: dict[int, _Shared] = {}
+_shared_guard = threading.Lock()
+
+
+def _probe(M: Any) -> tuple:
+    """Identity and a few stored values of a matrix: what an in-place change would move."""
+    if M is None:
+        return (None,)
+    data = getattr(M, "data", None) if sparse.issparse(M) else (M if isinstance(M, np.ndarray) else None)
+    out: tuple = (id(M), getattr(M, "shape", None), getattr(M, "nnz", None), str(getattr(M, "dtype", "")))
+    if isinstance(data, np.ndarray) and data.size:
+        flat = data.reshape(-1)
+        out += (id(data), flat[:_PROBE].tobytes(), flat[-_PROBE:].tobytes())
+    return out
+
+
+def _fingerprint(adata: Any) -> tuple:
+    """What the assessment reads, cheaply: the matrices (identity, shape, end values), the
+    obs / var columns and their dtypes, the key lists, and the provenance record."""
+    raw = adata.raw
+    prov = adata.uns.get(provenance.UNS_KEY) if hasattr(adata, "uns") else None
+    return (
+        _probe(adata.X), _probe(raw.X) if raw is not None else None,
+        tuple((str(c), str(t), len(t.categories) if isinstance(t, pd.CategoricalDtype) else -1)
+              for c, t in adata.obs.dtypes.items()),
+        tuple((str(c), str(t)) for c, t in adata.var.dtypes.items()),
+        tuple(adata.layers.keys()), tuple(adata.obsm.keys()), tuple(adata.obsp.keys()),
+        tuple(sorted(map(str, adata.uns.keys()))),
+        prov if isinstance(prov, str) else repr(prov),
+    )
+
+
+def _entry(adata: Any) -> _Shared:
+    """``adata``'s entry (under ``_shared_guard``)."""
+    e = _shared.get(id(adata))
+    if e is None or e.ref() is not adata:
+        e = _Shared(ref=weakref.ref(adata))
+        _shared[id(adata)] = e
+        weakref.finalize(adata, _shared.pop, id(adata), None)
+    return e
+
+
+def assessing(adata: Any) -> bool:
+    """Whether an assessment of ``adata`` is running (a caller now would share it)."""
+    e = _shared.get(id(adata))
+    return e is not None and e.ref() is adata and e.running is not None
+
+
+# Peak memory of one assessment beyond the dataset (warm, imports done), measured
+# 2026-11-23: 23,578 x 34,209 log-normalised CSR (5,525 values a cell) +76 MB (estimate 76),
+# Kang +19 MB (24): the row blocks of the samples (``_SCALE_CHUNK`` cells, about 3 float64
+# copies of their values with indices) and the 200 x 2,000 dense count check.
+ASSESS_BLOCK_COPIES = 3
+
+
+def assessment_need(adata: Any) -> int:
+    """Memory one assessment of ``adata`` adds (``ASSESS_BLOCK_COPIES``), 0 while one runs
+    (a call now shares it): what the routes hold while it runs (``working_copy.reading``)."""
+    if assessing(adata):
+        return 0
+    n, g = int(adata.n_obs or 0), int(adata.n_vars or 0)
+    if not n or not g:
+        return 0
+    per_cell = 0.0
+    for M in (adata.X, adata.raw.X if adata.raw is not None else None):
+        if M is not None:
+            nnz = getattr(M, "nnz", None)
+            per_cell = max(per_cell, (nnz / max(1, M.shape[0])) if nnz is not None else M.shape[1])
+    rows = min(_SCALE_CHUNK, n)
+    return int(ASSESS_BLOCK_COPIES * rows * per_cell * 16 + 200 * min(2000, g) * 8 * 3)
+
+
 def assess_preprocessing(adata: Any) -> PreprocessingState:
-    """Inspect an AnnData object and return the full preprocessing state.
+    """Inspect an AnnData object and return the full preprocessing state, one assessment
+    of it at a time (a call while one runs gets its result); each caller gets its own copy.
 
     Parameters
     ----------
@@ -1013,6 +1133,44 @@ def assess_preprocessing(adata: Any) -> PreprocessingState:
     PreprocessingState
         Structured report of which preprocessing steps have been applied.
     """
+    try:
+        key = _fingerprint(adata)
+    except Exception:  # an object without the usual parts: nothing shared
+        return _assess_now(adata)
+    while True:
+        with _shared_guard:
+            try:
+                entry = _entry(adata)
+            except TypeError:  # no weak references (a stand-in object)
+                return _assess_now(adata)
+            running = entry.running
+            if running is None:
+                entry.running, entry.key = Future(), key
+                mine = entry.running
+                break
+            same = entry.key == key
+        if same:
+            return running.result().model_copy(deep=True)
+        try:  # another state of the data: after it, on its own
+            running.result()
+        except Exception:
+            pass
+    try:
+        state = _assess_now(adata)
+    except BaseException as exc:
+        mine.set_exception(exc)
+        raise
+    else:
+        mine.set_result(state)
+        return state.model_copy(deep=True)
+    finally:
+        with _shared_guard:
+            if entry.running is mine:
+                entry.running, entry.key = None, None
+
+
+def _assess_now(adata: Any) -> PreprocessingState:
+    """``assess_preprocessing``'s work, unshared."""
     logger.info(
         "Assessing preprocessing state for dataset with %d cells x %d genes",
         adata.n_obs,
