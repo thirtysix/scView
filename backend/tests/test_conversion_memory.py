@@ -36,12 +36,50 @@ def test_no_limit_set_advises_freeing_the_machine():
     assert "Docker or Podman" in text and "SCVIEW_MEMORY_GB" not in text
 
 
-def test_message_with_the_estimate_gives_the_size_to_raise_to():
+def _once(text: str, *parts: str) -> None:
+    for part in parts:
+        assert text.count(part) == 1, (part, text)
+
+
+def test_message_with_the_estimate_above_the_limit_gives_the_size_to_raise_to():
     text = conversion.out_of_memory_message("converting SCA.rds", 3 * GiB, int(3.6 * GiB), hosted=False)
-    assert text.startswith("The converter ran out of memory converting SCA.rds (it has 3.0 GB; "
-                           "this object needs about 3.6 GB).")
+    assert text.startswith("The converter ran out of its 3.0 GB converting SCA.rds. "
+                           "This object needs about 3.6 GB. Raise SCVIEW_MEMORY_GB")
     assert "at least 6 GB" in text  # 3.6 GB / 0.7 rounded up, as the preflight says
     assert "DietSeurat" in text
+    assert "too low" not in text
+    _once(text, "3.0 GB", "3.6 GB")
+
+
+def test_message_with_the_estimate_below_the_limit_says_it_was_too_low():
+    """The hub (v0.82.0): "ran out of memory (it has 3.0 GB; this object needs about 2.0 GB).
+    Ask the site admin ... (it has 3.0 GB)": the estimate contradicted the fact, and the
+    limit came twice. The fact leads; the estimate is said to be too low."""
+    for hosted in (False, True):
+        text = conversion.out_of_memory_message("converting SCA.rds", 3 * GiB, 2 * GiB, hosted=hosted)
+        assert text.startswith("The converter ran out of its 3.0 GB converting SCA.rds. "
+                               "The estimate (about 2.0 GB) was too low for this object: "
+                               "it needs more than 3.0 GB. ")
+        assert "needs about" not in text
+        assert "at least" not in text  # ceil(2.0 / 0.7) = 3 GB: no size above the limit to vouch for
+        _once(text, "ran out", "2.0 GB", "DietSeurat")
+        assert text.count("3.0 GB") == 2  # the fact, and "more than" it
+        assert ("site admin" in text) is hosted
+    hub = conversion.out_of_memory_message("converting SCA.rds", 3 * GiB, 2 * GiB, hosted=True)
+    assert "Ask the site admin to give the R converter more memory. " in hub
+    assert "(it has" not in hub
+
+
+def test_a_tight_estimate_below_the_limit_still_gives_a_size_above_it():
+    text = conversion.out_of_memory_message("converting x.rds", 3 * GiB, int(2.5 * GiB), hosted=True)
+    assert "The estimate (about 2.5 GB) was too low for this object: it needs more than 3.0 GB." in text
+    assert "Ask the site admin to give the R converter more memory (this needs at least 4 GB)." in text
+
+
+def test_message_without_a_limit_gives_the_estimate():
+    text = conversion.out_of_memory_message("converting x.rds", None, int(3.6 * GiB), hosted=False)
+    assert text.startswith("The converter ran out of memory converting x.rds. This object needs about 3.6 GB. ")
+    assert "Docker or Podman more memory to at least 6 GB" in text
 
 
 def test_message_without_a_size_when_the_estimate_said_it_fits():
@@ -71,7 +109,8 @@ async def test_out_of_memory_answer_becomes_the_memory_sentence(small_rds):
         await conversion.trigger_conversion(str(small_rds), "/d/x.h5ad", URL,
                                             transport=httpx.MockTransport(handler))
     text = str(exc.value)
-    assert text.startswith("The converter ran out of memory converting SCA.rds (it has 3.0 GB; this object needs about ")
+    # the estimate of a 3 kB object is far under 3 GB: the fact leads, the estimate was too low
+    assert text.startswith("The converter ran out of its 3.0 GB converting SCA.rds. The estimate (about ")
     assert "SCVIEW_MEMORY_GB" in text
     assert "could not be reached" not in text
 
@@ -110,8 +149,19 @@ async def test_a_converter_that_restarted_mid_conversion_most_likely_ran_out_of_
     transport = _dropping({"status": "ok", "started_at": later, "memory_limit_bytes": 3 * GiB})
     with pytest.raises(conversion.ConversionError) as exc:
         await conversion.trigger_conversion(str(small_rds), "/d/x.h5ad", URL, transport=transport)
-    assert str(exc.value).startswith("The converter stopped and restarted while converting SCA.rds: "
-                                     "it most likely ran out of memory (it has 3.0 GB")
+    text = str(exc.value)
+    assert text.startswith("The converter stopped and restarted while converting SCA.rds: "
+                           "it most likely ran out of its 3.0 GB. If so, the estimate (about ")
+    assert "was too low for this object: it needs more than 3.0 GB." in text
+    assert text.count("3.0 GB") == 2
+
+
+def test_the_restart_message_with_the_estimate_above_the_limit():
+    text = conversion.out_of_memory_message("converting x.rds", 3 * GiB, int(3.6 * GiB), hosted=True,
+                                            restarted=True)
+    assert text.startswith("The converter stopped and restarted while converting x.rds: it most likely "
+                           "ran out of its 3.0 GB. This object needs about 3.6 GB. Ask the site admin to "
+                           "give the R converter more memory (this needs at least 6 GB).")
 
 
 async def test_a_drop_without_a_restart_is_not_called_memory(small_rds):
@@ -137,5 +187,5 @@ async def test_export_out_of_memory_is_said_as_memory():
         await rds_export.trigger_export("/d/s.h5ad", "/d/o.rds", "seurat", URL,
                                         transport=httpx.MockTransport(handler))
     text = str(exc.value)
-    assert text.startswith("The converter ran out of memory writing the .rds file (it has 2.0 GB).")
+    assert text.startswith("The converter ran out of its 2.0 GB writing the .rds file. Raise SCVIEW_MEMORY_GB")
     assert "DietSeurat" not in text

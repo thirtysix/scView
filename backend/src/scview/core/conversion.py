@@ -54,14 +54,16 @@ class ConversionError(RuntimeError):
     """The converter refused the file or failed; the message is its own sentence."""
 
 
-def converter_memory_advice(limit_bytes: int | None, target_gb: int | None, *, hosted: bool) -> str:
+def converter_memory_advice(limit_bytes: int | None, target_gb: int | None, *, hosted: bool,
+                            name_limit: bool = True) -> str:
     """What to do when the converter has too little memory: the ONE place for the local
     and hosted (DEPLOYMENT_MODE=public) wording. Locally the converter gets scView's own
-    limit (docker-compose.yml: SCVIEW_MEMORY_GB)."""
+    limit (docker-compose.yml: SCVIEW_MEMORY_GB). ``name_limit`` False: the sentence
+    before already named the limit, so the hosted wording does not say it again."""
     if hosted:
         from scview.core.memory_budget import more_memory_advice
 
-        return more_memory_advice(limit_bytes=limit_bytes, target_gb=target_gb,
+        return more_memory_advice(limit_bytes=limit_bytes if name_limit else None, target_gb=target_gb,
                                   service="the R converter", hosted_site=True)
     at_least = f" to at least {target_gb} GB" if target_gb else ""
     if limit_bytes is None:
@@ -89,20 +91,26 @@ def _gb(b: float) -> str:
 def out_of_memory_message(doing: str, limit_bytes: int | None, need_bytes: int | None, *,
                           hosted: bool, restarted: bool = False, tip: bool = True) -> str:
     """The sentence for work the converter ran out of memory on (``doing``: "converting
-    x.rds"), with what to do."""
-    has = []
-    if limit_bytes:
-        has.append(f"it has {_gb(limit_bytes)} GB")
-    if need_bytes:
-        has.append(f"this object needs about {_gb(need_bytes)} GB")
-    what = (f"The converter stopped and restarted while {doing}: it most likely ran out of memory"
-            if restarted else f"The converter ran out of memory {doing}")
+    x.rds"), with what to do. The measured fact leads (the limit it ran out of); the
+    estimate follows only as what it adds: above the limit, the size this object needs;
+    at or under it, that the estimate was too low for this object (on the hub one said
+    "needs about 2.0 GB" of a converter that had 3.0 GB and ran out). Each clause once."""
+    of = f"its {_gb(limit_bytes)} GB" if limit_bytes else "memory"
+    lead = (f"The converter stopped and restarted while {doing}: it most likely ran out of {of}."
+            if restarted else f"The converter ran out of {of} {doing}.")
+    parts = [lead]
     target = target_gb(need_bytes) if need_bytes else None
-    if target and limit_bytes and target * GiB <= limit_bytes:
-        target = None  # the estimate says it fits: no number to raise it to
-    text = (f"{what}{' (' + '; '.join(has) + ')' if has else ''}. "
-            f"{converter_memory_advice(limit_bytes, target, hosted=hosted)}")
-    return f"{text} {SMALLER_OBJECT_TIP}" if tip else text
+    if need_bytes and limit_bytes and need_bytes <= limit_bytes:
+        parts.append(f"{'If so, the' if restarted else 'The'} estimate (about {_gb(need_bytes)} GB) "
+                     f"was too low for this object: it needs more than {_gb(limit_bytes)} GB.")
+        if target and target * GiB <= limit_bytes:
+            target = None  # no size the estimate can vouch for: only "more"
+    elif need_bytes:
+        parts.append(f"This object needs about {_gb(need_bytes)} GB.")
+    parts.append(converter_memory_advice(limit_bytes, target, hosted=hosted, name_limit=False))
+    if tip:
+        parts.append(SMALLER_OBJECT_TIP)
+    return " ".join(parts)
 
 
 def hosted() -> bool:
