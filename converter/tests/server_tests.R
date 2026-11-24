@@ -76,5 +76,15 @@ hb <- jsonlite::fromJSON(h$body)
 check("/health says when it started and its memory",
       h$status == 200L && nzchar(hb$started_at) && hb$oom_kills == 2 && hb$memory_used_bytes == 4e8)
 
+# DietSeurat is advised after an out-of-memory kill only when it would drop a layer
+# (convert.R, which server.R sources into the global environment)
+suppressPackageStartupMessages(library(SeuratObject))
+m <- Matrix::rsparsematrix(30, 20, 0.3, rand.x = function(n) rpois(n, 5) + 1)
+dimnames(m) <- list(paste0("g", 1:30), paste0("c", 1:20))
+so <- suppressWarnings(CreateSeuratObject(counts = m))
+check("counts only: nothing for DietSeurat to drop", identical(seurat_droppable_layers(so), FALSE))
+LayerData(so, layer = "data") <- log1p(m)
+check("a data layer: DietSeurat would drop it", identical(seurat_droppable_layers(so), TRUE))
+
 cat(sprintf("[server] %d failed\n", failed))
 quit(status = if (failed) 1 else 0)

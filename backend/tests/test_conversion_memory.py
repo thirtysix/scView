@@ -4,6 +4,7 @@ be reached"), with what to do locally and on a hosted site."""
 from __future__ import annotations
 
 import gzip
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -80,6 +81,36 @@ def test_message_without_a_limit_gives_the_estimate():
     text = conversion.out_of_memory_message("converting x.rds", None, int(3.6 * GiB), hosted=False)
     assert text.startswith("The converter ran out of memory converting x.rds. This object needs about 3.6 GB. ")
     assert "Docker or Podman more memory to at least 6 GB" in text
+
+
+def test_the_dietseurat_tip_only_when_it_can_help():
+    args = ("converting x.rds", 3 * GiB, 4 * GiB)
+    counts_only = conversion.out_of_memory_message(*args, hosted=False, droppable_layers=False)
+    assert "DietSeurat" not in counts_only and "smaller object" not in counts_only
+    layered = conversion.out_of_memory_message(*args, hosted=False, droppable_layers=True)
+    assert layered.endswith(conversion.SMALLER_OBJECT_TIP)
+    unknown = conversion.out_of_memory_message(*args, hosted=False)
+    assert unknown.endswith(conversion.SMALLER_OBJECT_IF)
+    assert "Or, if it has data or scale.data layers, save a smaller object" in unknown
+
+
+@pytest.mark.parametrize("found,tip", [(False, None), (True, "SMALLER_OBJECT_TIP"), ("x", "SMALLER_OBJECT_IF")])
+async def test_the_out_of_memory_answer_reads_the_layers_from_the_progress_file(small_rds, tmp_path, found, tip):
+    progress = tmp_path / "progress.json"
+    progress.write_text(json.dumps({"stage": "writing", "source_class": "Seurat", "droppable_layers": found}))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={"status": "error", "error_kind": "out_of_memory",
+                                         "memory_limit_bytes": 3 * GiB, "error": "x"})
+
+    with pytest.raises(conversion.ConversionError) as exc:
+        await conversion.trigger_conversion(str(small_rds), "/d/x.h5ad", URL, progress_path=str(progress),
+                                            transport=httpx.MockTransport(handler))
+    text = str(exc.value)
+    if tip is None:
+        assert "DietSeurat" not in text
+    else:
+        assert text.endswith(getattr(conversion, tip))
 
 
 def test_message_without_a_size_when_the_estimate_said_it_fits():

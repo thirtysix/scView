@@ -220,9 +220,10 @@ def converter_verdict(path: str | Path, mem: ConverterMemory, *, hosted: bool = 
     if level in ("tight", "wont_fit") and mem.limit_bytes is not None:
         target = conversion.target_gb(need, mem.used_bytes or 0)
         suggestions.append(conversion.converter_memory_advice(mem.limit_bytes, target, hosted=hosted))
-        suggestions.append("Or save a smaller object in R first: DietSeurat(obj, layers = \"counts\") "
-                           "keeps the counts and drops the data and scale.data layers, which scView "
-                           "does not read.")
+        # the stream does not say which layers it holds: the tip says when it helps
+        suggestions.append("Or, if it has data or scale.data layers, save a smaller object in R first: "
+                           "DietSeurat(obj, layers = \"counts\") keeps the counts and drops those "
+                           "layers, which scView does not read.")
     basis = ("Estimated from the size of the R object once decompressed (the converter reads all of it, "
              f"layers it does not write too): {_gb(ser.bytes)} GB"
              + ("" if ser.exact else ", extrapolated from the first part of the file")

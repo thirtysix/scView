@@ -45,6 +45,11 @@ RESTART_POLL_S = 2.0
 
 GiB = 1024 ** 3
 
+# When the converter did not say whether the object has layers DietSeurat would drop
+# (it was killed before it had read the object, or it is not a Seurat object).
+SMALLER_OBJECT_IF = ("Or, if it has data or scale.data layers, save a smaller object in R first, with "
+                     "only the counts (for Seurat v5: DietSeurat(obj, layers = \"counts\")): scView "
+                     "does not read those layers, but the converter has to load them.")
 SMALLER_OBJECT_TIP = ("Or save a smaller object in R first, with only the counts (for Seurat v5: "
                       "DietSeurat(obj, layers = \"counts\")): scView does not read the data and "
                       "scale.data layers, but the converter has to load them.")
@@ -89,12 +94,15 @@ def _gb(b: float) -> str:
 
 
 def out_of_memory_message(doing: str, limit_bytes: int | None, need_bytes: int | None, *,
-                          hosted: bool, restarted: bool = False, tip: bool = True) -> str:
+                          hosted: bool, restarted: bool = False, tip: bool = True,
+                          droppable_layers: bool | None = None) -> str:
     """The sentence for work the converter ran out of memory on (``doing``: "converting
     x.rds"), with what to do. The measured fact leads (the limit it ran out of); the
     estimate follows only as what it adds: above the limit, the size this object needs;
     at or under it, that the estimate was too low for this object (on the hub one said
-    "needs about 2.0 GB" of a converter that had 3.0 GB and ran out). Each clause once."""
+    "needs about 2.0 GB" of a converter that had 3.0 GB and ran out). Each clause once.
+    ``droppable_layers`` (the converter's progress file): False, the object has only
+    counts, so no DietSeurat tip; None, not known, so the tip says when it helps."""
     of = f"its {_gb(limit_bytes)} GB" if limit_bytes else "memory"
     lead = (f"The converter stopped and restarted while {doing}: it most likely ran out of {of}."
             if restarted else f"The converter ran out of {of} {doing}.")
@@ -108,8 +116,8 @@ def out_of_memory_message(doing: str, limit_bytes: int | None, need_bytes: int |
     elif need_bytes:
         parts.append(f"This object needs about {_gb(need_bytes)} GB.")
     parts.append(converter_memory_advice(limit_bytes, target, hosted=hosted, name_limit=False))
-    if tip:
-        parts.append(SMALLER_OBJECT_TIP)
+    if tip and droppable_layers is not False:
+        parts.append(SMALLER_OBJECT_TIP if droppable_layers else SMALLER_OBJECT_IF)
     return " ".join(parts)
 
 
@@ -131,6 +139,15 @@ async def _need_bytes(rds_path: str) -> int | None:
     except OSError:
         return None
     return conversion_preflight.estimate_peak(ser.bytes)
+
+
+def _droppable_layers(progress_path: str | None) -> bool | None:
+    """Whether the converter found layers DietSeurat would drop (its progress file), or
+    None when it did not say."""
+    if not progress_path:
+        return None
+    v = (read_progress(Path(progress_path)) or {}).get("droppable_layers")
+    return v if isinstance(v, bool) else None
 
 
 async def _measured(rds_path: str, peak_bytes: int) -> dict:
@@ -239,7 +256,7 @@ async def trigger_conversion(
         if health.get("restarted"):
             raise ConversionError(out_of_memory_message(
                 f"converting {name}", health.get("memory_limit_bytes"), await _need_bytes(rds_path),
-                hosted=hosted(), restarted=True)) from e
+                hosted=hosted(), restarted=True, droppable_layers=_droppable_layers(progress_path))) from e
         raise ConversionError(
             f"The connection to the R converter dropped while it converted {name} "
             f"({type(e).__name__}). Add the file again to convert it."
@@ -255,7 +272,7 @@ async def trigger_conversion(
         limit = data.get("memory_limit_bytes")
         raise ConversionError(out_of_memory_message(
             f"converting {name}", int(limit) if isinstance(limit, (int, float)) else None, await _need_bytes(rds_path),
-            hosted=hosted()))
+            hosted=hosted(), droppable_layers=_droppable_layers(progress_path)))
     if resp.status_code >= 400 or data.get("status") != "ok":
         reason = data.get("error")
         raise ConversionError(

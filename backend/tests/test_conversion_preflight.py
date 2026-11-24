@@ -105,7 +105,8 @@ def test_verdict_wont_fit_names_the_need_and_what_to_do(tmp_path):
     assert v["sentence"].startswith("Converting object.rds takes about 0.8 GB in the R converter")
     assert "The converter has 0.3 GB free of its 0.4 GB limit." in v["sentence"]
     assert any("SCVIEW_MEMORY_GB" in s for s in v["suggestions"])
-    assert any("DietSeurat" in s for s in v["suggestions"])
+    assert any(s.startswith("Or, if it has data or scale.data layers, save a smaller object in R first: "
+                            "DietSeurat(") for s in v["suggestions"])
     assert v["source"] == "converter" and "decompressed" in v["basis"]
 
 

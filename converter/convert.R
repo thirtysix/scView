@@ -45,7 +45,10 @@ convert_rds_to_h5ad <- function(input_path, output_path, progress_path = NULL) {
   # 2. Seurat: the original path, unchanged
   # ------------------------------------------------------------------
   if (kind == "Seurat") {
-    progress("converting", "Converting a Seurat object", source_class = "Seurat")
+    # kept in the progress file: after an out-of-memory kill the backend says DietSeurat
+    # only when it would drop something
+    progress("converting", "Converting a Seurat object", source_class = "Seurat",
+             droppable_layers = seurat_droppable_layers(obj))
     version_info <- detect_seurat_version(obj)
     cat(sprintf("[convert] Detected Seurat version: %s\n", version_info))
 
@@ -284,6 +287,20 @@ detect_seurat_version <- function(obj) {
 # is, array for array, the CSR form of the cells x genes matrix (as write_csr in
 # convert_sce.R). Values and their type (float64) are the ones 0.81.0 wrote, which
 # stored X as csc_matrix; CSR is what the backend's chunked reader needs.
+
+#' Whether a Seurat object holds layers that DietSeurat(obj, layers = "counts") drops
+#' (data, scale.data or others, in any assay). A v3 / v4 assay always has a data slot.
+seurat_droppable_layers <- function(obj) {
+  for (a in tryCatch(SeuratObject::Assays(obj), error = function(e) character(0))) {
+    assay <- tryCatch(obj[[a]], error = function(e) NULL)
+    if (inherits(assay, "Assay5")) {
+      if (!all(grepl("^counts(\\.|$)", names(methods::slot(assay, "layers"))))) return(TRUE)
+    } else if (inherits(assay, "Assay")) {
+      return(TRUE)
+    }
+  }
+  FALSE
+}
 
 #' Join the per-sample layers (counts.1, counts.2, data.1, ...) of one Seurat v5 assay.
 #' An assay that cannot be joined comes back as it is.
