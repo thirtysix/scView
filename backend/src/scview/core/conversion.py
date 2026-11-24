@@ -133,6 +133,25 @@ async def _need_bytes(rds_path: str) -> int | None:
     return conversion_preflight.estimate_peak(ser.bytes)
 
 
+async def _measured(rds_path: str, peak_bytes: int) -> dict:
+    """A conversion's measured peak beside the estimate it had, for the dataset's
+    conversion report (``memory``) and the log: real objects to refit the estimate on."""
+    record: dict[str, Any] = {"peak_bytes": peak_bytes}
+    from scview.core import conversion_preflight
+
+    try:
+        ser = await asyncio.to_thread(conversion_preflight.serialized_size_cached, rds_path)
+    except OSError:
+        ser = None
+    if ser is not None:
+        record.update(serialized_bytes=ser.bytes, serialized_exact=ser.exact,
+                      estimate_bytes=conversion_preflight.estimate_peak(ser.bytes))
+    logger.info("Converted %s: measured peak %.2f GiB%s", Path(rds_path).name, peak_bytes / GiB,
+                "" if ser is None else (f", estimate {record['estimate_bytes'] / GiB:.2f} GiB "
+                                        f"({ser.bytes / GiB:.2f} GiB decompressed)"))
+    return record
+
+
 async def _after_drop(converter_url: str, sent_at: float,
                       transport: httpx.AsyncBaseTransport | None) -> dict | None:
     """The connection dropped mid-conversion: the converter's /health once it answers
@@ -184,7 +203,9 @@ async def trigger_conversion(
 
     Returns
     -------
-    dict – the converter's body: ``status``, ``message`` and ``report``.
+    dict – the converter's body: ``status``, ``message`` and ``report``; the report
+    carries the measured peak beside the estimate (``memory``) when the converter
+    measured one.
 
     Raises
     ------
@@ -240,6 +261,11 @@ async def trigger_conversion(
         raise ConversionError(
             str(reason) if reason else f"The R converter answered {resp.status_code} without saying why."
         )
+    peak = data.get("peak_bytes")
+    if isinstance(peak, (int, float)) and not isinstance(peak, bool) and peak > 0:
+        report = data.get("report") if isinstance(data.get("report"), dict) else {}
+        report["memory"] = await _measured(rds_path, int(peak))
+        data["report"] = report
     return data
 
 

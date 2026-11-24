@@ -10,7 +10,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from scview.core import conversion, rds_export
+from scview.core import conversion, conversion_preflight, rds_export
 
 GiB = 1024 ** 3
 URL = "http://conv:8001"
@@ -126,6 +126,28 @@ async def test_out_of_memory_on_a_hosted_site_asks_the_admin(small_rds, monkeypa
         await conversion.trigger_conversion(str(small_rds), "/d/x.h5ad", URL,
                                             transport=httpx.MockTransport(handler))
     assert "site admin" in str(exc.value) and ".env" not in str(exc.value)
+
+
+async def test_a_conversion_reports_its_measured_peak_beside_the_estimate(small_rds):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "ok", "message": "Converted",
+                                         "report": {"source_class": "Seurat"}, "peak_bytes": 2 * GiB})
+
+    data = await conversion.trigger_conversion(str(small_rds), "/d/x.h5ad", URL,
+                                               transport=httpx.MockTransport(handler))
+    mem = data["report"]["memory"]
+    assert data["report"]["source_class"] == "Seurat"
+    assert mem["peak_bytes"] == 2 * GiB and mem["serialized_bytes"] == 3002 and mem["serialized_exact"]
+    assert mem["estimate_bytes"] == conversion_preflight.estimate_peak(3002)
+
+
+async def test_an_older_converter_without_a_peak_reports_no_memory(small_rds):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "ok", "message": "Converted", "report": {"kept": []}})
+
+    data = await conversion.trigger_conversion(str(small_rds), "/d/x.h5ad", URL,
+                                               transport=httpx.MockTransport(handler))
+    assert "memory" not in data["report"]
 
 
 def _dropping(health: dict | None):
