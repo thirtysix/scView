@@ -7,6 +7,7 @@ import { plotlyColorscale } from "@/lib/colors";
 import { plotConfig } from "@/lib/plotConfig";
 import { defaultColourBy, fmtP, pcaTraces, pcLabel, r2Shade } from "@/lib/pseudobulkQc";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { errorMessage } from "@/lib/errorMessage";
 
 const FILL_STYLE = { width: "100%", height: "100%" } as const;
 
@@ -117,7 +118,7 @@ export function PseudobulkQc({ datasetId, refreshKey = 0 }: { datasetId: string;
         setColourBy((c) => (c && d.covariates.some((x) => x.name === c) ? c : defaultColourBy(d)));
       })
       .catch((e) => {
-        if (!cancelled) setError(String(e?.message ?? e));
+        if (!cancelled) setError(errorMessage(e));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

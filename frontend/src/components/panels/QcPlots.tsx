@@ -21,6 +21,7 @@ import { ThresholdHistogram, type RefLine, type ThresholdLine } from "@/componen
 import { roundTo, thresholdMode } from "@/lib/qcThresholds";
 import { SelectionChip } from "@/components/common/SelectionChip";
 import { useQcHistogramSelection, useQcScatterSelection } from "@/hooks/useQcSelection";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface QcMetric {
   min: number;
@@ -421,7 +422,7 @@ export function QcPlots({
         if (!cancelled) setData(d);
       })
       .catch((e) => {
-        if (!cancelled) setError(String(e?.message ?? e));
+        if (!cancelled) setError(errorMessage(e));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -442,7 +443,7 @@ export function QcPlots({
         if (!cancelled) setGrouped(d);
       })
       .catch((e) => {
-        if (!cancelled) setGroupError(String(e?.message ?? e));
+        if (!cancelled) setGroupError(errorMessage(e));
       })
       .finally(() => {
         if (!cancelled) setGroupLoading(false);
