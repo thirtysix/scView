@@ -80,20 +80,3 @@ export async function apiFetchBinary(
   }
   return res.arrayBuffer();
 }
-
-export async function apiUpload(
-  path: string,
-  file: File
-): Promise<{ id: string; name: string; status: string }> {
-  const formData = new FormData();
-  formData.append("file", file);
-  const res = await fetch(`${API_BASE}${path}`, {
-    method: "POST",
-    body: formData,
-  });
-  if (!res.ok) {
-    const error = await readError(res);
-    throw new Error(`Upload error ${res.status}: ${error}`);
-  }
-  return res.json();
-}
