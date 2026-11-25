@@ -1,8 +1,27 @@
-import { apiFetch, apiUpload } from "./client";
+import { API_BASE } from "@/lib/constants";
+import { apiFetch } from "./client";
 import type { DatasetInfo } from "./types";
+import { xhrUpload, type UploadOptions } from "./upload";
 
-export async function uploadDataset(file: File) {
-  return apiUpload("/datasets/upload", file);
+/** Upload one file as a new dataset (an R object starts converting), with byte progress. */
+export function uploadDataset(
+  file: File,
+  opts: UploadOptions = {},
+): Promise<{ id: string; name: string; status: string }> {
+  const form = new FormData();
+  form.append("file", file);
+  return xhrUpload(`${API_BASE}/datasets/upload`, form, {
+    what: file.name,
+    signal: opts.signal,
+    onProgress: (loaded, total) =>
+      opts.onProgress?.({
+        loaded: total > 0 ? Math.min(file.size, (loaded / total) * file.size) : 0,
+        total: file.size,
+        file: file.name,
+        fileIndex: 1,
+        fileCount: 1,
+      }),
+  });
 }
 
 export async function listDatasets(): Promise<DatasetInfo[]> {

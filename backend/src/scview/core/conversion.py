@@ -45,6 +45,11 @@ RESTART_POLL_S = 2.0
 
 GiB = 1024 ** 3
 
+# When the converter did not say whether the object has layers DietSeurat would drop
+# (it was killed before it had read the object, or it is not a Seurat object).
+SMALLER_OBJECT_IF = ("Or, if it has data or scale.data layers, save a smaller object in R first, with "
+                     "only the counts (for Seurat v5: DietSeurat(obj, layers = \"counts\")): scView "
+                     "does not read those layers, but the converter has to load them.")
 SMALLER_OBJECT_TIP = ("Or save a smaller object in R first, with only the counts (for Seurat v5: "
                       "DietSeurat(obj, layers = \"counts\")): scView does not read the data and "
                       "scale.data layers, but the converter has to load them.")
@@ -54,14 +59,16 @@ class ConversionError(RuntimeError):
     """The converter refused the file or failed; the message is its own sentence."""
 
 
-def converter_memory_advice(limit_bytes: int | None, target_gb: int | None, *, hosted: bool) -> str:
+def converter_memory_advice(limit_bytes: int | None, target_gb: int | None, *, hosted: bool,
+                            name_limit: bool = True) -> str:
     """What to do when the converter has too little memory: the ONE place for the local
     and hosted (DEPLOYMENT_MODE=public) wording. Locally the converter gets scView's own
-    limit (docker-compose.yml: SCVIEW_MEMORY_GB)."""
+    limit (docker-compose.yml: SCVIEW_MEMORY_GB). ``name_limit`` False: the sentence
+    before already named the limit, so the hosted wording does not say it again."""
     if hosted:
         from scview.core.memory_budget import more_memory_advice
 
-        return more_memory_advice(limit_bytes=limit_bytes, target_gb=target_gb,
+        return more_memory_advice(limit_bytes=limit_bytes if name_limit else None, target_gb=target_gb,
                                   service="the R converter", hosted_site=True)
     at_least = f" to at least {target_gb} GB" if target_gb else ""
     if limit_bytes is None:
@@ -87,22 +94,31 @@ def _gb(b: float) -> str:
 
 
 def out_of_memory_message(doing: str, limit_bytes: int | None, need_bytes: int | None, *,
-                          hosted: bool, restarted: bool = False, tip: bool = True) -> str:
+                          hosted: bool, restarted: bool = False, tip: bool = True,
+                          droppable_layers: bool | None = None) -> str:
     """The sentence for work the converter ran out of memory on (``doing``: "converting
-    x.rds"), with what to do."""
-    has = []
-    if limit_bytes:
-        has.append(f"it has {_gb(limit_bytes)} GB")
-    if need_bytes:
-        has.append(f"this object needs about {_gb(need_bytes)} GB")
-    what = (f"The converter stopped and restarted while {doing}: it most likely ran out of memory"
-            if restarted else f"The converter ran out of memory {doing}")
+    x.rds"), with what to do. The measured fact leads (the limit it ran out of); the
+    estimate follows only as what it adds: above the limit, the size this object needs;
+    at or under it, that the estimate was too low for this object (on the hub one said
+    "needs about 2.0 GB" of a converter that had 3.0 GB and ran out). Each clause once.
+    ``droppable_layers`` (the converter's progress file): False, the object has only
+    counts, so no DietSeurat tip; None, not known, so the tip says when it helps."""
+    of = f"its {_gb(limit_bytes)} GB" if limit_bytes else "memory"
+    lead = (f"The converter stopped and restarted while {doing}: it most likely ran out of {of}."
+            if restarted else f"The converter ran out of {of} {doing}.")
+    parts = [lead]
     target = target_gb(need_bytes) if need_bytes else None
-    if target and limit_bytes and target * GiB <= limit_bytes:
-        target = None  # the estimate says it fits: no number to raise it to
-    text = (f"{what}{' (' + '; '.join(has) + ')' if has else ''}. "
-            f"{converter_memory_advice(limit_bytes, target, hosted=hosted)}")
-    return f"{text} {SMALLER_OBJECT_TIP}" if tip else text
+    if need_bytes and limit_bytes and need_bytes <= limit_bytes:
+        parts.append(f"{'If so, the' if restarted else 'The'} estimate (about {_gb(need_bytes)} GB) "
+                     f"was too low for this object: it needs more than {_gb(limit_bytes)} GB.")
+        if target and target * GiB <= limit_bytes:
+            target = None  # no size the estimate can vouch for: only "more"
+    elif need_bytes:
+        parts.append(f"This object needs about {_gb(need_bytes)} GB.")
+    parts.append(converter_memory_advice(limit_bytes, target, hosted=hosted, name_limit=False))
+    if tip and droppable_layers is not False:
+        parts.append(SMALLER_OBJECT_TIP if droppable_layers else SMALLER_OBJECT_IF)
+    return " ".join(parts)
 
 
 def hosted() -> bool:
@@ -123,6 +139,34 @@ async def _need_bytes(rds_path: str) -> int | None:
     except OSError:
         return None
     return conversion_preflight.estimate_peak(ser.bytes)
+
+
+def _droppable_layers(progress_path: str | None) -> bool | None:
+    """Whether the converter found layers DietSeurat would drop (its progress file), or
+    None when it did not say."""
+    if not progress_path:
+        return None
+    v = (read_progress(Path(progress_path)) or {}).get("droppable_layers")
+    return v if isinstance(v, bool) else None
+
+
+async def _measured(rds_path: str, peak_bytes: int) -> dict:
+    """A conversion's measured peak beside the estimate it had, for the dataset's
+    conversion report (``memory``) and the log: real objects to refit the estimate on."""
+    record: dict[str, Any] = {"peak_bytes": peak_bytes}
+    from scview.core import conversion_preflight
+
+    try:
+        ser = await asyncio.to_thread(conversion_preflight.serialized_size_cached, rds_path)
+    except OSError:
+        ser = None
+    if ser is not None:
+        record.update(serialized_bytes=ser.bytes, serialized_exact=ser.exact,
+                      estimate_bytes=conversion_preflight.estimate_peak(ser.bytes))
+    logger.info("Converted %s: measured peak %.2f GiB%s", Path(rds_path).name, peak_bytes / GiB,
+                "" if ser is None else (f", estimate {record['estimate_bytes'] / GiB:.2f} GiB "
+                                        f"({ser.bytes / GiB:.2f} GiB decompressed)"))
+    return record
 
 
 async def _after_drop(converter_url: str, sent_at: float,
@@ -176,7 +220,9 @@ async def trigger_conversion(
 
     Returns
     -------
-    dict – the converter's body: ``status``, ``message`` and ``report``.
+    dict – the converter's body: ``status``, ``message`` and ``report``; the report
+    carries the measured peak beside the estimate (``memory``) when the converter
+    measured one.
 
     Raises
     ------
@@ -210,7 +256,7 @@ async def trigger_conversion(
         if health.get("restarted"):
             raise ConversionError(out_of_memory_message(
                 f"converting {name}", health.get("memory_limit_bytes"), await _need_bytes(rds_path),
-                hosted=hosted(), restarted=True)) from e
+                hosted=hosted(), restarted=True, droppable_layers=_droppable_layers(progress_path))) from e
         raise ConversionError(
             f"The connection to the R converter dropped while it converted {name} "
             f"({type(e).__name__}). Add the file again to convert it."
@@ -226,12 +272,17 @@ async def trigger_conversion(
         limit = data.get("memory_limit_bytes")
         raise ConversionError(out_of_memory_message(
             f"converting {name}", int(limit) if isinstance(limit, (int, float)) else None, await _need_bytes(rds_path),
-            hosted=hosted()))
+            hosted=hosted(), droppable_layers=_droppable_layers(progress_path)))
     if resp.status_code >= 400 or data.get("status") != "ok":
         reason = data.get("error")
         raise ConversionError(
             str(reason) if reason else f"The R converter answered {resp.status_code} without saying why."
         )
+    peak = data.get("peak_bytes")
+    if isinstance(peak, (int, float)) and not isinstance(peak, bool) and peak > 0:
+        report = data.get("report") if isinstance(data.get("report"), dict) else {}
+        report["memory"] = await _measured(rds_path, int(peak))
+        data["report"] = report
     return data
 
 

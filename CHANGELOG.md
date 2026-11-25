@@ -4,6 +4,31 @@ All notable changes to scView are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.83.0] - 2026-11-25
+
+Uploads show how far they have got and can be cancelled, and Seurat conversion needs less memory and estimates it
+honestly: a real object that 0.82.0's converter could not convert in 3 GB now converts there.
+
+### Added
+- Uploads show a progress card in place of the drop zone: a bar with percent, MB sent, speed and time left, file
+  n of m, and Cancel. An .rds then moves on to Converting with the converter's stage and estimate. A cancelled
+  upload leaves nothing on the server. No second upload starts while one runs, and leaving the page asks first.
+- The conversion report gives the converter's measured memory peak beside its estimate (`conversion.memory`), and
+  the converter's `/health` reports it too.
+
+### Changed
+- Seurat conversion frees each written block of the matrix at once: a real counts-only object peaked at 2.26 GiB
+  instead of 2.79 GiB, so it converts in a 3 GB converter.
+- The converter's memory estimate is 0.8 GiB plus the decompressed object (was 0.45 GiB): 0.82.0's estimate was
+  30% under on a real object; it is now never under on the real and synthetic objects tried (2-30% over).
+- When the converter runs out of memory, the message leads with the limit it ran out of, says each thing once, and
+  calls an estimate under that limit too low. The DietSeurat tip appears only when the object has data or
+  scale.data layers it would drop.
+
+### Fixed
+- Listing a dataset's stored results right after a run could miss the result the run had just returned (it is
+  written in the background); the listing now waits for queued writes.
+
 ## [0.82.0] - 2026-11-24
 
 Memory fixes from a hosted test run, where a user merged two cell-line Seurat objects: Seurat

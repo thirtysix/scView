@@ -3,7 +3,7 @@ import { parseOutlines, type CellOutlines } from "@/lib/cellOutlines";
 import { parseTranscripts, type TranscriptPoints } from "@/lib/transcripts";
 import { apiFetch, readError } from "./client";
 import { streamEvents } from "./clustering";
-import { uploadErrorText } from "./atacFragments";
+import { uploadErrorText } from "./upload";
 import type { WatchdogEvent } from "./pipelineRun";
 
 // --- Outlines and transcripts of a Xenium run (backend core/cell_outlines.py, core/transcripts.py) ---

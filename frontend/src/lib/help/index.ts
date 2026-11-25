@@ -10,6 +10,7 @@
  * it is useful and how to read it, in one to three short sentences.
  */
 import { COMPARE_HELP } from "./compare";
+import { DATA_HELP } from "./data";
 import { GENES_HELP } from "./genes";
 import { MODALITIES_HELP } from "./modalities";
 import { PLOT_HELP } from "./plot";
@@ -25,6 +26,7 @@ export const HELP_GROUPS = {
   qc: QC_HELP,
   trajectory: TRAJECTORY_HELP,
   compare: COMPARE_HELP,
+  data: DATA_HELP,
 };
 
 export const HELP: Readonly<Record<string, string>> = Object.assign({}, ...Object.values(HELP_GROUPS));

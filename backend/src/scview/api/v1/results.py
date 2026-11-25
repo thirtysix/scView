@@ -39,8 +39,11 @@ async def list_results(
 ) -> dict:
     """The dataset's stored results, newest first. ``stale`` is true for one
     computed on an earlier version of the data (cells or recipe changed), null
-    when the dataset is not open (nothing to compare with)."""
+    when the dataset is not open (nothing to compare with). Results are written in the
+    background, so the queued writes are waited for first: a listing right after a run
+    that returned a result must include it."""
     _known(dm, dataset_id)
+    await asyncio.to_thread(results_store.flush)
     rows = await asyncio.to_thread(results_store.entries, dataset_id, kind, dm.get_dataset(dataset_id))
     return {"results": [_summary(e) for e in rows], "keep_superseded": results_store.KEEP_SUPERSEDED,
             "max_bytes": results_store.MAX_BYTES, "total_bytes": sum(e.get("bytes") or 0 for e in rows)}
