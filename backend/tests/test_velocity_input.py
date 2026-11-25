@@ -162,6 +162,14 @@ def test_attach_refuses_a_file_of_other_cells_and_changes_nothing(tmp_path):
     with pytest.raises(vi.VelocityInputError, match="None of"):
         vi.attach(named, "ds", tmp_path, [tmp_path / "v.loom"])
     assert not vi.has_store(tmp_path, "ds")
+    assert not vi.store_path(tmp_path, "ds").parent.exists()  # no empty store folder left either
+    # A folder that holds another modality stays.
+    folder = vi.store_path(tmp_path, "ds").parent
+    folder.mkdir(parents=True)
+    (folder / "atac.h5").write_bytes(b"x")
+    with pytest.raises(vi.VelocityInputError):
+        vi.attach(named, "ds", tmp_path, [tmp_path / "v.loom"])
+    assert sorted(p.name for p in folder.iterdir()) == ["atac.h5"]
 
 
 def test_starsolo_unsorted_matrix_gives_the_same_rows(tmp_path):
