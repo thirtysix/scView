@@ -4,7 +4,7 @@ All notable changes to scView are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.83.0] - 2026-11-25
 
 Uploads show how far they have got and can be cancelled, and Seurat conversion needs less memory and estimates it
 honestly: a real object that 0.82.0's converter could not convert in 3 GB now converts there.
