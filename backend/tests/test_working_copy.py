@@ -224,6 +224,31 @@ async def test_markers_on_a_backed_dataset_are_computed_in_memory_and_kept(clien
     assert adaptor.has_markers(column="grp")
 
 
+async def test_markers_on_a_backed_dataset_hold_the_read_in_too(client, dataset_manager, backed, monkeypatch):
+    # make_room only frees the copy's room: the markers' own hold must count it, or the page's
+    # other requests take that room while the worker reads the file in (deep 1.6 GB file opened
+    # backed after an upload, Data Assessment beside its markers: a 3 GB backend OOM-killed).
+    did = _register(Path(dataset_manager.data_dir))
+    adaptor = await dataset_manager.get_or_load_dataset(did)
+    assert adaptor.adata.isbacked
+    from scview.api.v1 import markers
+
+    copy = working_copy.copy_bytes(adaptor)
+    work = markers._markers_need(adaptor, "grp")
+    assert copy > 0 and work > 0
+    held: list[int] = []
+    real = dataset_manager.hold_read
+
+    def spy(ids, need, *a, **k):
+        held.append(need)
+        return real(ids, need, *a, **k)
+
+    monkeypatch.setattr(dataset_manager, "hold_read", spy)
+    r = await client.get(f"{API}/datasets/{did}/markers", params={"groupby_column": "grp", "format": "json"})
+    assert r.status_code == 200, r.text
+    assert held and max(held) >= copy + work
+
+
 async def test_reading_a_backed_dataset_in_during_a_run_on_another_gets_the_run_sentence(
         client, dataset_manager, backed, monkeypatch):
     # Light work on a second dataset (markers, scoring, a PAGA) reads it in through the

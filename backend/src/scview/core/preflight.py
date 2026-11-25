@@ -3376,7 +3376,7 @@ def markers_need(adaptor, n_groups: int) -> int:
     """Peak memory computing one column's markers (``n_groups`` groups) adds to the dataset
     as it is held: the log copy when the ranked matrix holds counts (``marker_matrix.choose``)
     and the ranking's working set (``_step_markers``). A backed dataset's matrix is read in
-    first (``working_copy.make_room`` holds that room): counted from its file header."""
+    first: the markers route adds that (``working_copy.copy_bytes``) to what it holds."""
     import scipy.sparse as sp
 
     from scview.core import marker_matrix, matrix_genes
