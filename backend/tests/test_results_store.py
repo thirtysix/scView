@@ -642,3 +642,17 @@ def test_velocity_goes_stale_on_the_graph_not_on_a_clustering(tmp_path):
     assert state() == (False, None)
     provenance.record_step(a.adata, step="neighbors", tool="scanpy")
     assert state() == (True, "neighbours rebuilt after this result")
+
+
+async def test_a_listing_waits_for_queued_writes(client, dataset_manager):
+    """A result returned by a run is written in the background; listing right after must
+    include it (the MCP guide_assignment test listed 0 when the writer lagged)."""
+    import time
+
+    from tests.test_hvg_sensitivity import _register
+
+    did = _register(dataset_manager, _adata(), "lw")
+    results_store._writer.submit(time.sleep, 0.5)  # a slow write ahead in the queue
+    results_store.keep(did, "test", {"v": 1})
+    listed = (await client.get(f"/api/v1/datasets/{did}/results")).json()
+    assert [e["kind"] for e in listed["results"]] == ["test"]
