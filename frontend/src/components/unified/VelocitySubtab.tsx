@@ -16,9 +16,12 @@ import {
 } from "@/api/velocity";
 import { Caption, capText } from "@/components/common/Caption";
 import { Help } from "@/components/common/Help";
+import { UploadTaskProgress } from "@/components/common/UploadProgressCompact";
+import { filesWhat, isAbort } from "@/api/upload";
 import Plot from "@/components/plots/Plot";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
 import { useEmbedding } from "@/hooks/useEmbedding";
+import { useUploadTask } from "@/hooks/useUploadTask";
 import { mapCategoryToColor } from "@/lib/colors";
 import { errorMessage } from "@/lib/errorMessage";
 import { aboutGb } from "@/lib/labelTransfer";
@@ -143,6 +146,7 @@ export function VelocitySubtab() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [attaching, setAttaching] = useState(false);
+  const upload = useUploadTask();
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState("");
   const [memoryNote, setMemoryNote] = useState<string | null>(null);
@@ -257,10 +261,10 @@ export function VelocitySubtab() {
     setAttaching(true);
     setError(null);
     try {
-      await attachVelocity(datasetId, files);
+      await upload.run(filesWhat(files), (opts) => attachVelocity(datasetId, files, opts));
       await load(datasetId);
     } catch (e) {
-      setError(errorMessage(e));
+      if (!isAbort(e)) setError(errorMessage(e));
     } finally {
       setAttaching(false);
     }
@@ -373,12 +377,13 @@ export function VelocitySubtab() {
             }}
           />
         </label>
-        {attaching && (
+        {attaching && !upload.name && (
           <span className="flex items-center gap-1 text-slate-500">
             <Loader2 className="h-3 w-3 animate-spin" /> Matching cells and genes
           </span>
         )}
       </div>
+      <UploadTaskProgress task={upload} sentText="Sent. Matching cells and genes…" />
 
       {status.attached && (
         <div className="space-y-2 rounded-md border border-slate-200 p-2">

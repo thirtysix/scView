@@ -1,5 +1,6 @@
 import { API_BASE } from "@/lib/constants";
-import { apiFetch, readError } from "./client";
+import { apiFetch } from "./client";
+import { apiUpload, filesProgress, filesWhat, type UploadOptions } from "./upload";
 import { streamEvents } from "./clustering";
 
 /** RNA velocity (backend core/velocity_input.py, core/velocity.py, api/v1/velocity.py). */
@@ -253,12 +254,19 @@ export function getVelocity(datasetId: string): Promise<VelocityStatus> {
   return apiFetch(`/datasets/${datasetId}/velocity`);
 }
 
-export async function attachVelocity(datasetId: string, files: File[]): Promise<{ attached: boolean; source: VelocitySource }> {
+/** POST /velocity/attach (multipart), with upload progress over the files. */
+export function attachVelocity(
+  datasetId: string,
+  files: File[],
+  opts: UploadOptions = {},
+): Promise<{ attached: boolean; source: VelocitySource }> {
   const form = new FormData();
   files.forEach((f) => form.append("files", f));
-  const res = await fetch(`${API_BASE}/datasets/${datasetId}/velocity/attach`, { method: "POST", body: form });
-  if (!res.ok) throw new Error(`API error ${res.status}: ${await readError(res)}`);
-  return res.json();
+  return apiUpload(`${API_BASE}/datasets/${datasetId}/velocity/attach`, form, {
+    what: filesWhat(files),
+    signal: opts.signal,
+    onProgress: filesProgress(files, opts.onProgress),
+  });
 }
 
 export interface VelocityRunBody {

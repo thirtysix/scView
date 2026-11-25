@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
+import { installFakeXhr } from "@/test/fakeXhr";
 import { attachSeqMetrics, getSeqMetrics, removeSeqMetrics } from "./seqqc";
 
 const respond = (body: unknown, status = 200) =>
@@ -17,19 +18,19 @@ describe("seqqc api", () => {
   });
 
   it("sends the files and the target sample as multipart, and surfaces the server's sentence", async () => {
-    const f = respond({ samples: [{ sample: "s2" }], n_samples: 1, metrics_info: [] });
-    vi.stubGlobal("fetch", f);
+    const xhr = installFakeXhr((x) => x.respond(200, { samples: [{ sample: "s2" }], n_samples: 1, metrics_info: [] }));
     const file = new File(["x"], "metrics_summary.csv");
     await attachSeqMetrics("d1", [file], { column: "sample", sample: "s2" });
-    const init = (f.mock.calls[0] as unknown[])[1] as RequestInit;
-    const form = init.body as FormData;
-    expect(init.method).toBe("POST");
+    const req = xhr.requests[0]!;
+    const form = req.body as FormData;
+    expect(req.method).toBe("POST");
+    expect(req.url).toBe("/api/v1/datasets/d1/seq-metrics");
     expect((form.getAll("files")[0] as File).name).toBe("metrics_summary.csv");
     expect(form.get("column")).toBe("sample");
     expect(form.get("sample")).toBe("s2");
-    vi.stubGlobal("fetch", respond({ detail: "None of the 40 cells is in this raw matrix." }, 400));
+    installFakeXhr((x) => x.respond(400, { detail: "None of the 40 cells is in this raw matrix." }));
     await expect(attachSeqMetrics("d1", [file])).rejects.toThrow("None of the 40 cells is in this raw matrix.");
-    vi.stubGlobal("fetch", vi.fn(async () => new Response("<html>bad gateway</html>", { status: 502 })));
+    installFakeXhr((x) => x.respond(502, "<html>bad gateway</html>"));
     await expect(attachSeqMetrics("d1", [file])).rejects.toThrow(/backend did not answer/);
   });
 

@@ -13,6 +13,9 @@ import {
   type CustomCollection,
 } from "@/api/genesets";
 import { useCustomGeneSetsStore } from "@/stores/customGeneSetsStore";
+import { isAbort } from "@/api/upload";
+import { UploadTaskProgress } from "@/components/common/UploadProgressCompact";
+import { useUploadTask } from "@/hooks/useUploadTask";
 
 const NAME_MAX = 120;
 const ACCEPT = ".gmt,.csv,.tsv,.txt";
@@ -151,17 +154,22 @@ export function CustomCollectionsGroup({
     [clearMessages],
   );
 
+  const upload = useUploadTask();
+  const { run: runUpload, cancel: abortUpload } = upload;
+
   const cancelUpload = useCallback(() => {
+    abortUpload();
     setPendingFile(null);
     if (fileRef.current) fileRef.current.value = "";
-  }, []);
+  }, [abortUpload]);
 
   const handleUpload = useCallback(async () => {
     if (!pendingFile) return;
     setIsUploading(true);
     clearMessages();
     try {
-      const res = await uploadCustomCollection(pendingFile, uploadName.trim());
+      const file = pendingFile;
+      const res = await runUpload(file.name, (opts) => uploadCustomCollection(file, uploadName.trim(), opts));
       setNotice(
         [`Added "${res.name}" (${res.n_sets} sets).`, ...(res.warnings ?? [])].join(" "),
       );
@@ -171,11 +179,11 @@ export function CustomCollectionsGroup({
       if (sel && onChangeRef.current) onChangeRef.current(new Set([...sel, res.id]));
       bump();
     } catch (e) {
-      showError(e, "Upload failed.");
+      if (!isAbort(e)) showError(e, "Upload failed.");
     } finally {
       setIsUploading(false);
     }
-  }, [pendingFile, uploadName, clearMessages, cancelUpload, bump, showError]);
+  }, [pendingFile, uploadName, clearMessages, cancelUpload, bump, showError, runUpload]);
 
   const startRename = useCallback((c: CustomCollection) => {
     renamingRef.current = c.id;
@@ -253,6 +261,7 @@ export function CustomCollectionsGroup({
           accept={ACCEPT}
           aria-label="Gene-set file"
           className="hidden"
+          disabled={isUploading}
           onChange={(e) => pickFile(e.target.files?.[0])}
         />
       </div>
@@ -294,6 +303,7 @@ export function CustomCollectionsGroup({
               <X className="h-3.5 w-3.5" />
             </button>
           </div>
+          <UploadTaskProgress task={upload} minimal sentText="Sent. Checking the gene sets…" />
         </div>
       )}
 

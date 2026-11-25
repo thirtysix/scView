@@ -170,7 +170,7 @@ describe("SequencingQc", () => {
     fireEvent.change(screen.getByTestId("seqqc-file-input"), { target: { files: [file] } });
     expect(screen.getByTestId("seqqc-file-names").textContent).toBe("metrics_summary.csv");
     fireEvent.click(attach);
-    await waitFor(() => expect(attachSeqMetrics).toHaveBeenCalledWith("d1", [file], {}));
+    await waitFor(() => expect(attachSeqMetrics).toHaveBeenCalledWith("d1", [file], {}, expect.objectContaining({ signal: expect.any(AbortSignal) })));
     expect(await screen.findByTestId("seqqc-table")).toBeTruthy();
     expect(screen.queryByTestId("seqqc-attach")).toBeNull();
   });
@@ -201,7 +201,7 @@ describe("SequencingQc", () => {
     fireEvent.change(screen.getByLabelText("Sample"), { target: { value: "s2" } });
     fireEvent.click(attach);
     expect((await screen.findByRole("alert")).textContent).toBe("No cells have 'sample' = 's2'.");
-    expect(attachSeqMetrics).toHaveBeenCalledWith("d1", [file], { column: "sample", sample: "s2" });
+    expect(attachSeqMetrics).toHaveBeenCalledWith("d1", [file], { column: "sample", sample: "s2" }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
   });
 
   it("removes a sample's metrics and falls back to the attach prompt when none is left", async () => {

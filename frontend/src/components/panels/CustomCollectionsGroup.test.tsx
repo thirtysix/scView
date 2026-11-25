@@ -70,7 +70,7 @@ describe("CustomCollectionsGroup", () => {
     fireEvent.change(name, { target: { value: "Mine" } });
     fireEvent.click(screen.getByText("Save"));
     expect(await screen.findByText(/Added "Mine" \(2 sets\)\. 3 repeated genes were dropped\./)).toBeInTheDocument();
-    expect(api.uploadCustomCollection).toHaveBeenCalledWith(file, "Mine");
+    expect(api.uploadCustomCollection).toHaveBeenCalledWith(file, "Mine", expect.objectContaining({ signal: expect.any(AbortSignal) }));
     expect([...onChange.mock.calls.at(-1)![0]]).toEqual(["h.all", "custom-b"]);
     expect(useCustomGeneSetsStore.getState().version).toBe(1);
   });

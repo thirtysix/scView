@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { FileUp, Loader2 } from "lucide-react";
 import { importLabelFile, listLabelColumns } from "@/api/labels";
+import { isAbort } from "@/api/upload";
 import { Help } from "@/components/common/Help";
+import { UploadTaskProgress } from "@/components/common/UploadProgressCompact";
+import { useUploadTask } from "@/hooks/useUploadTask";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
 import { columnNameError } from "@/lib/labels";
 import {
@@ -48,6 +51,7 @@ export function LabelImportCard({ datasetId }: { datasetId: string }) {
   const [strip, setStrip] = useState(false);
   const [minMatch, setMinMatch] = useState(90);
   const [busy, setBusy] = useState<"check" | "import" | null>(null);
+  const upload = useUploadTask();
   const [report, setReport] = useState<LabelImportReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<LabelImportReport | null>(null);
@@ -110,16 +114,23 @@ export function LabelImportCard({ datasetId }: { datasetId: string }) {
     setBusy(dryRun ? "check" : "import");
     setError(null);
     try {
-      const r = await importLabelFile(datasetId, file, {
-        column,
-        barcodeColumn: barcode === BY_ORDER ? null : barcode,
-        labelColumn: label,
-        stripSuffix: strip,
-        minMatch: minMatch / 100,
-        dryRun,
-        newColumn: isNew,
-        sampleColumn: barcode === BY_ORDER && sample !== ANY_SAMPLE ? sample : null,
-      });
+      const r = await upload.run(file.name, (opts) =>
+        importLabelFile(
+          datasetId,
+          file,
+          {
+            column,
+            barcodeColumn: barcode === BY_ORDER ? null : barcode,
+            labelColumn: label,
+            stripSuffix: strip,
+            minMatch: minMatch / 100,
+            dryRun,
+            newColumn: isNew,
+            sampleColumn: barcode === BY_ORDER && sample !== ANY_SAMPLE ? sample : null,
+          },
+          opts,
+        ),
+      );
       if (dryRun) {
         setReport(r);
       } else {
@@ -132,7 +143,7 @@ export function LabelImportCard({ datasetId }: { datasetId: string }) {
       }
     } catch (e) {
       setReport(null);
-      setError(inCardWords(e instanceof Error ? e.message : "The import failed."));
+      if (!isAbort(e)) setError(inCardWords(e instanceof Error ? e.message : "The import failed."));
     } finally {
       setBusy(null);
     }
@@ -157,6 +168,7 @@ export function LabelImportCard({ datasetId }: { datasetId: string }) {
             type="file"
             accept=".csv,.tsv,.txt,.tab,.gz"
             aria-label="Label table file"
+            disabled={busy !== null}
             onChange={(e) => void pickFile(e.target.files?.[0] ?? null)}
             className="text-xs text-slate-600"
           />
@@ -319,6 +331,10 @@ export function LabelImportCard({ datasetId }: { datasetId: string }) {
             </button>
           </div>
         )}
+        <UploadTaskProgress
+          task={upload}
+          sentText={busy === "import" ? "Sent. Importing the labels…" : "Sent. Matching the rows to the cells…"}
+        />
 
         {error && (
           <p role="alert" className="rounded bg-red-50 px-2 py-1.5 text-[11px] text-red-700">

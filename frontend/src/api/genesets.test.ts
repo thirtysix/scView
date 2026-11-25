@@ -12,6 +12,7 @@ import {
   uploadCustomCollection,
   type CustomCollection,
 } from "./genesets";
+import { installFakeXhr } from "@/test/fakeXhr";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -40,30 +41,36 @@ describe("custom gene-set collections API", () => {
     expect(fetchMock.mock.calls[1]![0]).toBe("/api/v1/genesets/custom");
   });
 
-  it("uploads the file and name as multipart form data", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ ...col(), warnings: [] }), { status: 201 }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
+  it("uploads the file and name as multipart form data, with progress", async () => {
+    const xhr = installFakeXhr((x) => {
+      x.progress(5, 10);
+      x.respond(201, { ...col(), warnings: [] });
+    });
     const file = new File(["S\t\tA\n"], "lab.gmt");
-    await uploadCustomCollection(file, "Lab");
-    const [url, init] = fetchMock.mock.calls[0]!;
-    expect(url).toBe("/api/v1/genesets/custom/upload");
-    expect(init.method).toBe("POST");
-    const body = init.body as FormData;
+    const seen: number[] = [];
+    await uploadCustomCollection(file, "Lab", { onProgress: (p) => seen.push(p.loaded) });
+    const req = xhr.requests[0]!;
+    expect(req.url).toBe("/api/v1/genesets/custom/upload");
+    expect(req.method).toBe("POST");
+    const body = req.body as FormData;
     expect((body.get("file") as File).name).toBe("lab.gmt");
     expect(body.get("name")).toBe("Lab");
     // The browser must set the multipart boundary itself.
-    expect(init.headers).toBeUndefined();
+    expect(req.headers).toEqual({});
+    expect(seen).toEqual([file.size / 2]);
   });
 
   it("a rejected file throws its message and every problem", async () => {
     const detail = { message: "bad.gmt: 2 problems found, nothing was saved.", problems: ["line 1: x", "line 2: y"] };
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ detail }), { status: 400 })));
+    installFakeXhr((x) => x.respond(400, { detail }));
     const err = await uploadCustomCollection(new File(["x"], "bad.gmt"), "x").catch((e) => e);
     expect(err).toBeInstanceOf(GeneSetUploadError);
     expect(err.message).toBe(detail.message);
     expect(err.problems).toEqual(detail.problems);
+    installFakeXhr((x) => x.respond(502, "<html>bad gateway</html>"));
+    const down = await uploadCustomCollection(new File(["x"], "a.gmt"), "x").catch((e) => e);
+    expect(down).toBeInstanceOf(GeneSetUploadError);
+    expect(down.message).toMatch(/backend did not answer/);
   });
 
   it("a plain string detail becomes the message; a non-JSON body is kept", async () => {

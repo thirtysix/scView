@@ -3,7 +3,7 @@ import { parseOutlines, type CellOutlines } from "@/lib/cellOutlines";
 import { parseTranscripts, type TranscriptPoints } from "@/lib/transcripts";
 import { apiFetch, readError } from "./client";
 import { streamEvents } from "./clustering";
-import { uploadErrorText } from "./upload";
+import { filesProgress, xhrUpload, type UploadOptions } from "./upload";
 import type { WatchdogEvent } from "./pipelineRun";
 
 // --- Outlines and transcripts of a Xenium run (backend core/cell_outlines.py, core/transcripts.py) ---
@@ -78,33 +78,19 @@ export function deleteTranscripts(datasetId: string): Promise<{ deleted: boolean
   return apiFetch(`/datasets/${datasetId}/spatial/transcripts`, { method: "DELETE" });
 }
 
-function rawUpload<T>(url: string, file: File, onProgress?: (fraction: number) => void, signal?: AbortSignal): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", url);
-    xhr.setRequestHeader("Content-Type", "application/octet-stream");
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total);
-    };
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) resolve(JSON.parse(xhr.responseText) as T);
-      else reject(new Error(uploadErrorText(xhr.status, xhr.responseText)));
-    };
-    xhr.onerror = () => reject(new Error(`The upload of ${file.name} stopped before the end: send it again.`));
-    xhr.onabort = () => reject(new DOMException("Aborted", "AbortError"));
-    signal?.addEventListener("abort", () => xhr.abort());
-    xhr.send(file);
+/** The file as the raw request body (read from disk as it goes), with upload progress. */
+function rawUpload<T>(url: string, file: File, opts: UploadOptions): Promise<T> {
+  return xhrUpload<T>(url, file, {
+    what: file.name,
+    contentType: "application/octet-stream",
+    signal: opts.signal,
+    onProgress: filesProgress([file], opts.onProgress),
   });
 }
 
-export function uploadTranscripts(
-  datasetId: string,
-  file: File,
-  onProgress?: (fraction: number) => void,
-  signal?: AbortSignal,
-): Promise<TranscriptStatus> {
+export function uploadTranscripts(datasetId: string, file: File, opts: UploadOptions = {}): Promise<TranscriptStatus> {
   const url = `${API_BASE}/datasets/${datasetId}/spatial/transcripts?name=${encodeURIComponent(file.name)}`;
-  return rawUpload(url, file, onProgress, signal);
+  return rawUpload(url, file, opts);
 }
 
 export interface OutlineFit {
@@ -117,14 +103,9 @@ export interface OutlineFit {
   outlines: OutlineKind[];
 }
 
-export function uploadOutlines(
-  datasetId: string,
-  file: File,
-  onProgress?: (fraction: number) => void,
-  signal?: AbortSignal,
-): Promise<OutlineFit> {
+export function uploadOutlines(datasetId: string, file: File, opts: UploadOptions = {}): Promise<OutlineFit> {
   const url = `${API_BASE}/datasets/${datasetId}/spatial/outlines?name=${encodeURIComponent(file.name)}`;
-  return rawUpload(url, file, onProgress, signal);
+  return rawUpload(url, file, opts);
 }
 
 export interface TranscriptIndexEvents {

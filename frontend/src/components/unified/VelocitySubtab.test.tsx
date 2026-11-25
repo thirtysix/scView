@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach } from "vitest";
 import type { DatasetInfo } from "@/api/types";
+import type { UploadOptions } from "@/api/upload";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useUnifiedViewStore } from "@/stores/unifiedViewStore";
@@ -152,7 +153,31 @@ describe("VelocitySubtab", () => {
     api.attachVelocity.mockResolvedValue({ attached: true, source: {} });
     const files = [new File(["a"], "day0.loom"), new File(["b"], "day2.loom")];
     fireEvent.change(input, { target: { files } });
-    await waitFor(() => expect(api.attachVelocity).toHaveBeenCalledWith("d1", files));
+    await waitFor(() => expect(api.attachVelocity).toHaveBeenCalledWith("d1", files, expect.objectContaining({ signal: expect.any(AbortSignal) })));
+  });
+
+  it("shows the upload's progress, locks the choosers, and Cancel keeps nothing and shows no error", async () => {
+    api.getVelocity.mockResolvedValue({ ...base, attached: false, run: null, estimate: null, source: null });
+    let opts: UploadOptions = {};
+    api.attachVelocity.mockImplementation((_d: string, _f: File[], o: UploadOptions) => {
+      opts = o;
+      o.onProgress?.({ loaded: 300e6, total: 1200e6, file: "day0.loom", fileIndex: 1, fileCount: 2 });
+      return new Promise((_resolve, reject) =>
+        o.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError"))),
+      );
+    });
+    render(<VelocitySubtab />);
+    const input = (await screen.findByLabelText("Velocity .loom or .h5ad files")) as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [new File(["a"], "day0.loom"), new File(["b"], "day2.loom")] } });
+    const bar = await screen.findByRole("progressbar", { name: "Upload of 2 files" }, { timeout: 2000 });
+    expect(bar).toHaveAttribute("aria-valuenow", "25");
+    expect(input.disabled).toBe(true);
+    expect((screen.getByLabelText("STARsolo Velocyto/filtered files") as HTMLInputElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(opts.signal?.aborted).toBe(true);
+    expect(await screen.findByTestId("upload-cancelled")).toHaveTextContent("Upload of 2 files cancelled. Nothing was kept.");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(input.disabled).toBe(false);
   });
 
   it("shows the direction check and runs again with the same order, on the plot on screen", async () => {

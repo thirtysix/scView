@@ -1,4 +1,5 @@
-import { apiFetch, readError } from "./client";
+import { apiFetch } from "./client";
+import { apiUpload, filesProgress, type UploadOptions } from "./upload";
 import { streamEvents } from "./clustering";
 import { API_BASE } from "@/lib/constants";
 
@@ -158,13 +159,20 @@ export function getDeconvolutionDefaults(datasetId: string): Promise<DeconvDefau
 }
 
 /** POST /deconvolution/upload (multipart). Without a file the server uses the last run's file again. */
-export async function runDeconvolution(datasetId: string, file: File | null, options: DeconvOptions): Promise<DeconvResult> {
+export function runDeconvolution(
+  datasetId: string,
+  file: File | null,
+  options: DeconvOptions,
+  opts: UploadOptions = {},
+): Promise<DeconvResult> {
   const form = new FormData();
   if (file) form.append("file", file);
   form.append("options", JSON.stringify(options));
-  const res = await fetch(`${API_BASE}/datasets/${datasetId}/deconvolution/upload`, { method: "POST", body: form });
-  if (!res.ok) throw new Error(`API error ${res.status}: ${await readError(res)}`);
-  return res.json();
+  return apiUpload(`${API_BASE}/datasets/${datasetId}/deconvolution/upload`, form, {
+    what: file?.name ?? "the bulk file",
+    signal: opts.signal,
+    onProgress: file ? filesProgress([file], opts.onProgress) : undefined,
+  });
 }
 
 export function getDeconvolutionCheck(datasetId: string): Promise<DeconvCheck | null> {
