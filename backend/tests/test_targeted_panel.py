@@ -470,7 +470,7 @@ def test_a_request_says_what_the_user_set():
     assert _run_params(None).explicit == ()
 
 
-def test_the_filter_preview_endpoint_applies_the_floor_as_the_run_does():
+def test_the_filter_preview_endpoint_applies_the_floor_as_the_run_does(tmp_path):
     from fastapi import FastAPI
 
     from scview.api.v1 import assessment
@@ -484,13 +484,15 @@ def test_the_filter_preview_endpoint_applies_the_floor_as_the_run_does():
 
             return per_cell_qc(self.adata, ribo=ribo)
 
-    class DM:
+    from scview.core.dataset_manager import DatasetManager
+
+    class DM(DatasetManager):  # the route holds its read in the memory budget
         async def get_or_load_dataset(self, _):
             return Adaptor(a)
 
     app = FastAPI()
     app.include_router(assessment.router, prefix="/api/v1")
-    app.dependency_overrides[get_dataset_manager] = lambda: DM()
+    app.dependency_overrides[get_dataset_manager] = lambda: DM(data_dir=str(tmp_path))
     client = TestClient(app)
     url = "/api/v1/datasets/x/qc/filter-preview"
     out, _ = run_pipeline(a.copy(), ["filtering"])
