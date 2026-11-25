@@ -271,7 +271,8 @@ describe("PerturbationSubtab", () => {
     render(<PerturbationSubtab />);
     const box = await screen.findByTestId("mixscape-protein");
     fireEvent.click(within(box).getByRole("button", { name: /log counts/ })); // an older result: no layer list
-    expect(await within(box).findByRole("alert")).toHaveTextContent("keeps no antibody counts");
+    // a slow CI runner took over findByRole's 1 s default (v0.83 PR): the request is a plain promise
+    expect(await within(box).findByRole("alert", {}, { timeout: 5000 })).toHaveTextContent("keeps no antibody counts");
   });
 
   it("has no protein section without a protein check", async () => {
