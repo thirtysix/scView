@@ -4,7 +4,7 @@ All notable changes to scView are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.84.0] - 2026-11-25
 
 The Data Assessment page opens on deep files in a small backend, Seurat objects with unusual cell metadata
 convert, and every side-file upload shows its progress and can be cancelled.
