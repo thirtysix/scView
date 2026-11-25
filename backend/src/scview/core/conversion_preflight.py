@@ -3,21 +3,31 @@
 An R file has no header to read: its object is one serialized stream, compressed
 (gzip by default, or bzip2 / xz). What the converter holds at its peak is that whole
 object as R reads it (readRDS loads all of it, layers it does not write included),
-plus a fixed base for R, Python and anndata. So the estimate decompresses the stream
-without keeping it, counting its bytes (the serialized size is close to the object's
-size in memory), and adds the base:
+plus a base for R, Python and anndata and the blocks of X being written. Where the
+counts are most of the object nothing is freed before X is written, so the blocks come
+on top of the object: the base is what such an object needs beyond its own size. So
+the estimate decompresses the stream without keeping it, counting its bytes (the
+serialized size is close to the object's size in memory), and adds the base:
 
     peak = CONVERTER_BASE_BYTES + CONVERTER_PER_SERIALIZED_BYTE * serialized bytes
 
-Measured (v0.82.0, the converter process's VmHWM; serialized size -> peak, GiB):
-synthetic Seurat v5 objects with counts, data, scale.data, pca/umap and nn/snn graphs,
-8,000 cells x 20,000 genes in 3 split layers 0.56 -> 1.12, 12,000 x 34,209 1.60 -> 1.96,
-23,578 x 34,209 (the shape of the 331 MB object the hub converted) 3.14 -> 3.50, and
-a real 2,199-cell object 0.43 -> 0.88: within 10% of the fit. The 23,578-cell one
-converted at a 3.6 GiB limit and was killed at 3.2 GiB (0.81.0's converter was killed
-at 12 GB). The compressed size alone is a poor guide: these objects compress 2 to 5
-times, others more. The decompression is timed: after ``COUNT_SECONDS`` the rest is
-extrapolated from the share read so far.
+Measured (v0.83.0, the conversion's VmHWM at an 8 GiB limit, 2 CPUs; serialized size
+-> peak, GiB) on synthetic Seurat v5 objects: with counts, data, scale.data, pca/umap
+and nn/snn graphs (v0.82's), 8,000 cells x 20,000 genes in 3 split layers 0.56 -> 1.12,
+12,000 x 34,209 1.60 -> 1.96, 23,578 x 34,209 3.14 -> 3.50; with only counts, 20,000 x
+30,000 1.25 -> 1.98 and 5,000 x 30,000 0.31 -> 1.00; and on two real Seurat v5 objects
+(one counts only, one with split counts, data and scale.data layers). Counts-only
+objects need about 0.7 GiB beyond their size, at any size, so the factor stays 1.0 and
+the base covers them: the fit is 2% to 12% above those, never under, and up to 30%
+above objects whose other layers are freed before X is written (the stream does not say
+how much of it the counts are). The table is in ``tests/test_conversion_preflight.py``.
+The v0.82 fit (0.45 GiB + 1.0x) was 30% under on the counts-only real object, which a
+3 GiB converter could not convert; ``release_chunk`` running a full collection cut that
+peak by a fifth (it converts in 2.5 GiB now). A factor above 1 with a smaller base
+fits the larger objects more tightly but comes out under on small counts-only ones
+(1.15x + 0.55 GiB is 11% under the 5,000-cell one). The compressed size alone is a
+poor guide: these objects compress 2 to 5 times, others more. The decompression is
+timed: after ``COUNT_SECONDS`` the rest is extrapolated from the share read so far.
 
 The verdict is a warning, never a refusal, worded as the backend preflight's
 (``core/preflight.py``), against the converter's own memory (its GET /health reads
@@ -42,10 +52,10 @@ logger = logging.getLogger(__name__)
 GiB = 1024 ** 3
 
 # Fitted on the measurements above (see the module docstring).
-CONVERTER_BASE_BYTES = int(0.45 * GiB)
+CONVERTER_BASE_BYTES = int(0.8 * GiB)
 CONVERTER_PER_SERIALIZED_BYTE = 1.0
-# Largest error of the fit on the measured objects, rounded up.
-ERROR_BAND = 0.15
+# The fit's largest error on the measured objects (all of it above the peak), rounded.
+ERROR_BAND = 0.3
 # The conversion's time (2 CPUs, gzip): a few seconds, then per GB of serialized object.
 CONVERT_SECONDS = 3.0
 CONVERT_SECONDS_PER_GB = 5.5
@@ -210,14 +220,16 @@ def converter_verdict(path: str | Path, mem: ConverterMemory, *, hosted: bool = 
     if level in ("tight", "wont_fit") and mem.limit_bytes is not None:
         target = conversion.target_gb(need, mem.used_bytes or 0)
         suggestions.append(conversion.converter_memory_advice(mem.limit_bytes, target, hosted=hosted))
-        suggestions.append("Or save a smaller object in R first: DietSeurat(obj, layers = \"counts\") "
-                           "keeps the counts and drops the data and scale.data layers, which scView "
-                           "does not read.")
+        # the stream does not say which layers it holds: the tip says when it helps
+        suggestions.append("Or, if it has data or scale.data layers, save a smaller object in R first: "
+                           "DietSeurat(obj, layers = \"counts\") keeps the counts and drops those "
+                           "layers, which scView does not read.")
     basis = ("Estimated from the size of the R object once decompressed (the converter reads all of it, "
              f"layers it does not write too): {_gb(ser.bytes)} GB"
              + ("" if ser.exact else ", extrapolated from the first part of the file")
-             + f", plus about {_gb(CONVERTER_BASE_BYTES)} GB for R and Python. Measured on test objects, "
-             f"it came within {round(ERROR_BAND * 100)}% of the converter's peak.")
+             + f", plus about {_gb(CONVERTER_BASE_BYTES)} GB for R, Python and the blocks of the matrix "
+             f"it writes. Measured on real and test objects, it came up to {round(ERROR_BAND * 100)}% "
+             "above the converter's peak, never under.")
     return {
         "level": level, "sentence": sentence, "need_bytes": need, "peak_bytes": need,
         "peak_stage": "reading the R object", "available_bytes": avail,
@@ -227,7 +239,7 @@ def converter_verdict(path: str | Path, mem: ConverterMemory, *, hosted: bool = 
         "cached": {"count": 0, "bytes": 0, "frees_enough": False},
         "suggestions": suggestions, "error_band": ERROR_BAND,
         "breakdown": [{"label": "The R object, decompressed", "bytes": ser.bytes},
-                      {"label": "R, Python and anndata", "bytes": CONVERTER_BASE_BYTES}],
+                      {"label": "R, Python, anndata and the blocks being written", "bytes": CONVERTER_BASE_BYTES}],
         "notes": [], "basis": basis,
         "serialized_bytes": ser.bytes, "serialized_exact": ser.exact, "compression": ser.compression,
     }

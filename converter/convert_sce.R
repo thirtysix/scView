@@ -369,8 +369,11 @@ write_assay <- function(group, key, m, rows, n_cells, py) {
 
 #' Free a written chunk now. Its NumPy copy is held by a small R wrapper, and
 #' R's collector does not count the Python memory behind it, so without this
-#' every chunk stays until the end (measured on 37k cells: +1.2 GB of RSS).
-release_chunk <- function() invisible(gc(full = FALSE, verbose = FALSE))
+#' every chunk stays until the end (measured on 37k cells: +1.2 GB of RSS). A full
+#' collection: a young-generation one leaves the chunks that lived through an
+#' earlier one (a counts-only Seurat object of 1.5 GiB peaked at 2.79 GiB with
+#' full = FALSE, 2.23 GiB with full = TRUE, about a second longer).
+release_chunk <- function() invisible(gc(full = TRUE, verbose = FALSE))
 
 #' A genes x cells dgCMatrix is, array for array, the CSR form of the cells x
 #' genes matrix: column pointers = row pointers, row indices = column indices.

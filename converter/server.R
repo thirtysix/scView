@@ -3,7 +3,8 @@
 ## Minimal HTTP server for the scView converter service.
 ## Listens on port 8001 and exposes two routes:
 ##   GET  /health  -> health-check endpoint, with the memory this container has
-##                    (cgroup limit, use, OOM kills) and when the server started
+##                    (cgroup limit, use, OOM kills), when the server started and
+##                    the measured peak of the last conversion or export
 ##   POST /convert -> accepts JSON {input_path, output_path[, progress_path]},
 ##                    runs conversion (Seurat, SingleCellExperiment,
 ##                    SummarizedExperiment) and returns what was kept / skipped
@@ -21,6 +22,9 @@ source("export_rds.R")
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+#' A list without its NULL fields (toJSON writes NULL as {}).
+compact <- function(l) l[!vapply(l, is.null, logical(1))]
 
 json_response <- function(body_list, status = 200L) {
   list(
@@ -83,14 +87,58 @@ memory_state <- function() {
   )
 }
 
+#' The peak resident memory of this process so far (VmHWM), in bytes; NULL where
+#' /proc cannot be read. In the forked child this is the conversion's own peak, the
+#' server's pages it shares counted in (as the container's limit counts them).
+process_peak_bytes <- function(status = "/proc/self/status") {
+  line <- tryCatch(grep("^VmHWM:", readLines(status, warn = FALSE), value = TRUE),
+                   error = function(e) character(0))
+  if (length(line) == 0) return(NULL)
+  kb <- suppressWarnings(as.numeric(sub("^VmHWM:\\s*([0-9]+).*", "\\1", line[1])))
+  if (is.na(kb)) NULL else kb * 1024
+}
+
+# The last conversion or export: what, when, how it ended and its measured peak, for
+# /health (a refit of the backend's estimate can use real objects).
+LAST <- new.env(parent = emptyenv())
+LAST$run <- NULL
+
+remember_run <- function(what, res) {
+  LAST$run <- list(
+    what = what, finished_at = format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3%z"),
+    ok = isTRUE(res$success), error_kind = res$error_kind,
+    peak_bytes = res$peak_bytes, memory_limit_bytes = memory_state()$memory_limit_bytes
+  )
+  cat(sprintf("[server] %s: %s, peak %s\n", what, if (isTRUE(res$success)) "done" else (res$error_kind %||% "failed"),
+              if (is.null(res$peak_bytes)) "not measured" else sprintf("%.2f GiB", res$peak_bytes / 1024^3)))
+  res
+}
+
+#' The last run for /health: its fields as last_conversion_*, or nothing before one.
+last_run_fields <- function() {
+  r <- LAST$run
+  if (is.null(r)) return(list())
+  r <- compact(r)
+  stats::setNames(r, paste0("last_conversion_", names(r)))
+}
+
 #' Run a conversion in a forked child. When it needs more memory than the container
 #' has, the kernel kills the child (the largest process), not this server: the answer
 #' then says it ran out of memory (memory.events oom_kill went up) instead of the
 #' connection dropping, and the server stays up. All of a conversion's memory goes back
-#' with the child.
+#' with the child. Its answer carries its measured peak (`peak_bytes`, the child's
+#' VmHWM); a killed child has none.
 run_in_child <- function(work, what) {
+  remember_run(what, child_result(work, what))
+}
+
+child_result <- function(work, what) {
   before <- memory_state()$oom_kills
-  job <- parallel::mcparallel(work(), silent = FALSE)
+  job <- parallel::mcparallel({
+    out <- work()
+    if (is.list(out)) out$peak_bytes <- process_peak_bytes()
+    out
+  }, silent = FALSE)
   # a child that was killed delivers nothing (mccollect warns; the answer below says why)
   res <- suppressWarnings(parallel::mccollect(job, wait = TRUE))[[1]]
   if (is.list(res)) return(res)
@@ -103,8 +151,8 @@ run_in_child <- function(work, what) {
   if (oom) {
     return(list(
       success = FALSE, error_kind = "out_of_memory", memory_limit_bytes = limit,
-      error = sprintf("The converter ran out of memory %s%s.", what,
-                      if (is.null(limit)) "" else sprintf(" (it has %.1f GB)", limit / 1024^3))
+      error = if (is.null(limit)) sprintf("The converter ran out of memory %s.", what)
+              else sprintf("The converter ran out of its %.1f GB %s.", limit / 1024^3, what)
     ))
   }
   list(success = FALSE, error_kind = "stopped",
@@ -117,6 +165,7 @@ error_body <- function(result) {
   body <- list(status = "error", error = result$error)
   if (!is.null(result$error_kind)) body$error_kind <- result$error_kind
   if (!is.null(result$memory_limit_bytes)) body$memory_limit_bytes <- result$memory_limit_bytes
+  if (!is.null(result$peak_bytes)) body$peak_bytes <- result$peak_bytes
   body
 }
 
@@ -134,7 +183,8 @@ app <- list(
 
     # ---- GET /health ------------------------------------------------------
     if (method == "GET" && path == "/health") {
-      return(json_response(c(list(status = "ok", started_at = STARTED_AT), memory_state())))
+      return(json_response(c(list(status = "ok", started_at = STARTED_AT), memory_state(),
+                             last_run_fields())))
     }
 
     # ---- POST /convert ----------------------------------------------------
@@ -192,11 +242,12 @@ app <- list(
       ), sprintf("converting %s", basename(input_path)))
 
       if (isTRUE(result$success)) {
-        return(json_response(list(
-          status  = "ok",
-          message = result$message,
-          report  = result$report
-        )))
+        return(json_response(compact(list(
+          status     = "ok",
+          message    = result$message,
+          report     = result$report,
+          peak_bytes = result$peak_bytes
+        ))))
       } else {
         return(json_response(error_body(result), status = 500L))
       }
@@ -218,7 +269,8 @@ app <- list(
         error = function(e) list(success = FALSE, error = conditionMessage(e))
       ), "writing the .rds file")
       if (isTRUE(result$success)) {
-        return(json_response(list(status = "ok", message = result$message, report = result$report)))
+        return(json_response(compact(list(status = "ok", message = result$message, report = result$report,
+                                          peak_bytes = result$peak_bytes))))
       }
       return(json_response(error_body(result), status = 500L))
     }

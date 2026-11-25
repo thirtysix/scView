@@ -24,6 +24,37 @@ URL = "http://conv:8001"
 
 PAYLOAD = b"X\n" + bytes(range(256)) * 20000 + b"\x00" * 3_000_000
 
+# Measured conversions (v0.83.0 converter, 8 GiB limit, 2 CPUs) of synthetic Seurat v5
+# objects: serialized bytes -> the conversion's peak (VmHWM, GiB). A converter's /health
+# (last_conversion_peak_bytes) and a converted dataset's report (conversion.memory) give
+# the same pair for real objects; the estimate must stay at or above every one.
+MEASURED = [
+    ("counts + data + scale.data + graphs, 3 split layers", 601_456_838, 1.121),
+    ("counts + data + scale.data + graphs, 12,000 cells", 1_715_598_813, 1.958),
+    ("counts + data + scale.data + graphs, 23,578 cells", 3_369_723_301, 3.500),
+    ("counts only, 20,000 cells", 1_345_873_342, 1.979),
+    ("counts only, 5,000 cells", 337_317_754, 0.999),
+]
+
+
+@pytest.mark.parametrize("what,serialized,peak_gib", MEASURED)
+def test_the_estimate_is_never_under_a_measured_peak(what, serialized, peak_gib):
+    est = conversion_preflight.estimate_peak(serialized)
+    assert est >= peak_gib * GiB, what
+    assert est <= (1 + conversion_preflight.ERROR_BAND) * peak_gib * GiB, what
+
+
+def test_counts_only_objects_are_never_under_at_any_size():
+    """A counts-only object needs about 0.7 GiB beyond its own size at every size measured
+    (blocks of X on top of an object nothing of which is freed). So the estimate keeps at
+    least that over the object from small to large: a factor above 1 with a smaller base
+    comes out under on small ones, a factor below 1 on large ones."""
+    beyond = max(peak_gib * GiB - serialized for what, serialized, peak_gib in MEASURED
+                 if what.startswith("counts only"))
+    for gib in (0.1, 0.3, 1, 2, 4, 8, 16):
+        size = int(gib * GiB)
+        assert conversion_preflight.estimate_peak(size) - size >= beyond, gib
+
 
 @pytest.mark.parametrize("kind,write", [
     ("gzip", gzip.compress), ("bzip2", bz2.compress), ("xz", lzma.compress), ("none", lambda b: b),
@@ -71,10 +102,11 @@ def test_verdict_wont_fit_names_the_need_and_what_to_do(tmp_path):
                                                reachable=True)
     v = conversion_preflight.converter_verdict(p, mem)
     assert v["level"] == "wont_fit" and v["need_bytes"] == need
-    assert v["sentence"].startswith("Converting object.rds takes about 0.5 GB in the R converter")
+    assert v["sentence"].startswith("Converting object.rds takes about 0.8 GB in the R converter")
     assert "The converter has 0.3 GB free of its 0.4 GB limit." in v["sentence"]
     assert any("SCVIEW_MEMORY_GB" in s for s in v["suggestions"])
-    assert any("DietSeurat" in s for s in v["suggestions"])
+    assert any(s.startswith("Or, if it has data or scale.data layers, save a smaller object in R first: "
+                            "DietSeurat(") for s in v["suggestions"])
     assert v["source"] == "converter" and "decompressed" in v["basis"]
 
 
@@ -157,7 +189,7 @@ async def test_ingest_preflight_adds_the_converter_for_an_unconverted_rds(client
     from scview.main import app
 
     monkeypatch.setattr(conversion_preflight, "converter_memory",
-                        lambda url, transport=None: conversion_preflight.ConverterMemory(GiB, 0, True))
+                        lambda url, transport=None: conversion_preflight.ConverterMemory(2 * GiB, 0, True))
     mgr = IngestSessionManager(str(tmp_data_dir), converter_url=URL)
     app.dependency_overrides[get_ingest_session_manager] = lambda: mgr
     try:
@@ -169,4 +201,4 @@ async def test_ingest_preflight_adds_the_converter_for_an_unconverted_rds(client
     unit = body["units"][0]
     assert unit["format"] == "seurat"
     assert unit["converter"]["source"] == "converter" and unit["converter"]["level"] == "fits"
-    assert unit["converter"]["sentence"].startswith("Converting obj.rds takes about 0.5 GB in the R converter")
+    assert unit["converter"]["sentence"].startswith("Converting obj.rds takes about 0.8 GB in the R converter")
