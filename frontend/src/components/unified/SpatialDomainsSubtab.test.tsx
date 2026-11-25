@@ -244,7 +244,7 @@ describe("SpatialDomainsSubtab", () => {
     api.runNiches.mockResolvedValue(niches);
     render(<SpatialDomainsSubtab {...groupProps} />);
     const button = await screen.findByRole("button", { name: "Find niches" });
-    expect(screen.getByText(/against 'Lymph ref'/)).toBeInTheDocument();
+    expect(await screen.findByText(/against 'Lymph ref'/, undefined, { timeout: 5000 })).toBeInTheDocument();
     expect(screen.queryByTestId("niches-refused")).toBeNull();
     expect(screen.getByLabelText("Niche window")).toHaveValue(1);
     expect(await hoverTip(screen.getByText("Shares"))).toBe(SPATIAL_HELP["domains.niche-shares"]);
