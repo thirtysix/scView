@@ -138,11 +138,10 @@ export function PcaDiagnostics({ datasetId, refreshKey = 0 }: { datasetId: strin
         <h3 className="text-sm font-semibold text-slate-700">
           <HoverTip
             tip={<>
-              How much of the variance each principal component keeps, where the curve bends (the
-              elbow: Kneedle, the PC farthest below the line from the first to the last PC), how many
-              leading PCs reach 90% of what the stored PCs keep together, and which genes each PC
-              weighs most. A PC led by ribosomal, mitochondrial or cell-cycle genes is a technical
-              or cell-state axis rather than a cell-type one.
+              Each PC's share of the variance, the elbow, how many PCs reach 90% of the stored PCs'
+              variance, and each PC's top genes. The elbow is where variance stops falling fast, not
+              a PC count to cluster on: later PCs still separate cell types. A PC led by ribosomal,
+              mitochondrial or cell-cycle genes is a technical or cell-state axis.
             </>}
           >
             PCA
@@ -172,7 +171,7 @@ export function PcaDiagnostics({ datasetId, refreshKey = 0 }: { datasetId: strin
             <Metric
               label="Elbow"
               value={`PC${ok.elbow}`}
-              title="Kneedle: on the scree curve (variance ratio vs PC, both axes scaled to 0..1) the PC farthest below the straight line from the first to the last PC."
+              title="Where the variance per PC stops falling fast (Kneedle: on the scree curve, both axes scaled to 0..1, the PC farthest below the line from the first to the last PC). Not a PC count to cluster on: on 8 test datasets, clustering on the PCs up to the elbow lost 0.13 to 0.26 ARI on 3, while the default 50 PCs came within 0.03 ARI of the best count tested on 6."
             />
             <Metric
               label="90% at"

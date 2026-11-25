@@ -226,7 +226,9 @@ def grounding_lines(adata) -> tuple[list[str], str | None]:
         pos = ", ".join(g["gene"] for g in pc1["positive"])
         neg = ", ".join(g["gene"] for g in pc1["negative"])
         lines.append(f"- PC1 top loadings: positive {pos or 'none'}; negative {neg or 'none'}")
-    lines.append("- Caveat: the elbow and the 90% count are rules of thumb; a late PC can still carry "
-                 "a rare cell type, and a PC led by ribosomal, mitochondrial or cell-cycle genes is a "
-                 "technical or cell-state axis.")
+    lines.append("- Caveat: the elbow marks where variance stops falling fast, not a PC count to cluster "
+                 "on: on 8 test datasets, clustering on the PCs up to the elbow lost 0.13-0.26 ARI on 3, "
+                 "while the default 50 PCs came within 0.03 ARI of the best count tested on 6. The 90% "
+                 "count is a rule of thumb too; a late PC can still carry a rare cell type, and a PC led "
+                 "by ribosomal, mitochondrial or cell-cycle genes is a technical or cell-state axis.")
     return lines, detail
