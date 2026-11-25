@@ -360,3 +360,104 @@ async def test_every_route_says_507_when_it_cannot_fit(client, dataset_manager, 
         assert r.status_code == 507, (route, r.status_code, r.text)
         assert r.json()["detail"].startswith(f"{label} on x name needs about"), (route, r.text)
     assert dataset_manager._reads == {}
+
+
+# --- a dataset opened backed (memory short): its matrix read in spans ------------------------
+
+
+@pytest.mark.parametrize("fmt", ["csc", "csr"])
+def test_sums_on_disk_equal_the_sums_in_memory(tmp_path, fmt):
+    a = _deep(fmt=fmt)
+    a.write_h5ad(tmp_path / "x.h5ad")
+    backed = ad.read_h5ad(tmp_path / "x.h5ad", backed="r")
+    try:
+        M = backed.X
+        assert not sp.issparse(M) and M.format == fmt
+        mt = np.asarray(a.var_names.str.startswith("MT-"))
+        old = anndata_adaptor.ROW_BLOCK_VALUES
+        anndata_adaptor.ROW_BLOCK_VALUES = 5_000  # many spans
+        try:
+            got = anndata_adaptor._row_sums(M, [mt])
+            codes = np.arange(a.n_obs) % 3
+            sums = sparse_sums.group_sums(M, codes, 3)
+        finally:
+            anndata_adaptor.ROW_BLOCK_VALUES = old
+        want = anndata_adaptor._row_sums(sp.csr_matrix(a.X), [mt])
+        np.testing.assert_allclose(got[0], want[0])
+        np.testing.assert_array_equal(got[1], want[1])
+        np.testing.assert_allclose(got[2][0], want[2][0])
+        np.testing.assert_allclose(sums, sparse_sums.group_sums(a.X, codes, 3))
+    finally:
+        backed.file.close()
+
+
+@pytest.mark.parametrize("fmt", ["csc", "csr"])
+def test_rows_of_a_backed_csc_are_costed_as_the_whole_read(tmp_path, monkeypatch, fmt):
+    """anndata reads every column of a backed CSC to cut any rows from it (250 rows of the deep
+    file: +1.58 GB), so the gate costs any work that reads the matrix at the whole read."""
+    from scview.core import working_copy
+
+    _deep(n=800, g=400, fmt=fmt).write_h5ad(tmp_path / "x.h5ad")
+    monkeypatch.setattr(anndata_adaptor, "BACKED_MIN_BYTES", 0)
+    adaptor = anndata_adaptor.AnnDataAdaptor(str(tmp_path / "x.h5ad"))
+    assert adaptor.adata.isbacked
+    whole = working_copy.copy_bytes(adaptor)
+    assert whole > 0
+    assert working_copy.row_read_bytes(adaptor) == (whole if fmt == "csc" else 0)
+    in_memory = anndata_adaptor.AnnDataAdaptor(str(tmp_path / "x.h5ad"), backed=False)
+    monkeypatch.setattr(anndata_adaptor, "BACKED_MIN_BYTES", 10**12)
+    assert working_copy.row_read_bytes(in_memory) == 0
+
+
+async def test_the_gate_holds_the_whole_read_of_a_backed_csc(tmp_data_dir, monkeypatch):
+    from scview.core import working_copy
+
+    _budget(monkeypatch, free_gb=6.0)
+    dm = DatasetManager(data_dir=str(tmp_data_dir))
+    adaptor = object()
+    monkeypatch.setattr(dm, "get_dataset", lambda _i: adaptor)
+    monkeypatch.setattr(working_copy, "row_read_bytes", lambda a: 3 * GB if a is adaptor else 0)
+    held = []
+    real = dm.hold_read
+    monkeypatch.setattr(dm, "hold_read", lambda ids, need, label="": (held.append(need), real(ids, need, label))[1])
+    await assessment_gate.run("d", ("a",), lambda: 1, budget=assessment_gate.Budget(dm, lambda: GB, "QC states"))
+    await assessment_gate.run("d", ("b",), lambda: 1, budget=assessment_gate.Budget(dm, lambda: 0, "The doublet summary"))
+    assert [n for n in held if n] == [3 * GB]  # obs-only work (need 0) reads no rows: not surcharged
+
+
+def test_a_backed_csc_is_judged_and_sex_checked_by_columns(tmp_path, monkeypatch):
+    """Counts checks and the sex check read a backed CSC's columns, never its rows (each row read
+    loaded the whole matrix: the QC report on the deep file took +3.8 GB that way)."""
+    from scview.core import pipeline, sex_check
+
+    a = _deep(n=900, g=300)
+    a.var_names = ["XIST", "RPS4Y1", "DDX3Y", *a.var_names[3:]]
+    a.write_h5ad(tmp_path / "x.h5ad")
+    backed = ad.read_h5ad(tmp_path / "x.h5ad", backed="r")
+    try:
+        M = backed.X
+        assert sparse_sums.csc_on_disk(M)
+        rows_read = []
+        real = type(M).__getitem__
+
+        def spy(self, key):
+            row = key[0] if isinstance(key, tuple) else key
+            if not (isinstance(row, slice) and row == slice(None)):
+                rows_read.append(key)
+            return real(self, key)
+
+        monkeypatch.setattr(type(M), "__getitem__", spy)
+        assert pipeline.looks_like_counts(M) and anndata_adaptor._looks_like_counts(M)
+        on_disk = sex_check.sex_check(backed, "sample")
+        mv = normalization.mean_variance(M, a.var_names, max_cells=500)
+        assert rows_read == []
+        M[0:2]  # the spy sees a row read
+        assert rows_read
+    finally:
+        monkeypatch.undo()
+        backed.file.close()
+    in_memory = sex_check.sex_check(a, "sample")
+    ref = normalization.mean_variance(a.X, a.var_names, max_cells=500)
+    for k in ("mean", "var_counts", "var_log", "var_residuals"):
+        np.testing.assert_allclose(mv[k], ref[k], rtol=1e-9)
+    assert [(g["name"], g["call"]) for g in on_disk["groups"]] == [(g["name"], g["call"]) for g in in_memory["groups"]]

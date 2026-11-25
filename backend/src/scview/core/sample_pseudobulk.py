@@ -37,7 +37,6 @@ import re
 
 import numpy as np
 import pandas as pd
-import scipy.sparse as sp
 from scipy import stats
 
 from scview.core import cluster_qc, qc_groups, sparse_sums
@@ -99,7 +98,7 @@ def _genes_per_cell(M) -> np.ndarray:
 
 def _sum_rows(M, codes: np.ndarray, k: int) -> np.ndarray:
     # No CSR copy of a CSC matrix (a converted Seurat file: +1.6 GB on a deep one).
-    return sparse_sums.group_sums(M if sp.issparse(M) else np.asarray(M), codes, k)
+    return sparse_sums.group_sums(M, codes, k)
 
 
 def _unit_covariates(obs: pd.DataFrame, rows: np.ndarray, codes: np.ndarray, k: int,

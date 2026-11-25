@@ -105,6 +105,8 @@ async def get_assessment(
     # Its samples are held in the memory budget while it runs (a first open also assesses
     # for the co-pilot's insight and the QC facts: one at a time, ``assess_preprocessing``).
     need = assessment_need(adaptor.adata)
+    if need:  # its samples are rows: on a backed CSC, a whole read
+        need = max(need, await asyncio.to_thread(working_copy.row_read_bytes, adaptor))
     async with working_copy.reading(dm, dataset_id, need, "Assessing this dataset"):
         try:
             # Samples the matrix to judge its scale: ~1.6 s on Kang, so off the loop, and two

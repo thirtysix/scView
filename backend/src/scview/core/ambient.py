@@ -690,8 +690,11 @@ def fit_samples(adata, column: str | None, counts=None, codes=None) -> tuple[lis
                                          "cluster expresses and the others don't. Run clustering "
                                          "(the correction step clusters the cells itself)."])
             continue
-        if X is None:
-            X = sp.csr_matrix(counts)
+        if X is None:  # on disk (a backed dataset): read in, as its estimate counts
+            from scview.core import working_copy
+
+            X = sp.csr_matrix(counts if sp.issparse(counts) or isinstance(counts, np.ndarray)
+                              else working_copy.read_matrix(counts))
         fits[s.name] = estimate_rho(_take_rows(X, s.rows), codes[s.rows], s.frac, adata.var_names)
     return found, fits, notes
 
@@ -734,7 +737,7 @@ def marker_flags(adata, column: str, found: list[Sample], fits: dict[str, RhoFit
     # The wanted columns and each cell's total, read from counts as they are (no CSR copy).
     cols = counts[:, wanted]
     cols = cols.toarray() if sp.issparse(cols) else np.asarray(cols)  # cells x wanted
-    n_umi = np.asarray(counts.sum(axis=1)).ravel()
+    n_umi = sparse_sums.row_totals(counts)
     obs_in = np.zeros((k, len(wanted)))
     obs_all = np.zeros(len(wanted))
     exp_out = np.zeros((k, len(wanted)))

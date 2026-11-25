@@ -284,7 +284,7 @@ def mean_variance(
         rows = np.sort(np.random.default_rng(seed).choice(n, max_cells, replace=False))
     ns = int(rows.size)
     clip = default_clip(ns)
-    if sp.issparse(counts) and counts.format == "csc":
+    if getattr(counts, "format", None) == "csc" and not hasattr(counts, "row_blocks"):
         stats = _mean_variance_by_genes(counts, rows, ns == n, clip)
     else:
         stats = _mean_variance_by_cells(counts, rows, clip)
@@ -334,14 +334,11 @@ def _mean_variance_by_cells(counts, rows: np.ndarray, clip: float):
 
 
 def _gene_spans(counts, budget: int) -> list[tuple[int, int]]:
-    ptr, g = counts.indptr, counts.shape[1]
-    spans, j = [], 0
-    while j < g:
-        k = int(np.searchsorted(ptr, ptr[j] + budget, side="right")) - 1
-        k = min(max(k, j + 1), g)
-        spans.append((j, k))
-        j = k
-    return spans
+    """Column ranges of about ``budget`` stored values (``anndata_adaptor.column_spans``: an
+    on-disk CSC's indptr is never searched value by value)."""
+    from scview.core.anndata_adaptor import column_spans
+
+    return column_spans(counts, budget)
 
 
 def _mean_variance_by_genes(counts, rows: np.ndarray, all_rows: bool, clip: float):

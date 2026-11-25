@@ -59,6 +59,24 @@ def copy_bytes(adaptor) -> int:
     return preflight.backed_bytes(h)
 
 
+def row_read_bytes(adaptor) -> int:
+    """What reading any rows of a backed dataset costs when a matrix of it is CSC on disk: all
+    of it (anndata reads every column to cut rows from a CSC: 250 rows of a deep 23,578 x 34,209
+    file took +1.58 GB), so a request that reads rows is costed at the whole read. 0 for a
+    dataset in memory or stored by rows."""
+    if adaptor is None or not _backed(adaptor):
+        return 0
+    adata = adaptor.adata
+    mats = [adata.X, adata.raw.X if adata.raw is not None else None]
+    if not any(getattr(m, "format", None) == "csc" for m in mats if m is not None):
+        return 0
+    try:
+        return copy_bytes(adaptor)
+    except Exception as e:  # noqa: BLE001 - its file header unreadable: no surcharge
+        logger.warning("No whole-read estimate for %s: %s", getattr(adaptor, "h5ad_path", "?"), e)
+        return 0
+
+
 async def make_room(dm, dataset_id: str, adaptor, then: int = 0) -> bool:
     """Before work on ``adaptor``'s dataset that needs it in memory: room for reading a
     backed dataset in, and ``then`` bytes the work needs beyond the in-memory copy (a
