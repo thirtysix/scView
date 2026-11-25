@@ -391,44 +391,36 @@ def test_sums_on_disk_equal_the_sums_in_memory(tmp_path, fmt):
         backed.file.close()
 
 
-@pytest.mark.parametrize("fmt", ["csc", "csr"])
-def test_rows_of_a_backed_csc_are_costed_as_the_whole_read(tmp_path, monkeypatch, fmt):
-    """anndata reads every column of a backed CSC to cut any rows from it (250 rows of the deep
-    file: +1.58 GB), so the gate costs any work that reads the matrix at the whole read."""
+def test_a_backed_dataset_holds_at_least_its_span_reads(tmp_path, monkeypatch):
     from scview.core import working_copy
 
-    _deep(n=800, g=400, fmt=fmt).write_h5ad(tmp_path / "x.h5ad")
+    _deep(n=800, g=400).write_h5ad(tmp_path / "x.h5ad")
     monkeypatch.setattr(anndata_adaptor, "BACKED_MIN_BYTES", 0)
     adaptor = anndata_adaptor.AnnDataAdaptor(str(tmp_path / "x.h5ad"))
     assert adaptor.adata.isbacked
-    whole = working_copy.copy_bytes(adaptor)
-    assert whole > 0
-    assert working_copy.row_read_bytes(adaptor) == (whole if fmt == "csc" else 0)
-    in_memory = anndata_adaptor.AnnDataAdaptor(str(tmp_path / "x.h5ad"), backed=False)
+    assert working_copy.backed_read_bytes(adaptor) == working_copy.BACKED_READ_BYTES
     monkeypatch.setattr(anndata_adaptor, "BACKED_MIN_BYTES", 10**12)
-    assert working_copy.row_read_bytes(in_memory) == 0
+    assert working_copy.backed_read_bytes(anndata_adaptor.AnnDataAdaptor(str(tmp_path / "x.h5ad"))) == 0
 
 
-async def test_the_gate_holds_the_whole_read_of_a_backed_csc(tmp_data_dir, monkeypatch):
+async def test_the_gate_holds_a_backed_read_floor(tmp_data_dir, monkeypatch):
     from scview.core import working_copy
 
     _budget(monkeypatch, free_gb=6.0)
     dm = DatasetManager(data_dir=str(tmp_data_dir))
     adaptor = object()
     monkeypatch.setattr(dm, "get_dataset", lambda _i: adaptor)
-    monkeypatch.setattr(working_copy, "row_read_bytes", lambda a: 3 * GB if a is adaptor else 0)
+    monkeypatch.setattr(working_copy, "backed_read_bytes", lambda a: GB if a is adaptor else 0)
     held = []
     real = dm.hold_read
     monkeypatch.setattr(dm, "hold_read", lambda ids, need, label="": (held.append(need), real(ids, need, label))[1])
-    await assessment_gate.run("d", ("a",), lambda: 1, budget=assessment_gate.Budget(dm, lambda: GB, "QC states"))
-    await assessment_gate.run("d", ("b",), lambda: 1, budget=assessment_gate.Budget(dm, lambda: 0, "The doublet summary"))
-    assert [n for n in held if n] == [3 * GB]  # obs-only work (need 0) reads no rows: not surcharged
-
-
+    for key, need in (("a", GB // 4), ("b", 3 * GB), ("c", 0)):
+        await assessment_gate.run("d", (key,), lambda: 1, budget=assessment_gate.Budget(dm, lambda n=need: n, "QC states"))
+    assert [n for n in held if n] == [GB, 3 * GB]  # obs-only work (need 0) reads nothing
 def test_a_backed_csc_is_judged_and_sex_checked_by_columns(tmp_path, monkeypatch):
     """Counts checks and the sex check read a backed CSC's columns, never its rows (each row read
     loaded the whole matrix: the QC report on the deep file took +3.8 GB that way)."""
-    from scview.core import pipeline, sex_check
+    from scview.core import pipeline, scaling, sex_check
 
     a = _deep(n=900, g=300)
     a.var_names = ["XIST", "RPS4Y1", "DDX3Y", *a.var_names[3:]]
@@ -448,6 +440,7 @@ def test_a_backed_csc_is_judged_and_sex_checked_by_columns(tmp_path, monkeypatch
 
         monkeypatch.setattr(type(M), "__getitem__", spy)
         assert pipeline.looks_like_counts(M) and anndata_adaptor._looks_like_counts(M)
+        assert not scaling.holds_scaled(M)  # the dataset's info on open asks this
         on_disk = sex_check.sex_check(backed, "sample")
         mv = normalization.mean_variance(M, a.var_names, max_cells=500)
         assert rows_read == []

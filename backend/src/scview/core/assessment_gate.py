@@ -56,10 +56,10 @@ async def _held(dataset_id: str, budget: Budget | None, fn: Callable[..., Any], 
     from scview.core import working_copy
 
     need = max(0, int(await asyncio.to_thread(budget.need)))
-    if need:  # work that reads the matrix: rows of a backed CSC cost a whole read
+    if need:  # work that reads the matrix: a backed one's spans (working_copy.BACKED_READ_BYTES)
         get = getattr(budget.dm, "get_dataset", None)
         adaptor = get(dataset_id) if get is not None else None
-        need = max(need, await asyncio.to_thread(working_copy.row_read_bytes, adaptor))
+        need = max(need, await asyncio.to_thread(working_copy.backed_read_bytes, adaptor))
     if need:
         logger.info("%s (%s): holding %.2f GB while it runs", budget.what, dataset_id, need / 1024**3)
     what = working_copy.subject(budget.dm, dataset_id, need, budget.what)

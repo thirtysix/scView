@@ -50,7 +50,7 @@ HELD_OTHERWISE: dict[str, str] = {
 
 # The per-cell QC pass (``anndata_adaptor._row_sums``): one block of about ROW_BLOCK_VALUES
 # stored values at a time, copied, compared and column-sliced. Deep file, row blocks of a CSC:
-# +215 MB; CSC spans: +XXX MB.
+# +215 MB in 14 s; column spans: +215 MB in 4 s (Kang, CSR row blocks: +191 MB).
 PER_CELL_BYTES_PER_BLOCK_VALUE = 28
 PER_CELL_BYTES_PER_CELL = 128  # the per-cell arrays and their pieces
 FIXED = 32 * MiB  # imports, small frames, the answer itself
