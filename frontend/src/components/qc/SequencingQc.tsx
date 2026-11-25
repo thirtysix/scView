@@ -182,7 +182,8 @@ function AttachForm({
           {busy && <Loader2 className="h-3 w-3 animate-spin" />}
           {busy ? "Reading…" : "Attach"}
         </button>
-        {onCancel && (
+        {/* while the files go up, the upload card's Cancel is the one Cancel */}
+        {onCancel && !upload.name && (
           <button type="button" onClick={onCancel} disabled={busy} className="text-slate-400 hover:text-slate-600 hover:underline">
             Cancel
           </button>

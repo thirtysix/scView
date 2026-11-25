@@ -175,6 +175,37 @@ describe("SequencingQc", () => {
     expect(screen.queryByTestId("seqqc-attach")).toBeNull();
   });
 
+  it("while the files go up there is one Cancel, which stops the upload and keeps the form open", async () => {
+    getSeqMetrics.mockResolvedValue(null);
+    let signal: AbortSignal | undefined;
+    attachSeqMetrics.mockImplementation(
+      (_d: string, files: File[], _t: unknown, o: { signal?: AbortSignal; onProgress?: (p: unknown) => void }) => {
+        signal = o.signal;
+        o.onProgress?.({ loaded: 50e6, total: 200e6, file: files[0]!.name, fileIndex: 1, fileCount: 1 });
+        return new Promise((_resolve, reject) =>
+          o.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError"))),
+        );
+      },
+    );
+    render(<SequencingQc datasetId="d1" />);
+    fireEvent.click(await screen.findByRole("button", { name: /Attach Cell Ranger metrics/ }));
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy(); // the form's own, before an upload
+    fireEvent.change(screen.getByTestId("seqqc-file-input"), {
+      target: { files: [new File(["x"], "raw_feature_bc_matrix.h5")] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Attach" }));
+    const bar = await screen.findByRole("progressbar", {}, { timeout: 2000 });
+    expect(bar.getAttribute("aria-valuenow")).toBe("25");
+    expect((screen.getByTestId("seqqc-file-input") as HTMLInputElement).disabled).toBe(true);
+    const cancels = screen.getAllByRole("button", { name: "Cancel" });
+    expect(cancels).toHaveLength(1);
+    fireEvent.click(cancels[0]!);
+    expect(signal?.aborted).toBe(true);
+    expect((await screen.findByTestId("upload-cancelled")).textContent).toContain("Nothing was kept.");
+    expect(screen.getByTestId("seqqc-attach")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("attaches to one sample of a merged dataset and shows the server's sentence on failure", async () => {
     useDatasetStore.setState({
       currentDatasetId: "d1",
