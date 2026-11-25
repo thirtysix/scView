@@ -27,7 +27,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, ValidationError
 
 from scview.core import deconvolution as dc
-from scview.core import results_store
+from scview.core import raw_upload, results_store
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import dataset_edit, save_edit, uns_snapshot
 from scview.core.sse import keepalive
@@ -164,6 +164,7 @@ async def _store_upload(folder: Path, file: UploadFile) -> tuple[Path, str, str]
                 fh.write(chunk)
     except BaseException:
         partial.unlink(missing_ok=True)
+        raw_upload.drop_if_empty(folder)  # a refused first upload made it
         raise
     if total == 0:
         partial.unlink(missing_ok=True)
