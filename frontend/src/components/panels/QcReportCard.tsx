@@ -47,7 +47,7 @@ export function QcReportCard({ datasetId, refreshKey = 0 }: { datasetId: string;
         setData(d);
         setText(d.report);
       })
-      .catch((e) => epoch.current === mine && setError(String(e?.message ?? e)));
+      .catch((e) => epoch.current === mine && setError(errorMessage(e)));
   }, [datasetId, refreshKey]);
 
   const generate = useCallback(

@@ -5,6 +5,7 @@ import { Caption } from "@/components/common/Caption";
 import { HoverTip } from "@/components/common/InfoTip";
 import { MitoRefilter } from "@/components/qc/MitoRefilter";
 import { useDatasetStore } from "@/stores/datasetStore";
+import { errorMessage } from "@/lib/errorMessage";
 
 const MAX_GROUPS = 200;
 
@@ -151,7 +152,7 @@ export function MitoByType({
     setError(null);
     getMitoByType(datasetId, column || undefined, ceiling === "" ? undefined : Number(ceiling))
       .then((d) => !cancelled && setData(d && typeof d === "object" && "measurable" in d ? d : null))
-      .catch((e) => !cancelled && setError(String(e?.message ?? e)))
+      .catch((e) => !cancelled && setError(errorMessage(e)))
       .finally(() => !cancelled && setLoading(false));
     return () => {
       cancelled = true;

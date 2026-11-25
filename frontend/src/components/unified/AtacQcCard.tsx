@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { attachAtacMetrics, getAtacQc, type AtacQc } from "@/api/atac";
 import { Help } from "@/components/common/Help";
+import { isAbort } from "@/api/upload";
 import { Caption } from "@/components/common/Caption";
+import { UploadTaskProgress } from "@/components/common/UploadProgressCompact";
+import { useUploadTask } from "@/hooks/useUploadTask";
 import { RequestError } from "@/components/common/RequestError";
 import Plot from "@/components/plots/Plot";
 import { QC_MAX_CELLS, sampled, splitByGroup } from "@/lib/atac";
@@ -30,6 +33,7 @@ export function AtacQcCard({
   const [error, setError] = useState<string | null>(null);
   const [attached, setAttached] = useState<string | null>(null);
   const file = useRef<HTMLInputElement | null>(null);
+  const upload = useUploadTask();
   const columnsKey = qcColumns.join(",");
 
   useEffect(() => {
@@ -46,11 +50,11 @@ export function AtacQcCard({
   const attach = async (f: File) => {
     setError(null);
     try {
-      const r = await attachAtacMetrics(datasetId, f);
+      const r = await upload.run(f.name, (opts) => attachAtacMetrics(datasetId, f, opts));
       setAttached(`${r.file}: ${r.n_matched.toLocaleString()} of ${r.n_cells.toLocaleString()} cells matched.`);
       onAttached();
     } catch (e) {
-      setError(errorMessage(e));
+      if (!isAbort(e)) setError(errorMessage(e));
     }
   };
 
@@ -82,13 +86,14 @@ export function AtacQcCard({
       )}
       <div className="flex flex-wrap items-center gap-1.5">
         <input ref={file} type="file" accept=".csv,.gz" className="hidden" aria-label="Per-barcode metrics file"
+               disabled={!!upload.name}
                onChange={(e) => {
                  const f = e.target.files?.[0];
                  if (f) void attach(f);
                  e.target.value = "";
                }} />
-        <button type="button" onClick={() => file.current?.click()}
-                className="rounded border border-slate-300 px-2 py-0.5 text-[11px] text-slate-700 hover:border-primary hover:text-primary">
+        <button type="button" onClick={() => file.current?.click()} disabled={!!upload.name}
+                className="rounded border border-slate-300 px-2 py-0.5 text-[11px] text-slate-700 hover:border-primary hover:text-primary disabled:opacity-50">
           {metricsFiles.length ? "Replace per-barcode metrics" : "Attach per-barcode metrics"}
         </button>
         <span className="text-[11px] text-slate-500">
@@ -97,6 +102,7 @@ export function AtacQcCard({
             : "per_barcode_metrics.csv adds the fractions in peaks (FRiP), at TSS and mitochondrial.")}
         </span>
       </div>
+      <UploadTaskProgress task={upload} sentText="Sent. Matching the barcodes to the cells…" />
     </section>
   );
 }

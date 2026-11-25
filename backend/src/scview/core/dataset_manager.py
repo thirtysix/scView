@@ -487,6 +487,15 @@ class DatasetManager:
         r = max(others, key=lambda x: x.outstanding(used))
         return r, r.outstanding(used), max(0, budget.limit_bytes - used)
 
+    def _reads_hold(self, need: float, free: int | None) -> bool:
+        """Whether ``need`` (bytes, its error band applied) fits once the growth other
+        requests' reads still hold (``hold_read``) is over: it is refused only for them."""
+        used = memory_budget.read_budget().used_bytes
+        if free is None or used is None:
+            return False
+        reads = sum(r.outstanding(used) for r in list(self._reads.values()))
+        return reads > 0 and need <= free + reads
+
     def _run_name(self, r: RunReservation) -> str:
         return r.name or self.dataset_name(r.dataset_id)
 
@@ -554,7 +563,8 @@ class DatasetManager:
         return plan.in_memory is not None
 
     async def reserve(self, dataset_id: str, need: int, extra: int = 0,
-                      what: str = "Opening this dataset", strict: bool = False) -> None:
+                      what: str = "Opening this dataset", strict: bool = False,
+                      read_wait: float = 0) -> None:
         """Make room for ``need`` bytes (and ``extra`` the work needs beyond them) with
         ``free_memory_for``; ``DatasetMemoryError`` (a 507) when even the low end of
         ``need``'s error band is more than what is free with every other dataset closed.
@@ -583,17 +593,24 @@ class DatasetManager:
 
         free = await self.free_memory_for(need + extra, keep=dataset_id)
         # A run that just ended may still hold its copy for a moment (the request that
-        # follows a stopped ovary run got a 507): give it a few seconds to let go.
-        for i in range(REFUSAL_WAIT_SECONDS):
+        # follows a stopped ovary run got a 507): give it a few seconds to let go. Past
+        # those, ``read_wait`` seconds more while only other requests' reads keep it out:
+        # it then fits once they end (a page's requests queue rather than refuse each other).
+        i = 0
+        while True:
             if not refused(free):
                 return
             if (err := run_refusal(free)) is not None:
                 raise err
+            if i >= REFUSAL_WAIT_SECONDS and (i >= REFUSAL_WAIT_SECONDS + read_wait
+                                              or not self._reads_hold(need * (1 - band), free)):
+                break
             if i == 0:
                 logger.info("%s (%s) needs about %.1f GB; %.1f GB free: waiting up to %d s for memory",
                             what, dataset_id, need / 1024**3, max(0, free or 0) / 1024**3,
-                            REFUSAL_WAIT_SECONDS)
+                            REFUSAL_WAIT_SECONDS + read_wait)
             await asyncio.sleep(1)
+            i += 1
             free = await self.free_memory_for(need + extra, keep=dataset_id)
         if refused(free):
             if (err := run_refusal(free, last=True)) is not None:

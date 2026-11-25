@@ -9,6 +9,13 @@ import { conversionHeadline } from "@/lib/conversion";
  * and what it left out (with why). Shown on Data Assessment for a converted
  * dataset; the same report is stored in the dataset (uns scview_conversion).
  */
+/** The fold's summary. `kept` lists only the parts with a note, so with none listed the
+ * rest of the object was still converted: never say "0 kept". */
+function reportSummary(kept: number, skipped: number): string {
+  if (kept === 0) return `${skipped} not converted, everything else kept`;
+  return skipped > 0 ? `${kept} kept, ${skipped} not converted` : `${kept} kept, nothing left out`;
+}
+
 export function ConversionReport({ report }: { report: Report }) {
   const kept = report.kept ?? [];
   const skipped = report.skipped ?? [];
@@ -35,18 +42,19 @@ export function ConversionReport({ report }: { report: Report }) {
           {listed && (
             <details className="mt-1.5" open={skipped.length > 0}>
               <summary className="cursor-pointer text-xs text-slate-500 hover:text-slate-700">
-                {kept.length} kept
-                {skipped.length > 0 ? `, ${skipped.length} not converted` : ", nothing left out"}
+                {reportSummary(kept.length, skipped.length)}
               </summary>
               <div className="mt-2 grid gap-3 text-xs sm:grid-cols-2">
-                <div>
-                  <p className="mb-1 font-medium text-slate-600">Kept</p>
-                  <ul className="list-disc space-y-0.5 pl-4 text-slate-600">
-                    {kept.map((k) => (
-                      <li key={k}>{k}</li>
-                    ))}
-                  </ul>
-                </div>
+                {kept.length > 0 && (
+                  <div>
+                    <p className="mb-1 font-medium text-slate-600">Kept</p>
+                    <ul className="list-disc space-y-0.5 pl-4 text-slate-600">
+                      {kept.map((k) => (
+                        <li key={k}>{k}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
                 {skipped.length > 0 && (
                   <div>
                     <p className="mb-1 font-medium text-amber-700">Not converted</p>

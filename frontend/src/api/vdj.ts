@@ -1,5 +1,6 @@
 import { API_BASE } from "@/lib/constants";
-import { apiFetch, readError } from "./client";
+import { apiFetch } from "./client";
+import { apiUpload, filesProgress, type UploadOptions } from "./upload";
 
 /** The sample choice that matches cells by their barcode suffix ("*-2", "*-1:sampleA"). */
 export const SUFFIX_COLUMN = "__barcode_suffix__";
@@ -178,15 +179,22 @@ export interface AttachResult {
 }
 
 /** POST /vdj/upload (multipart): attach a contig table; errors carry the server's sentence. */
-export async function attachVdj(datasetId: string, file: File, opts: AttachOptions = {}): Promise<AttachResult> {
+export function attachVdj(
+  datasetId: string,
+  file: File,
+  opts: AttachOptions = {},
+  upload: UploadOptions = {},
+): Promise<AttachResult> {
   const form = new FormData();
   form.append("file", file);
   if (opts.sampleColumn) form.append("sample_column", opts.sampleColumn);
   if (opts.sample) form.append("sample", opts.sample);
   if (opts.replace) form.append("replace", "true");
-  const res = await fetch(`${API_BASE}/datasets/${datasetId}/vdj/upload`, { method: "POST", body: form });
-  if (!res.ok) throw new Error(`API error ${res.status}: ${await readError(res)}`);
-  return res.json();
+  return apiUpload(`${API_BASE}/datasets/${datasetId}/vdj/upload`, form, {
+    what: file.name,
+    signal: upload.signal,
+    onProgress: filesProgress([file], upload.onProgress),
+  });
 }
 
 export function redefineClonotypes(datasetId: string, sameVGene: boolean): Promise<{ summary: VdjSummary }> {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
-import { errorMessage, errorStatus } from "./errorMessage";
+import { errorMessage, errorStatus, retryQuery } from "./errorMessage";
 
 describe("errorMessage", () => {
   it("gives the server's reason, not the raw response", () => {
@@ -26,11 +26,25 @@ describe("errorMessage", () => {
     expect(errorStatus(new Error("network down"))).toBeNull();
     expect(errorStatus("API error 500: x")).toBe(500);
   });
+
+  it("asks a query again once, never after a memory refusal (507)", () => {
+    const refused = new Error('API error 507: {"detail":"Cluster QC on x needs about 1.4 GB at its peak"}');
+    expect(retryQuery(0, refused)).toBe(false);
+    expect(retryQuery(0, new Error("API error 500: boom"))).toBe(true);
+    expect(retryQuery(0, new Error("network down"))).toBe(true);
+    expect(retryQuery(1, new Error("API error 500: boom"))).toBe(false);
+  });
+
+  it("reads a memory refusal as its sentence", () => {
+    expect(errorMessage(new Error('API error 507: {"detail":"QC states on x needs about 0.3 GB."}'))).toBe(
+      "QC states on x needs about 0.3 GB.",
+    );
+  });
 });
 
 /**
- * `e instanceof Error ? e.message : String(e)` shows the raw `API error 400: {"detail": ...}`
- * body to the user. Use `errorMessage(e)` (and `errorStatus(e)` for the code) instead.
+ * `e instanceof Error ? e.message : String(e)` (or `String(e?.message ?? e)`) shows the raw
+ * `API error 400: {"detail": ...}` body to the user (a Data Assessment card's 507 read so). Use `errorMessage(e)` (and `errorStatus(e)` for the code) instead.
  */
 const SRC = resolve(__dirname, "..");
 
@@ -50,7 +64,9 @@ describe("error text", () => {
         readFileSync(p, "utf8")
           .split("\n")
           .flatMap((line, i) =>
-            /instanceof Error\s*\?\s*\w+\.message\s*:\s*String\(/.test(line) ? [`${relative(SRC, p)}:${i + 1}`] : [],
+            /instanceof Error\s*\?\s*\w+\.message\s*:\s*String\(|String\(\w+\?\.message \?\? \w+\)/.test(line)
+              ? [`${relative(SRC, p)}:${i + 1}`]
+              : [],
           ),
       );
     expect(hits).toEqual([]);

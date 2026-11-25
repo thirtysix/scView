@@ -1,4 +1,5 @@
 import { apiFetch } from "./client";
+import { apiUpload, filesProgress, type UploadOptions } from "./upload";
 import { API_BASE } from "@/lib/constants";
 import { streamEvents } from "./clustering";
 import type { WatchdogEvent } from "./pipelineRun";
@@ -254,10 +255,19 @@ export function atacExportUrl(datasetId: string): string {
   return `${API_BASE}/datasets/${datasetId}/atac/export`;
 }
 
-export function attachAtacMetrics(datasetId: string, file: File): Promise<{ n_cells: number; n_matched: number; file: string }> {
+/** POST /atac/metrics (multipart), with upload progress. */
+export function attachAtacMetrics(
+  datasetId: string,
+  file: File,
+  opts: UploadOptions = {},
+): Promise<{ n_cells: number; n_matched: number; file: string }> {
   const form = new FormData();
   form.append("file", file);
-  return apiFetch(`/datasets/${datasetId}/atac/metrics`, { method: "POST", body: form });
+  return apiUpload(`${API_BASE}/datasets/${datasetId}/atac/metrics`, form, {
+    what: file.name,
+    signal: opts.signal,
+    onProgress: filesProgress([file], opts.onProgress),
+  });
 }
 
 export interface AtacStreamHandlers {

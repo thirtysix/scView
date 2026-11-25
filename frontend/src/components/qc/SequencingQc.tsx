@@ -4,6 +4,9 @@ import Plot from "@/components/plots/Plot";
 import { Panel } from "@/components/common/Panel";
 import { HoverTip } from "@/components/common/InfoTip";
 import { Caption } from "@/components/common/Caption";
+import { UploadTaskProgress } from "@/components/common/UploadProgressCompact";
+import { filesWhat, isAbort } from "@/api/upload";
+import { useUploadTask } from "@/hooks/useUploadTask";
 import {
   attachSeqMetrics,
   getSeqMetrics,
@@ -78,6 +81,7 @@ function AttachForm({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
+  const upload = useUploadTask();
   const values = columns.find((c) => c.name === column)?.values ?? [];
   const canSend = files.length > 0 && !busy && (!column || !!sample);
 
@@ -85,10 +89,14 @@ function AttachForm({
     setBusy(true);
     setError(null);
     try {
-      onAttached(await attachSeqMetrics(datasetId, files, column ? { column, sample } : {}));
+      onAttached(
+        await upload.run(filesWhat(files), (opts) =>
+          attachSeqMetrics(datasetId, files, column ? { column, sample } : {}, opts),
+        ),
+      );
       setFiles([]);
     } catch (e) {
-      setError(errorMessage(e));
+      if (!isAbort(e)) setError(errorMessage(e));
     } finally {
       setBusy(false);
     }
@@ -117,6 +125,7 @@ function AttachForm({
           accept={ATTACH_ACCEPT}
           className="hidden"
           data-testid="seqqc-file-input"
+          disabled={busy}
           onChange={(e) => {
             setFiles(Array.from(e.target.files ?? []));
             e.target.value = "";
@@ -173,13 +182,20 @@ function AttachForm({
           {busy && <Loader2 className="h-3 w-3 animate-spin" />}
           {busy ? "Reading…" : "Attach"}
         </button>
-        {onCancel && (
+        {/* while the files go up, the upload card's Cancel is the one Cancel */}
+        {onCancel && !upload.name && (
           <button type="button" onClick={onCancel} disabled={busy} className="text-slate-400 hover:text-slate-600 hover:underline">
             Cancel
           </button>
         )}
-        {busy && <span className="text-slate-400">A raw matrix of millions of barcodes takes a few seconds.</span>}
+        {busy && !upload.name && (
+          <span className="text-slate-400">A raw matrix of millions of barcodes takes a few seconds.</span>
+        )}
       </div>
+      <UploadTaskProgress
+        task={upload}
+        sentText="Sent. Reading the files: a raw matrix of millions of barcodes takes a few seconds."
+      />
       {error && (
         <p role="alert" className="rounded-md bg-amber-50 px-2 py-1.5 text-xs text-amber-800">
           {error}

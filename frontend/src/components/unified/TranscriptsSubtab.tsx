@@ -9,11 +9,14 @@ import {
   type TranscriptStatus,
 } from "@/api/transcripts";
 import type { WatchdogEvent } from "@/api/pipelineRun";
+import { filesWhat, isAbort, uploadInTurn } from "@/api/upload";
 import { Caption } from "@/components/common/Caption";
 import { Help } from "@/components/common/Help";
 import { HoverTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
+import { lockedLabel, UploadTaskProgress } from "@/components/common/UploadProgressCompact";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
+import { useUploadTask } from "@/hooks/useUploadTask";
 import { errorMessage } from "@/lib/errorMessage";
 import { aboutGb } from "@/lib/labelTransfer";
 import { DOT_SIZE_RANGE, shownText, sizeText, timeText, transcriptColorCss } from "@/lib/transcripts";
@@ -44,12 +47,15 @@ export function TranscriptsSubtab() {
   const refreshDataset = useDatasetRefresh();
   const [status, setStatus] = useState<TranscriptStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [upload, setUpload] = useState<{ name: string; fraction: number } | null>(null);
   const [progress, setProgress] = useState<{ fraction: number; message: string } | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [draft, setDraft] = useState("");
-  const uploadAbort = useRef<AbortController | null>(null);
+  const txUpload = useUploadTask();
+  const outlineUpload = useUploadTask();
+  const { cancel: cancelTx } = txUpload;
+  const { cancel: cancelOutlines } = outlineUpload;
+  const uploading = !!txUpload.name || !!outlineUpload.name;
   const runAbort = useRef<AbortController | null>(null);
 
   const refresh = useCallback(async () => {
@@ -66,24 +72,20 @@ export function TranscriptsSubtab() {
     setError(null);
     void refresh();
     return () => {
-      uploadAbort.current?.abort();
+      cancelTx();
+      cancelOutlines();
       runAbort.current?.abort();
     };
-  }, [refresh]);
+  }, [refresh, cancelTx, cancelOutlines]);
 
   const send = async (file: File) => {
     if (!datasetId) return;
     setError(null);
-    const ctl = new AbortController();
-    uploadAbort.current = ctl;
-    setUpload({ name: file.name, fraction: 0 });
     try {
-      setStatus(await uploadTranscripts(datasetId, file, (fraction) => setUpload({ name: file.name, fraction }), ctl.signal));
+      setStatus(await txUpload.run(file.name, (opts) => uploadTranscripts(datasetId, file, opts)));
     } catch (e) {
-      if ((e as Error).name !== "AbortError") setError(errorMessage(e));
+      if (!isAbort(e)) setError(errorMessage(e));
       void refresh();
-    } finally {
-      setUpload(null);
     }
   };
 
@@ -128,19 +130,19 @@ export function TranscriptsSubtab() {
 
   const sendOutlines = async (list: FileList | null) => {
     if (!datasetId) return;
+    const files = Array.from(list ?? []);
+    if (!files.length) return;
     setError(null);
-    const ctl = new AbortController();
-    uploadAbort.current = ctl;
+    let sent = 0;
     try {
-      for (const file of Array.from(list ?? [])) {
-        setUpload({ name: file.name, fraction: 0 });
-        await uploadOutlines(datasetId, file, (fraction) => setUpload({ name: file.name, fraction }), ctl.signal);
-      }
+      await outlineUpload.run(filesWhat(files), (opts) =>
+        uploadInTurn(files, opts, (file, one) => uploadOutlines(datasetId, file, one), () => sent++),
+      );
       await refreshDataset(datasetId);
     } catch (e) {
-      if ((e as Error).name !== "AbortError") setError(errorMessage(e));
-    } finally {
-      setUpload(null);
+      if (!isAbort(e)) setError(errorMessage(e));
+      // a file sent before the cancel or the error is in: show it
+      if (sent) void refreshDataset(datasetId).catch(() => undefined);
     }
   };
 
@@ -188,14 +190,14 @@ export function TranscriptsSubtab() {
               0.7 GB for a 300-gene run). It is indexed here by gene and place, which needs about half its size on disk and takes
               under a minute.
             </p>
-            <label className="inline-flex cursor-pointer items-center gap-1 rounded border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50">
+            <label className={`inline-flex items-center gap-1 rounded border border-slate-200 px-2 py-1 text-xs text-slate-600 ${lockedLabel(uploading)}`}>
               <Upload className="h-3 w-3" /> Choose transcripts.parquet
               <input
                 type="file"
                 accept=".parquet"
                 className="sr-only"
                 aria-label="transcripts.parquet"
-                disabled={!!upload}
+                disabled={uploading}
                 onChange={(e) => {
                   const f = e.target.files?.[0];
                   if (f) void send(f);
@@ -206,12 +208,7 @@ export function TranscriptsSubtab() {
           </>
         )}
 
-        {upload && (
-          <div className="space-y-0.5" role="status">
-            <p className="text-[11px] text-slate-500">Uploading {upload.name}: {Math.round(upload.fraction * 100)}%</p>
-            <div className="h-1 rounded bg-slate-100"><div className="h-1 rounded bg-blue-500" style={{ width: `${upload.fraction * 100}%` }} /></div>
-          </div>
-        )}
+        <UploadTaskProgress task={txUpload} sentText="Sent. Checking the file…" />
 
         {status?.uploaded && (
           <div className="flex flex-wrap items-center gap-2">
@@ -362,7 +359,7 @@ export function TranscriptsSubtab() {
             the folder brings them along.
           </p>
           {spatial.outlines_note && <p className="text-[11px] leading-snug text-amber-700">{spatial.outlines_note}</p>}
-          <label className="inline-flex cursor-pointer items-center gap-1 rounded border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50">
+          <label className={`inline-flex items-center gap-1 rounded border border-slate-200 px-2 py-1 text-xs text-slate-600 ${lockedLabel(uploading)}`}>
             <Upload className="h-3 w-3" /> Choose boundaries files
             <input
               type="file"
@@ -370,13 +367,14 @@ export function TranscriptsSubtab() {
               accept=".parquet,.gz"
               className="sr-only"
               aria-label="Boundaries files"
-              disabled={!!upload}
+              disabled={uploading}
               onChange={(e) => {
                 void sendOutlines(e.target.files);
                 e.target.value = "";
               }}
             />
           </label>
+          <UploadTaskProgress task={outlineUpload} keptNothing={false} sentText="Sent. Matching the outlines to the cells…" />
         </section>
       )}
     </div>

@@ -21,7 +21,8 @@ from scview.core import (
     cluster_evidence, cluster_qc, doublets, library_concordance, qc_filter, qc_groups, qc_report,
     sample_pseudobulk, sex_check,
 )
-from scview.core import assessment_gate, large_mode, large_run, leiden, working_copy
+from scview.core import assessment_gate, assessment_memory as amem, large_mode, large_run, leiden, working_copy
+from scview.core.assessment_gate import Budget
 from scview.core import batch_methods, label_curation, qc_states, scaling, spatial, targeted_panel
 from scview.core.obs_writes import (
     dataset_edit, edit_room, editable, save_edit, uns_snapshot,
@@ -104,6 +105,8 @@ async def get_assessment(
     # Its samples are held in the memory budget while it runs (a first open also assesses
     # for the co-pilot's insight and the QC facts: one at a time, ``assess_preprocessing``).
     need = assessment_need(adaptor.adata)
+    if need:  # a backed matrix is read in spans (working_copy.BACKED_READ_BYTES)
+        need = max(need, await asyncio.to_thread(working_copy.backed_read_bytes, adaptor))
     async with working_copy.reading(dm, dataset_id, need, "Assessing this dataset"):
         try:
             # Samples the matrix to judge its scale: ~1.6 s on Kang, so off the loop, and two
@@ -135,8 +138,11 @@ async def get_cluster_qc(
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
     try:
         # Per-cell metrics may need a pass over the counts: keep it off the loop.
-        report = await assessment_gate.run(dataset_id, ("cluster-qc", groupby, id(adaptor.adata)),
-                                           cluster_qc.for_adaptor, adaptor, groupby)
+        report = await assessment_gate.run(
+            dataset_id, ("cluster-qc", groupby, id(adaptor.adata)), cluster_qc.for_adaptor, adaptor, groupby,
+            budget=Budget(dm, lambda: amem.cluster_qc_need(adaptor, groupby), "Cluster QC"))
+    except DatasetMemoryError:
+        raise  # a 507 (main.py), not a 500
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -166,8 +172,12 @@ async def get_cluster_evidence(
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
     try:
         # The random-marker null and per-cell QC: off the loop (cached afterwards).
-        report = await assessment_gate.run(dataset_id, ("evidence", column, id(adaptor.adata)),
-                                           cluster_evidence.for_adaptor, adaptor, column or None)
+        report = await assessment_gate.run(
+            dataset_id, ("evidence", column, id(adaptor.adata)), cluster_evidence.for_adaptor, adaptor,
+            column or None, budget=Budget(dm, lambda: amem.evidence_need(adaptor, column or None),
+                                          "Cluster evidence"))
+    except DatasetMemoryError:
+        raise  # a 507 (main.py), not a 500
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -205,7 +215,10 @@ async def get_qc_by_group(
 
     try:
         # Per-cell metrics may need a pass over the counts: keep it off the loop.
-        return await assessment_gate.run(dataset_id, ("by-group", column, id(adaptor.adata)), _run)
+        return await assessment_gate.run(dataset_id, ("by-group", column, id(adaptor.adata)), _run,
+                                         budget=Budget(dm, lambda: amem.per_cell_need(adaptor), "QC by group"))
+    except DatasetMemoryError:
+        raise  # a 507 (main.py), not a 500
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -235,10 +248,13 @@ async def get_sex_check(
         raise HTTPException(status_code=404, detail=f"Column '{column}' not found.")
     try:
         # Reads a few gene columns and every cell's total counts: off the loop.
-        result = await assessment_gate.run(dataset_id, ("sex", column, id(adaptor.adata)),
-                                           sex_check.sex_check, adaptor.adata, column or None)
+        result = await assessment_gate.run(
+            dataset_id, ("sex", column, id(adaptor.adata)), sex_check.sex_check, adaptor.adata, column or None,
+            budget=Budget(dm, lambda: amem.sex_need(adaptor.adata), "The sex check"))
         sex_check.remember(dataset_id, result)  # for a later DE between groups' sex warning
         return result
+    except DatasetMemoryError:
+        raise  # a 507 (main.py), not a 500
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -275,7 +291,10 @@ async def get_library_concordance(
     try:
         # Per-cell counts may need a pass over the matrix the first time: off the loop.
         return await assessment_gate.run(
-            dataset_id, ("libraries", sample_column, library_column, celltype_column, id(adaptor.adata)), _run)
+            dataset_id, ("libraries", sample_column, library_column, celltype_column, id(adaptor.adata)), _run,
+            budget=Budget(dm, lambda: amem.per_cell_need(adaptor), "Library concordance"))
+    except DatasetMemoryError:
+        raise  # a 507 (main.py), not a 500
     except library_concordance.LibraryConcordanceError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -323,7 +342,11 @@ async def get_pseudobulk_qc(
     try:
         # Sums the counts of every cell and runs a PCA: off the loop.
         return await assessment_gate.run(
-            dataset_id, ("pseudobulk", sample_column, split_by, celltype_column, celltype, id(adata)), _run)
+            dataset_id, ("pseudobulk", sample_column, split_by, celltype_column, celltype, id(adata)), _run,
+            budget=Budget(dm, lambda: amem.pseudobulk_need(adaptor, celltype_column, celltype),
+                          "Pseudobulk sample QC"))
+    except DatasetMemoryError:
+        raise  # a 507 (main.py), not a 500
     except sample_pseudobulk.SampleQcError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -433,7 +456,10 @@ async def get_filter_preview(
         # Per-cell metrics may need a pass over the counts the first time: off the loop.
         key = ("filter-preview", repr(params), sample_column, cluster_column, label_column,
                condition_column, id(adaptor.adata))
-        return await assessment_gate.run(dataset_id, key, _run)
+        return await assessment_gate.run(dataset_id, key, _run,
+                                         budget=Budget(dm, lambda: amem.per_cell_need(adaptor), "The filter preview"))
+    except DatasetMemoryError:
+        raise  # a 507 (main.py), not a 500
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -469,8 +495,12 @@ async def get_doublets(
     if adaptor is None:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found.")
     try:
+        # Reads obs and uns only: held at nothing, but through the budget like the rest.
         return await assessment_gate.run(dataset_id, ("doublets", threshold, column, id(adaptor.adata)),
-                                         doublets.summary, adaptor.adata, threshold, column or None)
+                                         doublets.summary, adaptor.adata, threshold, column or None,
+                                         budget=Budget(dm, lambda: 0, "The doublet summary"))
+    except DatasetMemoryError:
+        raise  # a 507 (main.py), not a 500
     except doublets.DoubletError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -812,7 +842,10 @@ async def _qc_facts(dataset_id: str, dm: DatasetManager) -> qc_report.QCFacts:
     try:
         # Per-cell metrics may need a pass over the counts: keep it off the loop.
         return await assessment_gate.run(dataset_id, ("qc-facts", id(adaptor.adata)),
-                                         qc_report.build_facts, adaptor)
+                                         qc_report.build_facts, adaptor,
+                                         budget=Budget(dm, lambda: amem.qc_report_need(adaptor), "The QC report"))
+    except DatasetMemoryError:
+        raise  # a 507 (main.py), not a 500
     except Exception as e:
         logger.error("QC facts failed for %s: %s", dataset_id, e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"QC report failed: {e}")
@@ -916,8 +949,12 @@ async def get_mito_by_type(
     try:
         # Obs + cached per-cell QC (a few ms), but the arrays may need a pass first,
         # and placing removed cells reads them from the original upload once.
-        report = await assessment_gate.run(dataset_id, ("mito-by-type", column, ceiling, id(adaptor.adata)),
-                                           mito_by_type.for_adaptor, adaptor, column or None, ceiling, _assign)
+        report = await assessment_gate.run(
+            dataset_id, ("mito-by-type", column, ceiling, id(adaptor.adata)), mito_by_type.for_adaptor, adaptor,
+            column or None, ceiling, _assign,
+            budget=Budget(dm, lambda: amem.mito_by_type_need(dm, dataset_id, adaptor), "Mito by cell type"))
+    except DatasetMemoryError:
+        raise  # a 507 (main.py), not a 500
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -948,9 +985,12 @@ async def get_qc_states(
     if column and column not in adaptor.adata.obs.columns:
         raise HTTPException(status_code=404, detail=f"Column '{column}' not found.")
     try:
-        result, _states = await assessment_gate.run(dataset_id, ("qc-states", column, id(adaptor.adata)),
-                                                    qc_states.for_adaptor, adaptor, column or None)
+        result, _states = await assessment_gate.run(
+            dataset_id, ("qc-states", column, id(adaptor.adata)), qc_states.for_adaptor, adaptor, column or None,
+            budget=Budget(dm, lambda: amem.per_cell_need(adaptor, ribo=True), "QC states"))
         return result
+    except DatasetMemoryError:
+        raise  # a 507 (main.py), not a 500
     except qc_states.QcStatesError as e:
         raise HTTPException(status_code=e.status, detail=str(e))
     except Exception as e:

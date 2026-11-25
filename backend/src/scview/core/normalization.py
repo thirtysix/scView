@@ -195,6 +195,73 @@ def shifted_log(counts, target_sum: float = 1e4):
     return np.log1p(np.asarray(counts, dtype=np.float64) * scale[:, None])
 
 
+# Blocks of the mean-variance diagnostic: stored values of the counts read at a time, and
+# cells x genes of the dense residuals built at a time (32 MB as float64).
+MV_BLOCK_VALUES = 2_000_000  # Kang raw: 475 MB peak at 8M, 164 MB at 2M
+MV_RESIDUAL_VALUES = 4_000_000
+
+
+class _Moments:
+    """Per-gene sum and sum of squares, added up over blocks of cells."""
+
+    def __init__(self, g: int) -> None:
+        self.s = np.zeros(g)
+        self.sq = np.zeros(g)
+
+    def add(self, B, cols: slice | None = None) -> None:
+        """``B``: cells x genes (sparse or dense); ``cols``: the genes it holds (default all)."""
+        at = slice(None) if cols is None else cols
+        if sp.issparse(B):
+            B = B.astype(np.float64, copy=False)  # squares of float32 counts lose digits
+            self.s[at] += np.asarray(B.sum(axis=0)).ravel()
+            self.sq[at] += np.asarray(B.multiply(B).sum(axis=0)).ravel()
+        else:
+            B = np.asarray(B, dtype=np.float64)
+            self.s[at] += B.sum(axis=0)
+            self.sq[at] += (B * B).sum(axis=0)
+
+    def mean_var(self, n: int) -> tuple[np.ndarray, np.ndarray]:
+        mean = self.s / n
+        return mean, np.maximum(self.sq / n - mean**2, 0.0)
+
+
+def _log_of(B, totals: np.ndarray, target_sum: float = 1e4):
+    """``shifted_log`` of block ``B`` whose cells have ``totals`` (over every gene)."""
+    scale = np.divide(target_sum, totals, out=np.zeros_like(totals), where=totals > 0)
+    if sp.issparse(B):
+        L = B.astype(np.float64, copy=True).tocoo()
+        L.data = np.log1p(L.data * scale[L.row])
+        return L
+    return np.log1p(np.asarray(B, dtype=np.float64) * scale[:, None])
+
+
+def _residuals_of(B, totals: np.ndarray, genes: np.ndarray, total: float, clip: float) -> np.ndarray:
+    """Pearson residuals of block ``B`` (cells x genes, dense float64), as ``_block``."""
+    C = B.toarray() if sp.issparse(B) else np.asarray(B)
+    C = np.asarray(C, dtype=np.float64)
+    mu = np.outer(totals, genes / total) if total > 0 else np.zeros(C.shape)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        R = (C - mu) / np.sqrt(mu + mu**2 / THETA)
+    R[~np.isfinite(R)] = 0.0
+    np.clip(R, -clip, clip, out=R)
+    return R
+
+
+def _row_spans(rows: np.ndarray, per_row: float, budget: int) -> list[np.ndarray]:
+    step = max(1, int(budget // max(1.0, per_row)))
+    return [rows[a:a + step] for a in range(0, rows.size, step)]
+
+
+def _take(counts, idx: np.ndarray):
+    """Rows ``idx`` (ascending) of ``counts``, in memory, on disk or a large dataset's lazy
+    rows: a run of rows as one slice (a view of a dense matrix), else by index."""
+    if idx.size and int(idx[-1]) - int(idx[0]) + 1 == idx.size:
+        if idx.size == counts.shape[0] and (isinstance(counts, np.ndarray) or sp.issparse(counts)):
+            return counts
+        return counts[int(idx[0]):int(idx[-1]) + 1]
+    return counts[idx]
+
+
 def mean_variance(
     counts, gene_names, max_cells: int = DIAGNOSTIC_MAX_CELLS, seed: int = 0
 ) -> dict:
@@ -204,30 +271,100 @@ def mean_variance(
     Poisson's (variance = mean). The shifted log shrinks that trend but leaves
     lowly expressed genes with little variance; Pearson residuals make the variance
     about 1 for a gene that varies only by sampling, at any mean, so a gene above 1
-    varies for a reason. Genes never detected in the sampled cells are left out."""
+    varies for a reason. Genes never detected in the sampled cells are left out.
+
+    Read a block at a time, never as a copy of the sampled cells: a CSC matrix (a converted
+    Seurat file) by spans of genes, anything else by spans of cells, in two passes (totals,
+    then the residuals, which need every gene's total). The whole-sample copies (CSR, CSC,
+    float64, the kept genes, the shifted log) took +5.1 GB and 86 s on a deep 23,578 x
+    34,209 file."""
     n = counts.shape[0]
     rows = np.arange(n)
     if n > max_cells:
         rows = np.sort(np.random.default_rng(seed).choice(n, max_cells, replace=False))
-        counts = counts[rows]
-    elif hasattr(counts, "row_blocks"):  # a large dataset's counts on disk: its rows, read once
-        counts = counts[:]
-    if sp.issparse(counts):
-        counts = sp.csr_matrix(counts)
-    mean, var = _mean_var(counts)
+    ns = int(rows.size)
+    clip = default_clip(ns)
+    if getattr(counts, "format", None) == "csc" and not hasattr(counts, "row_blocks"):
+        stats = _mean_variance_by_genes(counts, rows, ns == n, clip)
+    else:
+        stats = _mean_variance_by_cells(counts, rows, clip)
+    mean, var, var_log, var_res = stats
     keep = mean > 0
-    counts = counts[:, np.flatnonzero(keep)]
-    _, var_log = _mean_var(shifted_log(counts))
-    clip = default_clip(counts.shape[0])
     return {
         "n_cells": int(n),
-        "n_cells_used": int(counts.shape[0]),
+        "n_cells_used": ns,
         "theta": THETA,
         "clip": clip,
-        "genes": [str(g) for g in np.asarray(gene_names)[keep]],
+        "genes": [str(x) for x in np.asarray(gene_names)[keep]],
         "mean": mean[keep],
         "var_counts": var[keep],
-        "var_log": var_log,
-        "var_residuals": residual_variance(counts, clip=clip),
+        "var_log": var_log[keep],
+        "var_residuals": var_res[keep],
         "keep": keep,
     }
+
+
+def _mean_variance_by_cells(counts, rows: np.ndarray, clip: float):
+    n_s, g = rows.size, counts.shape[1]
+    nnz = getattr(counts, "nnz", None)
+    per_row = (nnz / max(1, counts.shape[0])) if isinstance(nnz, (int, np.integer)) else g
+    raw, logged = _Moments(g), _Moments(g)
+    totals = np.zeros(n_s)
+    at = 0
+    for idx in _row_spans(rows, per_row, MV_BLOCK_VALUES):
+        B = _take(counts, idx)
+        if not sp.issparse(B):
+            B = np.asarray(B, dtype=np.float64)
+        t = np.asarray(B.sum(axis=1), dtype=np.float64).ravel()
+        totals[at:at + t.size] = t
+        at += t.size
+        raw.add(B)
+        logged.add(_log_of(B, t))
+    mean, var = raw.mean_var(n_s)
+    _, var_log = logged.mean_var(n_s)
+    genes, total = raw.s, float(raw.s.sum())
+    res = _Moments(g)
+    at = 0
+    for idx in _row_spans(rows, g, MV_RESIDUAL_VALUES):
+        B = _take(counts, idx)
+        res.add(_residuals_of(B, totals[at:at + idx.size], genes, total, clip))
+        at += idx.size
+    _, var_res = res.mean_var(n_s)
+    return mean, var, var_log, var_res
+
+
+def _gene_spans(counts, budget: int) -> list[tuple[int, int]]:
+    """Column ranges of about ``budget`` stored values (``anndata_adaptor.column_spans``: an
+    on-disk CSC's indptr is never searched value by value)."""
+    from scview.core.anndata_adaptor import column_spans
+
+    return column_spans(counts, budget)
+
+
+def _mean_variance_by_genes(counts, rows: np.ndarray, all_rows: bool, clip: float):
+    n_s, g = rows.size, counts.shape[1]
+
+    def block(j0: int, j1: int):
+        B = counts[:, j0:j1]
+        return B if all_rows else B[rows]
+
+    raw = _Moments(g)
+    totals = np.zeros(n_s)
+    for j0, j1 in _gene_spans(counts, MV_BLOCK_VALUES):
+        B = block(j0, j1)
+        totals += np.asarray(B.sum(axis=1), dtype=np.float64).ravel()
+        raw.add(B, slice(j0, j1))
+    mean, var = raw.mean_var(n_s)
+    genes, total = raw.s, float(raw.s.sum())
+    logged, res = _Moments(g), _Moments(g)
+    width = max(1, MV_RESIDUAL_VALUES // max(1, n_s))
+    for j0, j1 in _gene_spans(counts, MV_BLOCK_VALUES):
+        B = block(j0, j1)
+        logged.add(_log_of(B, totals), slice(j0, j1))
+        for k0 in range(j0, j1, width):
+            k1 = min(j1, k0 + width)
+            res.add(_residuals_of(B[:, k0 - j0:k1 - j0], totals, genes[k0:k1], total, clip),
+                    slice(k0, k1))
+    _, var_log = logged.mean_var(n_s)
+    _, var_res = res.mean_var(n_s)
+    return mean, var, var_log, var_res

@@ -35,4 +35,12 @@ describe("ConversionReport", () => {
     expect(screen.getByText("Converted from a Seurat object (Seurat v5).")).toBeTruthy();
     expect(screen.getByTestId("conversion-report").querySelector("details")).toBeNull();
   });
+
+  it("a Seurat object with one column left out never says \"0 kept\"", () => {
+    const skipped = ["cell metadata column CellType: a list column with no value in any cell"];
+    render(<ConversionReport report={{ source_class: "Seurat", detail: "Seurat v4", kept: [], skipped }} />);
+    expect(screen.getByText("1 not converted, everything else kept")).toBeTruthy();
+    expect(screen.queryByText("Kept")).toBeNull();
+    expect(screen.getByText(skipped[0]!)).toBeTruthy();
+  });
 });

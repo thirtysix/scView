@@ -60,9 +60,7 @@ convert_rds_to_h5ad <- function(input_path, output_path, progress_path = NULL) {
     rm(obj, loaded)
     result <- tryCatch(
       manual_convert(box, output_path, version_info, progress),
-      error = function(e) {
-        list(success = FALSE, error = paste0("Conversion failed: ", conditionMessage(e)))
-      }
+      error = function(e) list(success = FALSE, error = conversion_error(e))
     )
     result$report <- list(
       source_class = "Seurat", detail = paste("Seurat", version_info),
@@ -80,14 +78,19 @@ convert_rds_to_h5ad <- function(input_path, output_path, progress_path = NULL) {
   if (kind %in% c("SingleCellExperiment", "SummarizedExperiment")) {
     result <- tryCatch(
       convert_se_to_h5ad(obj, output_path, kind, progress, object_name = loaded$name),
-      error = function(e) {
-        list(success = FALSE, error = paste0("Conversion failed: ", conditionMessage(e)))
-      }
+      error = function(e) list(success = FALSE, error = conversion_error(e))
     )
     return(finish(progress, result))
   }
 
   finish(progress, list(success = FALSE, error = unsupported_message(obj)))
+}
+
+#' The error a failed conversion answers with, without reticulate's advice to run
+#' py_last_error() (nobody using scView can).
+conversion_error <- function(e) {
+  msg <- sub("\\s*Run `reticulate::py_last_error\\(\\)` for details\\.?\\s*$", "", conditionMessage(e))
+  paste0("Conversion failed: ", msg)
 }
 
 #' The previous entry point (Seurat only), kept for callers that still use it.
@@ -546,7 +549,8 @@ manual_convert <- function(obj, output_path, version_info, progress = NULL) {
 
   # ---- metadata (obs) ------------------------------------------------------
   cat("[convert] Extracting cell metadata ...\n")
-  obs_df <- tryCatch(obj@meta.data, error = function(e) data.frame(row.names = cells))
+  meta <- seurat_obs(tryCatch(obj@meta.data, error = function(e) NULL), cells)
+  obs_df <- meta$df
 
   # ---- var (gene names) -----------------------------------------------------
   var_df <- data.frame(row.names = x$genes)
@@ -655,8 +659,156 @@ manual_convert <- function(obj, output_path, version_info, progress = NULL) {
   list(
     success = TRUE,
     message = paste0("Converted via manual extraction (", version_info, ")"),
-    kept = tissue$kept, skipped = c(tissue$skipped, chromatin_note)
+    kept = c(meta$kept, tissue$kept), skipped = c(meta$skipped, tissue$skipped, chromatin_note)
   )
+}
+
+# ---------------------------------------------------------------------------
+# Cell metadata (Seurat meta.data)
+# ---------------------------------------------------------------------------
+#
+# meta.data went to pandas as it was, so one odd column failed the whole conversion
+# (a list column: "Mixing dicts with non-Series"; dates, nested tables, matrix columns,
+# a column named _index) or came out wrong (integer NA as -2147483648, logical NA as
+# FALSE). Every column now becomes a plain one pandas and anndata write as they are:
+# number, integer, TRUE / FALSE, factor or text. What cannot be one is left out and
+# said in the report.
+
+MAX_MATRIX_COLUMN <- 50  # a matrix column wider than this is not split into columns
+
+#' meta.data as list(df, kept, skipped): every column a plain one, in order, row names
+#' the cells. Nested tables and matrix columns come as parent.child columns. `kept` says
+#' what was changed on the way (a list column joined as text), `skipped` what was left
+#' out and why.
+seurat_obs <- function(md, cells) {
+  if (is.null(md) || !is.data.frame(md) || nrow(md) != length(cells)) {
+    skipped <- if (is.null(md)) character(0) else "cell metadata (meta.data): its rows are not the object's cells"
+    return(list(df = data.frame(row.names = cells), kept = character(0), skipped = skipped))
+  }
+  cols <- list()
+  kept <- character(0)
+  skipped <- character(0)
+  cn <- names(md)
+  for (i in seq_along(cn)) {
+    out <- obs_column(md[[i]], cn[i], nrow(md))
+    if (is.character(out$why)) {
+      skipped <- c(skipped, sprintf("cell metadata column %s: %s", cn[i], out$why))
+      next
+    }
+    cols <- c(cols, out$cols)
+    if (length(out$note)) kept <- c(kept, sprintf("cell metadata column %s: %s", cn[i], paste(out$note, collapse = "; ")))
+    if (length(out$left_out)) {
+      skipped <- c(skipped, sprintf("cell metadata column %s: %s", cn[i], paste(out$left_out, collapse = "; ")))
+    }
+  }
+
+  keys <- names(cols)
+  # anndata reserves _index; an empty or repeated name is not a column name
+  keys[is.na(keys) | !nzchar(keys)] <- paste0("column_", which(is.na(keys) | !nzchar(keys)))
+  keys[keys == "_index"] <- "_index_"
+  keys <- make.unique(keys, sep = "_")
+  df <- data.frame(row.names = rownames(md))
+  for (k in seq_along(cols)) df[[keys[k]]] <- cols[[k]]
+  list(df = df, kept = kept, skipped = skipped)
+}
+
+#' One meta.data column as list(cols = named list of plain vectors, note = what was
+#' changed, left_out = parts of a nested table left out), or list(why = the reason the
+#' whole column is left out).
+obs_column <- function(v, nm, n) {
+  one <- function(x, note = NULL) list(cols = stats::setNames(list(x), nm), note = note)
+
+  if (is.data.frame(v)) {  # a nested table: its columns as nm.child
+    if (nrow(v) != n) return(list(why = "a nested table whose rows are not the cells"))
+    out <- list(); notes <- character(0); left_out <- character(0)
+    for (j in seq_along(v)) {
+      sub_nm <- paste0(nm, ".", names(v)[j])
+      sub <- obs_column(v[[j]], sub_nm, n)
+      if (is.character(sub$why)) {
+        left_out <- c(left_out, sprintf("%s left out (%s)", sub_nm, sub$why))
+        next
+      }
+      out <- c(out, sub$cols)
+      if (length(sub$note)) notes <- c(notes, sprintf("%s %s", sub_nm, sub$note))
+      left_out <- c(left_out, sub$left_out)
+    }
+    if (length(out) == 0) return(list(why = "a nested table with no column scView can read"))
+    return(list(cols = out, note = c(sprintf("a nested table, kept as %s", paste(names(out), collapse = ", ")), notes),
+                left_out = left_out))
+  }
+  if (!is.null(dim(v)) && length(dim(v)) == 2) {  # a matrix column: one column per matrix column
+    if (nrow(v) != n) return(list(why = "a matrix whose rows are not the cells"))
+    if (ncol(v) > MAX_MATRIX_COLUMN) {
+      return(list(why = sprintf("a matrix of %s columns in one column (more than %d)", fmt_n(ncol(v)), MAX_MATRIX_COLUMN)))
+    }
+    m <- unclass(as.matrix(v))
+    sub_names <- colnames(m)
+    if (is.null(sub_names) || anyNA(sub_names) || !all(nzchar(sub_names))) sub_names <- as.character(seq_len(ncol(m)))
+    df <- stats::setNames(lapply(seq_len(ncol(m)), function(j) m[, j]), sub_names)
+    res <- obs_column(structure(df, class = "data.frame", row.names = seq_len(n)), nm, n)
+    if (!is.null(res$note)) res$note[1] <- sprintf("a matrix in one column, kept as %s", paste(names(res$cols), collapse = ", "))
+    return(res)
+  }
+  if (!is.null(dim(v))) return(list(why = sprintf("an array of %d dimensions in one column", length(dim(v)))))
+  if (length(v) != n) return(list(why = "its length does not match the cells"))
+  # before the list check: a POSIXlt date is a list
+  if (inherits(v, c("Date", "POSIXt"))) return(one(as.character(v)))
+  if (inherits(v, "difftime")) return(one(as.numeric(v)))
+  if (isS4(v)) return(list(why = sprintf("a %s, not a plain column", class(v)[1])))
+  if (is.list(v)) return(obs_list_column(v, nm, n))
+
+  if (is.factor(v)) {
+    lv <- levels(v)
+    # an NA level (factor(x, exclude = NULL)): its cells are missing values
+    if (anyNA(lv)) v <- factor(as.character(v), levels = lv[!is.na(lv)], ordered = is.ordered(v))
+    return(one(v))
+  }
+  if (is.logical(v)) {
+    if (!anyNA(v)) return(one(as.vector(v)))
+    # pandas has no missing TRUE / FALSE: a category, as convert_sce.R writes it
+    return(one(factor(ifelse(v, "TRUE", "FALSE"), levels = c("FALSE", "TRUE"))))
+  }
+  if (is.integer(v)) return(one(if (anyNA(v)) as.numeric(v) else as.vector(v)))
+  if (is.double(v)) return(one(as.vector(v)))
+  if (is.character(v)) return(one(enc2utf8(as.vector(v))))
+  if (is.complex(v)) return(one(as.character(v)))
+  if (is.raw(v)) return(one(as.integer(v)))
+  list(why = sprintf("of type %s", typeof(v)))
+}
+
+#' A list column. One value or none per cell: those values as a plain column, empty
+#' cells missing. Several values per cell: joined with "; ". Anything else, or no value
+#' in any cell, is left out.
+obs_list_column <- function(v, nm, n) {
+  lens <- lengths(v)
+  if (all(lens == 0)) return(list(why = "a list column with no value in any cell"))
+  plain <- vapply(v, function(e) is.null(e) || (is.atomic(e) && is.null(dim(e)) && !isS4(e)), logical(1))
+  if (!all(plain)) {
+    return(list(why = sprintf("a list of %s values, not one value per cell", class(v[!plain][[1]])[1])))
+  }
+  text <- function(e) as.character(e)  # a factor's labels, not its codes
+  if (all(lens <= 1)) {
+    has <- lens == 1
+    vals <- v[has]
+    if (all(vapply(vals, function(e) is.numeric(e) && !is.factor(e), logical(1)))) {
+      out <- rep(NA_real_, n)
+      out[has] <- as.numeric(unlist(vals, use.names = FALSE))
+    } else if (all(vapply(vals, is.logical, logical(1)))) {
+      out <- rep(NA, n)
+      out[has] <- unlist(vals, use.names = FALSE)
+    } else {
+      out <- rep(NA_character_, n)
+      out[has] <- vapply(vals, text, character(1))
+    }
+    res <- obs_column(out, nm, n)
+    res$note <- "a list column with one value per cell, kept as a plain column"
+    return(res)
+  }
+  joined <- vapply(v, function(e) if (length(e) == 0) NA_character_ else paste(text(e), collapse = "; "),
+                   character(1))
+  res <- obs_column(unname(joined), nm, n)
+  res$note <- sprintf("a list column with up to %d values per cell, kept as text joined with \"; \"", max(lens))
+  res
 }
 
 # ---------------------------------------------------------------------------

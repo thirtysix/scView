@@ -144,7 +144,7 @@ def _compute_markers_large(adaptor, column: str) -> dict:
 
 def _compute_and_save(dm: DatasetManager, dataset_id: str, adaptor, column: str) -> None:
     """Compute ``column``'s markers into the dataset and save them with it (in memory:
-    a backed dataset is read in first, after ``working_copy.make_room``; a large one
+    a backed dataset is read in first, inside the route's hold (``_markers_read_need``); a large one
     stays on disk, its markers from the gene store)."""
     large = adaptor.is_large
     adata = adaptor.adata if large else working_copy.in_memory(adaptor)
@@ -204,6 +204,18 @@ def _markers_need(adaptor, column: str) -> int:
     except Exception as e:  # never block the markers on their estimate
         logger.warning("No memory estimate for markers of '%s': %s", column, e)
         return 0
+
+
+def _markers_read_need(adaptor, column: str) -> int:
+    """All the memory computing ``column``'s markers adds: reading a backed dataset in
+    (``working_copy.copy_bytes``; ``make_room`` only frees that room, it holds none) and
+    the computation itself (``_markers_need``)."""
+    try:
+        copy = max(0, working_copy.copy_bytes(adaptor))
+    except Exception as e:  # never block the markers on their estimate
+        logger.warning("No in-memory estimate for markers of '%s': %s", column, e)
+        copy = 0
+    return copy + _markers_need(adaptor, column)
 
 
 def _specificity_target(adata, column: str) -> tuple[str, str] | None:
@@ -289,11 +301,12 @@ async def get_markers(
                 if not adaptor.has_markers(column=groupby_column):
                     need = 0
                     if not adaptor.is_large:  # a large dataset is not read in
-                        await working_copy.make_room(dm, dataset_id, adaptor)
-                        need = await asyncio.to_thread(_markers_need, adaptor, groupby_column)
+                        need = await asyncio.to_thread(_markers_read_need, adaptor, groupby_column)
                     # Seconds to tens of seconds: in a worker thread, so the server
-                    # keeps answering meanwhile. Its memory is held (a first open computes
-                    # these beside the page's other requests): a 507 when it cannot fit.
+                    # keeps answering meanwhile. Its memory is held, a backed dataset's
+                    # read-in included (a first open computes these beside the page's other
+                    # requests; unheld, that read OOM-killed a 3 GB backend): a 507 when it
+                    # cannot fit.
                     what = working_copy.subject(dm, dataset_id, need,
                                                 f"Marker genes for '{groupby_column}'")
                     async with working_copy.reading(dm, dataset_id, need, what) as read:

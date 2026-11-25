@@ -163,7 +163,12 @@ def holds_scaled(M, rows: int = 2000) -> bool:
     below zero in its first rows. Log-normalised values and counts never go below 0."""
     if M is None or not getattr(M, "shape", (0,))[0]:
         return False
-    block = M[: min(rows, M.shape[0])]
+    from scview.core import sparse_sums
+
+    # A backed CSC: its first columns (its rows would read all of it; opening a deep file
+    # backed took +1.57 GB here, and a 1.8 GB backend was killed on open).
+    block = (sparse_sums.first_columns(M, 50_000) if sparse_sums.csc_on_disk(M)
+             else M[: min(rows, M.shape[0])])
     if sp.issparse(block):
         return bool(block.nnz) and float(block.data.min()) < 0
     block = np.asarray(block)

@@ -1,6 +1,6 @@
 import { API_BASE } from "@/lib/constants";
 import { apiFetch } from "./client";
-import { uploadErrorText } from "./upload";
+import { filesProgress, xhrUpload, type UploadOptions } from "./upload";
 import { streamEvents } from "./clustering";
 import type { WatchdogEvent } from "./pipelineRun";
 
@@ -119,27 +119,12 @@ export function deleteFragments(datasetId: string): Promise<{ deleted: boolean }
 
 /** One file as the raw request body: the browser reads it from disk as it sends, never whole
  *  into memory. An XMLHttpRequest, for its upload progress on a 2.4 GB file. */
-export function uploadFragmentFile(
-  datasetId: string,
-  file: File,
-  onProgress?: (fraction: number) => void,
-  signal?: AbortSignal,
-): Promise<FragmentStatus> {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", `${API_BASE}/datasets/${datasetId}/atac/fragments?name=${encodeURIComponent(file.name)}`);
-    xhr.setRequestHeader("Content-Type", "application/octet-stream");
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total);
-    };
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) resolve(JSON.parse(xhr.responseText) as FragmentStatus);
-      else reject(new Error(uploadErrorText(xhr.status, xhr.responseText)));
-    };
-    xhr.onerror = () => reject(new Error(`The upload of ${file.name} stopped before the end: send it again.`));
-    xhr.onabort = () => reject(new DOMException("Aborted", "AbortError"));
-    signal?.addEventListener("abort", () => xhr.abort());
-    xhr.send(file);
+export function uploadFragmentFile(datasetId: string, file: File, opts: UploadOptions = {}): Promise<FragmentStatus> {
+  return xhrUpload(`${API_BASE}/datasets/${datasetId}/atac/fragments?name=${encodeURIComponent(file.name)}`, file, {
+    what: file.name,
+    contentType: "application/octet-stream",
+    signal: opts.signal,
+    onProgress: filesProgress([file], opts.onProgress),
   });
 }
 

@@ -1,7 +1,10 @@
 import { useState } from "react";
 import { Loader2, Upload } from "lucide-react";
 import { attachVdj, type VdjFile, type VdjSummary } from "@/api/vdj";
+import { isAbort } from "@/api/upload";
 import { Help } from "@/components/common/Help";
+import { UploadTaskProgress } from "@/components/common/UploadProgressCompact";
+import { useUploadTask } from "@/hooks/useUploadTask";
 import { errorText } from "@/lib/programs";
 import { choiceLabel, fileSentence, needsSample, valueLabel } from "@/lib/vdj";
 
@@ -26,6 +29,7 @@ export function ClonotypeAttach({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<VdjFile | null>(null);
+  const upload = useUploadTask();
 
   const choices = summary.sample_choices;
   const values = choices.find((c) => c.name === column)?.values ?? [];
@@ -37,16 +41,19 @@ export function ClonotypeAttach({
     setError(null);
     setDone(null);
     try {
-      const res = await attachVdj(datasetId, file, {
-        sampleColumn: column || undefined,
-        sample: column ? sample : undefined,
-        replace,
-      });
+      const res = await upload.run(file.name, (opts) =>
+        attachVdj(
+          datasetId,
+          file,
+          { sampleColumn: column || undefined, sample: column ? sample : undefined, replace },
+          opts,
+        ),
+      );
       setDone(res.attached);
       setFile(null);
       await onAttached(res.summary);
     } catch (e) {
-      setError(errorText(e));
+      if (!isAbort(e)) setError(errorText(e));
     } finally {
       setBusy(false);
     }
@@ -125,6 +132,7 @@ export function ClonotypeAttach({
           Attach
         </button>
       </div>
+      <UploadTaskProgress task={upload} sentText="Sent. Matching the contigs to the cells…" />
       {error && (
         <p role="alert" className="rounded-md bg-amber-50 px-2 py-1.5 text-amber-800">
           {error}

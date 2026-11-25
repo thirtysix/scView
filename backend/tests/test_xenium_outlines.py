@@ -244,8 +244,7 @@ async def test_attach_refusals_are_sentences_with_the_counts(client, dataset_man
     assert r.status_code == 415
     r = await _post(client, "nope", "cell_boundaries.parquet", b"x")
     assert r.status_code == 404
-    folder = cell_outlines.store_dir(dataset_manager.data_dir, did)
-    assert not list(folder.iterdir())
+    assert not cell_outlines.store_dir(dataset_manager.data_dir, did).exists()  # nothing kept, not even the folder
     plain = ad.AnnData(X=sp.csr_matrix(np.ones((4, 2), dtype=np.float32)))
     other = _register(dataset_manager, plain, "xc")
     r = await _post(client, other, "cell_boundaries.parquet", b"x")

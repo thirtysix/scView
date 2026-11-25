@@ -5,6 +5,9 @@ import { Caption } from "@/components/common/Caption";
 import { Help } from "@/components/common/Help";
 import { HoverTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
+import { UploadTaskProgress } from "@/components/common/UploadProgressCompact";
+import { isAbort } from "@/api/upload";
+import { useUploadTask } from "@/hooks/useUploadTask";
 import { DeconvolutionCheck } from "@/components/unified/DeconvolutionCheck";
 import {
   deconvolutionCsvUrl,
@@ -50,6 +53,7 @@ export function DeconvolutionSubtab() {
   const [file, setFile] = useState<File | null>(null);
   const [kind, setKind] = useState<FractionKind>("cell");
   const [running, setRunning] = useState(false);
+  const upload = useUploadTask();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -106,12 +110,15 @@ export function DeconvolutionSubtab() {
   const run = () => {
     setRunning(true);
     setError(null);
-    runDeconvolution(datasetId, file, options)
+    (file
+      ? upload.run(file.name, (opts) => runDeconvolution(datasetId, file, options, opts))
+      : runDeconvolution(datasetId, null, options)
+    )
       .then((r) => {
         setResult(r);
         setFile(null);
       })
-      .catch((e) => setError(errorMessage(e)))
+      .catch((e) => !isAbort(e) && setError(errorMessage(e)))
       .finally(() => setRunning(false));
   };
 
@@ -204,6 +211,7 @@ export function DeconvolutionSubtab() {
           <input
             type="file"
             accept=".tsv,.csv,.txt,.gct,.gz,.tab"
+            disabled={running}
             onChange={(e) => setFile(e.target.files?.[0] ?? null)}
             className="text-xs text-slate-700 file:mr-2 file:rounded file:border file:border-slate-300 file:bg-white file:px-2 file:py-0.5 file:text-xs"
           />
@@ -222,6 +230,7 @@ export function DeconvolutionSubtab() {
           {running && <Loader2 className="h-3 w-3 animate-spin" />}
           {running ? "Deconvolving…" : file || !result ? "Deconvolve" : `Run again on ${result.filename}`}
         </button>
+        <UploadTaskProgress task={upload} sentText="Sent. Deconvolving the bulk samples…" />
       </div>
 
       {loading && !result && (

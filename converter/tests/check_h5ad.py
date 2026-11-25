@@ -95,6 +95,9 @@ def check_fixture(name: str, exp: dict, res: dict, out: Path) -> None:
         assert a.obs[col].cat.ordered, col
     for col, n in exp.get("n_missing", {}).items():
         assert int(a.obs[col].isna().sum()) == n, (col, int(a.obs[col].isna().sum()))
+    for col, head in exp.get("obs_head", {}).items():  # first values, None = missing
+        got = [None if pd.isna(v) else v for v in a.obs[col].iloc[: len(head)]]
+        assert got == head, (col, got)
     for col in exp.get("obs_absent", []):
         assert col not in a.obs, col
     for col in exp.get("var_columns", []):
@@ -117,6 +120,12 @@ def check_fixture(name: str, exp: dict, res: dict, out: Path) -> None:
     if exp.get("source_class") == "Seurat":
         assert report is None  # the Seurat output is the original one, untouched
         assert res["report"]["source_class"] == "Seurat"
+        kept = " | ".join(map(str, res["report"]["kept"]))
+        skipped = " | ".join(map(str, res["report"]["skipped"]))
+        for part in exp.get("report_kept", []):
+            assert part in kept, f"kept lacks {part!r}: {kept}"
+        for part in exp.get("report_skipped", []):
+            assert part in skipped, f"skipped lacks {part!r}: {skipped}"
         return
     assert report is not None, "uns scview_conversion missing"
     assert report["x"] == exp["x"], report["x"]

@@ -20,6 +20,7 @@ import { sourceText } from "@/lib/doubletSource";
 import { pct, roundTo } from "@/lib/qcThresholds";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useViewStore } from "@/stores/viewStore";
+import { errorMessage } from "@/lib/errorMessage";
 
 const STEPS = [0.0001, 0.0002, 0.0005, 0.001, 0.002, 0.005, 0.01];
 const DEBOUNCE_MS = 120;
@@ -105,7 +106,7 @@ export function DoubletCard({
           }
         })
         .catch((e) => {
-          if (id === request.current) setError(String(e?.message ?? e));
+          if (id === request.current) setError(errorMessage(e));
         })
         .finally(() => {
           if (id === request.current) setLoading(false);

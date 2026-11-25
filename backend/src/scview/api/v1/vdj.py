@@ -20,7 +20,7 @@ from typing import Any, Callable
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from scview.core import vdj
+from scview.core import raw_upload, vdj
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import dataset_edit, edit_room, editable, save_edit, uns_snapshot
 from scview.dependencies import get_dataset_manager
@@ -105,6 +105,7 @@ async def _store_upload(dm: DatasetManager, dataset_id: str, file: UploadFile) -
                 fh.write(chunk)
     except BaseException:
         partial.unlink(missing_ok=True)
+        raw_upload.drop_if_empty(folder)  # a refused first upload made it
         raise
     sha = digest.hexdigest()
     dest = folder / f"{sha[:12]}_{_SAFE.sub('_', name).strip('_') or 'contigs'}"
@@ -150,6 +151,7 @@ async def attach_vdj(
     except HTTPException:
         if new:
             path.unlink(missing_ok=True)
+            raw_upload.drop_if_empty(path.parent)
         raise
 
 

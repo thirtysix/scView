@@ -31,7 +31,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from scview.core import preflight, results_store
+from scview.core import preflight, raw_upload, results_store
 from scview.core import velocity as vel
 from scview.core import velocity_direction as vd
 from scview.core import velocity_input as vi
@@ -160,6 +160,10 @@ async def _store_uploads(dm: DatasetManager, dataset_id: str, files: list[Upload
                     fh.write(chunk)
         except BaseException:
             partial.unlink(missing_ok=True)
+            for p, _n, new in out:  # a refused file stops the set: none of it is kept
+                if new:
+                    p.unlink(missing_ok=True)
+            raw_upload.drop_if_empty(folder)
             raise
         dest = folder / f"{digest.hexdigest()[:12]}_{_SAFE.sub('_', name).strip('_') or 'velocity'}"
         if dest.exists():
@@ -215,6 +219,8 @@ async def _attach(dm: DatasetManager, dataset_id: str, files: list[UploadFile]) 
             for p, _n, new in stored:
                 if new:
                     p.unlink(missing_ok=True)
+            if stored:
+                raw_upload.drop_if_empty(stored[0][0].parent)
             raise HTTPException(status_code=e.status, detail=str(e))
         except Exception as e:
             dm.evict(dataset_id)

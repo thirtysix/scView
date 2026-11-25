@@ -10,13 +10,12 @@ were corrected. 422 for a large dataset (it reads every cell's counts).
 
 from __future__ import annotations
 
-import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from scview.core import ambient, large_mode
-from scview.core.dataset_manager import DatasetManager
+from scview.core import ambient, assessment_gate, assessment_memory, large_mode
+from scview.core.dataset_manager import DatasetManager, DatasetMemoryError
 from scview.dependencies import get_dataset_manager
 
 logger = logging.getLogger(__name__)
@@ -37,8 +36,14 @@ async def get_ambient(
     if column and column not in adaptor.adata.obs.columns:
         raise HTTPException(status_code=404, detail=f"Column '{column}' not found.")
     try:
-        # Sums each sample's counts and tests its marker genes: off the loop.
-        return await asyncio.to_thread(ambient.diagnose_cached, adaptor.adata, column or None)
+        # Sums each sample's counts and tests its marker genes: off the loop, in the memory budget.
+        return await assessment_gate.run(
+            dataset_id, ("ambient", column, id(adaptor.adata)), ambient.diagnose_cached, adaptor.adata,
+            column or None, budget=assessment_gate.Budget(
+                dm, lambda: assessment_memory.ambient_need(adaptor.adata, column or None),
+                "The ambient RNA estimate"))
+    except DatasetMemoryError:
+        raise  # a 507 (main.py), not a 500
     except ambient.AmbientError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

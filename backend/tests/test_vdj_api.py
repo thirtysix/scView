@@ -76,7 +76,7 @@ async def test_merged_dataset_needs_the_sample(client, dataset_manager, tmp_path
     path = write_csv(tmp_path / "all.csv", t_rows() + b_rows())
     r = await _attach(client, did, path)
     assert r.status_code == 409 and "libraries" in r.json()["detail"]
-    assert not list((Path(dataset_manager.data_dir) / "uploads" / did / "vdj").iterdir())
+    assert not (Path(dataset_manager.data_dir) / "uploads" / did / "vdj").exists()  # nothing kept, not even the folder
     s = (await client.get(f"{API}/datasets/{did}/vdj")).json()
     names = [c["name"] for c in s["sample_choices"]]
     assert names[0] == "sample" and vdj.SUFFIX_COLUMN in names

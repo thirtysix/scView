@@ -22,6 +22,17 @@ class UploadRefused(RuntimeError):
         self.status = status
 
 
+def drop_if_empty(folder: Path) -> None:
+    """Remove a dataset's store folder that a stopped or refused upload made and left empty
+    (a cancelled first upload). A folder with anything in it stays. Called on the event loop,
+    after the caller saw no other upload of the dataset in flight, so no upload is between
+    making the folder and opening its part file."""
+    try:
+        folder.rmdir()
+    except OSError:
+        pass
+
+
 def refuse_multipart(request: Request) -> None:
     if (request.headers.get("content-type") or "").startswith("multipart/"):
         raise HTTPException(status_code=415, detail="Send the file as the raw request body, not a multipart form.")

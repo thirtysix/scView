@@ -20,6 +20,7 @@ vi.mock("@/components/plots/Plot", () => ({
 
 import type { FragmentQc, FragmentStatus } from "@/api/atacFragments";
 import type { DatasetInfo } from "@/api/types";
+import type { UploadOptions } from "@/api/upload";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { hoverTip, unhover } from "@/test/hoverTip";
@@ -89,6 +90,34 @@ describe("AtacFragmentQc", () => {
     fireEvent.change(input, { target: { files: [tbi, frag] } });
     await waitFor(() => expect(api.uploadFragmentFile).toHaveBeenCalledTimes(2));
     expect(api.uploadFragmentFile.mock.calls.map((c) => (c[1] as File).name)).toEqual([frag.name, tbi.name]);
+  });
+
+  it("shows progress over both files and Cancel stops the second (the first stays)", async () => {
+    api.getFragments.mockResolvedValue(empty);
+    const signals: AbortSignal[] = [];
+    api.uploadFragmentFile.mockImplementation((_d: string, f: File, o: UploadOptions) => {
+      signals.push(o.signal!);
+      if (f.name.endsWith(".tbi")) return Promise.resolve({ ...empty, index: true, missing: "The fragments file is still missing." });
+      o.onProgress?.({ loaded: f.size / 2, total: f.size, file: f.name, fileIndex: 1, fileCount: 1 });
+      return new Promise((_resolve, reject) =>
+        o.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError"))),
+      );
+    });
+    render(<AtacFragmentQc datasetId="d" />);
+    const input = (await screen.findByLabelText("Fragments file and index")) as HTMLInputElement;
+    const tbi = new File(["x".repeat(100)], "atac_fragments.tsv.gz.tbi");
+    const frag = new File(["y".repeat(100)], "atac_fragments.tsv.gz");
+    fireEvent.change(input, { target: { files: [tbi, frag] } });
+    const bar = await screen.findByRole("progressbar", { name: "Upload of 2 files" }, { timeout: 2000 });
+    // the fragments file goes first: half of it is a quarter of the set
+    expect(bar).toHaveAttribute("aria-valuenow", "25");
+    expect(screen.getByTestId("upload-compact-file")).toHaveTextContent("File 1 of 2: atac_fragments.tsv.gz");
+    expect(input.disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(await screen.findByTestId("upload-cancelled")).toHaveTextContent(/^Upload of 2 files cancelled\.$/);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]!.aborted).toBe(true);
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("says what is missing and shows an upload's refusal", async () => {

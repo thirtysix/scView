@@ -208,6 +208,17 @@ describe("MitoByType", () => {
   it("shows an error without breaking the panel", async () => {
     getMitoByType.mockRejectedValue(new Error("API error 500: boom"));
     render(<MitoByType datasetId="d1" />);
-    expect(await screen.findByText(/Mito by cell type unavailable: API error 500: boom/)).toBeInTheDocument();
+    expect(await screen.findByText(/Mito by cell type unavailable: boom/)).toBeInTheDocument();
+  });
+
+  it("shows a memory refusal as its sentence, not the raw response", async () => {
+    getMitoByType.mockRejectedValue(
+      new Error('API error 507: {"detail":"Mito by cell type on x needs about 0.4 GB at its peak."}'),
+    );
+    render(<MitoByType datasetId="d1" />);
+    expect(
+      await screen.findByText("Mito by cell type unavailable: Mito by cell type on x needs about 0.4 GB at its peak."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/API error/)).toBeNull();
   });
 });

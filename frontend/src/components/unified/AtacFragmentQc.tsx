@@ -14,13 +14,16 @@ import {
   type QcValues,
 } from "@/api/atacFragments";
 import type { WatchdogEvent } from "@/api/pipelineRun";
+import { filesWhat, isAbort, uploadInTurn } from "@/api/upload";
 import { Caption } from "@/components/common/Caption";
 import { Help } from "@/components/common/Help";
 import { HoverTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
+import { lockedLabel, UploadTaskProgress } from "@/components/common/UploadProgressCompact";
 import Plot from "@/components/plots/Plot";
 import { useCategoryColors } from "@/hooks/useCategoryColors";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
+import { useUploadTask } from "@/hooks/useUploadTask";
 import {
   histogramFigure,
   lengthByGroupFigure,
@@ -57,14 +60,14 @@ export function AtacFragmentQc({ datasetId }: { datasetId: string }) {
   const refreshDataset = useDatasetRefresh();
   const [status, setStatus] = useState<FragmentStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [upload, setUpload] = useState<{ name: string; fraction: number } | null>(null);
   const [progress, setProgress] = useState<{ fraction: number; message: string } | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [groupBy, setGroupBy] = useState("");
   const [values, setValues] = useState<QcValues | null>(null);
   const [lengths, setLengths] = useState<FragmentLengths | null>(null);
-  const uploadAbort = useRef<AbortController | null>(null);
+  const upload = useUploadTask();
+  const { cancel: cancelUpload } = upload;
   const runAbort = useRef<AbortController | null>(null);
 
   const columns = useMemo(
@@ -95,10 +98,10 @@ export function AtacFragmentQc({ datasetId }: { datasetId: string }) {
     setError(null);
     void refresh();
     return () => {
-      uploadAbort.current?.abort();
+      cancelUpload();
       runAbort.current?.abort();
     };
-  }, [datasetId, refresh]);
+  }, [datasetId, refresh, cancelUpload]);
 
   const qc: FragmentQc | null = status?.qc ?? null;
   const createdAt = qc?.created_at;
@@ -125,19 +128,15 @@ export function AtacFragmentQc({ datasetId }: { datasetId: string }) {
     const files = uploadOrder(Array.from(list ?? []));
     if (!files.length) return;
     setError(null);
-    const ctl = new AbortController();
-    uploadAbort.current = ctl;
     try {
-      for (const file of files) {
-        setUpload({ name: file.name, fraction: 0 });
-        const next = await uploadFragmentFile(datasetId, file, (fraction) => setUpload({ name: file.name, fraction }), ctl.signal);
-        setStatus((cur) => ({ ...cur, ...next }));
-      }
+      await upload.run(filesWhat(files), (opts) =>
+        uploadInTurn(files, opts, (file, one) => uploadFragmentFile(datasetId, file, one), (next) =>
+          setStatus((cur) => ({ ...cur, ...next })),
+        ),
+      );
     } catch (e) {
-      if ((e as Error).name !== "AbortError") setError(errorMessage(e));
+      if (!isAbort(e)) setError(errorMessage(e));
       void refresh();
-    } finally {
-      setUpload(null);
     }
   };
 
@@ -208,7 +207,7 @@ export function AtacFragmentQc({ datasetId }: { datasetId: string }) {
       )}
       {status?.missing && <p className="text-[11px] leading-snug text-amber-700" data-testid="atac-missing">{status.missing}</p>}
       {!status?.attached && (
-        <label className="inline-flex cursor-pointer items-center gap-1 rounded border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50">
+        <label className={`inline-flex items-center gap-1 rounded border border-slate-200 px-2 py-1 text-xs text-slate-600 ${lockedLabel(!!upload.name)}`}>
           <Upload className="h-3 w-3" /> Choose files
           <input
             type="file"
@@ -216,7 +215,7 @@ export function AtacFragmentQc({ datasetId }: { datasetId: string }) {
             accept=".gz,.bgz,.tbi"
             className="sr-only"
             aria-label="Fragments file and index"
-            disabled={!!upload}
+            disabled={!!upload.name}
             onChange={(e) => {
               void onFiles(e.target.files);
               e.target.value = "";
@@ -224,12 +223,7 @@ export function AtacFragmentQc({ datasetId }: { datasetId: string }) {
           />
         </label>
       )}
-      {upload && (
-        <div className="space-y-0.5" role="status">
-          <p className="text-[11px] text-slate-500">Uploading {upload.name}: {Math.round(upload.fraction * 100)}%</p>
-          <div className="h-1 rounded bg-slate-100"><div className="h-1 rounded bg-blue-500" style={{ width: `${upload.fraction * 100}%` }} /></div>
-        </div>
-      )}
+      <UploadTaskProgress task={upload} keptNothing={false} sentText="Sent. Checking the file against this dataset's cells…" />
 
       {status?.attached && (
         <p className="text-[11px] leading-snug text-slate-500" data-testid="atac-attached">
