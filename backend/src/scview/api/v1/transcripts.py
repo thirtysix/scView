@@ -138,6 +138,7 @@ async def upload_transcripts(dataset_id: str, request: Request, name: str = Quer
     finally:
         part.unlink(missing_ok=True)
         _uploading.discard(dataset_id)
+        raw_upload.drop_if_empty(part.parent)  # a cancelled first upload made it
     return await asyncio.to_thread(tr.status, settings.DATA_DIR, dataset_id, n_genes)
 
 

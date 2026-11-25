@@ -1,4 +1,5 @@
-import { apiFetch, readError } from "./client";
+import { apiFetch } from "./client";
+import { filesProgress, isAbort, UploadHttpError, xhrUpload, type UploadOptions } from "./upload";
 import type { CellFilter } from "@/lib/cellFilter";
 import { errorMessage, errorStatus } from "@/lib/errorMessage";
 import { API_BASE } from "@/lib/constants";
@@ -114,6 +115,7 @@ export async function importLabelFile(
     /** By order: the table's sample column to check row by row (default: one the server finds). */
     sampleColumn?: string | null;
   },
+  upload: UploadOptions = {},
 ): Promise<LabelImportReport> {
   const form = new FormData();
   form.append("file", file);
@@ -126,15 +128,17 @@ export async function importLabelFile(
   form.append("strip_suffix", String(opts.stripSuffix));
   form.append("min_match", String(opts.minMatch));
   form.append("dry_run", String(opts.dryRun));
-  let res: Response;
   try {
-    res = await fetch(`${API_BASE}/datasets/${datasetId}/labels/import-file`, { method: "POST", body: form });
+    return await xhrUpload<LabelImportReport>(`${API_BASE}/datasets/${datasetId}/labels/import-file`, form, {
+      what: file.name,
+      signal: upload.signal,
+      onProgress: filesProgress([file], upload.onProgress),
+    });
   } catch (e) {
+    if (isAbort(e)) throw e;
+    if (e instanceof UploadHttpError) {
+      throw new ApiDetailError(errorMessage(new Error(`API error ${e.status}: ${e.text}`)), e.status);
+    }
     throw new ApiDetailError(errorMessage(e), null);
   }
-  if (!res.ok) {
-    const body = await readError(res);
-    throw new ApiDetailError(errorMessage(new Error(`API error ${res.status}: ${body}`)), res.status);
-  }
-  return res.json() as Promise<LabelImportReport>;
 }

@@ -1,5 +1,6 @@
 import { API_BASE } from "@/lib/constants";
 import { readError } from "./client";
+import { filesProgress, filesWhat, xhrUpload, type UploadOptions } from "./upload";
 
 /** Typed Cell Ranger metrics of one sample (core/seq_metrics.py); fractions are 0..1. */
 export interface SeqMetricsValues {
@@ -141,18 +142,22 @@ export async function getSeqMetrics(datasetId: string): Promise<SeqMetricsRespon
 }
 
 /** POST /seq-metrics: attach metrics_summary.csv and/or a raw matrix (to one sample of `column`). */
-export async function attachSeqMetrics(
+export function attachSeqMetrics(
   datasetId: string,
   files: File[],
   target: { sample?: string; column?: string } = {},
+  opts: UploadOptions = {},
 ): Promise<SeqMetricsResponse> {
   const form = new FormData();
   for (const f of files) form.append("files", f);
   if (target.column) form.append("column", target.column);
   if (target.sample) form.append("sample", target.sample);
-  const res = await fetch(`${API_BASE}/datasets/${datasetId}/seq-metrics`, { method: "POST", body: form });
-  if (!res.ok) throw await failure(res);
-  return res.json();
+  // an error answer rejects with its detail sentence, as `failure` gives it for the other calls
+  return xhrUpload(`${API_BASE}/datasets/${datasetId}/seq-metrics`, form, {
+    what: filesWhat(files),
+    signal: opts.signal,
+    onProgress: filesProgress(files, opts.onProgress),
+  });
 }
 
 /** DELETE /seq-metrics?sample=: remove one sample's record; null when none is left. */

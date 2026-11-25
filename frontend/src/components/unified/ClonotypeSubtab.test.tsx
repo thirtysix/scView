@@ -143,7 +143,7 @@ describe("ClonotypeSubtab", () => {
     fireEvent.change(screen.getByLabelText("Sample column"), { target: { value: "donor" } });
     fireEvent.change(screen.getByLabelText("Sample"), { target: { value: "d2" } });
     fireEvent.click(screen.getByRole("button", { name: /Attach/ }));
-    await waitFor(() => expect(api.attachVdj).toHaveBeenCalledWith("d1", file, { sampleColumn: "donor", sample: "d2", replace: false }));
+    await waitFor(() => expect(api.attachVdj).toHaveBeenCalledWith("d1", file, { sampleColumn: "donor", sample: "d2", replace: false }, expect.objectContaining({ signal: expect.any(AbortSignal) })));
     await waitFor(() => expect(refresh).toHaveBeenCalledWith("d1", "clonotype"));
     expect(await screen.findByTestId("vdj-status")).toHaveTextContent("multichain");
   });

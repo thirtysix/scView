@@ -112,7 +112,7 @@ describe("DeconvolutionSubtab", () => {
     await screen.findByTestId("deconv-result");
     expect(api.runDeconvolution).toHaveBeenCalledWith("d1", file, {
       celltype_column: "cell_type", donor_column: "donor", method: "nnls", cells_column: null, cells_value: null,
-    });
+    }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
     expect(screen.getByTestId("bars")).toHaveTextContent("B:40,70|T:60,30");
     expect(screen.getByText(/n = 2 bulk samples; 2 cell types/)).toBeInTheDocument();
     expect(screen.getByText(/These look like TPM/)).toBeInTheDocument();
@@ -143,7 +143,7 @@ describe("DeconvolutionSubtab", () => {
     await screen.findByTestId("deconv-result");
     expect(api.runDeconvolution).toHaveBeenCalledWith("d1", expect.any(File), {
       celltype_column: "cell_type", donor_column: null, method: "auto", cells_column: "stim", cells_value: "CTRL",
-    });
+    }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
     expect(screen.getByText(/1,000 cells, 4 donors in .*with stim = CTRL/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Download reference/ }).getAttribute("href")).toContain(
       "cells_column=stim&cells_value=CTRL");

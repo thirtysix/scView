@@ -789,6 +789,11 @@ def attach(adata, dataset_id: str, data_dir: str | Path, paths: list[Path], stor
         record.update(_totals(tmp))
     except BaseException:
         tmp.unlink(missing_ok=True)
+        shutil.rmtree(workdir, ignore_errors=True)
+        try:
+            store.parent.rmdir()  # a refused first attach leaves no empty store folder; one in use stays
+        except OSError:
+            pass
         raise
     finally:
         shutil.rmtree(workdir, ignore_errors=True)

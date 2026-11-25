@@ -97,6 +97,8 @@ async def upload_outlines(dataset_id: str, request: Request, name: str = Query(m
     finally:
         held.unlink(missing_ok=True)
         _uploading_outlines.discard(key)
+        if not any(k[0] == dataset_id for k in _uploading_outlines):
+            raw_upload.drop_if_empty(folder)  # a cancelled or refused first upload made it
     return {**fit, "outlines": cell_outlines.kinds_of(dm.data_dir, dataset_id)}
 
 

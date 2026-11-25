@@ -1,5 +1,6 @@
 import { API_BASE } from "@/lib/constants";
 import { apiFetch, readError } from "./client";
+import { filesProgress, UploadHttpError, xhrUpload, type UploadOptions } from "./upload";
 
 /** A user-uploaded gene-set collection (backend core/custom_genesets.py). */
 export interface CustomCollection {
@@ -103,11 +104,20 @@ export async function listCustomCollections(datasetId?: string | null): Promise<
 }
 
 /** Upload a .gmt / .csv / .tsv as a named collection. A rejected file throws GeneSetUploadError. */
-export async function uploadCustomCollection(file: File, name: string): Promise<CustomUploadResult> {
+export async function uploadCustomCollection(file: File, name: string, opts: UploadOptions = {}): Promise<CustomUploadResult> {
   const form = new FormData();
   form.append("file", file);
   form.append("name", name);
-  return send<CustomUploadResult>("/genesets/custom/upload", { method: "POST", body: form });
+  try {
+    return await xhrUpload<CustomUploadResult>(`${API_BASE}/genesets/custom/upload`, form, {
+      what: file.name,
+      signal: opts.signal,
+      onProgress: filesProgress([file], opts.onProgress),
+    });
+  } catch (e) {
+    if (e instanceof UploadHttpError) throw parseError(e.status, e.text);
+    throw e;
+  }
 }
 
 /** Save named gene lists as one collection (one set per list). Rejected lists throw GeneSetUploadError. */

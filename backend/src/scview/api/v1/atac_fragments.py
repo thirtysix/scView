@@ -27,7 +27,7 @@ from starlette.requests import ClientDisconnect
 from scview.config import Settings
 from scview.core import atac_fragments as af
 from scview.core import fragment_file as ff
-from scview.core import gene_annotation, genome_build
+from scview.core import gene_annotation, genome_build, raw_upload
 from scview.core.dataset_manager import DatasetManager
 from scview.core.obs_writes import dataset_edit, edit_room, editable, save_edit, uns_snapshot
 from scview.core.run_watchdog import RunControl, RunWatchdog
@@ -126,12 +126,21 @@ async def upload_fragments(dataset_id: str, request: Request, name: str = Query(
     finally:
         part.unlink(missing_ok=True)
         _uploading.discard(key)
+        _drop_empty(settings, dataset_id)
     adata = adaptor.adata
     try:
         await asyncio.to_thread(_verify, settings, dataset_id, adata, name if role == "fragments" else None)
     except af.FragmentsError as e:
+        _drop_empty(settings, dataset_id)  # a refused file is removed
         raise _http(e)
     return await asyncio.to_thread(af.status, settings.DATA_DIR, dataset_id, int(adata.n_obs))
+
+
+def _drop_empty(settings: Settings, dataset_id: str) -> None:
+    """The dataset's store folder, when a stopped or refused upload left it empty and no other
+    upload of the dataset is going (that one may have just made it)."""
+    if not any(k[0] == dataset_id for k in _uploading):
+        raw_upload.drop_if_empty(af.part_path(settings.DATA_DIR, dataset_id, "fragments").parent)
 
 
 async def _stream_to(request: Request, part, role: str, max_bytes: int, max_mb: int) -> None:
