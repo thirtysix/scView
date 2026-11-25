@@ -64,6 +64,9 @@ AMBIENT_SOUP_COPIES = 3
 # slice, its rows, its square and its shifted log) and residual blocks of MV_RESIDUAL_VALUES.
 MV_BYTES_PER_BLOCK_VALUE = 48
 MV_DENSE_COPIES = 6
+# The route's answer (five values per gene as JSON lists) and first-call imports: the server
+# measured +696 MB on Kang where the computation alone took +475 MB.
+MV_ROUTE = 256 * MiB
 
 # Sample pseudobulk QC: per sample sums (dense) and the rows of one cell type when asked.
 PB_DENSE_COPIES = 4
@@ -177,7 +180,7 @@ def mean_variance_need(adata) -> int:
     ns = min(n, normalization.DIAGNOSTIC_MAX_CELLS)
     return int(normalization.MV_BLOCK_VALUES * MV_BYTES_PER_BLOCK_VALUE
                + normalization.MV_RESIDUAL_VALUES * 8 * MV_DENSE_COPIES
-               + g * 8 * 8 + ns * 8 * 4 + FIXED)
+               + g * 8 * 8 + ns * 8 * 4 + MV_ROUTE + FIXED)
 
 
 def pseudobulk_need(adaptor, celltype_column: str | None, celltype: str | None) -> int:

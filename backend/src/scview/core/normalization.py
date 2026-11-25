@@ -197,7 +197,7 @@ def shifted_log(counts, target_sum: float = 1e4):
 
 # Blocks of the mean-variance diagnostic: stored values of the counts read at a time, and
 # cells x genes of the dense residuals built at a time (32 MB as float64).
-MV_BLOCK_VALUES = 8_000_000
+MV_BLOCK_VALUES = 2_000_000  # Kang raw: 475 MB peak at 8M, 164 MB at 2M
 MV_RESIDUAL_VALUES = 4_000_000
 
 
