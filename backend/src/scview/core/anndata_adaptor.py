@@ -15,6 +15,7 @@ from pathlib import Path
 import anndata as ad
 import numpy as np
 import pandas as pd
+import scipy.sparse as sp
 
 from scview.core import (
     category_order, expression_range, haemoglobin, large_layout, large_mode, marker_specificity,
@@ -64,6 +65,11 @@ def _dense_rows(block) -> np.ndarray:
 
 def _looks_like_counts(M) -> bool:
     """Non-negative integers in the first rows: raw counts, not log or scaled values."""
+    from scview.core import sparse_sums
+
+    if sparse_sums.csc_on_disk(M):  # its rows would read all of it: its first columns' values
+        sample = sparse_sums.first_columns(M, 20_000).data
+        return sample.size == 0 or (sample.min() >= 0 and np.allclose(sample, np.round(sample)))
     sample = _dense_rows(M[: min(200, M.shape[0])])
     return sample.size == 0 or (sample.min() >= 0 and np.allclose(sample, np.round(sample)))
 
@@ -119,6 +125,8 @@ def _row_sums(M, masks: list[np.ndarray], chunk: int = 20000):
     """Per-cell totals, detected genes and one sum per gene mask, read in row
     blocks so a backed (on-disk) matrix, which has no .sum, works too, and an
     in-memory one is never copied whole."""
+    if getattr(M, "format", None) == "csc" and not hasattr(M, "row_blocks"):
+        return _csc_row_sums(M, masks)
     tc, ng = [], []
     sums: list[list[np.ndarray]] = [[] for _ in masks]
     # A large dataset's on-disk matrix: blocks of a bounded number of values.
@@ -135,6 +143,59 @@ def _row_sums(M, masks: list[np.ndarray], chunk: int = 20000):
     cat = lambda parts: np.concatenate(parts).astype(np.float64) if parts else np.zeros(0)  # noqa: E731
     total = cat(tc)
     return total, cat(ng), [cat(p) if p else np.zeros_like(total) for p in sums]
+
+
+def stored_values(M) -> int:
+    """Stored values of a sparse matrix in memory or on disk (a backed dataset's group), else
+    every cell x gene."""
+    nnz = getattr(M, "nnz", None)
+    if isinstance(nnz, (int, np.integer)):
+        return int(nnz)
+    group = getattr(M, "group", None)
+    try:
+        return int(group["data"].shape[0])
+    except Exception:  # noqa: BLE001 - not a stored sparse matrix
+        return int(M.shape[0]) * int(M.shape[1])
+
+
+def column_spans(M, budget: int) -> list[tuple[int, int]]:
+    """Column ranges of a CSC matrix (in memory: by its indptr; on disk: evenly) of about
+    ``budget`` stored values each."""
+    g = int(M.shape[1])
+    ptr = getattr(M, "indptr", None)
+    if isinstance(ptr, np.ndarray):
+        spans, start = [], 0
+        while start < g:
+            stop = int(np.searchsorted(ptr, ptr[start] + budget, side="right")) - 1
+            stop = min(max(stop, start + 1), g)
+            spans.append((start, stop))
+            start = stop
+        return spans
+    step = max(1, int(budget // max(1.0, stored_values(M) / max(1, g))))
+    return [(j, min(j + step, g)) for j in range(0, g, step)]
+
+
+def _csc_row_sums(M, masks: list[np.ndarray]):
+    """``_row_sums`` of a CSC matrix, in memory (a converted Seurat file) or on disk: summed by
+    cell over spans of columns of about ``ROW_BLOCK_VALUES`` stored values, never a row block.
+    Row blocks of a CSC each scan every stored value (233-row blocks of a 23,578 x 34,209 deep
+    file took 14 s), and on disk each reads the whole matrix."""
+    n = M.shape[0]
+    tc = np.zeros(n)
+    ng = np.zeros(n)
+    sums = [np.zeros(n) for _ in masks]
+    for j0, j1 in column_spans(M, ROW_BLOCK_VALUES):
+        B = M[:, j0:j1]
+        if not sp.issparse(B):
+            B = sp.csc_matrix(B)
+        idx, data = B.indices, B.data
+        tc += np.bincount(idx, weights=data, minlength=n)
+        ng += np.bincount(idx[data > 0], minlength=n)
+        for out, mask in zip(sums, masks):
+            cols = mask[j0:j1]
+            if cols.any():
+                out += np.asarray(B[:, cols].sum(axis=1), dtype=np.float64).ravel()
+    return tc, ng, sums
 
 
 def _row_stats(M, mt_mask: np.ndarray, chunk: int = 20000):
@@ -567,6 +628,11 @@ class AnnDataAdaptor:
                               self.adata.var_names) if _qc_missing(self.adata.obs) else None
                 self._qc_cells = per_cell_qc(self.adata, ribo=ribo, counts=counts)
             return self._qc_cells
+
+    def qc_cached(self, ribo: bool = False) -> bool:
+        """Whether ``qc_per_cell(ribo)`` answers from its cache (no pass over the counts)."""
+        cells = self._qc_cells
+        return cells is not None and (not ribo or bool(cells["ribo_checked"]))
 
     def qc_distributions(self, n_scatter: int = 5000, n_bins: int = 40) -> dict:
         """Per-cell QC distributions for the Data Assessment tab.

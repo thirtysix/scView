@@ -756,10 +756,14 @@ def looks_like_counts(M) -> bool:
     if M is None:
         return False
     if not sp.issparse(M) and not isinstance(M, np.ndarray) and hasattr(M, "shape"):
-        # An on-disk (backed) matrix, e.g. a file over 2 GB: read the first rows only.
-        # np.asarray of the whole thing failed (sparse) or read every value (dense).
+        # An on-disk (backed) matrix, e.g. a file over 2 GB: read the first rows only (a CSC's
+        # first columns: its rows would read all of it). np.asarray of the whole thing failed
+        # (sparse) or read every value (dense).
         try:
-            M = M[: min(M.shape[0], _COUNTS_ROWS)]
+            from scview.core import sparse_sums
+
+            M = (sparse_sums.first_columns(M, _COUNTS_SAMPLE) if sparse_sums.csc_on_disk(M)
+                 else M[: min(M.shape[0], _COUNTS_ROWS)])
         except Exception:  # noqa: BLE001 - not sliceable: nothing to judge
             return False
     if sp.issparse(M):

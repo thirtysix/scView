@@ -5,6 +5,7 @@ import App from "./App";
 import "./index.css";
 import { initTheme } from "./lib/theme";
 import { initA11y } from "./lib/accessibility";
+import { retryQuery } from "./lib/errorMessage";
 
 initTheme();
 initA11y();
@@ -13,7 +14,7 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       staleTime: 5 * 60 * 1000,
-      retry: 1,
+      retry: retryQuery,
     },
   },
 });

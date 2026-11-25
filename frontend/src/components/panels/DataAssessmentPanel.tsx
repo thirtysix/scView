@@ -14,6 +14,7 @@ import {
 } from "@/api/qc";
 import { channelsText, suggestionText } from "@/lib/doubletChannels";
 import { API_BASE } from "@/lib/constants";
+import { errorMessage } from "@/lib/errorMessage";
 import { QcPlots } from "@/components/panels/QcPlots";
 import { ClusterQcTable } from "@/components/panels/ClusterQcTable";
 import { QcReportCard } from "@/components/panels/QcReportCard";
@@ -844,8 +845,8 @@ export function DataAssessmentPanel() {
       const missing = STEP_ORDER.filter((s) => !stepStatus(data, s.key).done && !SKIP_BY_DEFAULT.has(s.key)).map((s) => s.key);
       setSelectedSteps(new Set(missing));
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Failed to fetch assessment";
-      setError(msg);
+      // The server's sentence (a 507 says how much memory the assessment needs), not "API error".
+      setError(e instanceof Error ? errorMessage(e) : "Failed to fetch assessment");
       setState(null);
     } finally {
       setLoading(false);
@@ -1171,8 +1172,7 @@ export function DataAssessmentPanel() {
       );
       setSuggestions(result);
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Failed to get suggestions";
-      setError(msg);
+      setError(e instanceof Error ? errorMessage(e) : "Failed to get suggestions");
     } finally {
       setSuggesting(false);
     }

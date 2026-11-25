@@ -19,6 +19,7 @@ import { RemovalAudit } from "@/components/qc/RemovalAudit";
 import { MitoModeControl } from "@/components/qc/MitoModeControl";
 import { DoubletFilterControl } from "@/components/qc/DoubletFilterControl";
 import { AtacFilterControl } from "@/components/qc/AtacFilterControl";
+import { errorMessage } from "@/lib/errorMessage";
 
 const DEBOUNCE_MS = 150;
 const ROWS = 6; // per table, more behind "show all"
@@ -258,7 +259,7 @@ export function QcFilterSummary({
           setError(null);
         })
         .catch((e) => {
-          if (id === request.current) setError(String(e?.message ?? e));
+          if (id === request.current) setError(errorMessage(e));
         })
         .finally(() => {
           if (id === request.current) setLoading(false);

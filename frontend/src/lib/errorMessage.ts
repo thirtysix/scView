@@ -25,3 +25,14 @@ export function errorStatus(e: unknown): number | null {
   const m = /^API error (\d+):/.exec(rawText(e));
   return m ? Number(m[1]) : null;
 }
+
+/** Statuses a query never asks again for: 507 is the backend refusing work that does not fit
+ * in its memory, and asking again at once only queues the same refusal (a retry storm on a
+ * page that fires a dozen requests). */
+const NO_RETRY = new Set([507]);
+
+/** React Query's `retry`: once, except for a refusal asking again cannot change. */
+export function retryQuery(failureCount: number, error: unknown): boolean {
+  const status = errorStatus(error);
+  return failureCount < 1 && (status === null || !NO_RETRY.has(status));
+}

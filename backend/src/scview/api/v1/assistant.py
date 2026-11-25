@@ -30,7 +30,7 @@ from scview.core.assistant import (
 )
 from scview.core.guards import enforce_query_limits
 from scview.core.rag.retrieve import retrieve_context
-from scview.core import cluster_evidence, results_store, selection_facts, working_copy
+from scview.core import assessment_memory, cluster_evidence, results_store, selection_facts, working_copy
 from scview.core.assessor import assessment_need
 from scview.core.rag.router import RouteState, classify_intent, mentions_app_ui, wants_methods
 
@@ -184,7 +184,12 @@ async def assistant_insight(
     try:
         # The per-cluster QC check may read the counts matrix: keep it off the loop. The
         # assessment it starts from is held in the memory budget (shared with the page's own).
-        need = assessment_need(adaptor.adata)
+        # Cluster QC on the active clustering too (core/assessment_memory.py), and on a backed
+        # CSC any rows read cost the whole matrix (working_copy.backed_read_bytes).
+        need = assessment_need(adaptor.adata) + await asyncio.to_thread(
+            assessment_memory.cluster_qc_need, adaptor, None)
+        if need:
+            need = max(need, await asyncio.to_thread(working_copy.backed_read_bytes, adaptor))
         async with working_copy.reading(dm, dataset_id, need, "Assessing this dataset") as read:
             return await read.run(build_insight, adaptor)
     except Exception as exc:  # pragma: no cover - defensive

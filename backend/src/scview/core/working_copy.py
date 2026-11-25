@@ -59,6 +59,20 @@ def copy_bytes(adaptor) -> int:
     return preflight.backed_bytes(h)
 
 
+# What a request reading a backed dataset holds at least: its matrix read in spans of about
+# ROW_BLOCK_VALUES stored values, each span's arrays as h5py reads them. Deep 23,578 x 34,209
+# file opened backed (CSC): the sex check +280 MB, QC report +284, ambient +223, pseudobulk
+# +255, mean-variance +490 (its own estimate is higher).
+BACKED_READ_BYTES = 384 * 1024**2
+
+
+def backed_read_bytes(adaptor) -> int:
+    """The least a request that reads a backed dataset's matrix holds (``BACKED_READ_BYTES``);
+    0 for a dataset in memory. Rows of a backed CSC are never read (anndata would read all of
+    it: 250 rows of the deep file, +1.58 GB): ``sparse_sums.csc_on_disk`` callers read columns."""
+    return BACKED_READ_BYTES if adaptor is not None and _backed(adaptor) else 0
+
+
 async def make_room(dm, dataset_id: str, adaptor, then: int = 0) -> bool:
     """Before work on ``adaptor``'s dataset that needs it in memory: room for reading a
     backed dataset in, and ``then`` bytes the work needs beyond the in-memory copy (a
@@ -205,13 +219,16 @@ def hold(dm, dataset_id: str, need: int, what: str):
 
 
 @asynccontextmanager
-async def reading(dm, dataset_id: str, need: int, what: str, also: tuple[str, ...] | list[str] = ()):
+async def reading(dm, dataset_id: str, need: int, what: str, also: tuple[str, ...] | list[str] = (),
+                  wait: float = 0):
     """Hold room for a read of ``need`` bytes (0: nothing to read, nothing is checked) until
     the block and the threads it started with ``held.run`` have ended, however they end.
     ``DatasetManager.reserve`` first: other open datasets closed, least recently used (never
     ``dataset_id`` or ``also``, the datasets read), and ``DatasetMemoryError`` (a 507) with
     ``what`` as the sentence's subject when it cannot fit. The datasets read are pinned
-    (``_pin``) for as long, whatever ``need``: their backed files stay open under the read."""
+    (``_pin``) for as long, whatever ``need``: their backed files stay open under the read.
+    ``wait``: seconds it may also wait while only other requests' reads keep it out
+    (``DatasetManager.reserve``'s ``read_wait``), queued behind them instead of refused."""
     held = HeldRead()
     ids = (dataset_id, *also)
     release = unpin = _pin(dm, ids)
@@ -219,7 +236,7 @@ async def reading(dm, dataset_id: str, need: int, what: str, also: tuple[str, ..
         try:
             guard = dm.hold_read(ids, 0)  # not dropped to make the room
             try:
-                await dm.reserve(dataset_id, need, what=what, strict=True)
+                await dm.reserve(dataset_id, need, what=what, strict=True, read_wait=wait)
                 hold = dm.hold_read(ids, need, what)
             finally:
                 guard()

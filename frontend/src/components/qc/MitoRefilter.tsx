@@ -221,7 +221,7 @@ export function MitoRefilter({
     setDone(null);
     getMitoRefilter(datasetId, column, withFloor)
       .then(setPreview)
-      .catch((e) => setError(String(e?.message ?? e)))
+      .catch((e) => setError(errorMessage(e)))
       .finally(() => setLoading(false));
   };
 

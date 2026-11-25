@@ -37,10 +37,9 @@ import re
 
 import numpy as np
 import pandas as pd
-import scipy.sparse as sp
 from scipy import stats
 
-from scview.core import cluster_qc, qc_groups
+from scview.core import cluster_qc, qc_groups, sparse_sums
 from scview.core.confounding import condition_columns
 from scview.core.pseudobulk import MIN_GENE_COUNT, PseudobulkError, raw_counts
 
@@ -93,15 +92,13 @@ def auto_split(obs: pd.DataFrame, sample: str) -> str | None:
 
 
 def _genes_per_cell(M) -> np.ndarray:
-    if sp.issparse(M):
-        return np.asarray((M > 0).sum(axis=1), dtype=np.float64).ravel()
-    return (np.asarray(M) > 0).sum(axis=1).astype(np.float64)
+    # In bounded blocks: ``(M > 0)`` copied every stored value (+0.7 GB on a deep file).
+    return sparse_sums.detected_per_row(M)
 
 
 def _sum_rows(M, codes: np.ndarray, k: int) -> np.ndarray:
-    S = sp.csr_matrix((np.ones(codes.size), (codes, np.arange(codes.size))), shape=(k, codes.size))
-    out = S @ (M if sp.issparse(M) else np.asarray(M))
-    return np.asarray(out.toarray() if sp.issparse(out) else out, dtype=np.float64)
+    # No CSR copy of a CSC matrix (a converted Seurat file: +1.6 GB on a deep one).
+    return sparse_sums.group_sums(M, codes, k)
 
 
 def _unit_covariates(obs: pd.DataFrame, rows: np.ndarray, codes: np.ndarray, k: int,

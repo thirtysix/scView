@@ -205,8 +205,11 @@ def _scan(M, f_idx: list[int], m_idx: list[int], totals: bool, by_rows: bool):
     """(F, Y, totals or None): the female and male genes' columns and the cells' totals.
     ``by_rows``: ``M`` is on disk (a backed dataset's ``_CSRDataset``, h5py), read in
     blocks of cells, as it is stored, instead of whole (it has no ``sum``)."""
-    if not by_rows:
-        return _columns(M, f_idx), _columns(M, m_idx), (_totals(M) if totals else None)
+    from scview.core import sparse_sums
+
+    if not by_rows or sparse_sums.csc_on_disk(M):  # a CSC on disk: its columns, never its rows
+        tot = sparse_sums.row_totals(M) if totals else None
+        return _columns(M, f_idx), _columns(M, m_idx), tot
     F, Y, T = [], [], []
     for i0 in range(0, M.shape[0], ROW_BLOCK):
         block = M[i0:min(i0 + ROW_BLOCK, M.shape[0])]
