@@ -14,7 +14,7 @@ import { Caption } from "@/components/common/Caption";
 import { Help } from "@/components/common/Help";
 import { HoverTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
-import { UploadTaskProgress } from "@/components/common/UploadProgressCompact";
+import { lockedLabel, UploadTaskProgress } from "@/components/common/UploadProgressCompact";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
 import { useUploadTask } from "@/hooks/useUploadTask";
 import { errorMessage } from "@/lib/errorMessage";
@@ -190,7 +190,7 @@ export function TranscriptsSubtab() {
               0.7 GB for a 300-gene run). It is indexed here by gene and place, which needs about half its size on disk and takes
               under a minute.
             </p>
-            <label className="inline-flex cursor-pointer items-center gap-1 rounded border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50">
+            <label className={`inline-flex items-center gap-1 rounded border border-slate-200 px-2 py-1 text-xs text-slate-600 ${lockedLabel(uploading)}`}>
               <Upload className="h-3 w-3" /> Choose transcripts.parquet
               <input
                 type="file"
@@ -359,7 +359,7 @@ export function TranscriptsSubtab() {
             the folder brings them along.
           </p>
           {spatial.outlines_note && <p className="text-[11px] leading-snug text-amber-700">{spatial.outlines_note}</p>}
-          <label className="inline-flex cursor-pointer items-center gap-1 rounded border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50">
+          <label className={`inline-flex items-center gap-1 rounded border border-slate-200 px-2 py-1 text-xs text-slate-600 ${lockedLabel(uploading)}`}>
             <Upload className="h-3 w-3" /> Choose boundaries files
             <input
               type="file"

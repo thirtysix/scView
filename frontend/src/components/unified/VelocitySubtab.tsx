@@ -22,6 +22,7 @@ import Plot from "@/components/plots/Plot";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
 import { useEmbedding } from "@/hooks/useEmbedding";
 import { useUploadTask } from "@/hooks/useUploadTask";
+import { lockedLabel } from "@/components/common/UploadProgressCompact";
 import { mapCategoryToColor } from "@/lib/colors";
 import { errorMessage } from "@/lib/errorMessage";
 import { aboutGb } from "@/lib/labelTransfer";
@@ -345,7 +346,7 @@ export function VelocitySubtab() {
       )}
 
       <div className="flex flex-wrap items-center gap-2">
-        <label className="cursor-pointer rounded-md border border-slate-300 bg-white px-2 py-1 hover:bg-slate-50">
+        <label className={`rounded-md border border-slate-300 bg-white px-2 py-1 ${lockedLabel(attaching || running)}`}>
           <Help id="velocity.attach">
             {status.attached ? "Attach other counts" : "Attach files"} (.loom, .h5ad; one per sample)
           </Help>
@@ -362,7 +363,7 @@ export function VelocitySubtab() {
             }}
           />
         </label>
-        <label className="cursor-pointer rounded-md border border-slate-300 bg-white px-2 py-1 hover:bg-slate-50">
+        <label className={`rounded-md border border-slate-300 bg-white px-2 py-1 ${lockedLabel(attaching || running)}`}>
           <Help id="velocity.attach">STARsolo files</Help>
           <input
             type="file"

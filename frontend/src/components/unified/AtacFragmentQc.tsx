@@ -19,7 +19,7 @@ import { Caption } from "@/components/common/Caption";
 import { Help } from "@/components/common/Help";
 import { HoverTip } from "@/components/common/InfoTip";
 import { RequestError } from "@/components/common/RequestError";
-import { UploadTaskProgress } from "@/components/common/UploadProgressCompact";
+import { lockedLabel, UploadTaskProgress } from "@/components/common/UploadProgressCompact";
 import Plot from "@/components/plots/Plot";
 import { useCategoryColors } from "@/hooks/useCategoryColors";
 import { useDatasetRefresh } from "@/hooks/useDatasetRefresh";
@@ -207,7 +207,7 @@ export function AtacFragmentQc({ datasetId }: { datasetId: string }) {
       )}
       {status?.missing && <p className="text-[11px] leading-snug text-amber-700" data-testid="atac-missing">{status.missing}</p>}
       {!status?.attached && (
-        <label className="inline-flex cursor-pointer items-center gap-1 rounded border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50">
+        <label className={`inline-flex items-center gap-1 rounded border border-slate-200 px-2 py-1 text-xs text-slate-600 ${lockedLabel(!!upload.name)}`}>
           <Upload className="h-3 w-3" /> Choose files
           <input
             type="file"

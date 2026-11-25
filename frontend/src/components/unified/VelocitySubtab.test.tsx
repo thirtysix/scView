@@ -172,12 +172,14 @@ describe("VelocitySubtab", () => {
     const bar = await screen.findByRole("progressbar", { name: "Upload of 2 files" }, { timeout: 2000 });
     expect(bar).toHaveAttribute("aria-valuenow", "25");
     expect(input.disabled).toBe(true);
+    expect(input.closest("label")!.className).toContain("opacity-50");
     expect((screen.getByLabelText("STARsolo Velocyto/filtered files") as HTMLInputElement).disabled).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(opts.signal?.aborted).toBe(true);
     expect(await screen.findByTestId("upload-cancelled")).toHaveTextContent("Upload of 2 files cancelled. Nothing was kept.");
     expect(screen.queryByRole("alert")).toBeNull();
     expect(input.disabled).toBe(false);
+    expect(input.closest("label")!.className).not.toContain("opacity-50");
   });
 
   it("shows the direction check and runs again with the same order, on the plot on screen", async () => {

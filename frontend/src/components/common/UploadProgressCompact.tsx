@@ -5,6 +5,11 @@ import { Help } from "@/components/common/Help";
 import type { UploadTask } from "@/hooks/useUploadTask";
 import { formatRate, formatTimeLeft, percentSent, sentOfTotal, type UploadProgress } from "@/lib/uploadProgress";
 
+/** Classes for a file chooser's label: greyed and not clickable while an upload runs. */
+export function lockedLabel(locked: boolean): string {
+  return locked ? "cursor-not-allowed opacity-50" : "cursor-pointer hover:bg-slate-50";
+}
+
 /** Shown only once an upload has run this long: a sub-second upload flashes nothing. */
 export const SHOW_AFTER_MS = 500;
 
