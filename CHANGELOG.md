@@ -33,6 +33,9 @@ convert, and every side-file upload shows its progress and can be cancelled.
   instead of failing ("Mixing dicts with non-Series"); each such column is kept as a plain column or left out with
   a note in the conversion report. Missing integers and TRUE/FALSE values are no longer written as -2147483648 or
   FALSE.
+- Marker genes computed on a dataset kept on disk now hold the memory for reading it in as well: opening a deep
+  1.6 GB file right after its upload could take a 3 GB backend down while Data Assessment ran beside it; the
+  markers are now refused with a sentence instead.
 - Attaching an ATAC `per_barcode_metrics.csv` always failed (422).
 - Cancelled or refused uploads no longer leave an empty folder behind.
 
