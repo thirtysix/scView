@@ -15,6 +15,7 @@ from pathlib import Path
 import anndata as ad
 import numpy as np
 import pandas as pd
+import scipy.sparse as sp
 
 from scview.core import (
     category_order, expression_range, haemoglobin, large_layout, large_mode, marker_specificity,
@@ -119,6 +120,8 @@ def _row_sums(M, masks: list[np.ndarray], chunk: int = 20000):
     """Per-cell totals, detected genes and one sum per gene mask, read in row
     blocks so a backed (on-disk) matrix, which has no .sum, works too, and an
     in-memory one is never copied whole."""
+    if sp.issparse(M) and M.format == "csc":
+        return _csc_row_sums(M, masks)
     tc, ng = [], []
     sums: list[list[np.ndarray]] = [[] for _ in masks]
     # A large dataset's on-disk matrix: blocks of a bounded number of values.
@@ -135,6 +138,29 @@ def _row_sums(M, masks: list[np.ndarray], chunk: int = 20000):
     cat = lambda parts: np.concatenate(parts).astype(np.float64) if parts else np.zeros(0)  # noqa: E731
     total = cat(tc)
     return total, cat(ng), [cat(p) if p else np.zeros_like(total) for p in sums]
+
+
+def _csc_row_sums(M, masks: list[np.ndarray]):
+    """``_row_sums`` of an in-memory CSC matrix (a converted Seurat file): summed by cell over
+    spans of columns of about ``ROW_BLOCK_VALUES`` stored values, never a row block. Row blocks
+    of a CSC each scan every stored value (233-row blocks of a 23,578 x 34,209 deep file took
+    14 s); this is one pass, holding one span's indices at a time."""
+    n = M.shape[0]
+    tc = np.zeros(n)
+    ng = np.zeros(n)
+    indptr = M.indptr
+    start = 0
+    while start < M.shape[1]:
+        stop = int(np.searchsorted(indptr, indptr[start] + ROW_BLOCK_VALUES, side="right")) - 1
+        stop = min(max(stop, start + 1), M.shape[1])
+        a, b = int(indptr[start]), int(indptr[stop])
+        idx, data = M.indices[a:b], M.data[a:b]
+        tc += np.bincount(idx, weights=data, minlength=n)
+        ng += np.bincount(idx[data > 0], minlength=n)
+        start = stop
+    sums = [np.asarray(M[:, mask].sum(axis=1)).ravel().astype(np.float64) if mask.any()
+            else np.zeros(n) for mask in masks]
+    return tc, ng, sums
 
 
 def _row_stats(M, mt_mask: np.ndarray, chunk: int = 20000):
@@ -567,6 +593,11 @@ class AnnDataAdaptor:
                               self.adata.var_names) if _qc_missing(self.adata.obs) else None
                 self._qc_cells = per_cell_qc(self.adata, ribo=ribo, counts=counts)
             return self._qc_cells
+
+    def qc_cached(self, ribo: bool = False) -> bool:
+        """Whether ``qc_per_cell(ribo)`` answers from its cache (no pass over the counts)."""
+        cells = self._qc_cells
+        return cells is not None and (not ribo or bool(cells["ribo_checked"]))
 
     def qc_distributions(self, n_scatter: int = 5000, n_bins: int = 40) -> dict:
         """Per-cell QC distributions for the Data Assessment tab.

@@ -11,15 +11,56 @@ turn, without blocking the event loop or another dataset's work. A request ident
 already running or waiting (same endpoint, arguments and loaded dataset) does not run again:
 it waits for that one and gets its result, so a second page costs nothing more. The work runs
 in its own task, so a client that goes away does not cancel it for the others.
+
+Each computation is also held in the memory budget (``Budget``): once it has a lane, its
+estimated peak (worked out then, so a cache an earlier request filled counts as nothing to
+read) is reserved with ``working_copy.reading`` until it ends. Requests that share it share
+the one reservation; requests the page fires together each count the others' reservations,
+and one that fits only once those end waits for them (``QUEUE_SECONDS``) rather than being
+refused. One that cannot fit even with the other datasets closed is a 507 naming it, and the
+page's other cards still load. A 3 GB backend holding a deep 1.6 GB file (23,578 x 34,209)
+was killed within 3 s of opening Data Assessment before this.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable, Hashable
+from dataclasses import dataclass
 from typing import Any
 
+logger = logging.getLogger(__name__)
+
 MAX_AT_ONCE = 2  # heavy computations per dataset at a time
+# How long a computation waits for room that other requests' reads hold, past the dataset
+# manager's own few seconds: under nginx's 300 s read timeout with the lane wait before it.
+QUEUE_SECONDS = 120.0
+
+
+@dataclass
+class Budget:
+    """How a computation is held in the memory budget: ``need()`` its estimated peak in bytes
+    (called in a worker thread once it has a lane; 0: nothing held), ``what`` the subject of a
+    refusal ("Cluster QC"), ``dm`` the dataset manager."""
+
+    dm: Any
+    need: Callable[[], int]
+    what: str
+
+
+async def _held(dataset_id: str, budget: Budget | None, fn: Callable[..., Any], *args: Any) -> Any:
+    """``fn(*args)`` in a worker thread, inside ``budget``'s reservation when there is one."""
+    if budget is None:
+        return await asyncio.to_thread(fn, *args)
+    from scview.core import working_copy
+
+    need = max(0, int(await asyncio.to_thread(budget.need)))
+    if need:
+        logger.info("%s (%s): holding %.2f GB while it runs", budget.what, dataset_id, need / 1024**3)
+    what = working_copy.subject(budget.dm, dataset_id, need, budget.what)
+    async with working_copy.reading(budget.dm, dataset_id, need, what, wait=QUEUE_SECONDS) as held:
+        return await held.run(fn, *args)
 
 
 class _Gate:
@@ -37,11 +78,14 @@ def _retrieve(task: asyncio.Task) -> None:
         task.exception()  # read, so an error nobody awaited any more is not logged as lost
 
 
-async def run(dataset_id: str, key: Hashable, fn: Callable[..., Any], *args: Any, lane: bool = True) -> Any:
+async def run(dataset_id: str, key: Hashable, fn: Callable[..., Any], *args: Any, lane: bool = True,
+              budget: Budget | None = None) -> Any:
     """``fn(*args)`` in a worker thread, at most ``MAX_AT_ONCE`` per dataset at a time; a call
     with the same ``key`` while one is in flight gets that one's result (or its error).
     ``lane`` False: shared the same way, but not queued behind the lanes (the assessment
-    itself, which the page's checklist waits for: 16 s behind cluster QC and the QC report)."""
+    itself, which the page's checklist waits for: 16 s behind cluster QC and the QC report).
+    ``budget``: held in the memory budget while it runs (see the module); a
+    ``DatasetMemoryError`` (507) reaches every caller sharing it."""
     loop = asyncio.get_running_loop()
     gid = (id(loop), dataset_id)
     gate = _gates.get(gid)
@@ -51,9 +95,9 @@ async def run(dataset_id: str, key: Hashable, fn: Callable[..., Any], *args: Any
     if task is None:
         async def work() -> Any:
             if not lane:
-                return await asyncio.to_thread(fn, *args)
+                return await _held(dataset_id, budget, fn, *args)
             async with gate.lanes:
-                return await asyncio.to_thread(fn, *args)
+                return await _held(dataset_id, budget, fn, *args)
 
         task = loop.create_task(work())
         gate.inflight[key] = task

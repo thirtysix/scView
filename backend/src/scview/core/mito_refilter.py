@@ -108,6 +108,14 @@ def _looks_like_counts(M) -> bool:
     return looks_like_counts(M)
 
 
+def holds_log(adata) -> bool:
+    """Whether ``_lognorm`` finds log values (``.raw`` or X) rather than working them out."""
+    if adata.raw is not None and not _looks_like_counts(adata.raw.X):
+        return True
+    X = adata.X
+    return not _looks_like_counts(X) and float(X.min()) >= 0
+
+
 def _lognorm(adata) -> tuple[Any, pd.Index]:
     """The kept cells' log-normalised expression and its genes: ``.raw`` after
     scaling, else X when it holds log values, else worked out from the counts."""
@@ -252,6 +260,16 @@ def read_cells(path: str, names: list[str]) -> tuple[sp.csr_matrix, pd.Index, pd
 
 # Removed cells' labels per (dataset, file, mtime, column): placed once, then served.
 _assigned_cache: dict[tuple, tuple[list[str], np.ndarray]] = {}
+
+
+def assigned_cached(dataset_id: str, adaptor) -> bool:
+    """Whether ``assigned_removed`` has placed this dataset's removed cells (for its file as
+    it is now): its memory estimate is then 0."""
+    try:
+        here = (dataset_id, adaptor.h5ad_path, Path(adaptor.h5ad_path).stat().st_mtime_ns)
+    except (OSError, TypeError):
+        return False
+    return any(k[:3] == here for k in _assigned_cache)
 
 
 def assigned_removed(dm, dataset_id: str, adaptor, column: str) -> tuple[list[str], np.ndarray] | None:

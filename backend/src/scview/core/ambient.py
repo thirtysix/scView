@@ -73,6 +73,7 @@ import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 
+from scview.core import sparse_sums
 from scview.core.object_cache import ObjectCache
 
 logger = logging.getLogger(__name__)
@@ -611,7 +612,8 @@ def samples(adata, counts=None) -> tuple[list[Sample], list[str]]:
     from scview.core import doublets
 
     ch = doublets.channels(adata)
-    sums = np.asarray((_onehot(ch.codes, len(ch.names)) @ sp.csr_matrix(counts)).todense())
+    # Per channel without a CSR copy of the counts (sparse_sums: +1.5 GB on a deep CSC file).
+    sums = sparse_sums.group_sums(counts, ch.codes, len(ch.names))
     for i, label in enumerate(ch.names):
         rows = np.flatnonzero(ch.codes == i)
         if rows.size == 0:
@@ -678,7 +680,7 @@ def fit_samples(adata, column: str | None, counts=None, codes=None) -> tuple[lis
     if codes is None:
         cc = cluster_codes(adata, column)
         codes = None if cc is None else cc[0]
-    X = sp.csr_matrix(counts)
+    X = None  # rows by sample: a CSR copy, made only when a sample has a soup to fit
     for s in found:
         if s.source != "empty_droplets":
             continue
@@ -688,6 +690,8 @@ def fit_samples(adata, column: str | None, counts=None, codes=None) -> tuple[lis
                                          "cluster expresses and the others don't. Run clustering "
                                          "(the correction step clusters the cells itself)."])
             continue
+        if X is None:
+            X = sp.csr_matrix(counts)
         fits[s.name] = estimate_rho(_take_rows(X, s.rows), codes[s.rows], s.frac, adata.var_names)
     return found, fits, notes
 
@@ -727,9 +731,10 @@ def marker_flags(adata, column: str, found: list[Sample], fits: dict[str, RhoFit
     if not wanted:
         return out, approximate
     k = len(labels)
-    X = sp.csr_matrix(counts)
-    cols = X[:, wanted].toarray()  # cells x wanted
-    n_umi = np.asarray(X.sum(axis=1)).ravel()
+    # The wanted columns and each cell's total, read from counts as they are (no CSR copy).
+    cols = counts[:, wanted]
+    cols = cols.toarray() if sp.issparse(cols) else np.asarray(cols)  # cells x wanted
+    n_umi = np.asarray(counts.sum(axis=1)).ravel()
     obs_in = np.zeros((k, len(wanted)))
     obs_all = np.zeros(len(wanted))
     exp_out = np.zeros((k, len(wanted)))
@@ -896,6 +901,11 @@ def _cache_key(adata, column: str | None) -> tuple:
 # QC report and the co-pilot's insight at once, and each first call made its own (the
 # 39k-nuclei kidney file went past 6 GB that way). Later callers wait and read the cache.
 _DIAGNOSE_LOCK = threading.Lock()
+
+
+def is_cached(adata, column: str | None = None) -> bool:
+    """Whether ``diagnose_cached`` would answer from memory (its memory estimate is then 0)."""
+    return _CACHE.get(adata, _cache_key(adata, column)) is not None
 
 
 def diagnose_cached(adata, column: str | None = None) -> dict:

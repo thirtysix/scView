@@ -8,16 +8,15 @@ what the data shows.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 
 import numpy as np
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException
 
-from scview.core import normalization
+from scview.core import assessment_gate, assessment_memory, normalization
 from scview.core.assessor import recorded_normalization_method
-from scview.core.dataset_manager import DatasetManager
+from scview.core.dataset_manager import DatasetManager, DatasetMemoryError
 from scview.core.object_cache import ObjectCache
 from scview.dependencies import get_dataset_manager
 
@@ -77,8 +76,13 @@ async def get_mean_variance(
     if cached is not None:
         return cached
     try:
-        # Residuals of every gene, a block at a time: seconds on 14k cells.
-        payload = await asyncio.to_thread(mean_variance_payload, adata)
+        # Residuals of every gene, a block at a time: seconds on 14k cells. In the memory budget.
+        payload = await assessment_gate.run(
+            dataset_id, ("mean-variance", id(adata)), mean_variance_payload, adata,
+            budget=assessment_gate.Budget(dm, lambda: assessment_memory.mean_variance_need(adata),
+                                          "The mean-variance plot"))
+    except DatasetMemoryError:
+        raise  # a 507 (main.py), not a 500
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:

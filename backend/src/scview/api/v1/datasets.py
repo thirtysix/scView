@@ -15,9 +15,9 @@ from pydantic import BaseModel
 from scview.api.v1.export import file_stem
 from scview.config import Settings
 from scview.dependencies import get_settings_dep, get_dataset_manager
-from scview.core import cell_outlines, conversion, crispr, hashing, provenance, replay_script, run_manifest, spatial, transcripts, xenium
+from scview.core import assessment_gate, assessment_memory, cell_outlines, conversion, crispr, hashing, provenance, replay_script, run_manifest, spatial, transcripts, xenium
 from scview.core.atac_import import dataset_state as atac_state
-from scview.core.dataset_manager import DatasetManager
+from scview.core.dataset_manager import DatasetManager, DatasetMemoryError
 from scview.core.obs_writes import is_locked
 from scview.models.enums import DatasetStatus
 from scview.models.schemas import DatasetUploadResponse
@@ -399,8 +399,14 @@ async def get_qc_distributions(
     if adaptor is None:
         raise HTTPException(status_code=404, detail="Dataset not found.")
     try:
-        # May need a pass over the counts (and the MALAT1 % extra): off the loop.
-        return await asyncio.to_thread(adaptor.qc_distributions)
+        # May need a pass over the counts (and the MALAT1 % extra): off the loop, held in the
+        # memory budget beside the page's other requests (a 507 when it cannot fit).
+        return await assessment_gate.run(
+            dataset_id, ("qc", id(adaptor.adata)), adaptor.qc_distributions,
+            budget=assessment_gate.Budget(dm, lambda: assessment_memory.per_cell_need(adaptor, ribo=True),
+                                          "QC metrics"))
+    except DatasetMemoryError:
+        raise
     except Exception as e:  # noqa: BLE001 — surface a clean 500 rather than a stack trace
         raise HTTPException(status_code=500, detail=f"Could not compute QC metrics: {e}")
 
