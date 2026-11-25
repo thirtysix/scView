@@ -4,6 +4,38 @@ All notable changes to scView are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+The Data Assessment page opens on deep files in a small backend, Seurat objects with unusual cell metadata
+convert, and every side-file upload shows its progress and can be cancelled.
+
+### Added
+- Every side-file upload (velocity, sequencing metrics and raw matrix, V(D)J, ATAC fragments and metrics,
+  transcripts, deconvolution reference, label file, gene sets) shows a progress card with percent, MB sent, speed,
+  time left and Cancel; the chooser is locked while it runs, and a cancelled upload leaves nothing on the server.
+
+### Changed
+- Data Assessment holds each heavy card's memory in the budget, waits up to 2 minutes for room, and otherwise
+  says which card did not fit: a deep 1.6 GB file now opens every card in a 3 GB backend (peak 2.25 GB; 0.83.0 was
+  killed for memory within seconds). Ambient RNA, cluster QC, pseudobulk QC and mean-variance no longer copy the
+  counts (peaks 1,492 to 4 MB, 1,508 to 216 MB, 1,616 to 101 MB, and 5,090 MB in 86 s to 216 MB in 15 s).
+- Datasets kept on disk with column-stored counts are read by columns on the Data Assessment page (page peak
+  854 MB in a 1.8 GB backend).
+- The memory an .rds needs once converted is estimated from the counts as stored in the file (the largest assay's,
+  so a small antibody or hashtag assay no longer stands for the RNA), not 3 times the file size: within 13% on test
+  objects and never under (before: 34% under to 4 times over).
+- PCA diagnostics say the elbow is where variance stops falling fast, not a PC count to cluster on: on 8 test
+  datasets, clustering on the PCs up to the elbow lost 0.13 to 0.26 ARI on 3, while the default 50 PCs came
+  within 0.03 ARI of the best count tested on 6.
+
+### Fixed
+- Seurat .rds files whose cell metadata holds a list column, dates, a nested table or a matrix column now convert
+  instead of failing ("Mixing dicts with non-Series"); each such column is kept as a plain column or left out with
+  a note in the conversion report. Missing integers and TRUE/FALSE values are no longer written as -2147483648 or
+  FALSE.
+- Attaching an ATAC `per_barcode_metrics.csv` always failed (422).
+- Cancelled or refused uploads no longer leave an empty folder behind.
+
 ## [0.83.0] - 2026-11-25
 
 Uploads show how far they have got and can be cancelled, and Seurat conversion needs less memory and estimates it
