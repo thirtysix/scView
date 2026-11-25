@@ -177,12 +177,12 @@ def _ser(tmp_path, data: bytes, name="obj.rds"):
     return conversion_preflight.serialized_size(p)
 
 
-def test_a_v4_objects_counts_are_its_first_matrix(tmp_path):
+def test_a_v4_objects_counts_are_its_assays_first_matrix(tmp_path):
     """Seurat v3 / v4: counts, then data, then scale.data; the class name ends each."""
     data = _stream(3 * MiB, DGC, 3 * MiB, DGC, 5 * MiB, 100, ASSAY, 1000)
     s = _ser(tmp_path, data)
     assert (s.seurat_assay, s.exact) == ("Assay", True)
-    assert s.first_matrix_bytes == 3 * MiB + 2
+    assert s.assay_counts_bytes == 3 * MiB + 2
     assert conversion_preflight.counts_bytes(s) == 3 * MiB + 2
 
 
@@ -190,7 +190,20 @@ def test_an_empty_counts_matrix_is_passed_over(tmp_path):
     """An assay made from data alone: an empty counts matrix, then the data (X)."""
     data = _stream(200, DGC, 2 * MiB, DGC, ASSAY)
     s = _ser(tmp_path, data)
-    assert s.first_matrix_bytes == 2 * MiB
+    assert s.assay_counts_bytes == 2 * MiB
+
+
+def test_a_small_first_assay_never_stands_for_the_counts(tmp_path):
+    """An antibody assay stored before RNA: the largest assay's counts are X's, not the
+    first matrix in the stream. Matrices after the last assay (graphs) are not counts."""
+    adt = _stream(2 * MiB, DGC, 2 * MiB, DGC, 300, ASSAY)
+    rna = bytes(100) + bytes(9 * MiB) + DGC + bytes(9 * MiB) + DGC + bytes(4 * MiB) + ASSAY
+    graphs = bytes(30 * MiB) + DGC
+    s = _ser(tmp_path, adt + rna + graphs)
+    assert s.assay_counts_bytes == 9 * MiB + 100
+    assert conversion_preflight.counts_bytes(s) == 9 * MiB + 100
+    small_second = _ser(tmp_path, rna.replace(bytes(100), b"X\n", 1) + adt[2:], "b.rds")
+    assert small_second.assay_counts_bytes == 9 * MiB + 2
 
 
 def test_a_v5_object_counts_as_all_counts(tmp_path):
@@ -219,7 +232,7 @@ def test_a_class_name_split_between_two_pieces_is_found():
         m = conversion_preflight._Markers()
         m.feed(piece[:cut])
         m.feed(piece[cut:])
-        assert m.result() == {"seurat_assay": "Assay", "first_matrix_bytes": 2 * MiB}
+        assert m.result() == {"seurat_assay": "Assay", "assay_counts_bytes": 2 * MiB}
 
 
 # ---------------------------------------------------------------------------

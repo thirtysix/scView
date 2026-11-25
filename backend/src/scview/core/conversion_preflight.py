@@ -75,9 +75,9 @@ class Serialized:
     compression: str  # gzip | bzip2 | xz | none
     # Seurat assays seen in the stream: "Assay5" (Seurat v5) or "Assay" (v3 / v4); "" none
     seurat_assay: str = ""
-    # Bytes of the first sparse matrix (dgCMatrix) over 1 MiB, from the end of the one
-    # before it (or the start); None when none was seen. See ``counts_bytes``.
-    first_matrix_bytes: int | None = None
+    # The largest assay counts seen: in each v3 / v4 assay its first sparse matrix
+    # (dgCMatrix) over 1 MiB, in bytes; None when none was seen. See ``counts_bytes``.
+    assay_counts_bytes: int | None = None
 
 
 # R's own serialization starts with these (format, then a newline); an RData file with RDX.
@@ -97,8 +97,8 @@ def _decompressor(head: bytes):
 
 
 # Class names as R's XDR serialization writes them (a CHARSXP: its length, then the
-# bytes): an S4 object's class attribute comes after its slots, so a dgCMatrix's name
-# marks the end of that matrix.
+# bytes). An S4 object's class attribute comes after its slots: a dgCMatrix's name marks
+# the end of that matrix, an Assay's the end of that assay (counts, data, scale.data, ...).
 _ASSAY5 = b"\x00\x00\x00\x06Assay5"
 _ASSAY = b"\x00\x00\x00\x05Assay"
 _DGC = b"\x00\x00\x00\x09dgCMatrix"
@@ -109,36 +109,49 @@ MIN_MATRIX_BYTES = 1024 * 1024
 
 class _Markers:
     """Finds the class names above in the decompressed stream, piece by piece (a name
-    split between two pieces is found too)."""
+    split between two pieces is found too). Each v3 / v4 assay's counts are its first
+    matrix over ``MIN_MATRIX_BYTES``; the largest of them is kept, whatever the assays'
+    order (an antibody or hashtag assay can come before RNA)."""
 
     def __init__(self) -> None:
         self.at = 0  # stream offset of the piece's first byte
         self.tail = b""
+        self.seen = 0  # offset just past the last name handled
         self.assay5 = self.assay = False
-        self.last_matrix = 0  # offset just past the last dgCMatrix name
-        self.first_matrix: int | None = None
+        self.last_end = 0  # just past the last dgCMatrix or Assay name
+        self.counts: int | None = None  # the current assay's counts
+        self.largest: int | None = None
 
     def feed(self, piece: bytes) -> None:
         buf = self.tail + piece
         start = self.at - len(self.tail)
         if not self.assay5 and _ASSAY5 in buf:
             self.assay5 = True
-        if not self.assay and _ASSAY in buf:
-            self.assay = True
-        i = buf.find(_DGC) if self.first_matrix is None else -1
-        while i >= 0 and self.first_matrix is None:
-            end = start + i + len(_DGC)
-            if end > self.last_matrix:  # not the one found at the end of the last piece
-                if start + i - self.last_matrix > MIN_MATRIX_BYTES:
-                    self.first_matrix = start + i - self.last_matrix
-                self.last_matrix = end
-            i = buf.find(_DGC, i + 1)
+        names = []
+        for pat in (_DGC, _ASSAY):
+            i = buf.find(pat)
+            while i >= 0:
+                names.append((start + i, start + i + len(pat), pat))
+                i = buf.find(pat, i + 1)
+        for at, end, pat in sorted(names):
+            if end <= self.seen:  # found already, at the end of the last piece
+                continue
+            self.seen = end
+            if pat is _DGC:
+                if self.counts is None and at - self.last_end > MIN_MATRIX_BYTES:
+                    self.counts = at - self.last_end
+            else:  # an assay ends: its counts were the first large matrix in it
+                self.assay = True
+                if self.counts is not None:
+                    self.largest = max(self.largest or 0, self.counts)
+                self.counts = None
+            self.last_end = end
         self.at += len(piece)
         self.tail = buf[-16:]
 
     def result(self) -> dict:
         assay = "Assay5" if self.assay5 else "Assay" if self.assay else ""
-        return {"seurat_assay": assay, "first_matrix_bytes": self.first_matrix}
+        return {"seurat_assay": assay, "assay_counts_bytes": self.largest}
 
 
 def _feed(d, kind: str, data: bytes, marks: _Markers | None = None) -> int:
@@ -222,13 +235,14 @@ def counts_bytes(ser: Serialized) -> int:
     (a dgCMatrix's values and row indices are 12 bytes per stored value, as X's CSR).
 
     A Seurat v3 / v4 object (Assay, no Assay5) keeps counts, then data, then scale.data
-    in each assay, the RNA assay first: its counts are the first sparse matrix of the
-    stream (the first over ``MIN_MATRIX_BYTES``: one made from data alone has an empty
-    counts matrix, and X is its data). Anything else (Seurat v5, whose counts can be
-    split in several layers; a SingleCellExperiment, whose assays all become layers; a
-    stream not read to its end) counts as the whole object, the most X can be."""
-    if ser.exact and ser.seurat_assay == "Assay" and ser.first_matrix_bytes:
-        return min(ser.bytes, ser.first_matrix_bytes)
+    in each assay: each assay's counts are its first sparse matrix over
+    ``MIN_MATRIX_BYTES`` (one made from data alone has an empty counts matrix, and X is
+    its data), and the largest assay's are taken, so a small antibody assay stored first
+    never stands for RNA. Anything else (Seurat v5, whose counts can be split in several
+    layers; a SingleCellExperiment, whose assays all become layers; a stream not read to
+    its end) counts as the whole object, the most X can be."""
+    if ser.exact and ser.seurat_assay == "Assay" and ser.assay_counts_bytes:
+        return min(ser.bytes, ser.assay_counts_bytes)
     return ser.bytes
 
 
