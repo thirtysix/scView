@@ -168,6 +168,9 @@ class Header:
     has_clusters: bool = False
     estimated: bool = False  # cells / genes estimated from a sample (text tables)
     guess: bool = False  # nothing in the file could be read (RDS): sizes are a guess
+    # An R object: its counts' bytes in the decompressed stream, and all of it (0: not known)
+    r_counts_bytes: int = 0
+    r_object_bytes: int = 0
     unit: str = "cell"  # what one row is, for the sentence about it: "bin" for Visium HD
     # 10x Multiome peaks, which stay on disk (core/atac_import.py): n_peaks, nnz, store_bytes.
     atac: dict | None = None
@@ -634,15 +637,51 @@ def _read_table(path: Path, genes_in_rows: bool = True) -> Header:
     return h
 
 
-# A converted Seurat object in memory, per byte of .rds: a guess (not measured).
+# A converted R object in memory, per byte of .rds: the guess when the file cannot be
+# decompressed (not measured).
 RDS_BYTES_PER_FILE_BYTE = (1.5, 3.0, 6.0)  # low, point, high
+# Once converted and open, per byte of the serialized counts (conversion_preflight
+# .counts_bytes), plus LOAD_FIXED. Measured (v0.84, 2 CPUs: the ingest of the converted
+# file, then the dataset opened; backend anon memory over the server's before) on Seurat
+# objects, real and synthetic, v4 with counts and data (and scale.data and PCA) and v5
+# with counts only: 1.10 to 1.12 times the counts, the ingest's peak within 3% of the
+# dataset once open; the table is in tests/test_preflight_header.py. A v5 object with
+# data or scale.data layers counts as all counts: over, never under.
+RDS_BYTES_PER_COUNTS_BYTE = 1.1
 
 
 def _read_rds(path: Path) -> Header:
+    """The size the converted object takes, from the R object's decompressed stream
+    (``conversion_preflight``, read once per file and kept): its counts where the stream
+    shows them (a Seurat v3 / v4 object), else the whole object. A file that cannot be
+    decompressed keeps the guess from its size."""
+    from scview.core import conversion_preflight
+
     h = Header("rds", guess=True)
-    h.note = ("An .rds file has no header to read before the converter opens it: the "
-              "memory is a guess of about 3 times the file size (from 1.5 to 6 times).")
+    try:
+        ser = conversion_preflight.serialized_size_cached(path)
+    except Exception:  # noqa: BLE001 - a damaged stream keeps the guess
+        ser = None
+    if ser is None or ser.bytes <= 0:
+        h.note = ("An .rds file has no header to read before the converter opens it: the "
+                  "memory is a guess of about 3 times the file size (from 1.5 to 6 times).")
+        return h
+    counts = conversion_preflight.counts_bytes(ser)
+    h.r_counts_bytes, h.r_object_bytes = counts, ser.bytes
+    h.note = ("Estimated from the R object's counts as stored in the file "
+              f"({_about(counts)} of its {_about(ser.bytes)} once decompressed)."
+              if counts < ser.bytes else
+              f"Estimated from the R object's size once decompressed ({_about(ser.bytes)}): "
+              "the most its counts can be, so this is over when it holds other layers too.")
     return h
+
+
+def _rds_resident(h: Header) -> int:
+    """What a converted R object holds once open: from its counts (``_read_rds``), else
+    the guess from the file size."""
+    if h.r_counts_bytes:
+        return int(RDS_BYTES_PER_COUNTS_BYTE * h.r_counts_bytes + LOAD_FIXED)
+    return int(h.file_bytes * RDS_BYTES_PER_FILE_BYTE[1])
 
 
 def _read_h5seurat(path: Path) -> Header:
@@ -897,7 +936,7 @@ def backed_bytes(h: Header) -> int:
 def resident_bytes(h: Header) -> int:
     """Memory the dataset holds once open (its arrays, frames and caches)."""
     if h.guess:
-        return int(h.file_bytes * RDS_BYTES_PER_FILE_BYTE[1])
+        return _rds_resident(h)
     return (_matrices_bytes(h) + h.obsm_bytes + h.obsp_bytes + h.varm_bytes + h.uns_bytes
             + _frames_bytes(h) + (h.n_cells or 0) * LOAD_PER_CELL + LOAD_FIXED)
 
@@ -928,10 +967,11 @@ def estimate_load(h: Header, ingest: bool = True, cpus: float | None = None) -> 
     res = resident_bytes(h)
     notes = [h.note] if h.note else []
     if h.guess:
-        lo, mid, hi = (int(h.file_bytes * f) for f in RDS_BYTES_PER_FILE_BYTE)
+        mid = _rds_resident(h)
+        what = "The counts, once converted" if h.r_counts_bytes else "Guess from the file size"
         return LoadEstimate(mid, mid, "opening the converted file",
                             _range(h.file_bytes / READ_FILE_BPS["rds"], cpus),
-                            [("Guess from the file size", mid)], notes)
+                            [(what, mid)], notes)
     values = sum(mm.nnz for mm in h.matrices if _in_memory(h, mm))
     read = int(values * READ_BYTES_PER_VALUE.get(h.format, 8.0))
     breakdown = [(f"{mm.where} ({'sparse' if mm.sparse else 'dense'}, {mm.dtype})", mm.nbytes)
@@ -2757,7 +2797,10 @@ def _load_lead(h: Header, est: LoadEstimate) -> str:
              + (" (estimated)" if h.estimated else "") if h.n_cells and h.n_genes else "")
     head = f"{shape}: " if shape else ""
     if h.guess:
-        return f"{head}Loading takes {_about(est.peak_bytes)} (a guess from the file size)"
+        basis = ("a guess from the file size" if not h.r_counts_bytes
+                 else "from the R object's counts" if h.r_counts_bytes < h.r_object_bytes
+                 else "from the R object's size")
+        return f"{head}Loading takes {_about(est.peak_bytes)} ({basis})"
     return (f"{head}Loading takes {_about(est.peak_bytes)} at its peak ({est.peak_stage}) "
             f"and {_about(est.resident_bytes)} once open")
 

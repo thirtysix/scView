@@ -13,7 +13,8 @@ import pandas as pd
 import pytest
 import scipy.sparse as sp
 
-from scview.core.preflight import header_from_adata, read_header, sniff_format
+from scview.core import preflight
+from scview.core.preflight import estimate_load, header_from_adata, read_header, sniff_format
 
 
 def _adata(n_obs=40, n_vars=30, dense=False, seed=0) -> ad.AnnData:
@@ -209,6 +210,41 @@ def test_zarr_v2_dense_by_hand(tmp_path):
     (p / "X" / ".zarray").write_text(json.dumps({"shape": [100, 7], "dtype": "<f8"}))
     h = read_header(p)
     assert (h.n_cells, h.n_genes, h.x.dtype, h.x.sparse) == (100, 7, "float64", False)
+
+
+GiB = 1024 ** 3
+
+# Measured (v0.84): the ingest of a converted .rds and the dataset opened, backend anon
+# memory over the server's before (GiB), against the counts' bytes in the stream.
+RDS_MEASURED = [
+    ("synthetic v4: counts + data, 11,000 cells", 448_512_329, 0.454),
+    ("synthetic v4: counts + data + scale.data + PCA, 10,000 cells", 140_315_197, 0.144),
+    ("synthetic v5: counts only, 12,000 cells (the whole object)", 278_459_783, 0.301),
+]
+
+
+@pytest.mark.parametrize("what,counts,measured", RDS_MEASURED)
+def test_rds_once_open_is_within_20_percent_and_never_under(what, counts, measured):
+    est = preflight._rds_resident(preflight.Header("rds", guess=True, r_counts_bytes=counts))
+    assert measured * GiB <= est <= 1.2 * measured * GiB, what
+
+
+def test_rds_is_estimated_from_its_counts(tmp_path):
+    """A gzip stream with a v4 assay's class name: X is its first sparse matrix."""
+    dgc = b"\x00\x00\x00\x09dgCMatrix"
+    data = b"X\n" + bytes(3 * 1024 ** 2) + dgc + bytes(3 * 1024 ** 2) + dgc + b"\x00\x00\x00\x05Assay"
+    p = tmp_path / "obj.rds"
+    p.write_bytes(gzip.compress(data))
+    h = read_header(p)
+    assert h.format == "rds" and h.guess and h.r_counts_bytes == 3 * 1024 ** 2 + 2
+    assert h.r_object_bytes == len(data)
+    est = estimate_load(h)
+    assert est.resident_bytes == int(1.1 * h.r_counts_bytes + preflight.LOAD_FIXED)
+    assert "counts as stored in the file" in h.note
+    assert est.breakdown[0][0] == "The counts, once converted"
+    assert "(from the R object's counts)" in preflight._load_lead(h, est)
+    h.r_counts_bytes = h.r_object_bytes  # no counts found: the whole object
+    assert "(from the R object's size)" in preflight._load_lead(h, estimate_load(h))
 
 
 def test_rds_is_a_guess(tmp_path):

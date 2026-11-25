@@ -73,6 +73,11 @@ class Serialized:
     bytes: int
     exact: bool  # False: the end was extrapolated, or the stream could not be read
     compression: str  # gzip | bzip2 | xz | none
+    # Seurat assays seen in the stream: "Assay5" (Seurat v5) or "Assay" (v3 / v4); "" none
+    seurat_assay: str = ""
+    # The largest assay counts seen: in each v3 / v4 assay its first sparse matrix
+    # (dgCMatrix) over 1 MiB, in bytes; None when none was seen. See ``counts_bytes``.
+    assay_counts_bytes: int | None = None
 
 
 # R's own serialization starts with these (format, then a newline); an RData file with RDX.
@@ -91,15 +96,78 @@ def _decompressor(head: bytes):
     return "none", None
 
 
-def _feed(d, kind: str, data: bytes) -> int:
+# Class names as R's XDR serialization writes them (a CHARSXP: its length, then the
+# bytes). An S4 object's class attribute comes after its slots: a dgCMatrix's name marks
+# the end of that matrix, an Assay's the end of that assay (counts, data, scale.data, ...).
+_ASSAY5 = b"\x00\x00\x00\x06Assay5"
+_ASSAY = b"\x00\x00\x00\x05Assay"
+_DGC = b"\x00\x00\x00\x09dgCMatrix"
+# A matrix smaller than this is passed over: a v3 / v4 assay made from data alone holds
+# an empty counts matrix before its data.
+MIN_MATRIX_BYTES = 1024 * 1024
+
+
+class _Markers:
+    """Finds the class names above in the decompressed stream, piece by piece (a name
+    split between two pieces is found too). Each v3 / v4 assay's counts are its first
+    matrix over ``MIN_MATRIX_BYTES``; the largest of them is kept, whatever the assays'
+    order (an antibody or hashtag assay can come before RNA)."""
+
+    def __init__(self) -> None:
+        self.at = 0  # stream offset of the piece's first byte
+        self.tail = b""
+        self.seen = 0  # offset just past the last name handled
+        self.assay5 = self.assay = False
+        self.last_end = 0  # just past the last dgCMatrix or Assay name
+        self.counts: int | None = None  # the current assay's counts
+        self.largest: int | None = None
+
+    def feed(self, piece: bytes) -> None:
+        buf = self.tail + piece
+        start = self.at - len(self.tail)
+        if not self.assay5 and _ASSAY5 in buf:
+            self.assay5 = True
+        names = []
+        for pat in (_DGC, _ASSAY):
+            i = buf.find(pat)
+            while i >= 0:
+                names.append((start + i, start + i + len(pat), pat))
+                i = buf.find(pat, i + 1)
+        for at, end, pat in sorted(names):
+            if end <= self.seen:  # found already, at the end of the last piece
+                continue
+            self.seen = end
+            if pat is _DGC:
+                if self.counts is None and at - self.last_end > MIN_MATRIX_BYTES:
+                    self.counts = at - self.last_end
+            else:  # an assay ends: its counts were the first large matrix in it
+                self.assay = True
+                if self.counts is not None:
+                    self.largest = max(self.largest or 0, self.counts)
+                self.counts = None
+            self.last_end = end
+        self.at += len(piece)
+        self.tail = buf[-16:]
+
+    def result(self) -> dict:
+        assay = "Assay5" if self.assay5 else "Assay" if self.assay else ""
+        return {"seurat_assay": assay, "assay_counts_bytes": self.largest}
+
+
+def _feed(d, kind: str, data: bytes, marks: _Markers | None = None) -> int:
     """Bytes ``data`` decompresses to (all of it, up to the end of its stream)."""
-    n = len(d.decompress(data, _OUT))
+    def take(piece: bytes) -> int:
+        if marks is not None:
+            marks.feed(piece)
+        return len(piece)
+
+    n = take(d.decompress(data, _OUT))
     if kind == "gzip":
         while d.unconsumed_tail and not d.eof:
-            n += len(d.decompress(d.unconsumed_tail, _OUT))
+            n += take(d.decompress(d.unconsumed_tail, _OUT))
     else:
         while not d.eof and not d.needs_input:
-            n += len(d.decompress(b"", _OUT))
+            n += take(d.decompress(b"", _OUT))
     return n
 
 
@@ -109,28 +177,37 @@ def serialized_size(path: str | Path, seconds: float = COUNT_SECONDS) -> Seriali
     its end; past ``seconds`` the rest is extrapolated from the share read."""
     path = Path(path)
     size = path.stat().st_size
+    marks = _Markers()
     with open(path, "rb") as fh:
         head = fh.read(6)
         kind, d = _decompressor(head)
+        t0 = time.monotonic()
         if d is None:
-            return Serialized(size, head.startswith(_PLAIN), kind)
+            if not head.startswith(_PLAIN):
+                return Serialized(size, False, kind)
+            fh.seek(0)
+            while chunk := fh.read(_READ):
+                marks.feed(chunk)
+                if time.monotonic() - t0 > seconds:
+                    return Serialized(size, True, kind)
+            return Serialized(size, True, kind, **marks.result())
         fh.seek(0)
         mode = kind
         out = fed = 0
-        t0 = time.monotonic()
         while True:
             chunk = fh.read(_READ)
             if not chunk:
-                return Serialized(out, True, kind)
+                return Serialized(out, True, kind, **marks.result())
             fed += len(chunk)
             while chunk:
                 if d is None or d.eof:
                     mode, d = _decompressor(chunk[:6])
                     if d is None:  # trailing bytes after the last stream
-                        return Serialized(out, True, kind)
-                out += _feed(d, mode, chunk)
+                        return Serialized(out, True, kind, **marks.result())
+                out += _feed(d, mode, chunk, marks)
                 chunk = d.unused_data if d.eof else b""
             if fed < size and time.monotonic() - t0 > seconds:
+                # the rest unread: whether it holds an Assay5 is not known
                 return Serialized(int(out * size / fed), False, kind)
 
 
@@ -150,6 +227,23 @@ def serialized_size_cached(path: str | Path) -> Serialized:
 
 def estimate_peak(serialized_bytes: int) -> int:
     return int(CONVERTER_BASE_BYTES + CONVERTER_PER_SERIALIZED_BYTE * serialized_bytes)
+
+
+def counts_bytes(ser: Serialized) -> int:
+    """The bytes of the matrix the converter writes as X (the main assay's counts), as
+    serialized: what the backend holds once the converted file is open is about this
+    (a dgCMatrix's values and row indices are 12 bytes per stored value, as X's CSR).
+
+    A Seurat v3 / v4 object (Assay, no Assay5) keeps counts, then data, then scale.data
+    in each assay: each assay's counts are its first sparse matrix over
+    ``MIN_MATRIX_BYTES`` (one made from data alone has an empty counts matrix, and X is
+    its data), and the largest assay's are taken, so a small antibody assay stored first
+    never stands for RNA. Anything else (Seurat v5, whose counts can be split in several
+    layers; a SingleCellExperiment, whose assays all become layers; a stream not read to
+    its end) counts as the whole object, the most X can be."""
+    if ser.exact and ser.seurat_assay == "Assay" and ser.assay_counts_bytes:
+        return min(ser.bytes, ser.assay_counts_bytes)
+    return ser.bytes
 
 
 # ---------------------------------------------------------------------------

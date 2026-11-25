@@ -157,6 +157,85 @@ def test_the_size_is_read_once_per_file(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# The counts in the stream: what the converted file holds once open
+# ---------------------------------------------------------------------------
+
+MiB = 1024 ** 2
+DGC = b"\x00\x00\x00\x09dgCMatrix"  # a CHARSXP class name, as R's XDR stream writes it
+ASSAY = b"\x00\x00\x00\x05Assay"
+ASSAY5 = b"\x00\x00\x00\x06Assay5"
+
+
+def _stream(*parts) -> bytes:
+    """An R-like stream: ints are filler bytes, bytes go in as they are."""
+    return b"X\n" + b"".join(bytes(p) if isinstance(p, int) else p for p in parts)
+
+
+def _ser(tmp_path, data: bytes, name="obj.rds"):
+    p = tmp_path / name
+    p.write_bytes(gzip.compress(data))
+    return conversion_preflight.serialized_size(p)
+
+
+def test_a_v4_objects_counts_are_its_assays_first_matrix(tmp_path):
+    """Seurat v3 / v4: counts, then data, then scale.data; the class name ends each."""
+    data = _stream(3 * MiB, DGC, 3 * MiB, DGC, 5 * MiB, 100, ASSAY, 1000)
+    s = _ser(tmp_path, data)
+    assert (s.seurat_assay, s.exact) == ("Assay", True)
+    assert s.assay_counts_bytes == 3 * MiB + 2
+    assert conversion_preflight.counts_bytes(s) == 3 * MiB + 2
+
+
+def test_an_empty_counts_matrix_is_passed_over(tmp_path):
+    """An assay made from data alone: an empty counts matrix, then the data (X)."""
+    data = _stream(200, DGC, 2 * MiB, DGC, ASSAY)
+    s = _ser(tmp_path, data)
+    assert s.assay_counts_bytes == 2 * MiB
+
+
+def test_a_small_first_assay_never_stands_for_the_counts(tmp_path):
+    """An antibody assay stored before RNA: the largest assay's counts are X's, not the
+    first matrix in the stream. Matrices after the last assay (graphs) are not counts."""
+    adt = _stream(2 * MiB, DGC, 2 * MiB, DGC, 300, ASSAY)
+    rna = bytes(100) + bytes(9 * MiB) + DGC + bytes(9 * MiB) + DGC + bytes(4 * MiB) + ASSAY
+    graphs = bytes(30 * MiB) + DGC
+    s = _ser(tmp_path, adt + rna + graphs)
+    assert s.assay_counts_bytes == 9 * MiB + 100
+    assert conversion_preflight.counts_bytes(s) == 9 * MiB + 100
+    small_second = _ser(tmp_path, rna.replace(bytes(100), b"X\n", 1) + adt[2:], "b.rds")
+    assert small_second.assay_counts_bytes == 9 * MiB + 2
+
+
+def test_a_v5_object_counts_as_all_counts(tmp_path):
+    """Seurat v5 can split its counts in layers (the first is one sample): the whole object."""
+    data = _stream(2 * MiB, DGC, 2 * MiB, DGC, ASSAY5, 100)
+    s = _ser(tmp_path, data)
+    assert s.seurat_assay == "Assay5"
+    assert conversion_preflight.counts_bytes(s) == s.bytes == len(data)
+
+
+def test_no_seurat_assay_or_no_end_counts_as_all(tmp_path, monkeypatch):
+    sce = _ser(tmp_path, _stream(2 * MiB, DGC, 2 * MiB, DGC), "sce.rds")
+    assert sce.seurat_assay == "" and conversion_preflight.counts_bytes(sce) == sce.bytes
+    monkeypatch.setattr(conversion_preflight, "_READ", 64 * 1024)
+    rnd = bytes((i * 7919 + (i >> 8) * 31) % 256 for i in range(2_000_000))
+    p = tmp_path / "big.rds"
+    p.write_bytes(gzip.compress(_stream(rnd, DGC, rnd, rnd, ASSAY)))
+    cut = conversion_preflight.serialized_size(p, seconds=0)  # read in part: an Assay5 may follow
+    assert not cut.exact and conversion_preflight.counts_bytes(cut) == cut.bytes
+
+
+def test_a_class_name_split_between_two_pieces_is_found():
+    m = conversion_preflight._Markers()
+    piece = bytes(2 * MiB) + DGC + bytes(10) + ASSAY
+    for cut in (2 * MiB + 5, 2 * MiB + 11):
+        m = conversion_preflight._Markers()
+        m.feed(piece[:cut])
+        m.feed(piece[cut:])
+        assert m.result() == {"seurat_assay": "Assay", "assay_counts_bytes": 2 * MiB}
+
+
+# ---------------------------------------------------------------------------
 # Where it shows: the upload's metadata, and the ingest preflight
 # ---------------------------------------------------------------------------
 

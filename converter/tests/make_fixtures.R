@@ -367,6 +367,54 @@ if (requireNamespace("SeuratObject", quietly = TRUE)) {
   )
 }
 
+# ---- 11f. Seurat v4 meta.data columns pandas cannot take as they are ----------
+# Each of these failed the whole conversion (a list column: "Mixing dicts with non-Series";
+# dates, a nested table, a matrix column, a column named _index) or came out wrong
+# (integer NA as -2147483648, logical NA as FALSE). Now every one is converted or left
+# out with a note.
+if (requireNamespace("SeuratObject", quietly = TRUE)) {
+  old_opt <- options(Seurat.object.assay.version = "v3")
+  m11f <- sparse_counts(12, 12, 1); dimnames(m11f) <- list(paste0("g", 1:12), paste0("f", 1:12))
+  sm <- suppressWarnings(SeuratObject::CreateSeuratObject(counts = m11f))
+  md <- sm@meta.data
+  empty <- vector("list", 12); names(empty) <- rownames(md)
+  md$empty_list <- empty                                     # a named list of NULLs
+  md$one_each <- as.list(rep(c("LineA", "LineB"), 6))         # one value per cell
+  md$some_each <- lapply(1:12, function(i) switch(i %% 3 + 1, NULL, "LineA", c("LineA", "LineB")))
+  md$tables <- lapply(1:12, function(i) data.frame(a = i))    # not one value per cell
+  md$na_level <- factor(rep(c("DonorA", NA), 6), exclude = NULL)
+  md$stamp <- as.POSIXct("2023-01-02 03:04:05", tz = "UTC") + 0:11
+  md$day <- as.Date("2023-01-02") + 0:11
+  md$flag <- rep(c(TRUE, NA, FALSE), 4)
+  md$count <- c(NA_integer_, 2:12)
+  md$score <- data.frame(a = 1:12, b = rep(c("x", "y"), 6))   # a nested table
+  md$pair <- matrix(as.numeric(1:24), 12, 2, dimnames = list(NULL, c("u", "v")))
+  md[["_index"]] <- paste0("id", 1:12)
+  sm@meta.data <- md
+  stopifnot(!inherits(sm[["RNA"]], "Assay5"))
+  options(old_opt)
+  rds(sm, "seurat_odd_meta")
+  expected$seurat_odd_meta <- list(
+    n_obs = 12, n_vars = 12, x_sum = sum(m11f), x_format = "csr_matrix",
+    layers = structure(list(), names = character(0)), source_class = "Seurat",
+    obs_dtypes = list(one_each = "category", some_each = "category", na_level = "category",
+                      stamp = "object", day = "object", flag = "category", count = "float64",
+                      score.a = "int32", score.b = "category", pair.u = "float64", pair.v = "float64",
+                      `_index_` = "object", nCount_RNA = "float64"),
+    categories = list(one_each = c("LineA", "LineB"), na_level = I("DonorA"), flag = c("FALSE", "TRUE")),
+    n_missing = list(some_each = 4, na_level = 6, flag = 4, count = 1),
+    # NA: a missing value (JSON null)
+    obs_head = list(some_each = list("LineA", "LineA; LineB", NA), day = list("2023-01-02", "2023-01-03"),
+                    stamp = list("2023-01-02 03:04:05", "2023-01-02 03:04:06"), flag = list("TRUE", NA, "FALSE"),
+                    count = list(NA, 2), pair.v = list(13, 14)),
+    obs_absent = c("empty_list", "tables"),
+    report_skipped = c("empty_list: a list column with no value in any cell",
+                       "tables: a list of data.frame values"),
+    report_kept = c("some_each: a list column with up to 2 values per cell", "score: a nested table",
+                    "pair: a matrix in one column")
+  )
+}
+
 # ---- 12. Seurat Visium objects (VisiumV1, VisiumV2) -------------------------
 # Made with Seurat 5.1.0 (not in this image) by backend/tests/fixtures/h5seurat/
 # make_fixtures.R: 60 spots of 10x's V1_Human_Lymph_Node, the low-res image at every
