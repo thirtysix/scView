@@ -354,9 +354,9 @@ def test_mex_streams_to_the_same_values_in_csr(tmp_path, data_dir, calls, order,
     X = _counts(180, len(names), seed=4)
     files = _mex(tmp_path / "mex", X, names, ids, types, order=order)
     today, new = _both(data_dir, files, calls)
-    # Today's MEX reader leaves X as CSC (genes major); the streamed one stores CSR.
+    # scanpy's MEX reader gives X as CSC (genes major); both ways store it CSR (core/csr_store.py).
     assert_same_h5ad(today, new, any_sparse_format=True)
-    assert ad.read_h5ad(today).X.format == "csc"
+    assert ad.read_h5ad(today).X.format == "csr"
     assert ad.read_h5ad(new).X.format == "csr"
     assert ad.read_h5ad(new).X.has_sorted_indices
 

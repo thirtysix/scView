@@ -546,9 +546,10 @@ def prepare(src: Path, out: Path, rec: dict, info: dict[str, str]) -> dict:
 
     from scview.core import provenance
 
+    from scview.core import csr_store
+
     part = out.with_name(f".{out.name}.part")
-    shutil.copyfile(src, part)
-    part.chmod(0o644)
+    csr_store.copy_file(src, part)  # a plain copy, unless a matrix is CSC: then stored by rows
     summary: dict[str, Any] = {}
     try:
         with h5py.File(part, "r+") as f:

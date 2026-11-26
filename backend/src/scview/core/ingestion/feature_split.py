@@ -15,10 +15,11 @@ the upload; processing still writes to ``derived/``). The new file is written on
 block of rows at a time straight from the original's HDF5 groups, so the split
 never holds the dataset in memory: its peak is one block (``BLOCK_NNZ`` stored
 values of a sparse matrix, ``BLOCK_VALUES`` of a dense one) plus the small
-antibody / tag tables, whatever the file's size. Doing it at first open instead
-would mean re-splitting on every open until something saved the dataset, in the
-memory the open already needs, and could not tell an upload made before this
-change (left as it was) from a new one.
+antibody / tag tables, whatever the file's size. A column-stored (CSC) matrix is
+written row-stored (CSR), one range of cells at a time (``core/csr_store.py``).
+Doing it at first open instead would mean re-splitting on every open until
+something saved the dataset, in the memory the open already needs, and could not
+tell an upload made before this change (left as it was) from a new one.
 """
 
 from __future__ import annotations
@@ -240,7 +241,9 @@ def _copy_raw(raw: h5py.Group, fo: h5py.File) -> None:
              if isinstance(rvar, pd.DataFrame) and "feature_types" in rvar.columns else None)
     keep = None if types is None else types == protein.GENE_TYPE
     if keep is None or keep.all() or not keep.any():
-        h5_copy.copy(raw, fo, "raw")
+        from scview.core import csr_store
+
+        csr_store.copy_raw(raw, fo, compression=_GZIP)  # as stored, but a CSC X by rows
         return
     g = _group_like(raw, fo, "raw")
     for key in raw.keys():
@@ -344,25 +347,11 @@ def _subset_csr(src, parent, name, keep, extract):
 
 
 def _subset_csc(src, parent, name, keep, extract):
-    n_obs, n_var = (int(x) for x in src.attrs["shape"])
-    indptr = src["indptr"][:].astype(np.int64)
-    out = _sparse_out(parent, name, "csc_matrix", (n_obs, int(keep.sum())), src)
-    lengths = []
-    side = [(m, _remap(m), np.zeros((n_obs, int(m.sum())), dtype=np.float32)) for m in extract]
-    for start, end in _blocks(indptr, BLOCK_NNZ):
-        lo, hi = indptr[start], indptr[end]
-        data, idx = src["data"][lo:hi], src["indices"][lo:hi]
-        cols = np.repeat(np.arange(start, end), np.diff(indptr[start:end + 1]))
-        k = keep[cols]
-        _append(out["data"], data[k])
-        _append(out["indices"], idx[k].astype(out["indices"].dtype))
-        lengths.append(np.diff(indptr[start:end + 1])[keep[start:end]])
-        for m, rm, table in side:
-            sel = m[cols]
-            np.add.at(table, (idx[sel].astype(np.int64), rm[cols[sel]]), data[sel])
-    out.create_dataset("indptr", data=np.concatenate([[0], np.cumsum(np.concatenate(lengths or [[]]))])
-                       .astype(out["indices"].dtype))
-    return [t for _, _, t in side]
+    """A CSC matrix is written CSR (``core/csr_store.py``): a dataset read by rows from
+    disk cannot use a column-stored one."""
+    from scview.core import csr_store
+
+    return csr_store.convert(src, parent, name, keep=keep, extract=extract, compression=_GZIP)
 
 
 def _subset_dense(src, parent, name, keep, extract):

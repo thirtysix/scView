@@ -648,6 +648,7 @@ def persist(data_dir: Path, dataset_id: str, name: str, sub: ad.AnnData, *, pare
             sel: Selection, n_parent: int, info: Contents) -> Path:
     """Write the subset (read-only, ``ingested/{id}/``), its input files and the metadata
     sidecar the picker reads. A failure part-way removes what was written."""
+    from scview.core import csr_store
     from scview.core.ingestion.session import _make_readonly, _plain_strings, _safe_name
 
     folders = [data_dir / d / dataset_id for d in ("ingested", "uploads")]
@@ -657,7 +658,7 @@ def persist(data_dir: Path, dataset_id: str, name: str, sub: ad.AnnData, *, pare
         ing.mkdir(parents=True, exist_ok=True)
         path = ing / f"{_safe_name(name)}.h5ad"
         _plain_strings(sub)
-        sub.write_h5ad(path, compression="gzip")
+        csr_store.write_h5ad(sub, path)  # an older parent's CSC matrix is stored by rows
         _make_readonly(path)
         for src, rel in info.stores:
             sub_dir, fname = rel.split("/", 1)

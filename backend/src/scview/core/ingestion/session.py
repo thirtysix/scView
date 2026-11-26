@@ -43,6 +43,7 @@ from scview.core import (
     cell_outlines,
     conversion,
     crispr,
+    csr_store,
     modality_store,
     protein,
     provenance,
@@ -920,6 +921,9 @@ class IngestSessionManager:
             if matrices is not None:
                 streamed.finish_h5ad(adata, matrices, h5_path)
             else:
+                # Row-stored on disk whatever the reader made (an .h5ad's CSC X, MEX):
+                # one matrix copied at a time, counted by preflight.estimate_load.
+                csr_store.in_memory(adata)
                 adata.write_h5ad(h5_path, compression="gzip")
         except Exception as e:
             # Leave no half-made dataset behind (an uploads dir without metadata).

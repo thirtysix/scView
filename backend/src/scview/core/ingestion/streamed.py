@@ -16,17 +16,19 @@ the matrix copied a block of cells at a time:
   Cell Ranger 2's ``/<genome>``) are the cells x genes CSR arrays; a MEX matrix.mtx is
   read in chunks of lines (sorted by cell, as Cell Ranger and R write it, or, any order,
   bucketed by cell range on disk first); an .h5ad's X and layers keep their layout
-  (``feature_split._subset_matrix``), its .raw and obsp are copied as stored.
+  (``feature_split._subset_matrix``) unless it is CSC, which is written CSR
+  (``core/csr_store.py``, as is a CSC .raw); the rest of .raw and obsp are copied as stored.
 - Antibody and CellPlex columns are taken out on the way into small dense tables and
   attached as ``protein.split_features`` attaches them.
 
 Equal to today's ingest of the same files (``tests/test_ingestion_streamed.py`` runs
 both): X values, cell and gene order, value dtype; obs and var frames and dtypes; obsm;
-uns. Differences, on purpose: a MEX matrix is stored CSR (today's reader leaves it CSC,
-which cannot be read by rows); stored indices are int64 only when the value count
-needs it (> 2**31, as scipy does in memory; a split's count is bounded by the file's);
-a copied .raw is not re-encoded. A merge of several units needs their X alone (an
-.h5ad unit with layers is refused with what to do instead).
+uns. Both store a sparse matrix CSR (scanpy's MEX reader and some .h5ad files give CSC,
+which cannot be read by rows: ``core/csr_store.py``). Differences, on purpose: stored
+indices are int64 only when the value count needs it (> 2**31, as scipy does in memory;
+a split's count is bounded by the file's); a copied .raw is not re-encoded beyond that.
+A merge of several units needs their X alone (an .h5ad unit with layers is refused with
+what to do instead).
 
 ``choose`` decides: streamed when the preflight estimate of today's in-memory ingest
 (``preflight.estimate_load``) does not fit the memory free with the working reserve
@@ -49,7 +51,7 @@ import h5py
 import numpy as np
 import pandas as pd
 
-from scview.core import crispr, h5_copy, hashing, protein, spatial, velocity_input
+from scview.core import crispr, csr_store, h5_copy, hashing, protein, spatial, velocity_input
 from scview.core.ingestion import feature_split as fs
 from scview.core.ingestion.bundling import FileRole, IngestUnit, UnitFormat
 from scview.core.ingestion.detection import legacy_tenx_genomes
@@ -675,9 +677,10 @@ def _copy_h5ad(su: StreamedUnit, fo: h5py.File) -> tuple:
             for name in fi["layers"].keys():
                 if name not in skip:
                     fs._subset_matrix(fi["layers"][name], g, name, keep, [])
-        for key in ("raw", "obsp"):
-            if key in fi:
-                h5_copy.copy(fi[key], fo, key)
+        if "raw" in fi:
+            csr_store.copy_raw(fi["raw"], fo, compression=fs._GZIP)  # as stored, but a CSC X by rows
+        if "obsp" in fi:
+            h5_copy.copy(fi["obsp"], fo, "obsp")
         if isinstance(fo.get("raw"), h5py.Group) and isinstance(fo["raw"].get("var"), h5py.Group):
             from scview.core import gene_symbols
 
@@ -843,18 +846,22 @@ def streamed_need(units: list[IngestUnit], genes_in_rows: bool = True) -> int:
     the row pointers, one block in flight and the antibody / tag tables."""
     from scview.core import preflight
 
-    total = STREAM_WORKING_BYTES + preflight.LOAD_FIXED
+    total, working = preflight.LOAD_FIXED, STREAM_WORKING_BYTES
     for u in units:
         h = preflight.read_unit_header(u, genes_in_rows)
         n = h.n_cells or 0
+        if u.format == UnitFormat.anndata and any(m.csc for m in h.matrices):
+            # Stored by rows on the way (csr_store.convert): a range of cells, not a block.
+            working = max(working, csr_store.working_bytes(n_obs=n))
         total += (preflight._frames_bytes(h) + h.obsm_bytes + h.uns_bytes + h.varm_bytes
                   + n * (16 + preflight.LOAD_PER_CELL))
-    return int(total)
+    return int(total + working)
 
 
 def disk_need(units: list[IngestUnit]) -> int:
     """Disk a streamed ingest writes: about the size of the files read (gzip either way),
-    at most their matrices uncompressed; a multiome file's ATAC store on top."""
+    at most their matrices uncompressed; a multiome file's ATAC store on top, and the
+    temporary files of an .h5ad's column-stored matrices."""
     from scview.core import preflight
 
     total = 0
@@ -862,5 +869,7 @@ def disk_need(units: list[IngestUnit]) -> int:
         h = preflight.read_unit_header(u)
         mats = sum(m.nbytes for m in h.matrices)
         total += min(int(1.5 * h.file_bytes), mats) if mats else int(1.5 * h.file_bytes)
+        # A CSC matrix sorted by cell through temporary files (core/csr_store.py).
+        total += sum(csr_store.temp_bytes(m.nnz, np.dtype(m.dtype).itemsize) for m in h.matrices if m.csc)
         total += int(h.atac["store_bytes"]) if h.atac else 0
     return total

@@ -126,6 +126,8 @@ class Matrix:
     # first rows of a file with no sparse matrix), or taken from the sparse matrices beside
     # it (``_State``); None: not known. Doublet detection sizes dense counts by it.
     nonzero: int | None = None
+    # Stored by columns (CSC) in the file: an ingest stores it by rows (core/csr_store.py).
+    csc: bool = False
 
     @property
     def nbytes(self) -> int:
@@ -215,7 +217,7 @@ def _h5_matrix(node, where: str, n_cells: int | None = None) -> Matrix | None:
         return None
     data, indices = node["data"], node["indices"]
     return Matrix(where, int(shape[0]), int(shape[1]), True, int(data.shape[0]),
-                  data.dtype.name, indices.dtype.name)
+                  data.dtype.name, indices.dtype.name, csc=enc in ("csc_matrix", "csc"))
 
 
 # Rows of an on-disk dense matrix whose non-zeros are counted (the first ones: one read).
@@ -456,7 +458,8 @@ def _read_mex(path: Path) -> Header:
     """10x MEX: matrix.mtx is genes x cells."""
     n_genes, n_cells, nnz = _mtx_header(path)
     h = Header("mex", n_cells, n_genes)
-    h.matrices.append(Matrix("X", n_cells, n_genes, True, nnz, "float32"))
+    # scanpy's reader gives it by columns (the file's genes x cells, transposed).
+    h.matrices.append(Matrix("X", n_cells, n_genes, True, nnz, "float32", csc=True))
     return h
 
 
@@ -536,7 +539,7 @@ def _zarr_matrix(d: Path, where: str) -> Matrix | None:
             return None
         r, c = (int(x) for x in attrs["shape"])
         return Matrix(where, r, c, True, int(dmeta["shape"][0]), _zarr_dtype(dmeta.get("dtype")),
-                      _zarr_dtype(imeta.get("dtype", "int32")))
+                      _zarr_dtype(imeta.get("dtype", "int32")), csc=enc == "csc_matrix")
     return None
 
 
@@ -903,6 +906,8 @@ WRITE_FRACTION = 0.1
 READ_FILE_BPS = {"10x_h5": 60e6, "mex": 12e6, "loom": 30e6, "table": 5e6, "rds": 20e6}
 READ_MEMORY_BPS = 400e6
 WRITE_BPS = 150e6  # gzip h5ad, bytes of matrices per second
+# A CSC matrix copied to CSR in memory (scipy): 1.49 GB of matrices added 0.8 s to an ingest.
+TO_ROWS_BPS = 1.5e9
 ATAC_IMPORT_SECONDS_PER_VALUE = 2.5e-7  # the peak store's pass over the file (PBMC 10k measured at import)
 # Visium HD mouse brain, Space Ranger 4: 64 MB of GeoJSON in 1.0 s; 86 MB of decoded images read and gzip-saved.
 HD_OUTLINE_BPS = 64e6
@@ -987,6 +992,14 @@ def estimate_load(h: Header, ingest: bool = True, cpus: float | None = None) -> 
         if res + write > peak:
             peak, stage = res + write, "saving the dataset"
         secs += mats / WRITE_BPS + mats / READ_MEMORY_BPS
+        # A column-stored matrix is stored by rows before the save (csr_store.in_memory):
+        # one matrix copied at a time, each copy replacing its matrix.
+        by_rows = [mm.nbytes for mm in h.matrices if mm.csc and _in_memory(h, mm)]
+        if by_rows:
+            if res + max(by_rows) > peak:
+                peak, stage = res + max(by_rows), "storing the matrix by rows"
+                breakdown.append(("Storing the matrix by rows (one copy)", max(by_rows)))
+            secs += sum(by_rows) / TO_ROWS_BPS
     secs += h.side_seconds
     if read:
         breakdown.append(("Reading (converting the values)", read))

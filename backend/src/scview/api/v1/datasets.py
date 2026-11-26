@@ -97,6 +97,8 @@ async def upload_dataset(
         if ext == ".h5ad" else None
 
     velocity = await _move_velocity_layers(dm, dataset_id, dest_path, file.filename) if ext == ".h5ad" else None
+    # Column-stored (CSC) matrices: the working source stores them by rows (core/csr_store.py).
+    by_rows = await _store_by_rows(dm, dataset_id, dest_path, file.filename) if ext == ".h5ad" else None
     # A CELLxGENE file (Ensembl ids, symbols in var['feature_name']): symbols as gene names.
     gene_names = await _gene_symbols(dm, dataset_id, dest_path, file.filename) if ext == ".h5ad" else None
     # A spatial file holding the whole capture grid: the spots off the tissue left out.
@@ -122,6 +124,8 @@ async def upload_dataset(
         meta["feature_split"] = feature_split
     if velocity:
         meta["velocity"] = velocity
+    if by_rows:
+        meta["stored_by_rows"] = by_rows
     if gene_names:
         meta["gene_names"] = gene_names
     if off_tissue:
@@ -196,6 +200,43 @@ async def _split_feature_types(dm: DatasetManager, dataset_id: str, src: Path,
     _make_readonly(out)
     logger.info("Split feature types of %s: %s", filename, summary)
     return summary
+
+
+async def _store_by_rows(dm: DatasetManager, dataset_id: str, src: Path, filename: str) -> dict | None:
+    """An .h5ad whose X, a layer or ``.raw`` X is column-stored (CSC): the dataset's working
+    source in ``ingested/{id}/`` holds them row-stored (CSR), same values and order, from the
+    earlier steps' file when one ran (``core/csr_store.py``). A dataset opened from disk reads
+    blocks of cells, which a CSC matrix cannot give without reading all of it. The upload
+    itself stays as sent. Written a range of cells at a time in a worker thread, its memory
+    counted beside the other requests'. A failure leaves the matrices as they are."""
+    from scview.core import csr_store
+
+    out_dir = dm.data_dir / "ingested" / dataset_id
+    out = out_dir / src.name
+    current = out if out.exists() else src
+    where = await asyncio.to_thread(csr_store.csc_in_file, current)
+    if not where:
+        return None
+    made_dir = not out_dir.exists()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    partial = out_dir / f".{src.name}.csr.partial"
+    release = dm.hold_read(dataset_id, csr_store.working_bytes(current), "storing the matrix by rows")
+    try:
+        done = await asyncio.to_thread(csr_store.rewrite_file, current, partial, out_dir)
+        if out.exists():
+            out.chmod(0o644)
+        partial.replace(out)
+    except Exception as e:  # never lose the upload over the layout
+        logger.warning("Matrices of %s left column-stored: %s", filename, e)
+        return None
+    finally:
+        release()
+        partial.unlink(missing_ok=True)
+        if made_dir and not any(out_dir.iterdir()):
+            out_dir.rmdir()
+    _make_readonly(out)
+    logger.info("Stored by rows (CSR) for %s: %s", filename, ", ".join(done))
+    return {"matrices": done}
 
 
 async def _gene_symbols(dm: DatasetManager, dataset_id: str, src: Path, filename: str) -> dict | None:

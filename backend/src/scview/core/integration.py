@@ -1029,7 +1029,9 @@ def persist_joint(
     ing = data_dir / "ingested" / dataset_id
     ing.mkdir(parents=True, exist_ok=True)
     path = ing / f"{_safe_name(name)}.h5ad"
-    joint.write_h5ad(path, compression="gzip")
+    from scview.core import csr_store
+
+    csr_store.write_h5ad(joint, path)  # never a column-stored matrix in a new dataset
     _make_readonly(path)
 
     up = data_dir / "uploads" / dataset_id

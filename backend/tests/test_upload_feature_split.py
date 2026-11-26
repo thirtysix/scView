@@ -81,7 +81,8 @@ def test_split_matches_the_matrix_and_the_wizard(tmp_path, fmt):
     assert list(b.var_names) == GENES and list(b.obs_names) == list(a.obs_names)
     got = b.X.toarray() if sp.issparse(b.X) else np.asarray(b.X)
     np.testing.assert_array_equal(got, dense[:, gene_cols])
-    assert type(b.X) is type(a.X) or (fmt == "dense" and isinstance(b.X, np.ndarray))
+    # A column-stored matrix is written row-stored (core/csr_store.py); the others keep their layout.
+    assert isinstance(b.X, np.ndarray) if fmt == "dense" else b.X.format == "csr"
     if sp.issparse(b.X):
         # anndata hands scipy the arrays as stored: one index dtype, or scipy's kernels
         # refuse them (found live: rank_genes_groups -> eliminate_zeros -> ValueError).
