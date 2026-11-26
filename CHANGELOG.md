@@ -6,6 +6,11 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.85.0] - 2026-11-26
+
+Label edits on a dataset kept on disk no longer read it into memory, new datasets store their matrices by rows,
+and uploads with untyped features keep their genes.
+
 ### Changed
 - New datasets store their matrices by rows (CSR). An .h5ad whose X, a layer or .raw is stored by columns
   (CSC), and 10x matrix folders read into memory, were kept by columns, which large mode cannot read at all
