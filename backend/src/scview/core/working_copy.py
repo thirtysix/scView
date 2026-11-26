@@ -206,12 +206,18 @@ def _pin(dm, ids: tuple[str, ...]):
     """Pin the cached adaptors of ``ids`` (``AnnDataAdaptor.pin``): a backed object one of
     them lets go of while the read works (a run or an edit reading it into memory) keeps
     its file open until the read ends. Returns the unpin of all of them."""
+    from scview.core import anndata_adaptor
+
     get = getattr(dm, "get_dataset", None)
     unpins = []
     for i in dict.fromkeys(ids):
         adaptor = get(i) if get is not None else None
-        if adaptor is not None and hasattr(adaptor, "pin"):
-            unpins.append(adaptor.pin())
+        # ... and an adaptor still closing a backed file of this dataset: the caller may hold
+        # that object, taken before a wait in which an edit read the dataset in and the
+        # manager dropped the adaptor (``anndata_adaptor.closing``).
+        late = [a for a in anndata_adaptor.closing(i) if a is not adaptor] if isinstance(i, str) else []
+        for a in ([adaptor] if adaptor is not None and hasattr(adaptor, "pin") else []) + late:
+            unpins.append(a.pin())
 
     def unpin() -> None:
         for u in unpins:

@@ -445,3 +445,44 @@ def test_every_make_room_call_sits_inside_dataset_edit():
             if where != "edit" and (rel, where) not in allowed:
                 bad.append(f"{rel}:{i + 1} (in {where})")
     assert not bad, f"make_room / edit_room outside dataset_edit: {bad}"
+
+
+async def test_a_read_pins_the_backed_object_of_a_dropped_adaptor(tmp_path, monkeypatch):
+    # The class of the mean-variance 500 (test_assessment_gate), for every ``reading``: the
+    # route takes the backed object, waits, and an edit reads the dataset in and the manager
+    # drops the adaptor; its file stays open only for the OTHER readers. Looked up by id the
+    # late read pinned nothing (or a new adaptor), and the last other unpin closed the file
+    # under it. ``_pin`` also pins the adaptors still closing a file of the dataset.
+    import asyncio
+    import threading
+
+    monkeypatch.setattr(anndata_adaptor, "BACKED_MIN_BYTES", 0)
+    a = ad.AnnData(sp.random(50, 20, density=0.3, format="csr", dtype=np.float32, random_state=0))
+    a.write_h5ad(tmp_path / "d.h5ad")
+    adaptor = AnnDataAdaptor(str(tmp_path / "d.h5ad"))
+    adaptor.dataset_id = "d"
+    backed = adaptor.adata  # taken before the wait
+    assert backed.isbacked
+
+    class DM:  # the manager after the drop
+        def get_dataset(self, _id):
+            return None
+
+    other = adaptor.pin()  # another request, reading
+    await asyncio.to_thread(adaptor.to_memory)  # the edit's read-in
+    assert anndata_adaptor.closing("d") == [adaptor] and anndata_adaptor.closing("e") == []
+    started, mid = threading.Event(), threading.Event()
+
+    def read(x):
+        counts = x.X
+        started.set()
+        mid.wait(10)
+        return float(counts[np.arange(5)].sum())
+
+    async with working_copy.reading(DM(), "d", 0, "The read") as held:
+        task = asyncio.ensure_future(held.run(read, backed))
+        assert await asyncio.to_thread(started.wait, 10)
+        other()  # the other request ends while this one reads
+        mid.set()
+        assert await task == pytest.approx(float(a.X[:5].sum()))
+    assert adaptor._pins == 0 and not adaptor._retired and anndata_adaptor.closing("d") == []
