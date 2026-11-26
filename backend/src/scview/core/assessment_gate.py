@@ -67,6 +67,14 @@ async def _held(dataset_id: str, budget: Budget | None, fn: Callable[..., Any], 
         return await held.run(fn, *args)
 
 
+def _pin_now(dataset_id: str, budget: Budget | None) -> Callable[[], None]:
+    if budget is None:
+        return lambda: None
+    from scview.core import working_copy
+
+    return working_copy._pin(budget.dm, (dataset_id,))
+
+
 class _Gate:
     def __init__(self) -> None:
         self.lanes = asyncio.Semaphore(MAX_AT_ONCE)
@@ -103,10 +111,16 @@ async def run(dataset_id: str, key: Hashable, fn: Callable[..., Any], *args: Any
             async with gate.lanes:
                 return await _held(dataset_id, budget, fn, *args)
 
+        # Pinned NOW, before any wait: the caller took the dataset's (backed) object before
+        # calling, and a lane or the memory queue can keep this work waiting for a minute.
+        # ``reading`` pins only once it starts: an edit that read the dataset in meanwhile
+        # closed the file under the object the caller holds (h5py: invalid identifier, a 500).
+        unpin = _pin_now(dataset_id, budget)
         task = loop.create_task(work())
         gate.inflight[key] = task
 
         def done(t: asyncio.Task) -> None:
+            unpin()
             if gate.inflight.get(key) is t:
                 del gate.inflight[key]
             if not gate.inflight and _gates.get(gid) is gate:

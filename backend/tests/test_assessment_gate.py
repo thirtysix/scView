@@ -123,3 +123,52 @@ async def test_two_pages_at_once_compute_cluster_qc_once(client, dataset_manager
     r1, r2 = await asyncio.gather(client.get(url), client.get(url))
     assert r1.status_code == r2.status_code == 200
     assert r1.json() == r2.json() and len(calls) == 1
+
+
+async def test_work_waiting_for_a_lane_keeps_the_backed_file_open(tmp_path, monkeypatch):
+    # Seen live (1.66 GB file, 3 GB backend, 1 run in 6): the mean-variance card took the backed
+    # object and waited for a lane; an edit read the dataset in and then dropped it, so the card
+    # pinned nothing when it started; another card's unpin closed the file under its read
+    # (h5py: invalid identifier, a 500). The gate pins the dataset before any wait.
+    from scview.core import anndata_adaptor
+    from scview.core.anndata_adaptor import AnnDataAdaptor
+
+    monkeypatch.setattr(anndata_adaptor, "BACKED_MIN_BYTES", 0)
+    a = ad.AnnData(sp.random(50, 20, density=0.3, format="csr", dtype=np.float32, random_state=0))
+    a.write_h5ad(tmp_path / "d.h5ad")
+    adaptor = AnnDataAdaptor(str(tmp_path / "d.h5ad"))
+    backed = adaptor.adata
+    assert backed.isbacked
+    cached = [adaptor]
+
+    class DM:
+        def get_dataset(self, _id):
+            return cached[0]
+
+        def dataset_name(self, _id):
+            return "d"
+
+    budget = assessment_gate.Budget(DM(), lambda: 0, "The card")
+    go, started, mid = threading.Event(), threading.Event(), threading.Event()
+    blockers = [asyncio.ensure_future(assessment_gate.run("d", ("block", i), go.wait))
+                for i in range(assessment_gate.MAX_AT_ONCE)]
+    await asyncio.sleep(0.05)
+
+    def read(x):
+        counts = x.X  # the on-disk matrix, read a block at a time
+        started.set()
+        mid.wait(10)
+        return float(counts[np.arange(5)].sum())
+
+    card = asyncio.ensure_future(assessment_gate.run("d", "card", read, backed, budget=budget))
+    await asyncio.sleep(0.05)  # waiting for a lane
+    other = adaptor.pin()  # another card, reading
+    await asyncio.to_thread(adaptor.to_memory)  # the edit's read-in: the backed object is let go
+    cached[0] = None  # and its reload: the dataset is dropped
+    go.set()
+    await asyncio.gather(*blockers)
+    assert await asyncio.to_thread(started.wait, 10)
+    other()  # the other card ends while this one reads
+    mid.set()
+    assert await card == pytest.approx(float(a.X[:5].sum()))
+    assert adaptor._pins == 0 and not adaptor._retired  # the file is closed once it is done

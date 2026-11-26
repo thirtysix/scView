@@ -15,6 +15,10 @@ All notable changes to scView are documented here. The format is based on
   46 s, waiting for the edit). Renaming a category and edits that compute on the counts still read the file in.
 
 ### Fixed
+- A Data Assessment card that waited its turn while an edit read a dataset kept on disk into memory could fail
+  with a server error ("invalid identifier"): the file was closed under its read when another card finished.
+  Seen on the mean-variance card, 1 run in 6 on a 1.66 GB file in a 3 GB backend. Each card now keeps the file
+  open from the moment it is asked for.
 - Every edit of a dataset kept on disk (labels, clustering, saved scores, copy number, gene programs, reference
   mapping: 29 saves in all) and gene-set scoring now hold the memory of reading it in until the work ends, so
   requests running beside it count that memory. Before, the room was freed but not held, and a request arriving
