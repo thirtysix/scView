@@ -18,7 +18,9 @@ All notable changes to scView are documented here. The format is based on
   Ontology terms, restoring a stored result and the velocity direction write only the cell table and their
   settings into a copy of the file. On a 1.66 GB file (73,260 cells) in a 3 GB backend a category reorder took
   3.1 s (before: 34.8 s), and the Data Assessment cards opened beside it all answered within 10 s (before: 33 to
-  46 s, waiting for the edit). Renaming a category and edits that compute on the counts still read the file in.
+  46 s, waiting for the edit). Giving a category a new name is saved the same way, its marker tables and
+  enrichment results following the name. Merging two categories, renaming in a column with marker qualifiers,
+  and edits that compute on the counts still read the file in.
 
 ### Fixed
 - An .h5ad upload whose `feature_types` column is empty for some genes lost those genes: a merged atlas with

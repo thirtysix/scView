@@ -159,7 +159,9 @@ def _follow_rename(adata, column: str, old: str, new: str, merge: bool) -> None:
                 adata.uns["rank_genes_groups"] = adata.uns[markers_key(column)]
         return
     for key in _marker_keys(adata, column):
-        rgg = adata.uns[key]
+        # a new dict: a save that rewrites only the replaced uns entries (``uns_snapshot``)
+        # must see this one as changed
+        rgg = adata.uns[key] = dict(adata.uns[key])
         for field in ("names", "scores", "logfoldchanges", "pvals", "pvals_adj"):
             arr = rgg.get(field)
             names = getattr(getattr(arr, "dtype", None), "names", None)
@@ -221,6 +223,17 @@ async def set_category_order(
     return {"column": column, "order": order}
 
 
+def _rename_is_labels_only(adaptor, column: str, old: str, new: str) -> bool:
+    """Whether this rename changes obs and uns alone, so a dataset on disk need not be read
+    in: a new name for one category. A merge of two categories works its markers out again,
+    and a column with label qualifiers works those out again: both read the matrix."""
+    adata = adaptor.adata
+    if column not in adata.obs.columns or adata.obs[column].dtype.name != "category":
+        return False
+    cats = list(adata.obs[column].cat.categories)
+    return old in cats and new not in cats and label_qualifiers.read(adata, column) is None
+
+
 class RenameCategoryBody(BaseModel):
     old: str
     new: str
@@ -248,10 +261,12 @@ async def rename_obs_category(
         if adaptor is None:
             raise HTTPException(status_code=404, detail="Dataset not found.")
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
-        backed = await edit_room(dm, dataset_id, adaptor)
+        light = _rename_is_labels_only(adaptor, column, body.old, new)
+        backed = await edit_room(dm, dataset_id, adaptor, labels_only=light)
 
         def _run() -> None:
-            adata = editable(adaptor)
+            adata = editable(adaptor, labels_only=light)
+            before = uns_snapshot(adata) if light else None
             if column not in adata.obs.columns:
                 raise HTTPException(status_code=404, detail=f"Column '{column}' not found.")
             col = adata.obs[column]
@@ -274,8 +289,9 @@ async def rename_obs_category(
             category_order.follow_rename(adata, column, body.old, new, merge)
             cell_ontology.follow_rename(adata, column, body.old, new, merge)
             label_qualifiers.follow_rename(adata, column, large=large_layout.is_large(adata))
-            # A full write (markers are edited in place), beside the file then swapped in.
-            save_edit(adaptor, adata, output_path)
+            # A new name alone: obs and the uns entries it replaced. Otherwise a full write
+            # (markers worked out again), beside the file then swapped in.
+            save_edit(adaptor, adata, output_path, before)
 
         try:
             # Markers may be recomputed on a merge: seconds, so in a worker thread.

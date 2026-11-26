@@ -305,10 +305,39 @@ async def test_a_labels_only_edit_of_a_backed_dataset_reads_nothing_in(client, d
 async def test_an_edit_that_needs_the_matrix_still_reads_a_backed_dataset_in(client, dataset_manager, backed):
     did = _register(Path(dataset_manager.data_dir))
     assert await _is_backed(dataset_manager, did)
-    r = await client.post(f"{API}/datasets/{did}/metadata/grp/rename", json={"old": "a", "new": "A"})
+    # two categories made one: their markers are worked out again, from the matrix
+    r = await client.post(f"{API}/datasets/{did}/metadata/grp/rename", json={"old": "a", "new": "b"})
     assert r.status_code == 200, r.text
     saved = ad.read_h5ad((await dataset_manager.get_or_load_dataset(did)).h5ad_path)
-    assert "A" in saved.obs["grp"].cat.categories
+    assert list(saved.obs["grp"].cat.categories) == ["b", "c"]
+
+
+async def test_a_new_name_for_a_category_of_a_backed_dataset_reads_nothing_in(
+        client, dataset_manager, backed, monkeypatch):
+    # The rename wrote the whole file again after reading it in. A new name changes obs, the
+    # group names of the column's markers and its enrichment keys: all written into a copy.
+    import scanpy as sc
+
+    from scview.core.uns_keys import markers_key
+
+    did = _register(Path(dataset_manager.data_dir))
+    a = _counts()  # with stored markers by group name, to be carried along
+    sc.pp.normalize_total(a)
+    sc.pp.log1p(a)
+    sc.tl.rank_genes_groups(a, "grp", key_added=markers_key("grp"), use_raw=False)
+    a.write_h5ad(Path(dataset_manager.data_dir) / "uploads" / did / "data.h5ad")
+    assert await _is_backed(dataset_manager, did)
+    await _no_read_in(monkeypatch)
+    r = await client.post(f"{API}/datasets/{did}/metadata/grp/rename", json={"old": "a", "new": "A"})
+    assert r.status_code == 200, r.text
+    assert dataset_manager.outstanding(1 * GB) == 0  # nothing held
+    adaptor = await dataset_manager.get_or_load_dataset(did)
+    assert adaptor.adata.isbacked
+    saved = ad.read_h5ad(adaptor.h5ad_path)
+    assert list(saved.obs["grp"].cat.categories) == ["A", "b", "c"]
+    stored = [v for k, v in saved.uns.items() if isinstance(v, dict) and "names" in v]
+    assert stored and all("A" in v["names"].dtype.names and "a" not in v["names"].dtype.names for v in stored)
+    assert abs(saved.X - a.X).max() < 1e-6 and (saved.raw.X != _counts().X).nnz == 0
 
 
 def test_a_labels_only_edit_of_an_old_format_file_is_read_in(tmp_path, backed):
