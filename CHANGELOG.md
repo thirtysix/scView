@@ -7,6 +7,12 @@ All notable changes to scView are documented here. The format is based on
 ## [Unreleased]
 
 ### Changed
+- New datasets store their matrices by rows (CSR). An .h5ad whose X, a layer or .raw is stored by columns
+  (CSC), and 10x matrix folders read into memory, were kept by columns, which large mode cannot read at all
+  and which makes every read of a block of cells scan the whole matrix. The upload itself stays as sent; the
+  row-stored working copy takes 8 to 33 s per 1.5 GB of matrices (a 0.47 GB gzip upload of 73,260 cells: 43 s
+  in all). On that file, DE between cells peaks 0.7 GB lower in a 3 GB backend. Datasets already stored by
+  columns stay as they are.
 - Label edits on a dataset kept on disk no longer read it into memory: reordering categories, labelling or
   un-labelling cells, combining or importing label columns, keeping a clustering resolution, saved scores, Cell
   Ontology terms, restoring a stored result and the velocity direction write only the cell table and their
