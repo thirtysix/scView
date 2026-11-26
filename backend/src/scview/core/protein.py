@@ -106,6 +106,21 @@ def attach(adata: ad.AnnData, counts, features: list[str], split: ProteinSplit) 
     adata.uns[UNS_KEY] = split.to_dict()
 
 
+# What a missing feature type reads as once a table is turned to text (a NaN from a merge of
+# files of which only some carry the column, an empty cell).
+_NO_TYPE = frozenset({"", "nan", "none", "na", "<na>", "null"})
+
+
+def type_names(types) -> np.ndarray:
+    """Feature types as text, a missing one read as a gene ("Gene Expression"): a feature
+    without a type is not another modality. A merged atlas had the type on 7 of its 10,237
+    genes (NaN on the rest) and an upload kept those 7."""
+    values = pd.Series(np.asarray(types, dtype=object))
+    text = values.astype(str)
+    missing = values.isna() | text.str.strip().str.lower().isin(_NO_TYPE)
+    return np.where(missing, GENE_TYPE, text).astype(str)
+
+
 def split_features(adata: ad.AnnData) -> tuple[ad.AnnData, ProteinSplit | None]:
     """Take antibody (and other non-gene) features out of the gene matrix.
 
@@ -116,9 +131,11 @@ def split_features(adata: ad.AnnData) -> tuple[ad.AnnData, ProteinSplit | None]:
     adopted under scView's keys instead.
     """
     types = adata.var.get("feature_types")
-    if types is None or not (types.astype(str) == GENE_TYPE).any():
+    if types is None:
         return adata, adopt_obsm(adata)
-    types = types.astype(str)
+    types = pd.Series(type_names(types), index=adata.var_names)
+    if not (types == GENE_TYPE).any():
+        return adata, adopt_obsm(adata)
     if (types == GENE_TYPE).all():
         return adata, adopt_obsm(adata)
 

@@ -497,11 +497,11 @@ def _plan_split(su: StreamedUnit) -> None:
             atac_import.refuse_only_peaks(types, su.label)
         except atac_import.AtacOnly as e:
             raise IngestLoadError(str(e)) from e
-    if types is None or not (types.astype(str) == protein.GENE_TYPE).any() or \
-            (types.astype(str) == protein.GENE_TYPE).all():
+    if types is not None:
+        types = pd.Series(protein.type_names(types), index=meta.var_names)
+    if types is None or not (types == protein.GENE_TYPE).any() or (types == protein.GENE_TYPE).all():
         protein.adopt_obsm(meta)
         return
-    types = types.astype(str)
     split = protein.ProteinSplit()
     is_ab = (types == protein.ANTIBODY_TYPE).to_numpy()
     is_cmo = (types == hashing.CMO_TYPE).to_numpy()

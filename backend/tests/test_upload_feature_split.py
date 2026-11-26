@@ -260,3 +260,78 @@ def test_split_keeps_legacy_category_references_valid(tmp_path):
     dst = tmp_path / "out.h5ad"
     feature_split.split_h5ad(src, dst, original_filename="legacy.h5ad")
     assert ad.read_h5ad(dst).obs["donor"].tolist() == a.obs["donor"].tolist()
+
+
+# -- a feature with no type is a gene ------------------------------------------------------
+
+def _untyped(kind: str) -> ad.AnnData:
+    """A merged atlas: the merge left the type on a few genes and NaN on the rest."""
+    a = _cite()
+    types = np.array(TYPES, dtype=object)
+    types[[1, 2, 13, 14]] = np.nan if kind == "nan" else kind
+    a.var["feature_types"] = pd.Categorical(types) if kind == "nan" else types.astype(str)
+    a.raw = a.copy()
+    return a
+
+
+@pytest.mark.parametrize("kind", ["nan", "", "None"])
+def test_untyped_features_are_kept_as_genes(tmp_path, kind):
+    a = _untyped(kind)
+    assert list(protein.type_names(a.var["feature_types"])) == TYPES
+    src, out = tmp_path / "u.h5ad", tmp_path / "o.h5ad"
+    a.write_h5ad(src)
+    summary = feature_split.split_h5ad(src, out, original_filename="u.h5ad")
+    assert summary["n_genes"] == 12 and summary["other_features"] == {}
+    b = ad.read_h5ad(out)
+    assert list(b.var_names) == GENES and b.raw.n_vars == 12
+    genes, split = protein.split_features(a)  # the wizard's split makes the same choice
+    assert list(genes.var_names) == GENES and split.other_features == {}
+
+
+def test_a_file_whose_types_are_genes_or_missing_needs_no_split(tmp_path):
+    a = _cite()[:, GENES].copy()
+    a.raw = None
+    types = np.array(["Gene Expression"] * 12, dtype=object)
+    types[3:] = np.nan
+    a.var["feature_types"] = pd.Categorical(types)
+    src = tmp_path / "g.h5ad"
+    a.write_h5ad(src)
+    assert not feature_split.needs_split(src)
+    genes, split = protein.split_features(a)
+    assert genes is a and split is None
+
+
+def test_replay_keeps_untyped_features_as_genes():
+    a = _untyped("nan")
+    snip = replay_script._ingest({"formats": ["h5ad"], "feature_split": {"n_antibodies": 3}}, None)
+    start = next(i for i, ln in enumerate(snip.code) if ln.startswith('if "feature_types"'))
+    lines = snip.code[start:start + 5]
+    scope = {"adata": a}
+    exec("\n".join(lines), scope)  # noqa: S102 - the replay's own lines
+    assert list(scope["adata"].var_names) == GENES
+
+
+def test_feature_types_of_a_legacy_file_are_names_not_codes(tmp_path):
+    # anndata 0.7.x stores a categorical as codes with the names under var/__categories; read
+    # alone the column gave "0", "1", ...: no "Gene Expression", so a CITE-seq file in that
+    # layout was never split (and its antibodies stayed in X as genes).
+    import h5py
+
+    a = _cite()
+    a.raw = None
+    src = tmp_path / "legacy.h5ad"
+    a.write_h5ad(src)
+    with h5py.File(src, "a") as f:
+        cat = a.var["feature_types"].cat
+        del f["var/feature_types"]
+        cats = f["var"].create_group("__categories")
+        cats.create_dataset("feature_types", data=np.asarray(cat.categories, dtype=object),
+                            dtype=h5py.special_dtype(vlen=str))
+        f["var/feature_types"] = cat.codes.to_numpy().astype("i1")
+        f["var/feature_types"].attrs["categories"] = cats["feature_types"].ref
+        f["var"].attrs["encoding-version"] = "0.1.0"
+    assert list(feature_split.feature_types(src)) == TYPES
+    assert feature_split.needs_split(src)
+    summary = feature_split.split_h5ad(src, tmp_path / "o.h5ad", original_filename="legacy.h5ad")
+    assert summary["n_genes"] == 12 and summary["n_antibodies"] == 3
+    assert list(ad.read_h5ad(tmp_path / "o.h5ad").var_names) == GENES

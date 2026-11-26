@@ -49,13 +49,20 @@ class SplitUnsupported(RuntimeError):
 
 
 def feature_types(path: Path) -> np.ndarray | None:
-    """``var["feature_types"]`` read from the file (nothing else is read), or None."""
+    """``var["feature_types"]`` read from the file (nothing else is read), or None. A
+    missing type reads as a gene (``protein.type_names``)."""
     try:
         with h5py.File(path, "r") as f:
             var = f.get("var")
             if not isinstance(var, h5py.Group) or "feature_types" not in var:
                 return None
-            return np.asarray(pd.Series(read_elem(var["feature_types"])).astype(str))
+            values = read_elem(var["feature_types"])
+            legacy = var.get("__categories")  # anndata < 0.8: the column holds codes
+            if isinstance(legacy, h5py.Group) and "feature_types" in legacy:
+                names = np.asarray(read_elem(legacy["feature_types"]), dtype=object)
+                codes = np.asarray(values).astype(np.int64)
+                values = np.where(codes >= 0, names[np.clip(codes, 0, len(names) - 1)], None)
+            return protein.type_names(values)
     except (OSError, KeyError, ValueError, TypeError) as e:
         logger.warning("Could not read feature types of %s: %s", path, e)
         return None
@@ -237,7 +244,7 @@ def _group_like(src: h5py.Group, parent: h5py.Group, name: str) -> h5py.Group:
 def _copy_raw(raw: h5py.Group, fo: h5py.File) -> None:
     """``.raw`` keeps its own features: subset only when its var says which are genes."""
     rvar = read_elem(raw["var"]) if "var" in raw else None
-    types = (rvar["feature_types"].astype(str).to_numpy()
+    types = (protein.type_names(rvar["feature_types"])
              if isinstance(rvar, pd.DataFrame) and "feature_types" in rvar.columns else None)
     keep = None if types is None else types == protein.GENE_TYPE
     if keep is None or keep.all() or not keep.any():

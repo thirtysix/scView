@@ -187,7 +187,9 @@ def refuse_only_peaks(types: pd.Series | np.ndarray | None, name: str = "This fi
     """Raise AtacOnly when a loaded table's feature types are peaks and no genes."""
     if types is None:
         return
-    values = np.asarray(types).astype(str)
+    from scview.core import protein
+
+    values = protein.type_names(types)
     if (values == PEAKS_TYPE).any() and not (values == GENE_TYPE).any():
         raise AtacOnly(ONLY_PEAKS.format(name=name))
 
@@ -387,7 +389,9 @@ def _plan_h5ad(unit: IngestUnit) -> UnitPeaks | None:
         if not isinstance(f.get("var"), h5py.Group) or "feature_types" not in f["var"]:
             return None
         var = read_elem(f["var"])
-        types = var["feature_types"].astype(str).to_numpy()
+        from scview.core import protein
+
+        types = protein.type_names(var["feature_types"])
         cols = np.flatnonzero(types == PEAKS_TYPE)
         if not len(cols):
             return None
