@@ -49,12 +49,31 @@ def dataset_lock(dataset_id: str) -> asyncio.Lock:
     return lock
 
 
+# The edit holding each dataset's lock now (``current_edit``), per event loop as the locks.
+_edits: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, "DatasetEdit"]] = (
+    weakref.WeakKeyDictionary()
+)
+
+
 class DatasetEdit:
     """Work run inside ``dataset_edit``: each ``run`` is a worker thread the lock
-    waits for, even when the request is cancelled."""
+    waits for, even when the request is cancelled. ``on_end`` callbacks run when the
+    lock is handed back (the memory held for a backed dataset's read-in is let go there)."""
 
     def __init__(self) -> None:
         self.tasks: list[asyncio.Future] = []
+        self._on_end: list = []
+
+    def on_end(self, fn) -> None:
+        self._on_end.append(fn)
+
+    def _end(self) -> None:
+        fns, self._on_end = self._on_end, []
+        for fn in fns:
+            try:
+                fn()
+            except Exception:  # noqa: BLE001 - the lock is handed back whatever a release does
+                pass
 
     async def run(self, fn, *args):
         task = asyncio.ensure_future(asyncio.to_thread(fn, *args))
@@ -72,12 +91,21 @@ async def dataset_edit(dataset_id: str):
     lock = dataset_lock(dataset_id)
     await lock.acquire()
     edit = DatasetEdit()
+    edits = _edits.setdefault(asyncio.get_running_loop(), {})
+    edits[dataset_id] = edit
+
+    def finish() -> None:
+        if edits.get(dataset_id) is edit:
+            del edits[dataset_id]
+        edit._end()
+        lock.release()
+
     try:
         yield edit
     finally:
         running = [t for t in edit.tasks if not t.done()]
         if not running:
-            lock.release()
+            finish()
         else:
             left = len(running)
 
@@ -85,10 +113,19 @@ async def dataset_edit(dataset_id: str):
                 nonlocal left
                 left -= 1
                 if left == 0:
-                    lock.release()
+                    finish()
 
             for t in running:
                 t.add_done_callback(_done)
+
+
+def current_edit(dataset_id: str) -> DatasetEdit | None:
+    """The ``dataset_edit`` holding this dataset's lock now, if any."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+    return _edits.get(loop, {}).get(dataset_id)
 
 
 def is_locked(dataset_id: str) -> bool:
@@ -103,7 +140,8 @@ def is_locked(dataset_id: str) -> bool:
 
 async def edit_room(dm, dataset_id: str, adaptor) -> bool:
     """``working_copy.make_room`` before an obs / uns edit; whether the dataset is read
-    into memory for it (the caller reloads it afterwards). A large dataset is not: its
+    into memory for it (the caller reloads it afterwards). Call it inside ``dataset_edit``:
+    the room for the read-in is held until that edit ends. A large dataset is not: its
     tables are in memory already and the edit is written into its h5ad in place."""
     if getattr(adaptor, "is_large", False):
         return False

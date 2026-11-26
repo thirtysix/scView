@@ -73,23 +73,44 @@ def backed_read_bytes(adaptor) -> int:
     return BACKED_READ_BYTES if adaptor is not None and _backed(adaptor) else 0
 
 
-async def make_room(dm, dataset_id: str, adaptor, then: int = 0) -> bool:
+class UnheldReadIn(RuntimeError):
+    """``make_room`` for a backed dataset outside ``dataset_edit``: nothing would hold the
+    room it frees. A programming error; use ``read_in`` (or ``reading``) there."""
+
+
+async def make_room(dm, dataset_id: str, adaptor, then: int = 0, hold: bool = True) -> bool:
     """Before work on ``adaptor``'s dataset that needs it in memory: room for reading a
     backed dataset in, and ``then`` bytes the work needs beyond the in-memory copy (a
     run's estimated peak, ``preflight.run_need``). Refused with ``DatasetMemoryError``
     (a 507) only when the copy itself cannot fit with every other dataset closed; what
     the work needs beyond it is asked for, never refused (a run's pre-step check stops
     a step that cannot fit). Returns whether the dataset is backed: ``in_memory``, in
-    the worker thread, then reads it in."""
+    the worker thread, then reads it in.
+
+    The copy's room is also HELD (``DatasetManager.hold_read``) until the ``dataset_edit``
+    the caller is in has ended, so requests running beside the read count it. Freed but
+    unheld, that room went to a page's other requests while the worker read the file in
+    (v0.84.0: a 3 GB backend OOM-killed). Outside ``dataset_edit`` it raises ``UnheldReadIn``:
+    such work takes ``read_in``. ``hold=False`` only where the caller reserves the copy
+    itself (a pipeline run's reservation)."""
     try:
         copy = await asyncio.to_thread(copy_bytes, adaptor)
     except Exception as e:  # never block the work on the estimate itself
         logger.warning("No in-memory estimate for %s: %s", dataset_id, e)
         copy = -1 if _backed(adaptor) else 0
     backed = copy != 0
+    edit = None
+    if copy > 0 and hold:
+        from scview.core import obs_writes
+
+        edit = obs_writes.current_edit(dataset_id)
+        if edit is None:
+            raise UnheldReadIn(f"make_room for backed dataset {dataset_id} outside dataset_edit")
     if copy > 0:
         await dm.reserve(dataset_id, copy, extra=max(0, then),
                          what="Reading this dataset into memory")
+        if edit is not None:  # no await between the reserve and the hold
+            edit.on_end(dm.hold_read(dataset_id, copy, "Reading this dataset into memory"))
     elif then > 0:
         await dm.free_memory_for(then, keep=dataset_id)
     return backed
@@ -265,3 +286,18 @@ async def reading(dm, dataset_id: str, need: int, what: str, also: tuple[str, ..
 
             for t in running:
                 t.add_done_callback(_done)
+
+
+@asynccontextmanager
+async def read_in(dm, dataset_id: str, adaptor, what: str, then: int = 0):
+    """``reading`` for work that reads ``adaptor``'s dataset into memory whole (``in_memory``
+    in a ``held.run`` thread) outside ``dataset_edit``: the copy (``copy_bytes``) and ``then``
+    bytes of work are reserved and held until it ends; nothing for a dataset in memory."""
+    try:
+        copy = max(0, await asyncio.to_thread(copy_bytes, adaptor))
+    except Exception as e:  # never block the work on the estimate itself
+        logger.warning("No in-memory estimate for %s: %s", dataset_id, e)
+        copy = 0
+    need = copy + max(0, then) if copy else 0
+    async with reading(dm, dataset_id, need, subject(dm, dataset_id, need, what)) as held:
+        yield held

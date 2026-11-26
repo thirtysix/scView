@@ -4,6 +4,14 @@ All notable changes to scView are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- Every edit of a dataset kept on disk (labels, clustering, saved scores, copy number, gene programs, reference
+  mapping: 29 saves in all) and gene-set scoring now hold the memory of reading it in until the work ends, so
+  requests running beside it count that memory. Before, the room was freed but not held, and a request arriving
+  during the read could take it and get the backend killed for memory (0.84.0 fixed this for marker genes only).
+
 ## [0.84.0] - 2026-11-25
 
 The Data Assessment page opens on deep files in a small backend, Seurat objects with unusual cell metadata
