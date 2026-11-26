@@ -384,7 +384,9 @@ def test_the_copy_is_what_in_memory_adds(tmp_path):
 def test_convert_memory_is_a_range_not_the_matrix(tmp_path, monkeypatch):
     import tracemalloc
 
-    m = _random_csc(60_000, 200, 0.25, np.float32, seed=6)  # 3M values, 24 MB as CSR
+    # 6M values, 48 MB as CSR: half of it is well over the bound below (at 3M values the two
+    # limits were 14.1 and 12 MB, and CI measured 12.46)
+    m = _random_csc(60_000, 200, 0.5, np.float32, seed=6)
     src, dst = tmp_path / "in.h5", tmp_path / "out.h5"
     _write_csc_arrays(src, m.data, m.indices, m.indptr, m.shape)
     monkeypatch.setattr(csr_store, "BLOCK_NNZ", 100_000)
