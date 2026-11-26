@@ -379,10 +379,10 @@ async def velocity_direction(dataset_id: str, body: DirectionRequest, dm: Datase
         if now is None or now.get("result_id") != result_id:
             raise HTTPException(status_code=409, detail="The velocity run changed while it was checked: check again.")
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
-        backed = await edit_room(dm, dataset_id, adaptor)
+        backed = await edit_room(dm, dataset_id, adaptor, labels_only=True)
 
         def work() -> dict[str, Any]:
-            data = editable(adaptor)
+            data = editable(adaptor, labels_only=True)
             before = uns_snapshot(data)
             out = vel.set_direction(data, direction)
             save_edit(adaptor, data, output_path, before)

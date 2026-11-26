@@ -138,23 +138,40 @@ def is_locked(dataset_id: str) -> bool:
     return lock is not None and lock.locked()
 
 
-async def edit_room(dm, dataset_id: str, adaptor) -> bool:
-    """``working_copy.make_room`` before an obs / uns edit; whether the dataset is read
-    into memory for it (the caller reloads it afterwards). Call it inside ``dataset_edit``:
-    the room for the read-in is held until that edit ends. A large dataset is not: its
-    tables are in memory already and the edit is written into its h5ad in place."""
+async def edit_room(dm, dataset_id: str, adaptor, labels_only: bool = False) -> bool:
+    """``working_copy.make_room`` before an obs / uns edit; whether the dataset is backed
+    (the caller reloads it afterwards). Call it inside ``dataset_edit``: the room for the
+    read-in is held until that edit ends. A large dataset is not read in: its tables are
+    in memory already and the edit is written into its h5ad in place.
+
+    ``labels_only``: the edit reads and changes obs and uns only (never X, raw, a layer or
+    obsp), so a backed dataset is NOT read in either: no room is asked for and none held,
+    and requests beside the edit have nothing to wait for. ``editable`` takes the same
+    flag; ``save_edit`` then copies the file and rewrites obs and the changed uns entries
+    (it needs ``uns_before``)."""
     if getattr(adaptor, "is_large", False):
         return False
+    if skips_read_in(adaptor, labels_only):
+        return True
     from scview.core import working_copy
 
     return await working_copy.make_room(dm, dataset_id, adaptor)
 
 
-def editable(adaptor):
+def skips_read_in(adaptor, labels_only: bool) -> bool:
+    """Whether a ``labels_only`` edit leaves this backed dataset on disk: its file must be
+    a current-format h5ad, since obs and uns are written into a copy of it (an older
+    file is read in and written whole, as before)."""
+    return bool(labels_only and getattr(adaptor.adata, "isbacked", False)
+                and _current_h5ad(adaptor.h5ad_path))
+
+
+def editable(adaptor, labels_only: bool = False):
     """The AnnData an obs / uns edit changes (in a worker thread, after ``edit_room``):
     the dataset in memory (``working_copy.in_memory``), or a large dataset's backed one,
-    whose X stays on disk."""
-    if getattr(adaptor, "is_large", False):
+    whose X stays on disk. ``labels_only`` (as given to ``edit_room``): a backed dataset's
+    own object, its obs and uns in memory and its matrices left on disk."""
+    if getattr(adaptor, "is_large", False) or skips_read_in(adaptor, labels_only):
         return adaptor.adata
     from scview.core import working_copy
 

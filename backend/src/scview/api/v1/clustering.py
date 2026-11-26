@@ -196,10 +196,10 @@ async def keep_resolution(
             raise HTTPException(status_code=400, detail=str(exc))
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
 
-        backed = await edit_room(dm, dataset_id, adaptor)
+        backed = await edit_room(dm, dataset_id, adaptor, labels_only=True)
 
         def _run():
-            work = editable(adaptor)
+            work = editable(adaptor, labels_only=True)
             before = uns_snapshot(work)
             result = rs.keep(work, method, resolution)
             save_edit(adaptor, work, output_path, before)

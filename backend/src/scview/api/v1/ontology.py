@@ -102,10 +102,10 @@ async def set_label_terms(
     async with dataset_edit(dataset_id) as held:
         adaptor = await _adaptor(dm, dataset_id)
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
-        backed = await edit_room(dm, dataset_id, adaptor)
+        backed = await edit_room(dm, dataset_id, adaptor, labels_only=True)
 
         def _run() -> dict[str, Any]:
-            adata = editable(adaptor)
+            adata = editable(adaptor, labels_only=True)
             before = uns_snapshot(adata)
             changes: dict[str, Any] = dict(body.terms)
             if body.clear:

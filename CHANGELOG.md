@@ -6,6 +6,14 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+- Label edits on a dataset kept on disk no longer read it into memory: reordering categories, labelling or
+  un-labelling cells, combining or importing label columns, keeping a clustering resolution, saved scores, Cell
+  Ontology terms, restoring a stored result and the velocity direction write only the cell table and their
+  settings into a copy of the file. On a 1.66 GB file (73,260 cells) in a 3 GB backend a category reorder took
+  3.1 s (before: 34.8 s), and the Data Assessment cards opened beside it all answered within 10 s (before: 33 to
+  46 s, waiting for the edit). Renaming a category and edits that compute on the counts still read the file in.
+
 ### Fixed
 - Every edit of a dataset kept on disk (labels, clustering, saved scores, copy number, gene programs, reference
   mapping: 29 saves in all) and gene-set scoring now hold the memory of reading it in until the work ends, so

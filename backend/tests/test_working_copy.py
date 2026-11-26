@@ -273,6 +273,60 @@ async def test_reading_a_backed_dataset_in_during_a_run_on_another_gets_the_run_
     assert await working_copy.make_room(dataset_manager, did, adaptor, hold=False) is True
 
 
+async def _no_read_in(monkeypatch):
+    async def refuse(*a, **k):
+        raise AssertionError("a labels-only edit asked for a read-in")
+    monkeypatch.setattr(working_copy, "make_room", refuse)
+    monkeypatch.setattr(AnnDataAdaptor, "to_memory", lambda self: (_ for _ in ()).throw(
+        AssertionError("a labels-only edit read the dataset in")))
+
+
+async def test_a_labels_only_edit_of_a_backed_dataset_reads_nothing_in(client, dataset_manager, backed, monkeypatch):
+    # A category reorder read the whole file in (16 s on a 1.6 GB file, the page's cards
+    # waiting on the held room). obs and uns go into a copy of the file; X is never read.
+    did = _register(Path(dataset_manager.data_dir))
+    assert await _is_backed(dataset_manager, did)
+    await _no_read_in(monkeypatch)
+    r = await client.post(f"{API}/datasets/{did}/metadata/grp/order", json={"order": ["c", "b", "a"]})
+    assert r.status_code == 200, r.text
+    r = await client.post(f"{API}/datasets/{did}/labels",
+                          json={"column": "mine", "label": "picked", "indices": [0, 1, 2], "new_column": True})
+    assert r.status_code == 200, r.text
+    assert dataset_manager.outstanding(1 * GB) == 0  # nothing held
+    adaptor = await dataset_manager.get_or_load_dataset(did)
+    assert adaptor.adata.isbacked
+    saved = ad.read_h5ad(adaptor.h5ad_path)
+    assert list(saved.obs["grp"].cat.categories) == ["c", "b", "a"]
+    assert (saved.obs["mine"].astype(str).iloc[:3] == "picked").all()
+    want = _counts()
+    assert (saved.X != want.X).nnz == 0 and (saved.raw.X != want.X).nnz == 0  # the matrices as uploaded
+
+
+async def test_an_edit_that_needs_the_matrix_still_reads_a_backed_dataset_in(client, dataset_manager, backed):
+    did = _register(Path(dataset_manager.data_dir))
+    assert await _is_backed(dataset_manager, did)
+    r = await client.post(f"{API}/datasets/{did}/metadata/grp/rename", json={"old": "a", "new": "A"})
+    assert r.status_code == 200, r.text
+    saved = ad.read_h5ad((await dataset_manager.get_or_load_dataset(did)).h5ad_path)
+    assert "A" in saved.obs["grp"].cat.categories
+
+
+def test_a_labels_only_edit_of_an_old_format_file_is_read_in(tmp_path, backed):
+    import h5py
+    from scview.core import obs_writes
+
+    p = tmp_path / "old.h5ad"
+    _counts().write_h5ad(p)
+    adaptor = AnnDataAdaptor(str(p))
+    assert adaptor.adata.isbacked and obs_writes.skips_read_in(adaptor, True)
+    assert not obs_writes.skips_read_in(adaptor, False)
+    adaptor.close()
+    with h5py.File(p, "a") as f:
+        del f.attrs["encoding-type"]  # as anndata < 0.8 wrote it
+    old = AnnDataAdaptor(str(p))
+    assert old.adata.isbacked and not obs_writes.skips_read_in(old, True)
+
+
 # -- the read-in is held, wherever it is asked for --------------------------------
 
 

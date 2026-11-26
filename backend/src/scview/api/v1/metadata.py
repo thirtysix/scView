@@ -196,10 +196,10 @@ async def set_category_order(
         if adaptor is None:
             raise HTTPException(status_code=404, detail="Dataset not found.")
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
-        backed = await edit_room(dm, dataset_id, adaptor)
+        backed = await edit_room(dm, dataset_id, adaptor, labels_only=True)
 
         def _run() -> list[str]:
-            adata = editable(adaptor)
+            adata = editable(adaptor, labels_only=True)
             before = uns_snapshot(adata)
             order = category_order.reorder(adata, column, body.order, body.sort)
             # Only obs (and a colours list in uns) changed: no matrix rewrite.
