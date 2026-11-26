@@ -21,10 +21,19 @@ All notable changes to scView are documented here. The format is based on
   46 s, waiting for the edit). Renaming a category and edits that compute on the counts still read the file in.
 
 ### Fixed
+- An .h5ad upload whose `feature_types` column is empty for some genes lost those genes: a merged atlas with
+  the type on 7 of its 10,237 genes kept only the 7 ("other features: nan"). A feature with no type is now a
+  gene, in the upload, the import wizard and the replay script.
+- An .h5ad written by anndata before 0.8 with antibodies, tags or guides among its features was uploaded with
+  them left in the gene matrix: the feature types of that layout were read as numbers, so no split was made.
+- Each label edit saved into an existing file made the file larger by the size of the cell table (0.545 to
+  0.563 to 0.575 GB over two edits on 73,260 cells): the old table's space stayed in the file. The save now
+  writes a file without it, in the same time (0.4 to 0.5 s per 0.55 GB).
 - A Data Assessment card that waited its turn while an edit read a dataset kept on disk into memory could fail
   with a server error ("invalid identifier"): the file was closed under its read when another card finished.
   Seen on the mean-variance card, 1 run in 6 on a 1.66 GB file in a 3 GB backend. Each card now keeps the file
-  open from the moment it is asked for.
+  open from the moment it is asked for, and every other read of a dataset on disk (DE, markers, activity,
+  subset and the rest) keeps it open the same way when it starts after such a wait.
 - Every edit of a dataset kept on disk (labels, clustering, saved scores, copy number, gene programs, reference
   mapping: 29 saves in all) and gene-set scoring now hold the memory of reading it in until the work ends, so
   requests running beside it count that memory. Before, the room was freed but not held, and a request arriving
