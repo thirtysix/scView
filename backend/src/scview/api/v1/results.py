@@ -87,10 +87,10 @@ async def restore_result(dataset_id: str, result_id: str,
         except uns_history.RestoreError as exc:
             raise HTTPException(status_code=exc.status, detail=exc.detail)
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
-        backed = await edit_room(dm, dataset_id, adaptor)
+        backed = await edit_room(dm, dataset_id, adaptor, labels_only=True)
 
         def _run() -> list[str]:
-            adata = editable(adaptor)
+            adata = editable(adaptor, labels_only=True)
             before = uns_snapshot(adata)
             keys = uns_history.apply(adata, value)
             save_edit(adaptor, adata, output_path, before)

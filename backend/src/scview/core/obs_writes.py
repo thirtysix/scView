@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 import os
-import shutil
 import weakref
 
 from scview.core.uns_keys import markers_key
@@ -49,12 +48,31 @@ def dataset_lock(dataset_id: str) -> asyncio.Lock:
     return lock
 
 
+# The edit holding each dataset's lock now (``current_edit``), per event loop as the locks.
+_edits: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, "DatasetEdit"]] = (
+    weakref.WeakKeyDictionary()
+)
+
+
 class DatasetEdit:
     """Work run inside ``dataset_edit``: each ``run`` is a worker thread the lock
-    waits for, even when the request is cancelled."""
+    waits for, even when the request is cancelled. ``on_end`` callbacks run when the
+    lock is handed back (the memory held for a backed dataset's read-in is let go there)."""
 
     def __init__(self) -> None:
         self.tasks: list[asyncio.Future] = []
+        self._on_end: list = []
+
+    def on_end(self, fn) -> None:
+        self._on_end.append(fn)
+
+    def _end(self) -> None:
+        fns, self._on_end = self._on_end, []
+        for fn in fns:
+            try:
+                fn()
+            except Exception:  # noqa: BLE001 - the lock is handed back whatever a release does
+                pass
 
     async def run(self, fn, *args):
         task = asyncio.ensure_future(asyncio.to_thread(fn, *args))
@@ -72,12 +90,21 @@ async def dataset_edit(dataset_id: str):
     lock = dataset_lock(dataset_id)
     await lock.acquire()
     edit = DatasetEdit()
+    edits = _edits.setdefault(asyncio.get_running_loop(), {})
+    edits[dataset_id] = edit
+
+    def finish() -> None:
+        if edits.get(dataset_id) is edit:
+            del edits[dataset_id]
+        edit._end()
+        lock.release()
+
     try:
         yield edit
     finally:
         running = [t for t in edit.tasks if not t.done()]
         if not running:
-            lock.release()
+            finish()
         else:
             left = len(running)
 
@@ -85,10 +112,19 @@ async def dataset_edit(dataset_id: str):
                 nonlocal left
                 left -= 1
                 if left == 0:
-                    lock.release()
+                    finish()
 
             for t in running:
                 t.add_done_callback(_done)
+
+
+def current_edit(dataset_id: str) -> DatasetEdit | None:
+    """The ``dataset_edit`` holding this dataset's lock now, if any."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+    return _edits.get(loop, {}).get(dataset_id)
 
 
 def is_locked(dataset_id: str) -> bool:
@@ -101,22 +137,40 @@ def is_locked(dataset_id: str) -> bool:
     return lock is not None and lock.locked()
 
 
-async def edit_room(dm, dataset_id: str, adaptor) -> bool:
-    """``working_copy.make_room`` before an obs / uns edit; whether the dataset is read
-    into memory for it (the caller reloads it afterwards). A large dataset is not: its
-    tables are in memory already and the edit is written into its h5ad in place."""
+async def edit_room(dm, dataset_id: str, adaptor, labels_only: bool = False) -> bool:
+    """``working_copy.make_room`` before an obs / uns edit; whether the dataset is backed
+    (the caller reloads it afterwards). Call it inside ``dataset_edit``: the room for the
+    read-in is held until that edit ends. A large dataset is not read in: its tables are
+    in memory already and the edit is written into its h5ad in place.
+
+    ``labels_only``: the edit reads and changes obs and uns only (never X, raw, a layer or
+    obsp), so a backed dataset is NOT read in either: no room is asked for and none held,
+    and requests beside the edit have nothing to wait for. ``editable`` takes the same
+    flag; ``save_edit`` then copies the file and rewrites obs and the changed uns entries
+    (it needs ``uns_before``)."""
     if getattr(adaptor, "is_large", False):
         return False
+    if skips_read_in(adaptor, labels_only):
+        return True
     from scview.core import working_copy
 
     return await working_copy.make_room(dm, dataset_id, adaptor)
 
 
-def editable(adaptor):
+def skips_read_in(adaptor, labels_only: bool) -> bool:
+    """Whether a ``labels_only`` edit leaves this backed dataset on disk: its file must be
+    a current-format h5ad, since obs and uns are written into a copy of it (an older
+    file is read in and written whole, as before)."""
+    return bool(labels_only and getattr(adaptor.adata, "isbacked", False)
+                and _current_h5ad(adaptor.h5ad_path))
+
+
+def editable(adaptor, labels_only: bool = False):
     """The AnnData an obs / uns edit changes (in a worker thread, after ``edit_room``):
     the dataset in memory (``working_copy.in_memory``), or a large dataset's backed one,
-    whose X stays on disk."""
-    if getattr(adaptor, "is_large", False):
+    whose X stays on disk. ``labels_only`` (as given to ``edit_room``): a backed dataset's
+    own object, its obs and uns in memory and its matrices left on disk."""
+    if getattr(adaptor, "is_large", False) or skips_read_in(adaptor, labels_only):
         return adaptor.adata
     from scview.core import working_copy
 
@@ -196,46 +250,38 @@ def write_derived(
         import h5py
         from anndata.io import write_elem
 
-        shutil.copyfile(source_path, partial)
+        from scview.core import h5_copy
+
+        # Everything the edit did not touch is copied into a new file and the rest written
+        # beside it: deleting from a file copy left each old obs in it (``compact_copy``).
+        gone = [k for k in uns_before if k not in adata.uns]
         try:
+            with h5py.File(source_path, "r") as f:
+                in_file = {g: set(f[g].keys()) if g in f else set() for g in ("uns", "obsm", "obsp")}
+            fresh_uns = [k for k, v in adata.uns.items()
+                         # From another file (source_unchanged), also what the dataset gained in
+                         # memory since it was read (as a full write would save it).
+                         if uns_before.get(k) != id(v) or (source_unchanged and k not in in_file["uns"])]
+            if source_unchanged:
+                obsm_keys = [*(obsm_keys or ()), *(k for k in adata.obsm if k not in in_file["obsm"])]
+            obsm_keys, obsp_keys = list(dict.fromkeys(obsm_keys or ())), list(dict.fromkeys(obsp_keys or ()))
+            h5_copy.compact_copy(source_path, partial, [
+                "obs", *(["var"] if var else []), *(f"uns/{k}" for k in (*gone, *fresh_uns)),
+                *(f"obsm/{k}" for k in obsm_keys), *(f"obsp/{k}" for k in obsp_keys)])
             with h5py.File(partial, "a") as f:
-                del f["obs"]
                 write_elem(f, "obs", adata.obs)
                 if var:
-                    del f["var"]
                     write_elem(f, "var", adata.var)
-                if "uns" not in f:
-                    write_elem(f, "uns", {})
-                group = f["uns"]
-                for key in [k for k in uns_before if k not in adata.uns]:
-                    if key in group:
-                        del group[key]
-                for key, value in adata.uns.items():
-                    # From another file (source_unchanged), also what the dataset gained in
-                    # memory since it was read (as a full write would save it).
-                    if uns_before.get(key) != id(value) or (source_unchanged and key not in group):
-                        if key in group:
-                            del group[key]
-                        write_elem(group, key, value)
-                if source_unchanged:
-                    obsm_keys = [*(obsm_keys or ()),
-                                 *(k for k in adata.obsm if "obsm" not in f or k not in f["obsm"])]
-                if obsm_keys and "obsm" not in f:
-                    write_elem(f, "obsm", {})
-                for key in obsm_keys or ():
-                    if key in f["obsm"]:
-                        del f["obsm"][key]
-                    if key in adata.obsm:
-                        write_elem(f["obsm"], key, adata.obsm[key])
-                if obsp_keys and "obsp" not in f:
-                    write_elem(f, "obsp", {})
-                for key in obsp_keys or ():
-                    if key in f["obsp"]:
-                        del f["obsp"][key]
-                    if key in adata.obsp:
-                        write_elem(f["obsp"], key, adata.obsp[key])
+                for name, keys, held in (("uns", fresh_uns, adata.uns), ("obsm", obsm_keys, adata.obsm),
+                                         ("obsp", obsp_keys, adata.obsp)):
+                    if name not in f and (keys or name == "uns"):
+                        write_elem(f, name, {})
+                    for key in keys:
+                        if key in held:
+                            write_elem(f[name], key, held[key])
         except Exception:
-            os.remove(partial)
+            if os.path.exists(partial):
+                os.remove(partial)
             raise
     else:
         adata.write_h5ad(partial, compression="gzip")

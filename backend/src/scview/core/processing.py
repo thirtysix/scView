@@ -201,9 +201,19 @@ async def _make_run_room(dm: DatasetManager, dataset_id: str, adaptor: AnnDataAd
             except Exception as e:  # noqa: BLE001 - never block the work on the estimate itself
                 logger.warning("No estimate for the work on %s: %s", dataset_id, e)
     own_need = max(own.values(), default=0)
-    await working_copy.make_room(dm, dataset_id, adaptor, then=need or own_need)
+    # hold=False: the run's own reservation below counts the copy (``growth``).
+    await working_copy.make_room(dm, dataset_id, adaptor, then=need or own_need, hold=False)
     if own_need > 0 and control is not None:
         await _reserve_run(dm, dataset_id, control, own_need, lambda: own)
+    if not need and not (own_need > 0 and control is not None):
+        # No estimate of the work: the read-in alone is reserved until the work ends
+        # (``release_run``), so requests beside it count the copy.
+        try:
+            copy = await asyncio.to_thread(working_copy.copy_bytes, adaptor)
+        except Exception:  # noqa: BLE001 - never block the work on the estimate itself
+            copy = 0
+        if copy > 0:
+            dm.reserve_run(dataset_id, copy)
     if need:
         from scview.core import preflight
 

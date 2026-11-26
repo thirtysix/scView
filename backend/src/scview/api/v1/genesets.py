@@ -304,10 +304,11 @@ def _aucell(adata, gene_set: list[str], max_rank: int | None):
     return aucell.score(rk, m.idx), m, rk
 
 
-async def _in_thread(fn, dataset_id: str):
+async def _in_thread(fn, dataset_id: str, held=None):
     try:
         # Seconds on a large dataset: in a worker thread, so the server keeps answering.
-        return await asyncio.to_thread(fn)
+        # ``held`` (``working_copy.read_in``): its reservation waits for the thread.
+        return await (held.run(fn) if held is not None else asyncio.to_thread(fn))
     except HTTPException:
         raise
     except ValueError as e:  # nothing to rank, max_rank out of range, too large
@@ -413,8 +414,6 @@ async def _score_response(dm: DatasetManager, dataset_id: str, adaptor, body: Ge
         raise _none_found(body.gene_set)
 
     large = adaptor.is_large
-    if not large:  # a large dataset is scored from its gene store, never read in
-        await working_copy.make_room(dm, dataset_id, adaptor)
 
     def _score() -> GeneSetScoreResponse:
         if large:
@@ -434,7 +433,11 @@ async def _score_response(dm: DatasetManager, dataset_id: str, adaptor, body: Ge
             panel_caution=targeted_panel.enrichment_caution(adata),
         )
 
-    return await _in_thread(_score, dataset_id)
+    if large:  # scored from its gene store, never read in
+        return await _in_thread(_score, dataset_id)
+    # A backed dataset is read in: its copy is held until the scoring ends.
+    async with working_copy.read_in(dm, dataset_id, adaptor, "Scoring this gene set") as held:
+        return await _in_thread(_score, dataset_id, held)
 
 
 def _group_codes(adata, column: str | None) -> np.ndarray | None:
@@ -478,8 +481,6 @@ async def compare_score_methods(
     genes_found, _ = _match(adaptor.gene_names(), body.gene_set)
     if not genes_found:
         raise _none_found(body.gene_set)
-
-    await working_copy.make_room(dm, dataset_id, adaptor)
 
     def _check() -> dict:
         adata = working_copy.in_memory(adaptor)
@@ -526,4 +527,6 @@ async def compare_score_methods(
             "sentence": aucell.sentence(check, {k: METHOD_LABELS[k] for k in scores}, metric, where),
         }
 
-    return await _in_thread(_check, dataset_id)
+    # A backed dataset is read in: its copy is held until the check ends.
+    async with working_copy.read_in(dm, dataset_id, adaptor, "Comparing scoring methods") as held:
+        return await _in_thread(_check, dataset_id, held)

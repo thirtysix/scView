@@ -332,6 +332,22 @@ def _close_file(adata: ad.AnnData) -> None:
         type(manager).close(manager)
 
 
+# Adaptors still holding a backed object they no longer serve, its file open for the
+# requests reading it (``AnnDataAdaptor._retire``); gone from here at the last unpin.
+_closing: weakref.WeakSet = weakref.WeakSet()
+_closing_lock = threading.Lock()
+
+
+def closing(dataset_id: str) -> list[AnnDataAdaptor]:
+    """The adaptors of ``dataset_id`` that still keep a let-go backed file open, the dataset
+    manager's own or one it has dropped since. A request that took the backed object before
+    a wait pins these as well when its read starts (``working_copy._pin``): looked up by id
+    alone, a dropped adaptor is not found, and the last other reader's unpin closed the file
+    under the late read (h5py: invalid identifier)."""
+    with _closing_lock:
+        return [a for a in _closing if getattr(a, "dataset_id", None) == dataset_id]
+
+
 # Layer key -> obsm key of the protein modality (core/protein.py).
 PROTEIN_LAYERS = {"protein": protein.CLR_KEY, "protein_counts": protein.COUNTS_KEY,
                   "protein_dsb": protein.DSB_KEY}
@@ -347,6 +363,7 @@ class AnnDataAdaptor:
         # Open backed although the file is under BACKED_MIN_BYTES: the dataset manager
         # found its in-memory peak too big for the memory left (DatasetManager.reserve).
         self.force_backed = bool(backed)
+        self.dataset_id: str | None = None  # set by the dataset manager
         self._adata: ad.AnnData | None = None
         self._memory_lock = threading.Lock()  # one read of a backed file into memory at a time
         # Requests reading the backed object (``pin``), and the backed objects let go of
@@ -450,6 +467,9 @@ class AnnDataAdaptor:
                 done = True
                 self._pins -= 1
                 retired, self._retired = (self._retired, []) if self._pins == 0 else ([], self._retired)
+                if retired:
+                    with _closing_lock:
+                        _closing.discard(self)
             for old in retired:
                 _close_file(old)
 
@@ -470,6 +490,8 @@ class AnnDataAdaptor:
         with self._pin_lock:
             if self._pins:
                 self._retired.append(old)
+                with _closing_lock:
+                    _closing.add(self)
                 return
         _close_file(old)
 

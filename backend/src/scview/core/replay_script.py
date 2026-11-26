@@ -3177,7 +3177,10 @@ def _ingest_steps(p: dict, ctx: _Ctx) -> Snippet:
             "# scView kept only the 'Gene Expression' features in X; the antibody (CITE-seq) and",
             "# CellPlex tag features went to obsm['protein_counts'] / obsm['hto_counts'].",
             "if \"feature_types\" in adata.var.columns:",
-            "    adata = adata[:, adata.var[\"feature_types\"].astype(str).eq(\"Gene Expression\").to_numpy()].copy()",
+            "    _types = adata.var[\"feature_types\"]  # a feature with no type is a gene",
+            "    _untyped = _types.isna() | _types.astype(str).str.strip().str.lower().isin("
+            "[\"\", \"nan\", \"none\", \"na\", \"<na>\", \"null\"])",
+            "    adata = adata[:, (_untyped | _types.astype(str).eq(\"Gene Expression\")).to_numpy()].copy()",
         ]
         return Snippet(APPROXIMATE, lines, "antibody and tag features dropped from X, not moved to obsm")
     if any(k.startswith("protein") or k.startswith("n_protein") for k in p):

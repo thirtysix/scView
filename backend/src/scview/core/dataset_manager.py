@@ -331,6 +331,7 @@ class DatasetManager:
         backed = await self._make_memory_room(dataset_id, h5ad_path)
 
         adaptor = AnnDataAdaptor(h5ad_path, backed=backed)
+        adaptor.dataset_id = dataset_id  # ``anndata_adaptor.closing``
         updates = await asyncio.to_thread(self._metadata_updates, dataset_id, adaptor)
         if self._generation.get(dataset_id, 0) != generation:
             # Evicted while reading (its file was rewritten or removed): this copy
@@ -896,15 +897,15 @@ class DatasetManager:
                 import h5py
                 from anndata.io import write_elem
 
-                shutil.copyfile(target, partial)
+                from scview.core import h5_copy
+
+                # not a file copy and ``del``: that leaves each replaced entry in the file
+                h5_copy.compact_copy(target, partial, [f"uns/{k}" for k in keys])
                 with h5py.File(partial, "a") as f:
                     if "uns" not in f:
                         write_elem(f, "uns", {})
-                    group = f["uns"]
                     for key in keys:
-                        if key in group:
-                            del group[key]
-                        write_elem(group, key, adata.uns[key])
+                        write_elem(f["uns"], key, adata.uns[key])
                 os.replace(partial, target)
             else:
                 adata.write_h5ad(partial, compression="gzip")

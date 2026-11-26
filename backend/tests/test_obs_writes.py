@@ -142,3 +142,36 @@ def test_source_unchanged_writes_whole_when_the_source_is_an_old_format(tmp_path
     out = str(tmp_path / "out.h5ad")
     write_derived(a, out, src, before, source_unchanged=True)
     assert calls and "label" in ad.read_h5ad(out).obs
+
+
+def test_repeated_label_edits_do_not_grow_the_file(tmp_path):
+    # A file copy with obs deleted and written again kept every old obs: HDF5 does not give
+    # the space back (0.545 -> 0.563 -> 0.575 GB over two edits on a 73k-cell file).
+    import os
+
+    import h5py
+    import scipy.sparse as sp
+
+    n = 4000
+    a = ad.AnnData(sp.random(n, 50, density=0.05, format="csr", dtype=np.float32, random_state=0),
+                   obs=pd.DataFrame({f"c{i}": np.arange(n, dtype=float) + i for i in range(20)},
+                                    index=[f"cell{i}" for i in range(n)]))
+    a.uns["kept"] = {"x": np.arange(1000)}
+    a.obsm["X_umap"] = np.zeros((n, 2), dtype=np.float32)
+    path = str(tmp_path / "d.h5ad")
+    a.write_h5ad(path)
+    sizes = []
+    for i in range(6):
+        b = ad.read_h5ad(path)
+        before = uns_snapshot(b)
+        b.obs["label"] = pd.Categorical([f"t{i}"] * n)
+        b.uns["note"] = {"edit": i}
+        write_derived(b, path, path, before, obsm_keys=["X_umap"])
+        sizes.append(os.path.getsize(path))
+    assert max(sizes[1:]) - min(sizes[1:]) < 2048, sizes  # same content, same size
+    c = ad.read_h5ad(path)
+    assert list(c.obs["label"].unique()) == ["t5"] and c.uns["note"]["edit"] == 5
+    assert c.uns["kept"]["x"].sum() == np.arange(1000).sum() and c.obsm["X_umap"].shape == (n, 2)
+    assert (c.X != a.X).nnz == 0
+    with h5py.File(path, "r") as f:
+        assert f.attrs["encoding-type"] == "anndata"

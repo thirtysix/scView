@@ -92,10 +92,10 @@ async def _edit_and_save(
             raise HTTPException(status_code=404, detail="Dataset not found.")
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
 
-        backed = await edit_room(dm, dataset_id, adaptor)
+        backed = await edit_room(dm, dataset_id, adaptor, labels_only=True)
 
         def _run():
-            work = editable(adaptor)
+            work = editable(adaptor, labels_only=True)
             before = uns_snapshot(work)
             result = edit(work)
             # Labels change obs and uns only: the matrices are copied, not rewritten.

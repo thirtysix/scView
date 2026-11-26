@@ -40,10 +40,10 @@ async def _edit_and_save(dm: DatasetManager, dataset_id: str, edit: Callable[[An
         if expect_cells is not None and adaptor.cells_fingerprint() != expect_cells:
             raise saved_scores.SavedScoreError(CHANGED_NOTE, status=409)
         output_path = str(dm.derived_h5ad_path(dataset_id, adaptor.h5ad_path))
-        backed = await edit_room(dm, dataset_id, adaptor)
+        backed = await edit_room(dm, dataset_id, adaptor, labels_only=True)
 
         def _run():
-            work = editable(adaptor)
+            work = editable(adaptor, labels_only=True)
             before = uns_snapshot(work)
             result = edit(work)
             save_edit(adaptor, work, output_path, before, source_unchanged=True)

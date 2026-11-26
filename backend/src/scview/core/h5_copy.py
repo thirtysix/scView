@@ -71,3 +71,29 @@ def repoint(src: h5py.Group | h5py.Dataset, dst: h5py.Group | h5py.Dataset) -> i
 
         src.visititems(visit)
     return n
+
+
+def compact_copy(src_path, dst_path, leave_out=()) -> None:
+    """A new file ``dst_path`` with everything of ``src_path`` but the paths in
+    ``leave_out`` (a top-level name, "obs", or one level down, "uns/markers"), for the caller
+    to write anew. Unlike a file copy followed by ``del``, nothing of the left-out elements
+    stays in the file: HDF5 does not give a deleted element's space back, so a label edit
+    saved that way grew the file by the size of obs each time (0.545 -> 0.563 -> 0.575 GB
+    over two edits). Stored chunks are copied as they are (no decompression)."""
+    skip = {str(p).strip("/") for p in leave_out}
+    partly = {p.split("/", 1)[0] for p in skip if "/" in p}
+    with h5py.File(src_path, "r") as fi, h5py.File(dst_path, "w") as fo:
+        for k, v in fi.attrs.items():
+            fo.attrs[k] = v
+        for key in fi.keys():
+            if key in skip:
+                continue
+            if key in partly and isinstance(fi[key], h5py.Group):
+                group = fo.create_group(key)
+                for k, v in fi[key].attrs.items():
+                    group.attrs[k] = v
+                for name in fi[key].keys():
+                    if f"{key}/{name}" not in skip:
+                        copy(fi[key][name], group, name)
+            else:
+                copy(fi[key], fo, key)
