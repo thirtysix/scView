@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 import os
-import shutil
 import weakref
 
 from scview.core.uns_keys import markers_key
@@ -251,46 +250,38 @@ def write_derived(
         import h5py
         from anndata.io import write_elem
 
-        shutil.copyfile(source_path, partial)
+        from scview.core import h5_copy
+
+        # Everything the edit did not touch is copied into a new file and the rest written
+        # beside it: deleting from a file copy left each old obs in it (``compact_copy``).
+        gone = [k for k in uns_before if k not in adata.uns]
         try:
+            with h5py.File(source_path, "r") as f:
+                in_file = {g: set(f[g].keys()) if g in f else set() for g in ("uns", "obsm", "obsp")}
+            fresh_uns = [k for k, v in adata.uns.items()
+                         # From another file (source_unchanged), also what the dataset gained in
+                         # memory since it was read (as a full write would save it).
+                         if uns_before.get(k) != id(v) or (source_unchanged and k not in in_file["uns"])]
+            if source_unchanged:
+                obsm_keys = [*(obsm_keys or ()), *(k for k in adata.obsm if k not in in_file["obsm"])]
+            obsm_keys, obsp_keys = list(dict.fromkeys(obsm_keys or ())), list(dict.fromkeys(obsp_keys or ()))
+            h5_copy.compact_copy(source_path, partial, [
+                "obs", *(["var"] if var else []), *(f"uns/{k}" for k in (*gone, *fresh_uns)),
+                *(f"obsm/{k}" for k in obsm_keys), *(f"obsp/{k}" for k in obsp_keys)])
             with h5py.File(partial, "a") as f:
-                del f["obs"]
                 write_elem(f, "obs", adata.obs)
                 if var:
-                    del f["var"]
                     write_elem(f, "var", adata.var)
-                if "uns" not in f:
-                    write_elem(f, "uns", {})
-                group = f["uns"]
-                for key in [k for k in uns_before if k not in adata.uns]:
-                    if key in group:
-                        del group[key]
-                for key, value in adata.uns.items():
-                    # From another file (source_unchanged), also what the dataset gained in
-                    # memory since it was read (as a full write would save it).
-                    if uns_before.get(key) != id(value) or (source_unchanged and key not in group):
-                        if key in group:
-                            del group[key]
-                        write_elem(group, key, value)
-                if source_unchanged:
-                    obsm_keys = [*(obsm_keys or ()),
-                                 *(k for k in adata.obsm if "obsm" not in f or k not in f["obsm"])]
-                if obsm_keys and "obsm" not in f:
-                    write_elem(f, "obsm", {})
-                for key in obsm_keys or ():
-                    if key in f["obsm"]:
-                        del f["obsm"][key]
-                    if key in adata.obsm:
-                        write_elem(f["obsm"], key, adata.obsm[key])
-                if obsp_keys and "obsp" not in f:
-                    write_elem(f, "obsp", {})
-                for key in obsp_keys or ():
-                    if key in f["obsp"]:
-                        del f["obsp"][key]
-                    if key in adata.obsp:
-                        write_elem(f["obsp"], key, adata.obsp[key])
+                for name, keys, held in (("uns", fresh_uns, adata.uns), ("obsm", obsm_keys, adata.obsm),
+                                         ("obsp", obsp_keys, adata.obsp)):
+                    if name not in f and (keys or name == "uns"):
+                        write_elem(f, name, {})
+                    for key in keys:
+                        if key in held:
+                            write_elem(f[name], key, held[key])
         except Exception:
-            os.remove(partial)
+            if os.path.exists(partial):
+                os.remove(partial)
             raise
     else:
         adata.write_h5ad(partial, compression="gzip")
