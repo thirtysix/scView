@@ -38,7 +38,9 @@ def _counts(seed: int = 0, n: int = 2400) -> ad.AnnData:
     genes spread over as many types (a random-like list), t4 damaged cells (a fifth of the
     counts, ten times the mito)."""
     rng = np.random.default_rng(seed)
-    names = [f"MT-{i}" for i in range(6)] + ["MALAT1"] + [f"RPS{i}" for i in range(5)] + [f"G{i}" for i in range(900)]
+    # real names for what cluster QC looks up by name: haemoglobin, red-cell genes, MALAT1, ribosomal
+    names = ([f"MT-{i}" for i in range(6)] + ["MALAT1", "HBB", "HBA1", "ALAS2", "GYPA", "KLF1", "AHSP"]
+             + [f"RPS{i}" for i in range(5)] + [f"G{i}" for i in range(900)])
     g = len(names)
     first = names.index("G0")
     group = rng.integers(0, 5, n)
@@ -135,6 +137,16 @@ def test_decisions_notes_and_qualified_labels_are_the_same_in_large_mode(tmp_pat
     assert list(big.obs["ai_label_qualified"].astype(str)) == list(mem.obs["ai_label_qualified"].astype(str))
     assert json.loads(big.uns["ai_label_qualifiers"]) == json.loads(mem.uns["ai_label_qualifiers"])
     assert "annotation_checks_skipped" not in big_rec and "cell_type_annotation" not in res.cautions
+
+    # Annotating again later, a run of that one step on the large dataset's own files (the
+    # counts are then the sidecar's): the same decisions, notes and qualified labels.
+    again = large_run.run(out, ["cell_type_annotation"], _params(chunked="on", annotation_overwrite=True), str(out))
+    assert again.status == "complete" and "cell_type_annotation" not in again.cautions, again.cautions
+    assert model.pop() == prompt_mem
+    redone = ad.read_h5ad(out)
+    assert {k: _step(redone).get(k) for k in rec if k.startswith(("llm_", "qualif"))} == \
+        {k: v for k, v in rec.items() if k.startswith(("llm_", "qualif"))}
+    assert list(redone.obs["ai_label_qualified"].astype(str)) == list(mem.obs["ai_label_qualified"].astype(str))
 
 
 @pytest.mark.parametrize("large", [False, True])

@@ -2069,7 +2069,7 @@ def _annotation_cluster_qc(adata: ad.AnnData, groupby: str):
 
     backend = _LARGE.get()
     if backend is not None:
-        return cluster_qc.cluster_qc(adata, groupby, backend.qc_cells(adata))
+        return cluster_qc.cluster_qc(adata, groupby, backend.qc_cells(adata), backend.gene_columns)
     return cluster_qc.cluster_qc(adata, groupby)
 
 
@@ -2081,7 +2081,7 @@ def _annotation_qc_notes(adata: ad.AnnData, groupby: str) -> dict[str, str]:
     try:
         report = _annotation_cluster_qc(adata, groupby)
     except Exception as exc:
-        logger.warning("Annotation QC notes skipped: %s", exc)
+        logger.warning("Annotation QC notes skipped: %s", exc, exc_info=True)
         check_skipped(CHECK_QC_NOTES, exc)
         return {}
     t = report.typical
@@ -2131,13 +2131,13 @@ def _annotation_decided(adata: ad.AnnData, groupby: str, marker_map: dict[str, l
     try:
         check = marker_randomness.check(adata, marker_map, db=db, tissue=tissue)  # types of the tissue only
     except Exception as exc:
-        logger.warning("Random-marker check skipped: %s", exc)
+        logger.warning("Random-marker check skipped: %s", exc, exc_info=True)
         check_skipped(CHECK_RANDOM, exc)
         check = marker_randomness.RandomCheck(skipped="check failed")
     try:
         report = _annotation_cluster_qc(adata, groupby)
     except Exception as exc:
-        logger.warning("Damaged-cluster check skipped: %s", exc)
+        logger.warning("Damaged-cluster check skipped: %s", exc, exc_info=True)
         check_skipped(CHECK_DAMAGED, exc)
         report = None
     return decide_clusters(check, report, marker_map)

@@ -1492,6 +1492,10 @@ class _Backend:
                 self._qc_cells = per_cell_qc(adata, ribo=True, counts=(_Blocks(counts.X), adata.var_names))
         return self._qc_cells
 
+    def gene_columns(self, genes):
+        """A few genes of X (log-normalised) as a cells x genes block, from the gene store."""
+        return self.run.store().genes(list(genes))
+
     def ranked_matrix(self, adata):
         """(X log-normalised on disk as row blocks, its gene names): the matrix this run's
         markers are ranked on, for the per-group sums of the label qualifiers."""
