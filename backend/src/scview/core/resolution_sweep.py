@@ -17,8 +17,11 @@ resolution is done it adds the clustering tree across them
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
+import threading
+from collections import OrderedDict
 from collections.abc import Iterator
 from typing import Any
 
@@ -40,6 +43,59 @@ MIN_RESOLUTION, MAX_RESOLUTION = 0.01, 5.0
 MAX_CELLS = 200_000
 SILHOUETTE_CELLS = 5_000
 SEED = 0  # the subsample's; clustering uses the pipeline's own seed (0)
+
+
+# The labels the last sweeps made, for "Keep this one": clustering is deterministic given the
+# graph, the method, the resolution and Leiden's passes, so a kept resolution reuses the sweep's
+# labels instead of clustering again (a Leiden run on 116k cells is minutes: keeping a
+# resolution the sweep had just shown took 400 s). The key holds the graph's own bytes, so a
+# graph remade since the sweep finds nothing and the resolution is clustered again.
+SWEPT_KEPT = 16
+_swept: OrderedDict[tuple, pd.Categorical] = OrderedDict()
+_swept_lock = threading.Lock()
+
+
+def graph_fingerprint(graph) -> str | None:
+    """A digest of the neighbour graph's stored bytes (20 MB at 116k cells: about 20 ms);
+    None for a graph that is not a sparse matrix in memory."""
+    import scipy.sparse as sp
+
+    if not sp.issparse(graph) or not hasattr(graph, "indptr"):
+        return None
+    h = hashlib.blake2b(digest_size=16)
+    h.update(repr((graph.format, graph.shape, str(graph.dtype))).encode())
+    for part in (graph.indptr, graph.indices, graph.data):
+        h.update(np.ascontiguousarray(part).data)
+    return h.hexdigest()
+
+
+def _swept_key(adata, method: str, resolution: float, n_iterations: int | None) -> tuple | None:
+    mark = graph_fingerprint(_graph(adata))
+    return None if mark is None else (mark, method, round(float(resolution), 4), n_iterations)
+
+
+def remember(adata, method: str, resolution: float, n_iterations: int | None, labels: pd.Categorical) -> None:
+    """Hold a sweep's labels at one resolution for ``keep`` (the last ``SWEPT_KEPT``)."""
+    key = _swept_key(adata, method, resolution, n_iterations)
+    if key is None:
+        return
+    with _swept_lock:
+        _swept[key] = labels
+        _swept.move_to_end(key)
+        while len(_swept) > SWEPT_KEPT:
+            _swept.popitem(last=False)
+
+
+def swept(adata, method: str, resolution: float, n_iterations: int | None = None) -> pd.Categorical | None:
+    """The labels a sweep made at this resolution on this dataset's graph as it is now."""
+    if method == "leiden" and n_iterations is None:
+        n_iterations = leiden.recorded_iterations(adata)
+    key = _swept_key(adata, method, resolution, n_iterations)
+    if key is None:
+        return None
+    with _swept_lock:
+        labels = _swept.get(key)
+    return labels if labels is not None and len(labels) == adata.n_obs else None
 
 
 class SweepError(ValueError):
@@ -180,8 +236,13 @@ def iter_sweep(adata, resolutions: list[float], method: str) -> Iterator[dict[st
         # A resolution the dataset already has a column for is shown as that
         # column, which "Keep this one" returns: re-clustering may not reproduce it
         # (files processed before the UMAP graph fix carry an altered graph).
-        labels = (pd.Categorical(adata.obs[existing].astype(str).where(adata.obs[existing].notna()))
-                  if existing is not None else cluster(adata, method, r, n_iterations))
+        if existing is not None:
+            labels = pd.Categorical(adata.obs[existing].astype(str).where(adata.obs[existing].notna()))
+        else:
+            labels = swept(adata, method, r, n_iterations)  # a sweep run again shows what it held
+            if labels is None:
+                labels = cluster(adata, method, r, n_iterations)
+                remember(adata, method, r, n_iterations, labels)
         codes = np.asarray(labels.codes)
         names = [str(c) for c in labels.categories]
         if (codes < 0).any():  # missing labels: one group
@@ -215,15 +276,20 @@ def sweep(adata, resolutions: list[float], method: str) -> dict[str, Any]:
 
 def keep(adata, method: str, resolution: float) -> dict[str, Any]:
     """Save the clustering at ``resolution`` as its pipeline column, unless that
-    column exists already. Does not change the dataset's active clustering."""
+    column exists already. Does not change the dataset's active clustering. The labels
+    are the sweep's when it made them on this graph (``swept``: ``reused``), else the
+    resolution is clustered here."""
     existing = existing_column(adata, method, resolution)
     if existing is not None:
         return {"column": existing, "created": False, "n_clusters": int(adata.obs[existing].nunique())}
     column = column_name(method, resolution)
     check(adata)
     n_iterations = leiden.recorded_iterations(adata) if method == "leiden" else None
-    labels = cluster(adata, method, resolution, n_iterations)
-    adata.obs[column] = labels
+    labels = swept(adata, method, resolution, n_iterations)  # the sweep's own, when it still holds them
+    reused = labels is not None
+    if labels is None:
+        labels = cluster(adata, method, resolution, n_iterations)
+    adata.obs[column] = labels.copy()
     forget_column_results(adata, column)  # left by an earlier column of that name
     params: dict[str, Any] = {"clustering_method": method, "clustering_resolution": resolution,
                               "column": column, "from": "resolution sweep"}
@@ -237,4 +303,4 @@ def keep(adata, method: str, resolution: float) -> dict[str, Any]:
         )
     except Exception as e:  # provenance must never block the result
         logger.warning("Could not record keep_resolution provenance: %s", e)
-    return {"column": column, "created": True, "n_clusters": int(len(labels.categories))}
+    return {"column": column, "created": True, "n_clusters": int(len(labels.categories)), "reused": reused}

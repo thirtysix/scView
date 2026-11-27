@@ -30,7 +30,7 @@ vi.mock("@/components/plots/Plot", () => ({
 import type { ClusterTree, SweepInfo, SweepRow } from "@/api/clustering";
 import { useDatasetStore } from "@/stores/datasetStore";
 import { useSettingsStore } from "@/stores/settingsStore";
-import { ResolutionSweepPanel } from "./ResolutionSweep";
+import { elapsedText, ResolutionSweepPanel } from "./ResolutionSweep";
 
 const info: SweepInfo = {
   available: true,
@@ -102,9 +102,47 @@ describe("ResolutionSweepPanel", () => {
 
     fireEvent.click(screen.getAllByRole("button", { name: /Keep this one/ })[1]!);
     await waitFor(() => expect(useSettingsStore.getState().colorBy).toBe("scview_leiden_r0.4"));
-    expect(api.keepResolution).toHaveBeenCalledWith("ds", 0.4, "leiden");
+    expect(api.keepResolution).toHaveBeenCalledWith("ds", 0.4, "leiden", expect.any(Function));
     expect(api.getDataset).toHaveBeenCalledWith("ds");
     expect(screen.getAllByRole("button", { name: "Show" })).toHaveLength(2);
+  });
+
+  it("says so while a kept resolution is clustered again, and not when the sweep's labels are saved", async () => {
+    api.getSweepInfo.mockResolvedValue(info);
+    api.runSweep.mockImplementation(async (_id, _body, h) => {
+      h.onStart({ method: "leiden", n_cells: 116313, resolutions: [0.2, 0.4], representation: "X_pca", silhouette_cells: 5000 });
+      h.onResult(row(0.2));
+      h.onResult(row(0.4));
+    });
+    api.getDataset.mockResolvedValue({ id: "ds", obs_columns: [] });
+    let finish: (v: unknown) => void = () => {};
+    api.keepResolution.mockImplementation((_id, resolution, _method, onStart) => {
+      onStart({ resolution, method: "leiden", exists: false, reused: resolution === 0.2, n_cells: 116313 });
+      return new Promise((resolve) => {
+        finish = () => resolve({ column: `scview_leiden_r${resolution}`, created: true, n_clusters: 4 });
+      });
+    });
+    renderPanel();
+    fireEvent.click(await screen.findByRole("button", { name: "Run" }));
+    await waitFor(() => expect(screen.getAllByRole("row")).toHaveLength(3));
+
+    // the sweep still holds 0.2: a short save, no clustering note
+    fireEvent.click(screen.getAllByRole("button", { name: /Keep this one/ })[0]!);
+    expect(await screen.findByRole("button", { name: /Saving/ })).toBeDisabled();
+    expect(screen.queryByTestId("keep-progress")).not.toBeInTheDocument();
+    await act(async () => finish(null));
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "Show" })).toHaveLength(1));
+
+    // 0.4 has to be clustered again: the wait is explained and the buttons stay disabled
+    fireEvent.click(screen.getByRole("button", { name: /Keep this one/ }));
+    expect(await screen.findByTestId("keep-progress")).toHaveTextContent(
+      /Clustering 116,313 cells at resolution 0\.4 again: the sweep’s labels for it are no longer held .*This can take minutes/);
+    expect(screen.getByRole("button", { name: /Clustering/ })).toBeDisabled();
+    await act(async () => finish(null));
+    await waitFor(() => expect(screen.queryByTestId("keep-progress")).not.toBeInTheDocument());
+    expect(screen.getAllByRole("button", { name: "Show" })).toHaveLength(2);
+    expect(elapsedText(42)).toBe("42 s");
+    expect(elapsedText(185)).toBe("3 min 05 s");
   });
 
   it("draws the clustering tree and picks a resolution from a row or a node", async () => {

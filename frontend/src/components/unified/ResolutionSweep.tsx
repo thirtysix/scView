@@ -5,6 +5,7 @@ import { Layers, Loader2, X } from "lucide-react";
 import {
   getSweepInfo,
   keepResolution,
+  type KeepStart,
   runSweep,
   type ClusterTree,
   type SweepInfo,
@@ -55,6 +56,12 @@ export function ResolutionSweepControl() {
 
 const METHOD_LABEL = { leiden: "Leiden", louvain: "Louvain" } as const;
 
+/** Seconds as "42 s" or "3 min 05 s". */
+export function elapsedText(seconds: number): string {
+  if (seconds < 60) return `${seconds} s`;
+  return `${Math.floor(seconds / 60)} min ${String(seconds % 60).padStart(2, "0")} s`;
+}
+
 export function ResolutionSweepPanel({ datasetId, onClose }: { datasetId: string; onClose: () => void }) {
   const dialogRef = useRef<HTMLDivElement>(null);
   useDialogFocus(dialogRef, onClose, { trap: false });
@@ -69,6 +76,9 @@ export function ResolutionSweepPanel({ datasetId, onClose }: { datasetId: string
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [keeping, setKeeping] = useState<number | null>(null);
+  // What the keep under way does (clusters again, or saves the sweep's labels), and for how long
+  const [keepStart, setKeepStart] = useState<KeepStart | null>(null);
+  const [keepSeconds, setKeepSeconds] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -123,11 +133,20 @@ export function ResolutionSweepPanel({ datasetId, onClose }: { datasetId: string
 
   const show = (column: string) => useSettingsStore.getState().setColorBy(column);
 
+  useEffect(() => {
+    if (keeping === null) return;
+    const began = Date.now();
+    const timer = setInterval(() => setKeepSeconds(Math.round((Date.now() - began) / 1000)), 1000);
+    return () => clearInterval(timer);
+  }, [keeping]);
+
   const keep = async (row: SweepRow) => {
     setKeeping(row.resolution);
+    setKeepStart(null);
+    setKeepSeconds(0);
     setError(null);
     try {
-      const res = await keepResolution(datasetId, row.resolution, start?.method ?? info?.method);
+      const res = await keepResolution(datasetId, row.resolution, start?.method ?? info?.method, setKeepStart);
       if (res.created) await refresh(datasetId);
       setRows((prev) => prev.map((r) => (r.column === res.column ? { ...r, exists: true } : r)));
       show(res.column);
@@ -280,7 +299,7 @@ export function ResolutionSweepPanel({ datasetId, onClose }: { datasetId: string
                       className="flex items-center gap-1 rounded border border-slate-300 px-1.5 py-0.5 text-slate-700 hover:bg-slate-50 disabled:opacity-50"
                     >
                       {keeping === r.resolution && <Loader2 className="h-3 w-3 animate-spin" />}
-                      Keep this one
+                      {keeping === r.resolution ? (keepStart && !keepStart.reused ? "Clustering…" : "Saving…") : "Keep this one"}
                     </button>
                   )}
                 </td>
@@ -288,6 +307,18 @@ export function ResolutionSweepPanel({ datasetId, onClose }: { datasetId: string
             ))}
           </tbody>
         </table>
+      )}
+
+      {keeping !== null && keepStart && !keepStart.reused && (
+        <p role="status" data-testid="keep-progress" className="flex items-start gap-1.5 rounded bg-amber-50 px-2 py-1.5 text-amber-800">
+          <Loader2 className="mt-0.5 h-3 w-3 shrink-0 animate-spin" />
+          <span>
+            Clustering {keepStart.n_cells.toLocaleString()} cells at resolution {keepStart.resolution} again: the
+            sweep&rsquo;s labels for it are no longer held (scView restarted, or the neighbour graph changed since).
+            This can take minutes on a large dataset; it is saved when done.{" "}
+            <span className="tabular-nums">{elapsedText(keepSeconds)}</span>
+          </span>
+        </p>
       )}
 
       {tree && tree.nodes.length > 0 && (
