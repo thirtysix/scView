@@ -216,9 +216,13 @@ describe("EmbeddingScatter camera on a resize", () => {
   class ResizableObserver {
     constructor(private cb: ResizeObserverCallback) {}
     observe() {
-      resize = (width, height) =>
-        act(() => this.cb([{ contentRect: { width, height } } as ResizeObserverEntry], this as never));
-      resize(400, 300);
+      const report = (width: number, height: number) =>
+        this.cb([{ contentRect: { width, height } } as ResizeObserverEntry], this as never);
+      resize = (width, height) => act(() => report(width, height));
+      // The first report comes while React runs the effect, inside render's own
+      // act(): a second act() here ends the outer one's queue, and the updates
+      // after it (the fit) are then drawn later, in no fixed order.
+      report(400, 300);
     }
     disconnect() {}
     unobserve() {}
