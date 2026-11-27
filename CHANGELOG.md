@@ -49,6 +49,14 @@ All notable changes to scView are documented here. The format is based on
 - A SingleCellExperiment whose cell metadata holds a factor with a missing level failed to convert.
 - QC advice no longer suggests correcting for a column the data are already corrected for; a removal p value
   too small to store is given as 1e-300, not 0.
+- QC metrics are always counted on raw counts. On a dataset whose X is already log-normalised (many public
+  imports), running the QC metrics step without a reset summed the log values (median "counts" 1,455 against
+  1,669 real on a 13,836-cell PBMC set, and a filter preview removing 21 cells against 0). The step now reads
+  the counts kept beside X and records which matrix it used; with no counts anywhere it is skipped with a
+  sentence. A dataset that already carries such columns shows a note in the QC panel and the filter preview.
+- An R object with a column named "a/b" beside a column "a" failed to convert, or converted to a dataset that
+  could not be opened. A Seurat export keeps a "/" in a column name (CD4/CD8, was CD4_CD8). File listings and
+  export reports show names as typed.
 
 ## [0.85.0] - 2026-11-26
 
