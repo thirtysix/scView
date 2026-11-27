@@ -6,6 +6,11 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.86.0] - 2026-11-27
+
+A dataset stored by columns can be stored by rows where a run needs it, every request keeps the dataset it reads
+open until it answers, names with "/" save, and QC metrics are always counted on counts.
+
 ### Added
 - "Store this dataset by rows" for a dataset uploaded before 0.85, which keeps its column-stored matrix. When a
   run on it does not fit in memory, scView now says why it cannot use large-dataset mode (before: the estimate
