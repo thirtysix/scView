@@ -19,8 +19,8 @@ entries kept, each cell's genes in order).
   compressed as the source is (gzip costs 15 s against 4 s on 93M values, and every later
   read pays for it again), unless the caller names a compression.
 - ``rewrite_file`` / ``copy_file``: a whole h5ad with its CSC matrices converted, everything
-  else copied as stored. ``rewrite_dataset``: the same for a dataset already in the library,
-  into its derived file.
+  else copied as stored. A dataset already in the library is rewritten only when the user
+  asks (``core/store_by_rows.py``, which also checks the disk and records the step).
 
 A file in the anndata < 0.7 layout (``h5sparse_format``) is left as it is.
 """
@@ -28,11 +28,8 @@ A file in the anndata < 0.7 layout (``h5sparse_format``) is left as it is.
 from __future__ import annotations
 
 import logging
-import os
 import shutil
 import tempfile
-import time
-import uuid
 from pathlib import Path
 
 import h5py
@@ -227,14 +224,17 @@ class _Ranges:
 
 def convert(src: h5py.Group, parent: h5py.Group, name: str, *, keep: np.ndarray | None = None,
             extract: list[np.ndarray] | tuple = (), workdir: str | Path | None = None,
-            range_bytes: int | None = None, compression: dict | None = None) -> list[np.ndarray]:
+            range_bytes: int | None = None, compression: dict | None = None,
+            progress=None) -> list[np.ndarray]:
     """Write the CSC matrix ``src`` (cells x genes) to ``parent[name]`` as CSR.
 
     ``keep``: a mask of the genes to write (all of them without it), numbered in order.
     ``extract``: masks of genes returned as dense float32 tables (cells x the mask's genes),
     as ``feature_split`` takes antibody and tag columns out. ``workdir``: where the temporary
     files go (default: beside the output file). ``compression``: h5py's dataset arguments
-    (``GZIP``, ``{}`` for none); None: as the source's values are stored."""
+    (``GZIP``, ``{}`` for none); None: as the source's values are stored. ``progress(n)``:
+    called with the stored values handled since its last call, in passes 2 and 3 (twice the
+    matrix's values in all)."""
     if compression is None:
         compression = _filters(src["data"])
     n_obs, n_var = (int(x) for x in src.attrs["shape"])
@@ -291,6 +291,8 @@ def convert(src: h5py.Group, parent: h5py.Group, name: str, *, keep: np.ndarray 
             lo, hi = int(indptr[start]), int(indptr[end])
             wanted = keep is None or bool(keep[start:end].any())
             taken = [s for s in side if s[0][start:end].any()]
+            if progress is not None:
+                progress(hi - lo)
             if hi == lo or not (wanted or taken):
                 continue
             rows = src["indices"][lo:hi].astype(np.int64, copy=False)
@@ -331,6 +333,8 @@ def convert(src: h5py.Group, parent: h5py.Group, name: str, *, keep: np.ndarray 
             del rows, data
             out["data"][lo:hi] = piece.data
             out["indices"][lo:hi] = piece.indices.astype(idx_dtype, copy=False)
+            if progress is not None:
+                progress(hi - lo)
     finally:
         if folder is not None:
             shutil.rmtree(folder, ignore_errors=True)
@@ -360,11 +364,11 @@ def _side_map(mask: np.ndarray) -> np.ndarray:
 
 
 def copy_matrix(src, parent: h5py.Group, name: str, workdir: str | Path | None = None,
-                compression: dict | None = None) -> bool:
+                compression: dict | None = None, progress=None) -> bool:
     """``src`` into ``parent[name]``: converted when it is CSC, else copied as stored.
     Returns whether it was converted."""
     if is_csc(src):
-        convert(src, parent, name, workdir=workdir, compression=compression)
+        convert(src, parent, name, workdir=workdir, compression=compression, progress=progress)
         return True
     h5_copy.copy(src, parent, name)
     return False
@@ -378,7 +382,7 @@ def _group_like(src: h5py.Group, parent: h5py.Group, name: str) -> h5py.Group:
 
 
 def copy_raw(raw: h5py.Group, parent: h5py.Group, workdir: str | Path | None = None,
-             compression: dict | None = None) -> bool:
+             compression: dict | None = None, progress=None) -> bool:
     """``.raw`` into ``parent["raw"]``, its X converted when it is CSC."""
     if not (isinstance(raw, h5py.Group) and "X" in raw and is_csc(raw["X"])):
         h5_copy.copy(raw, parent, "raw")
@@ -386,17 +390,18 @@ def copy_raw(raw: h5py.Group, parent: h5py.Group, workdir: str | Path | None = N
     g = _group_like(raw, parent, "raw")
     for key in raw.keys():
         if key == "X":
-            convert(raw["X"], g, "X", workdir=workdir, compression=compression)
+            convert(raw["X"], g, "X", workdir=workdir, compression=compression, progress=progress)
         else:
             h5_copy.copy(raw[key], g, key)
     return True
 
 
 def rewrite_file(src: str | Path, dst: str | Path, workdir: str | Path | None = None,
-                 compression: dict | None = None) -> list[str]:
+                 compression: dict | None = None, progress=None) -> list[str]:
     """Write ``dst``: the h5ad ``src`` with its CSC X, layers and ``.raw`` X as CSR and
     everything else copied as stored. ``src`` is only read. ``compression`` of the converted
-    matrices: as each is stored in ``src`` unless given. Returns what was converted."""
+    matrices: as each is stored in ``src`` unless given. ``progress``: as ``convert`` takes it
+    (``work_values`` is its total). Returns what was converted."""
     done = []
     with h5py.File(src, "r") as fi, h5py.File(dst, "w") as fo:
         for k, v in fi.attrs.items():
@@ -404,15 +409,15 @@ def rewrite_file(src: str | Path, dst: str | Path, workdir: str | Path | None = 
         for key in fi.keys():
             node = fi[key]
             if key == "X":
-                if copy_matrix(node, fo, "X", workdir, compression):
+                if copy_matrix(node, fo, "X", workdir, compression, progress):
                     done.append("X")
             elif key == "layers" and isinstance(node, h5py.Group):
                 g = _group_like(node, fo, "layers")
                 for name in node.keys():
-                    if copy_matrix(node[name], g, name, workdir, compression):
+                    if copy_matrix(node[name], g, name, workdir, compression, progress):
                         done.append(f"layers/{name}")
             elif key == "raw" and isinstance(node, h5py.Group):
-                if copy_raw(node, fo, workdir, compression):
+                if copy_raw(node, fo, workdir, compression, progress):
                     done.append("raw/X")
             else:
                 h5_copy.copy(node, fo, key)
@@ -430,49 +435,30 @@ def copy_file(src: str | Path, dst: str | Path) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# A dataset already in the library
+# What a rewrite will cost, from the file's header
 # ---------------------------------------------------------------------------
 
 
-def rewrite_dataset(dm, dataset_id: str) -> dict:
-    """Rewrite one dataset's CSC matrices as CSR into its derived file.
-
-    Call it inside ``obs_writes.dataset_edit`` (``edit.run``): nothing else may save the
-    dataset meanwhile. The active file is read and never changed when it is an upload, an
-    ingest or a conversion; the new file is written beside the derived one and swapped in
-    (``os.replace``), so a kill mid-write leaves the dataset as it was. Nothing is read
-    into memory whole. The caller drops the cached copy afterwards (``dm.evict``, as
-    ``rewrite_dataset_held`` does), so the next open reads the new file. Returns what was converted, the seconds and the file sizes; ``converted`` is empty
-    (and nothing written) for a dataset with no CSC matrix."""
-    t0 = time.monotonic()
-    source = dm._resolve_h5ad(dataset_id)
-    if source is None:
-        raise CsrStoreError(f"Dataset {dataset_id} has no h5ad file.")
-    where = csc_in_file(source)
-    before = os.path.getsize(source)
-    if not where:
-        return {"converted": [], "seconds": 0.0, "source": source, "bytes_before": before,
-                "bytes_after": before}
-    target = dm.derived_h5ad_path(dataset_id, source)
-    partial = target.with_name(f".{target.name}.{uuid.uuid4().hex[:8]}.part")  # one per writer
+def csc_sizes(path: str | Path) -> list[dict]:
+    """Each CSC matrix of the file: where, its stored values, the bytes of one value, whether
+    its values are compressed, and the disk its temporary files take ([] as ``csc_in_file``)."""
+    out = []
     try:
-        done = rewrite_file(source, partial, workdir=target.parent)
-        os.replace(partial, target)
-    finally:
-        partial.unlink(missing_ok=True)
-    out = {"converted": done, "seconds": round(time.monotonic() - t0, 1), "source": source,
-           "target": str(target), "bytes_before": before, "bytes_after": os.path.getsize(target)}
-    logger.info("Dataset %s stored by rows (CSR): %s in %.1f s", dataset_id, ", ".join(done), out["seconds"])
+        with h5py.File(path, "r") as f:
+            for where, node in matrices(f):
+                if not is_csc(node):
+                    continue
+                data = node["data"]
+                nnz, itemsize = int(data.shape[0]), int(np.dtype(data.dtype).itemsize)
+                out.append({"where": where, "nnz": nnz, "itemsize": itemsize,
+                            "compressed": data.compression is not None,
+                            "temp_bytes": temp_bytes(nnz, itemsize)})
+    except (OSError, KeyError, ValueError):
+        return []
     return out
 
 
-async def rewrite_dataset_held(dm, dataset_id: str) -> dict:
-    """``rewrite_dataset`` in a worker thread holding the dataset's edit lock, then the
-    cached copy dropped. Not called by the app yet: when to run it is a product decision."""
-    from scview.core.obs_writes import dataset_edit
-
-    async with dataset_edit(dataset_id) as held:
-        out = await held.run(rewrite_dataset, dm, dataset_id)
-        if out["converted"]:
-            dm.evict(dataset_id)
-    return out
+def work_values(path: str | Path) -> int:
+    """The total ``rewrite_file`` reports to ``progress`` for this file: each CSC matrix's
+    stored values twice (sorted to their ranges, then written)."""
+    return 2 * sum(m["nnz"] for m in csc_sizes(path))

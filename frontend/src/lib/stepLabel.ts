@@ -84,6 +84,7 @@ export const STEP_LABELS: Record<string, string> = {
   learned_gate_apply: "Learned gate applied",
   save_score: "Score saved as a column",
   remove_score: "Saved score removed",
+  store_by_rows: "Stored by rows (no value changed)",
   // Spatial
   spatial_autocorr: "Spatially variable genes (Moran's I)",
   spot_deconvolution: "Spot composition (cell types per spot)",

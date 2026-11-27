@@ -89,6 +89,8 @@ RECORDED_STEPS: tuple[str, ...] = (
     "learned_gate_apply",
     "save_score",
     "remove_score",
+    # Storage only: no value changes (core/store_by_rows.py)
+    "store_by_rows",
     # Spatial
     "spatial_autocorr",
     "spot_deconvolution",

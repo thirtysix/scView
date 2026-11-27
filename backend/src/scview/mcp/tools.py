@@ -830,6 +830,12 @@ async def _refuse_conversion(dataset_id: str, steps: list[str], p: dict[str, Any
     """A ToolError when the run would convert the dataset (preflight, by the run's own rule:
     ``large_run.mode_rule``), naming what that turns off and how to allow it."""
     mode = (await _get(f"{_ds(dataset_id)}/preflight", **_preflight_query(steps, p))).get("mode") or {}
+    by_columns = mode.get("by_columns")
+    if by_columns:  # large-dataset mode cannot read it: the run would be refused either way
+        raise ToolError(
+            f"Not run: {mode.get('reason')} That mode reads cells in blocks, and this dataset's matrix is "
+            f"stored by columns ({', '.join(by_columns.get('blocks_large_mode') or [])}). Call "
+            f"store_by_rows(dataset_id) first ({by_columns.get('text')}; no value changes), then run this again.")
     if mode.get("converts"):
         skip = (mode.get("without_doublets") or {}).get("text")
         raise ToolError(
