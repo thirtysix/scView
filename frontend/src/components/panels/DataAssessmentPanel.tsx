@@ -33,6 +33,7 @@ import { ConversionReport } from "@/components/panels/ConversionReport";
 import { PublicSourceCard } from "@/components/panels/PublicSourceCard";
 import { SubsetSourceCard } from "@/components/panels/SubsetSourceCard";
 import { PreflightRunNote } from "@/components/common/PreflightNote";
+import { StoreByRowsOffer } from "@/components/common/StoreByRowsOffer";
 import { FastLeidenInfo } from "@/components/common/FastLeidenInfo";
 import { TargetedPanelNote, type TargetedPanelInfo } from "@/components/qc/TargetedPanelNote";
 import { LabelCurationNote, type LabelCuration } from "@/components/qc/LabelCurationNote";
@@ -52,6 +53,7 @@ import {
   FINISHED_WITH_ERRORS,
   runErrorMessage,
   conversionQuestion,
+  isColumnStoredRefusal,
   isConversionRefusal,
   type RunOutcomeFields,
   type WatchdogEvent,
@@ -696,6 +698,8 @@ export function DataAssessmentPanel() {
   const [state, setState] = useState<AssessmentResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A run refused because the dataset is stored by columns: offered the rewrite, then run again.
+  const [blockedRun, setBlockedRun] = useState<{ steps: string[]; params: Record<string, unknown> | null } | null>(null);
   // Bumped after each pipeline run so the QC plots refetch (e.g. to pick up a
   // newly computed doublet_score) without needing a tab switch.
   const [qcRefreshKey, setQcRefreshKey] = useState(0);
@@ -807,6 +811,7 @@ export function DataAssessmentPanel() {
     if (!datasetId) return;
     setLoading(true);
     setError(null);
+    setBlockedRun(null);
     setRunResult(null);
     setSuggestions(null);
     try {
@@ -989,6 +994,7 @@ export function DataAssessmentPanel() {
     setSlowNote(null);
     setCancelling(false);
     setError(null);
+    setBlockedRun(null);
 
     try {
       const res = await fetch(
@@ -1083,7 +1089,8 @@ export function DataAssessmentPanel() {
       queryClient.invalidateQueries({ queryKey: ["embedding", datasetId] });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Pipeline run failed";
-      if (!allowLarge && isConversionRefusal(msg) && window.confirm(conversionQuestion(msg))) retryLarge = true;
+      if (isColumnStoredRefusal(msg)) setBlockedRun({ steps, params });
+      else if (!allowLarge && isConversionRefusal(msg) && window.confirm(conversionQuestion(msg))) retryLarge = true;
       else setError(msg);
     } finally {
       setPipelineRunning(false);
@@ -1224,6 +1231,20 @@ export function DataAssessmentPanel() {
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
         {/* Left: assessment controls + steps */}
         <div className="min-w-0 flex-1 space-y-4">
+      {/* A run refused for the column-stored matrix: the one action that unblocks it, then the run again */}
+      {blockedRun && datasetId && (
+        <div data-testid="blocked-run">
+          <p className="text-sm text-slate-700">
+            Not run: it does not fit in memory, so it would use large-dataset mode.
+          </p>
+          <StoreByRowsOffer
+            datasetId={datasetId}
+            doneText="Stored by rows. Running the steps again."
+            onDone={() => void runSteps(blockedRun.steps, blockedRun.params)}
+          />
+        </div>
+      )}
+
       {/* Error banner */}
       {error && (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
