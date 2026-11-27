@@ -2858,7 +2858,11 @@ def session_preflight(mgr, sid: str, dm) -> dict:
     opts = mgr.get_options(sid)
     avail = available_memory()
     cached = cached_others(dm)
-    loadable = [u for u in bundle.units if u.format != UnitFormat.unknown and u.complete]
+    staged = [u for u in bundle.units if u.format != UnitFormat.unknown and u.complete]
+    # An R object converted already ("Convert now") is estimated as the commit reads it:
+    # from the header of the .h5ad it became, not from the R object's stream.
+    loadable = mgr.as_converted(sid, staged)
+    was_r = {u.label for u in staged if u.format == UnitFormat.seurat}
     # Too large to read whole: the commit reads and saves the matrices in blocks.
     try:
         choice = streamed.choose(loadable, opts.streamed, opts.genes_in_rows) if loadable else None
@@ -2866,8 +2870,6 @@ def session_preflight(mgr, sid: str, dm) -> dict:
         choice = None
     blocks = bool(choice and choice.streamed)
     # R objects not converted yet: the converter's own estimate too (its memory asked once).
-    converted = {c["label"] for c in mgr.get_state(sid).get("converted", [])} if any(
-        u.format == UnitFormat.seurat for u in loadable) else set()
     conv_mem: list = []
     units, residents, peaks, secs = [], [], [], [0.0, 0.0]
     for u in loadable:
@@ -2898,8 +2900,10 @@ def session_preflight(mgr, sid: str, dm) -> dict:
                       "load": {"resident_bytes": est.resident_bytes, "peak_bytes": est.peak_bytes,
                                "peak_stage": est.peak_stage, "seconds": list(est.seconds)},
                       "streamed": blocks, "verdict": v})
-        if u.format == UnitFormat.seurat and u.label not in converted:
+        if u.format == UnitFormat.seurat:
             units[-1]["converter"] = _converter_verdict(mgr, u.files[0].path, conv_mem)
+        elif u.label in was_r:
+            units[-1].update(format=UnitFormat.seurat.value, converted=True)
         residents.append(est.resident_bytes)
         peaks.append(est.peak_bytes)
         secs = [secs[0] + est.seconds[0], secs[1] + est.seconds[1]]

@@ -666,7 +666,10 @@ export function DataPanel() {
           {sessionId && (
             <PreflightIngestNotes
               sessionId={sessionId}
-              refreshKey={bundle.units.map((u) => `${u.label}:${u.files.length}`).join("|")}
+              // a converted R object is estimated again, from the file it became
+              refreshKey={bundle.units
+                .map((u) => `${u.label}:${u.files.length}${convertedLabels.has(u.label) ? ":converted" : ""}`)
+                .join("|")}
             />
           )}
 

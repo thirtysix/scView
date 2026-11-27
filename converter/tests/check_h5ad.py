@@ -102,6 +102,11 @@ def check_fixture(name: str, exp: dict, res: dict, out: Path) -> None:
         assert col not in a.obs, col
     for col in exp.get("var_columns", []):
         assert col in a.var, f"var {col} missing: {list(a.var.columns)}"
+    for col in exp.get("var_absent", []):
+        assert col not in a.var, col
+    for col, head in exp.get("var_head", {}).items():
+        got = [None if pd.isna(v) else v for v in a.var[col].iloc[: len(head)]]
+        assert got == head, (col, got)
 
     if "pca_variance_ratio" in exp:
         np.testing.assert_allclose(a.uns["pca"]["variance_ratio"], exp["pca_variance_ratio"])

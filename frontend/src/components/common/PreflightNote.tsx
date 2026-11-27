@@ -347,7 +347,13 @@ export function PreflightIngestNotes({
           {u.converter && <PreflightNote verdict={u.converter} />}
           <PreflightNote
             verdict={u.verdict}
-            label={u.converter ? `${many ? u.label : "Then"}, once converted` : many ? u.label : undefined}
+            label={
+              u.converter
+                ? `${many ? u.label : "Then"}, once converted`
+                : u.converted
+                  ? `${many ? u.label : "The R object"}, converted`
+                  : many ? u.label : undefined
+            }
           />
         </div>
       ))}

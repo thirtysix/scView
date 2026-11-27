@@ -6,8 +6,10 @@
 ##   assays       X = logcounts (else counts, else the first assay); every
 ##                other assay a layer (counts included when X is logcounts).
 ##                Sparse stays sparse (CSR); dense goes over in blocks of cells.
-##   colData      obs (factors -> categories in level order; S4 columns skipped,
-##                nested tables flattened as a.b); sizeFactor and label
+##   colData      obs (factors -> categories in level order; list, date, nested
+##                table and matrix columns as plain columns, like a Seurat
+##                object's meta.data: convert.R plain_columns; what cannot be a
+##                plain column is left out with a note); sizeFactor and label
 ##                (sizeFactors, colLabels) are colData columns, so they come too.
 ##   rowData      var (Ensembl row names with a symbol column: symbols become
 ##                the gene names, the IDs var gene_ids); names made unique.
@@ -110,7 +112,7 @@ convert_se_to_h5ad <- function(obj, output_path, kind, progress, object_name = N
   if ("label" %in% colnames(col_df)) note(rpt, "kept", "cell labels (colLabels) as obs label")
 
   var_cols <- row_df[gene_rows, , drop = FALSE]
-  var <- frame_to_py(var_cols, genes$names, "rowData", rpt, py,
+  var <- frame_to_py(var_cols, genes$names, "rowData", rpt, py, unit = "gene",
                      extra = if (!is.null(genes$ids) && !("gene_ids" %in% colnames(var_cols)))
                        list(gene_ids = genes$ids))
   note(rpt, "kept", "gene metadata (rowData): %d of %d columns as var", var$n, var$total)
@@ -476,50 +478,12 @@ gene_names <- function(rn, row_df, gene_rows, rpt) {
   list(names = unique_names(nms, n, "gene", rpt, "gene names"), ids = ids)
 }
 
-#' Columns of a (possibly nested) DataFrame as a flat named list, nested
-#' tables as parent.child.
-flatten_frame <- function(df, prefix = "") {
-  vals <- list()
-  nms <- character(0)
-  cn <- colnames(df)
-  for (i in seq_along(cn)) {
-    v <- df[[i]]
-    nm <- if (nzchar(prefix)) paste0(prefix, ".", cn[i]) else cn[i]
-    if (methods::is(v, "DataFrame") || is.data.frame(v)) {
-      inner <- flatten_frame(v, nm)
-      vals <- c(vals, unname(inner))
-      nms <- c(nms, names(inner))
-    } else {
-      vals[[length(vals) + 1L]] <- v
-      nms <- c(nms, nm)
-    }
-  }
-  names(vals) <- nms
-  vals
-}
-
-#' One column as a NumPy array / pandas Categorical, or a sentence saying why
-#' it cannot be one.
-py_column <- function(v, n, py) {
-  if (methods::is(v, "Rle")) v <- S4Vectors::decode(v)
-  if (!is.null(dim(v)) && length(dim(v)) > 1) return("a matrix in one column")
-  if (isS4(v)) return(sprintf("a %s, not a plain column", class(v)[1]))
-  if (is.list(v)) return("a list, not a plain column")
-  if (length(v) != n) return("its length does not match")
-  if (inherits(v, c("Date", "POSIXt"))) v <- as.character(v)
-  if (inherits(v, "difftime")) v <- as.numeric(v)
-
+#' One plain column (a number, integer, TRUE / FALSE, factor or text vector, as
+#' convert.R's plain_columns leaves them) as a NumPy array / pandas Categorical.
+py_column <- function(v, py) {
   if (is.factor(v)) return(categorical(v, py))
   if (is.character(v)) return(categorical(factor(v), py))
-  if (is.logical(v)) {
-    if (anyNA(v)) {
-      return(categorical(factor(ifelse(v, "TRUE", "FALSE"), levels = c("FALSE", "TRUE")), py))
-    }
-    return(np_array(v))
-  }
-  if (is.integer(v)) return(np_array(if (anyNA(v)) as.numeric(v) else v))
-  if (is.double(v)) return(np_array(v))
-  sprintf("of type %s", typeof(v))
+  np_array(v)
 }
 
 #' A factor as a pandas Categorical: its levels in order, NA missing.
@@ -532,30 +496,22 @@ categorical <- function(f, py) {
 }
 
 #' colData / rowData as a pandas DataFrame indexed by `index`; `extra` adds
-#' plain columns. Returns list(df, n = columns kept).
-frame_to_py <- function(df, index, what, rpt, py, extra = NULL) {
-  cols <- c(flatten_frame(df), extra)
-  keys <- character(0)
-  vals <- list()
-  for (i in seq_along(cols)) {
-    nm <- names(cols)[i]
-    col <- py_column(cols[[i]], length(index), py)
-    if (is.character(col)) {
-      note(rpt, "skipped", "%s column %s: %s", what, nm, col)
-      next
-    }
-    keys <- c(keys, nm)
-    vals[[length(vals) + 1L]] <- col
-  }
-  # anndata reserves _index and nests names at "/"
-  keys[is.na(keys) | !nzchar(keys)] <- paste0("column_", which(is.na(keys) | !nzchar(keys)))
-  keys[keys == "_index"] <- "_index_"
-  keys <- make.unique(gsub("/", "_", keys, fixed = TRUE), sep = "_")
+#' plain columns. Every column goes through convert.R's plain_columns, as a Seurat
+#' object's meta.data does: list, date, nested-table and matrix columns kept as plain
+#' columns, what cannot be one left out, both said in the report. Returns
+#' list(df, n = columns of the table kept, total = columns it has).
+frame_to_py <- function(df, index, what, rpt, py, extra = NULL, unit = "cell") {
+  plain <- plain_columns(df, length(index), what, unit)
+  for (line in plain$kept) note(rpt, "kept", "%s", line)
+  for (line in plain$skipped) note(rpt, "skipped", "%s", line)
+  cols <- c(plain$cols, extra)
+  keys <- column_keys(names(cols))
+  vals <- lapply(cols, py_column, py = py)
 
   idx <- py$pd$Index(np_array(index), dtype = "object")
-  data <- reticulate::py_dict(keys, vals, convert = FALSE)
+  data <- reticulate::py_dict(keys, unname(vals), convert = FALSE)
   out <- py$pd$DataFrame(data, index = idx)
-  list(df = out, n = length(keys) - length(extra), total = length(cols) - length(extra))
+  list(df = out, n = plain$n, total = plain$total)
 }
 
 # ---------------------------------------------------------------------------
@@ -816,7 +772,7 @@ simple_value <- function(v, path, rpt, py, depth) {
   if ((is.data.frame(v) || methods::is(v, "DataFrame")) && nrow(v) <= 1e6) {
     idx <- rownames(v)
     if (is.null(idx)) idx <- as.character(seq_len(nrow(v)))
-    return(frame_to_py(v, make.unique(as.character(idx)), path, rpt, py)$df)
+    return(frame_to_py(v, make.unique(as.character(idx)), path, rpt, py, unit = "row")$df)
   }
   if (is.list(v) && !isS4(v) && depth < 5) {
     nms <- names(v)

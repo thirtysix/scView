@@ -115,6 +115,8 @@ export interface UnitPreflight {
   verdict: PreflightVerdict;
   /** An R object not converted yet: the R converter's memory for it (core/conversion_preflight.py) */
   converter?: PreflightVerdict | null;
+  /** An R object converted already: the estimate is from the header of the .h5ad it became */
+  converted?: boolean;
 }
 
 export interface IngestPreflight {
