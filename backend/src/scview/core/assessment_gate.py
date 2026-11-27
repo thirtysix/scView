@@ -30,6 +30,8 @@ from collections.abc import Callable, Hashable
 from dataclasses import dataclass
 from typing import Any
 
+from scview.core import request_pins
+
 logger = logging.getLogger(__name__)
 
 MAX_AT_ONCE = 2  # heavy computations per dataset at a time
@@ -115,12 +117,17 @@ async def run(dataset_id: str, key: Hashable, fn: Callable[..., Any], *args: Any
         # calling, and a lane or the memory queue can keep this work waiting for a minute.
         # ``reading`` pins only once it starts: an edit that read the dataset in meanwhile
         # closed the file under the object the caller holds (h5py: invalid identifier, a 500).
+        # With no budget there is no manager to ask: the datasets the request was handed
+        # (``request_pins``) are kept for the task, which other requests may share and which
+        # goes on when this one's client has left.
         unpin = _pin_now(dataset_id, budget)
+        unkeep = request_pins.keep()
         task = loop.create_task(work())
         gate.inflight[key] = task
 
         def done(t: asyncio.Task) -> None:
             unpin()
+            unkeep()
             if gate.inflight.get(key) is t:
                 del gate.inflight[key]
             if not gate.inflight and _gates.get(gid) is gate:

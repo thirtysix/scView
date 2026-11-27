@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import functools
 import gzip
 import io
 import json
@@ -25,6 +26,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import TextContent, ToolAnnotations
 from pydantic import Field
 
+from scview.core import request_pins
 from scview.core.cell_filter import CellFilter
 from scview.core.marker_names import HOW_TEXT
 from scview.mcp import api, compact, jobs, params, plots
@@ -2115,6 +2117,18 @@ async def get_result(
     return dumps(out, _max_chars(limit))
 
 
+def _own_reads(fn: Callable) -> Callable:
+    """For a tool that reads the dataset itself (``_adaptor``) rather than through a route:
+    no HTTP request holds its files, so the tool call is given a request's scope
+    (``core/request_pins.py``): the dataset stays readable until the tool returns."""
+    @functools.wraps(fn)
+    async def scoped(*args: Any, **kwargs: Any) -> Any:
+        with request_pins.scope():
+            return await fn(*args, **kwargs)
+
+    return scoped
+
+
 async def _adaptor(dataset_id: str):
     dm = api.dataset_manager()
     await _get(_ds(dataset_id))  # a 404 / not-ready error as the route words it
@@ -2125,6 +2139,7 @@ async def _adaptor(dataset_id: str):
 
 
 @tool(READ)
+@_own_reads
 async def plot(
     dataset_id: DatasetId,
     kind: Annotated[Literal["embedding", "violin", "dotplot", "coverage", "phase"], Field(description=(
