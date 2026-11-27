@@ -267,6 +267,7 @@ async def rename_obs_category(
         def _run() -> None:
             adata = editable(adaptor, labels_only=light)
             before = uns_snapshot(adata) if light else None
+            had = list(adata.uns.keys())  # a merge drops a large dataset's stored markers
             if column not in adata.obs.columns:
                 raise HTTPException(status_code=404, detail=f"Column '{column}' not found.")
             col = adata.obs[column]
@@ -291,7 +292,8 @@ async def rename_obs_category(
             label_qualifiers.follow_rename(adata, column, large=large_layout.is_large(adata))
             # A new name alone: obs and the uns entries it replaced. Otherwise a full write
             # (markers worked out again), beside the file then swapped in.
-            save_edit(adaptor, adata, output_path, before)
+            save_edit(adaptor, adata, output_path, before,
+                      uns_removed=[k for k in had if k not in adata.uns])
 
         try:
             # Markers may be recomputed on a merge: seconds, so in a worker thread.

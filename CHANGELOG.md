@@ -44,6 +44,9 @@ All notable changes to scView are documented here. The format is based on
   edit and +117 MB per rename before, under 0.03 MB now). A rename that merges two categories still adds its
   marker table's gene names (36 MB here) until the file has grown by a fifth, when it is rewritten without
   the unused space (1.2 s per 0.5 GB).
+- Large datasets: merging two categories left the column's old marker table in the file, so after a restart
+  the Markers tab showed it again, the merged-away group included. The table is now removed with the merge
+  and worked out again on the next visit, as it already was until a restart.
 - AI annotation on large datasets skipped its low-quality and QC-note rules and wrote no qualified labels,
   without saying so. It now applies them; a check that cannot run is named in the result.
 - A SingleCellExperiment whose cell metadata holds a factor with a missing level failed to convert.

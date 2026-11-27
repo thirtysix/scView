@@ -180,18 +180,22 @@ def editable(adaptor, labels_only: bool = False):
 def save_edit(adaptor, adata, output_path: str, uns_before: dict[str, int] | None = None,
               obsm_keys: tuple[str, ...] | list[str] | None = (),
               obsp_keys: tuple[str, ...] | list[str] | None = (), var: bool = False,
-              source_unchanged: bool = False) -> None:
+              source_unchanged: bool = False, uns_removed: tuple[str, ...] | list[str] = ()) -> None:
     """Save an obs / uns (/ obsm / obsp) edit of ``editable(adaptor)``: ``write_derived``,
     or for a large dataset its obs, the uns entries the edit replaced or removed,
     ``obsm_keys`` and ``obsp_keys`` written into its derived h5ad in place, X neither
     read nor copied. ``var``: the edit changed var too. ``source_unchanged``: see
-    ``write_derived``."""
+    ``write_derived``. ``uns_removed``: uns entries the edit removed, for a caller that
+    passes no ``uns_before`` (a full write elsewhere): without a snapshot a large dataset's
+    in-place save cannot tell what went, and the entry stayed in the file (a merged
+    category's old marker table came back after a restart)."""
     if getattr(adaptor, "is_large", False):
         from scview.core import large_mode
         from scview.core.dataset_manager import large_derived
 
         large_derived(adaptor, output_path)
         changed, removed = large_mode.changed_uns(adata, uns_before)
+        removed = list(dict.fromkeys([*removed, *(k for k in uns_removed if k not in adata.uns)]))
         adaptor.write_in_place(obs=True, uns_keys=changed, uns_removed=removed,
                                obsm_keys=list(obsm_keys or ()), obsp_keys=list(obsp_keys or ()), var=var)
         return

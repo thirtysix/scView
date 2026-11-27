@@ -132,6 +132,10 @@ async def test_category_order_and_rename_are_written_in_place(client, both):
     back = ad.read_h5ad(both, backed="r")
     assert set(back.obs["leiden"].cat.categories) == {"0", "2"}
     back.file.close()
+    from scview.core.uns_keys import markers_key
+
+    with h5py.File(both, "r") as f:  # gone from the FILE too: a restart served the old table, group "1" and all
+        assert markers_key("leiden") not in f["uns"]
     res = await client.get(f"{API}/{LARGE}/markers", params={"groupby_column": "leiden", "format": "json"})
     assert res.status_code == 200 and set(res.json()["groups"]) == {"0", "2"}
 
