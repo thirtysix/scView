@@ -252,14 +252,14 @@ def test_a_graph_is_written_in_place_and_removed(large, twin):
 
 def test_a_read_waits_for_an_in_place_write(large, monkeypatch):
     started, release = threading.Event(), threading.Event()
-    real = large_mode._replace
+    real = large_mode._write_table
 
-    def slow(group, key, value):
+    def slow(f, key, frame):
         started.set()
         release.wait(5)
-        return real(group, key, value)
+        return real(f, key, frame)
 
-    monkeypatch.setattr(large_mode, "_replace", slow)
+    monkeypatch.setattr(large_mode, "_write_table", slow)
     writer = threading.Thread(target=large.write_in_place)
     writer.start()
     assert started.wait(5)
