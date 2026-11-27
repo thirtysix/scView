@@ -22,6 +22,8 @@ import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 
+from scview.core import h5_names
+
 logger = logging.getLogger(__name__)
 
 SAMPLE_VALUES = 200_000  # stored values sampled per matrix
@@ -239,8 +241,8 @@ def _matrices_on_disk(path: str, layers: list[str], has_raw: bool) -> dict[str, 
         if has_raw and "raw" in f and "X" in f["raw"]:
             out["raw"] = matrix_h5(f["raw"]["X"])
         for name in layers:
-            if "layers" in f and name in f["layers"]:
-                out["layers"][name] = matrix_h5(f["layers"][name])
+            if "layers" in f and h5_names.has(f["layers"], name):  # a name may hold "/"
+                out["layers"][name] = matrix_h5(h5_names.child(f["layers"], name))
     return out
 
 

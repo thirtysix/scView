@@ -897,15 +897,15 @@ class DatasetManager:
                 import h5py
                 from anndata.io import write_elem
 
-                from scview.core import h5_copy
+                from scview.core import h5_copy, h5_names
 
                 # not a file copy and ``del``: that leaves each replaced entry in the file
-                h5_copy.compact_copy(target, partial, [f"uns/{k}" for k in keys])
+                h5_copy.compact_copy(target, partial, [("uns", k) for k in keys])
                 with h5py.File(partial, "a") as f:
                     if "uns" not in f:
                         write_elem(f, "uns", {})
                     for key in keys:
-                        write_elem(f["uns"], key, adata.uns[key])
+                        h5_names.write_elem(f["uns"], key, adata.uns[key])  # a key may hold "/"
                 os.replace(partial, target)
             else:
                 adata.write_h5ad(partial, compression="gzip")

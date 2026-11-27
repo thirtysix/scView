@@ -682,9 +682,10 @@ def _replace(group: h5py.Group, key: str, value: Any) -> None:
     the file for good). The journal keeps the write all or nothing either way."""
     from anndata.io import write_elem
 
-    if key in group:
-        del group[key]
-    write_elem(group, key, value)
+    from scview.core import h5_names
+
+    h5_names.drop(group, key)  # a name holding "/" is one key (h5_names); an older nested entry too
+    write_elem(group, h5_names.stored(key), value)
 
 
 def _same_column(old, new) -> bool:
@@ -724,16 +725,17 @@ def _write_table(f: h5py.File, key: str, frame) -> None:
     if stored is None or not names or not stored.index.equals(frame.index):
         _replace(f, key, frame)
         return
+    from scview.core import h5_names
+
     for name in [c for c in stored.columns if c not in frame.columns]:
-        del group[name]
+        h5_names.drop(group, str(name))
     for name, column in frame.items():
         if name in stored.columns and _same_column(stored[name], column):
             continue
-        if name in group:
-            del group[name]
-        write_elem(group, str(name), column._values)
+        h5_names.drop(group, str(name))
+        write_elem(group, h5_names.stored(str(name)), column._values)  # a column named "A/B" is one key
     if [str(c) for c in stored.columns] != names:
-        group.attrs["column-order"] = names
+        group.attrs["column-order"] = [h5_names.stored(n) for n in names]
 
 
 # ---------------------------------------------------------------------------
@@ -850,14 +852,16 @@ def write_in_place(adata, path: str | Path, lock: threading.RLock, *, obs: bool 
 
                     write_elem(f, "uns", {})
                 group = f["uns"]
+                from scview.core import h5_names
+
                 for key in uns_removed:
-                    if key in group and key not in adata.uns:
-                        del group[key]
+                    if key not in adata.uns:
+                        h5_names.drop(group, key)
                 for key in uns_keys:
                     if key in adata.uns:
                         _replace(group, key, adata.uns[key])
-                    elif key in group:
-                        del group[key]
+                    else:
+                        h5_names.drop(group, key)
                 keys = list(obsm_keys)
                 if keys and "obsm" not in f:
                     from anndata.io import write_elem
@@ -866,8 +870,8 @@ def write_in_place(adata, path: str | Path, lock: threading.RLock, *, obs: bool 
                 for key in keys:
                     if key in adata.obsm:
                         _replace(f["obsm"], key, adata.obsm[key])
-                    elif key in f["obsm"]:
-                        del f["obsm"][key]
+                    else:
+                        h5_names.drop(f["obsm"], key)
                 graphs = list(obsp_keys)
                 if graphs and "obsp" not in f:
                     from anndata.io import write_elem
@@ -876,8 +880,8 @@ def write_in_place(adata, path: str | Path, lock: threading.RLock, *, obs: bool 
                 for key in graphs:
                     if key in adata.obsp:
                         _replace(f["obsp"], key, adata.obsp[key])
-                    elif key in f["obsp"]:
-                        del f["obsp"][key]
+                    else:
+                        h5_names.drop(f["obsp"], key)
                 _hook("writing")
                 f.close()  # HDF5 writes out what it held: into the journaled file
                 raw.commit()

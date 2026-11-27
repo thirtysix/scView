@@ -4698,9 +4698,30 @@ if "highly_variable" in adata.var.columns:
 for col in adata.obs.columns:
     if str(col).startswith("scview_") and adata.obs[col].dtype.name == "category":
         print(f"{col}: {adata.obs[col].nunique()} groups")
+# HDF5 reads "/" in a key as a path, so a name holding one ("T/NK") is stored as "T%2fNK",
+# as scView stores it. The values (the labels in a column) are never changed.
+renamed = h5_safe_names(adata)
+if renamed:
+    print('stored with "/" written as %2f:', ", ".join(repr(n) for n in dict.fromkeys(renamed)))
 adata.write_h5ad(OUTPUT)
 print("written", OUTPUT)
 '''
+
+
+def _h5_names_helper() -> str:
+    """core/h5_names.py's name escape, copied so the script's output has the names
+    scView's own file has (and its save cannot fail on a label like "T/NK")."""
+    import inspect
+
+    from scview.core import h5_names
+
+    lines = [f"{name} = {_lit(getattr(h5_names, name))}" for name in h5_names.REPLAY_CONSTANTS]
+    for obj in h5_names.REPLAY_CODE:
+        lines += ["", "", inspect.getsource(obj).rstrip("\n")]
+    return "\n".join(lines) + "\n"
+
+
+_HELPERS["h5_names"] = _h5_names_helper()  # always written, before the save (not in _HELPER_ORDER)
 
 
 def _steps(adata) -> list[dict]:
@@ -4814,5 +4835,6 @@ def build_script(adata, *, dataset_id: str = "", dataset_name: str = "",
     out += ["", "", "adata = read_input(INPUT)", 'print(f"read {adata.n_obs:,} cells x '
             '{adata.n_vars:,} genes")']
     out += body
+    out += ["", ""] + _HELPERS["h5_names"].strip("\n").splitlines() + [""]
     out += [""] + _SUMMARY.strip("\n").splitlines()
     return "\n".join(out) + "\n"

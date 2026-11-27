@@ -202,3 +202,34 @@ def test_a_compaction_killed_midway_leaves_the_dataset_as_it_was(counts, tmp_pat
     a = AnnDataAdaptor(str(path))
     assert a.is_large and a.adata.X[:2].shape[0] == 2
     a.close()
+
+
+def test_column_and_key_names_with_a_slash_edit_in_place(counts, tmp_path):
+    # Seam of two v0.86 changes: columns written one by one (this file) and names holding
+    # "/" stored escaped (core/h5_names.py). A column "T/NK" beside "T" must stay ONE key.
+    path = make_large(tmp_path / "ds", counts.copy(), gene_store_too=False)
+    adata = ad.read_h5ad(path, backed="r")
+    lock, rng = threading.RLock(), np.random.default_rng(3)
+    adata.obs["T"] = pd.Categorical(rng.choice(["a", "b"], N))
+    adata.obs["T/NK"] = pd.Categorical(rng.choice(["c", "d/e"], N))
+    adata.uns["T_colors"], adata.uns["T/NK_colors"] = ["#111111", "#222222"], ["#333333", "#444444"]
+    large_mode.write_in_place(adata, path, lock, uns_keys=["T_colors", "T/NK_colors"])
+    for e in range(3):  # edit the slash column, then drop it, each on top of the stored table
+        _relabel(adata, "T/NK", f"x/{e}", rng)
+        large_mode.write_in_place(adata, path, lock)
+    with h5py.File(path, "r") as f:
+        assert isinstance(f["obs"]["T"], h5py.Group) and "NK" not in f["obs"]["T"]  # not nested
+        assert "T%2fNK" in f["obs"] and "T%2fNK" in list(f["obs"].attrs["column-order"])
+    back = ad.read_h5ad(path, backed="r")
+    assert list(back.obs.columns) == list(adata.obs.columns)
+    assert list(back.obs["T/NK"].astype(str)) == list(adata.obs["T/NK"].astype(str))
+    assert list(back.uns["T/NK_colors"]) == ["#333333", "#444444"] and list(back.uns["T_colors"]) == ["#111111", "#222222"]
+    back.file.close()
+    del adata.obs["T/NK"]
+    large_mode.write_in_place(adata, path, lock)
+    back = ad.read_h5ad(path, backed="r")
+    assert "T/NK" not in back.obs and "T" in back.obs
+    with h5py.File(path, "r") as f:
+        assert "T%2fNK" not in f["obs"]
+    back.file.close()
+    adata.file.close()
