@@ -6,6 +6,50 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- "Store this dataset by rows" for a dataset uploaded before 0.85, which keeps its column-stored matrix. When a
+  run on it does not fit in memory, scView now says why it cannot use large-dataset mode (before: the estimate
+  promised large mode and the run then failed) and offers the one action, with its time and disk need (38 s and
+  1.7 GB for 73,260 cells; 80 s once the dataset has edits). No value, label or result changes, the upload is
+  untouched, and History records it. scView checks free disk first, also before the row-stored copy made at
+  upload. MCP: `store_by_rows`. It is not offered where it would not change the outcome (DE between cells,
+  markers).
+- SingleCellExperiment files: list, date, nested-table and matrix columns of colData and rowData now arrive as
+  plain columns, as for Seurat objects; a column that cannot be one is left out and named in the conversion
+  report.
+
+### Changed
+- After Convert now, the import wizard's memory estimate for an R object is read from the converted file
+  instead of the R object's size: 0.61 GB before, 0.33 GB after, 0.31 GB measured on a 20,000-cell Seurat v5
+  object. It also says when the file will be read in blocks.
+- Keeping a clustering resolution after a sweep saves the sweep's own labels at once (before: Leiden ran again,
+  414 s on 116,313 cells in large mode, with nothing shown). A resolution the sweep did not hold is clustered
+  with progress shown.
+- QC: a sample whose % mito spread (MAD) is 0 is cut at the % mito floor like every other sample, not at the
+  20% ceiling. On a 24-library nuclei dataset, 7 libraries were cut at 20% and 17 at 2%; now all 24 at 2%. The
+  per-sample table shows "2.0 (floor)". Recorded runs replay with the bounds they used.
+- Names that contain "/" are stored escaped in the file ("Treg%2fTfr") and shown exactly as typed in scView.
+  Other tools reading the .h5ad see the escaped form for column and key names; label values are unchanged.
+
+### Fixed
+- A cell-type label containing "/" beside a label equal to its first part ("Treg/Tfr" beside "Treg") made the
+  save of a finished run fail ("Incompatible object (Dataset) already exists"), and the run was lost. Settings
+  keyed by such a label, which read back wrong, are kept too. A save that fails after a run now says in words
+  that nothing was kept.
+- Plots and gene views of a dataset kept on disk could fail with a server error while an edit read the dataset
+  into memory or another dataset was opened: its file was closed under the read. In a test of 360 requests
+  beside edits, 33 failed before and 0 after. A rare server error when several requests freed memory at once
+  is fixed too.
+- Large datasets: label, order and rename edits no longer grow the file (116,313 cells: +8 to +19 MB per label
+  edit and +117 MB per rename before, under 0.03 MB now). A rename that merges two categories still adds its
+  marker table's gene names (36 MB here) until the file has grown by a fifth, when it is rewritten without
+  the unused space (1.2 s per 0.5 GB).
+- AI annotation on large datasets skipped its low-quality and QC-note rules and wrote no qualified labels,
+  without saying so. It now applies them; a check that cannot run is named in the result.
+- A SingleCellExperiment whose cell metadata holds a factor with a missing level failed to convert.
+- QC advice no longer suggests correcting for a column the data are already corrected for; a removal p value
+  too small to store is given as 1e-300, not 0.
+
 ## [0.85.0] - 2026-11-26
 
 Label edits on a dataset kept on disk no longer read it into memory, new datasets store their matrices by rows,
