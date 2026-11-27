@@ -721,7 +721,7 @@ def _write_table(f: h5py.File, key: str, frame) -> None:
             stored = read_elem(group)
         except Exception:  # noqa: BLE001 - a table anndata cannot read back is written whole
             stored = None
-    if stored is None or not stored.index.equals(frame.index):
+    if stored is None or not names or not stored.index.equals(frame.index):
         _replace(f, key, frame)
         return
     for name in [c for c in stored.columns if c not in frame.columns]:
