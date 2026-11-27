@@ -535,6 +535,8 @@ class DatasetManager:
         for victim in self._evictable(keep):
             if free() >= target:
                 break
+            if victim not in self._evictable(keep):
+                continue  # dropped, or taken up by a request, during the wait above
             self._drop(victim)
             await asyncio.to_thread(memory_budget.release_memory)
             budget = memory_budget.read_budget()

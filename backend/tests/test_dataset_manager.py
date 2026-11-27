@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -182,6 +183,23 @@ async def test_a_load_waits_for_memory_a_finished_run_is_still_freeing(dm, monke
 
 async def _no_sleep(_s):
     return None
+
+
+async def test_two_requests_freeing_memory_at_once_do_not_drop_one_dataset_twice(dm, monkeypatch):
+    # Seen live (24 requests at once on a 3 GB backend): both took the same list of datasets
+    # to drop, each waited for the collection after a drop, and the second then dropped a
+    # dataset the first had already dropped (list.remove: x not in list, a 500).
+    _three(dm)
+    _fake_memory(monkeypatch, dm, need_gb=0.1, limited=False)
+    for did in ("a", "b", "c"):
+        await dm.load_dataset(did)
+    _fake_memory(monkeypatch, dm, need_gb=0.1)
+    from scview.core import memory_budget
+
+    monkeypatch.setattr(memory_budget, "read_budget",
+                        lambda *_a, **_k: memory_budget.MemoryBudget(6 * GB, 7 * GB, True, "container limit"))
+    await asyncio.gather(dm.free_memory_for(int(1.0 * GB), keep="c"), dm.free_memory_for(int(1.0 * GB), keep="c"))
+    assert dm.cached_ids() == ["c"]
 
 
 async def test_without_a_container_limit_nothing_is_dropped_for_memory(dm, monkeypatch):
