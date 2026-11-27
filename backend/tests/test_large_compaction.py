@@ -137,6 +137,25 @@ def test_the_file_is_compacted_once_it_has_grown_past_the_threshold(counts, tmp_
     adaptor.close()
 
 
+def test_a_compacted_file_keeps_its_free_space_manager(counts, tmp_path):
+    # a run's h5ad keeps its free-space manager in the file (large_run.H5AD_CREATE)
+    from scview.core import h5_copy, large_run
+
+    made = make_large(tmp_path / "ds", counts, gene_store_too=False)
+    path = made.with_name("kept.h5ad")
+    h5_copy.compact_copy(made, path, create=large_run.H5AD_CREATE)
+    assert large_mode.compact(path, force=True)["compacted"]
+    with h5py.File(path, "r") as f:
+        strategy, persist, _ = f.id.get_create_plist().get_file_space_strategy()
+    assert persist and strategy == h5py.h5f.FSPACE_STRATEGY_FSM_AGGR
+    assert large_mode.compact(made, force=True)["compacted"]  # a file made without it stays without
+    with h5py.File(made, "r") as f:
+        assert not f.id.get_create_plist().get_file_space_strategy()[1]
+    back = ad.read_h5ad(path, backed="r")
+    assert large_layout.is_large(back) and back.n_obs == N
+    back.file.close()
+
+
 def test_no_compaction_without_the_disk_for_it(counts, tmp_path, monkeypatch):
     path = make_large(tmp_path / "ds", counts, gene_store_too=False)
     adata = ad.read_h5ad(path, backed="r")

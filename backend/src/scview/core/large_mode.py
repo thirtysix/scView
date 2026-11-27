@@ -785,9 +785,14 @@ def compact(path: str | Path, *, force: bool = False) -> dict | None:
     size = path.stat().st_size
     with h5py.File(path, "r") as f:
         base = f.attrs.get(COMPACT_SIZE_ATTR)
+        strategy, persist, _ = f.id.get_create_plist().get_file_space_strategy()
     base = size if base is None else int(base)
     if not force and size - base < compaction_threshold(base):
         return None
+    # A run makes the h5ad with its free-space manager kept in the file (large_run.H5AD_CREATE),
+    # so a later edit finds the holes an earlier one left: the copy must be made the same way.
+    create = {"fs_strategy": "fsm", "fs_persist": True} if (
+        persist and strategy == h5py.h5f.FSPACE_STRATEGY_FSM_AGGR) else None
     partial = _compact_partial(path)
     partial.unlink(missing_ok=True)  # a copy a crash left unfinished
     free = shutil.disk_usage(path.parent).free
@@ -797,7 +802,7 @@ def compact(path: str | Path, *, force: bool = False) -> dict | None:
         return {"compacted": False, "reason": "disk", "size": size, "free": free}
     start = time.monotonic()
     try:
-        h5_copy.compact_copy(path, partial)
+        h5_copy.compact_copy(path, partial, create=create)
         _hook("compacting")
         with h5py.File(partial, "r+") as f:
             f.attrs[COMPACT_SIZE_ATTR] = np.int64(partial.stat().st_size)
