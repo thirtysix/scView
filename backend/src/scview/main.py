@@ -14,7 +14,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from scview.config import get_settings
-from scview.core import large_mode
+from scview.core import large_mode, request_pins
 from scview.core.dataset_manager import DatasetBusyError, DatasetMemoryError
 from scview.core.large_mode import LargeDatasetError
 from scview.core.guards import require_access
@@ -119,6 +119,9 @@ app.add_middleware(
 
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.MAX_JSON_BODY_KB * 1024)
+# Last added = outermost: every dataset a request is handed stays readable until its response
+# has been sent (core/request_pins.py).
+app.add_middleware(request_pins.Middleware)
 
 # ---------------------------------------------------------------------------
 # Routers — every /api route passes the (optional) shared-secret access gate.

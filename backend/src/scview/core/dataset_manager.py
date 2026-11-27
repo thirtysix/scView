@@ -24,6 +24,7 @@ from scview.core import (
     large_mode,
     memory_budget,
     modality_store,
+    request_pins,
     results_store,
     transcripts,
     uns_history,
@@ -304,7 +305,7 @@ class DatasetManager:
         if dataset_id in self._datasets:
             self._load_order.remove(dataset_id)
             self._load_order.append(dataset_id)
-            return self._datasets[dataset_id]
+            return self._handed(self._datasets[dataset_id])
 
         pending = self._loading.get(dataset_id)
         if pending is None:
@@ -317,7 +318,14 @@ class DatasetManager:
 
             pending.add_done_callback(_forget)
         # Shielded: one caller giving up must not cancel the read the others wait on.
-        return await asyncio.shield(pending)
+        return self._handed(await asyncio.shield(pending))
+
+    @staticmethod
+    def _handed(adaptor: AnnDataAdaptor | None) -> AnnDataAdaptor | None:
+        """Every adaptor handed to a request is pinned until the request ends
+        (``core/request_pins.py``): its backed file stays open under the request's reads."""
+        request_pins.hold(adaptor)
+        return adaptor
 
     async def _load(self, dataset_id: str) -> AnnDataAdaptor | None:
         h5ad_path = self._resolve_h5ad(dataset_id)
@@ -527,6 +535,8 @@ class DatasetManager:
         for victim in self._evictable(keep):
             if free() >= target:
                 break
+            if victim not in self._evictable(keep):
+                continue  # dropped, or taken up by a request, during the wait above
             self._drop(victim)
             await asyncio.to_thread(memory_budget.release_memory)
             budget = memory_budget.read_budget()
@@ -620,7 +630,7 @@ class DatasetManager:
                                      memory_budget.read_budget().limit_bytes, what)
 
     def get_dataset(self, dataset_id: str) -> AnnDataAdaptor | None:
-        return self._datasets.get(dataset_id)
+        return self._handed(self._datasets.get(dataset_id))
 
     def cached_ids(self) -> list[str]:
         """The datasets held in memory, least recently used first."""
@@ -783,6 +793,7 @@ class DatasetManager:
         in_flight = self._loading.pop(dataset_id, None)  # the next access reads the file again
         adaptor = self._datasets.pop(dataset_id, None)
         if adaptor:
+            request_pins.let_go(adaptor)  # the request that drops it reads it no more
             adaptor.close()
         if dataset_id in self._load_order:
             self._load_order.remove(dataset_id)
