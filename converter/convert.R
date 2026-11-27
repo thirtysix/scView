@@ -667,6 +667,7 @@ manual_convert <- function(obj, output_path, version_info, progress = NULL) {
 # Cell metadata (Seurat meta.data)
 # ---------------------------------------------------------------------------
 #
+# Shared with convert_sce.R (colData, rowData), which is always sourced after this file.
 # meta.data went to pandas as it was, so one odd column failed the whole conversion
 # (a list column: "Mixing dicts with non-Series"; dates, nested tables, matrix columns,
 # a column named _index) or came out wrong (integer NA as -2147483648, logical NA as
@@ -685,45 +686,69 @@ seurat_obs <- function(md, cells) {
     skipped <- if (is.null(md)) character(0) else "cell metadata (meta.data): its rows are not the object's cells"
     return(list(df = data.frame(row.names = cells), kept = character(0), skipped = skipped))
   }
+  # a "/" in a name stays, as it always has for a Seurat object
+  plain <- plain_columns(md, nrow(md), "cell metadata", keep_slash = TRUE)
+  df <- data.frame(row.names = rownames(md))
+  for (k in seq_along(plain$cols)) df[[names(plain$cols)[k]]] <- plain$cols[[k]]
+  list(df = df, kept = plain$kept, skipped = plain$skipped)
+}
+
+#' The columns of a table with one row per cell or gene (Seurat meta.data; colData,
+#' rowData and metadata tables of a SingleCellExperiment, convert_sce.R) as plain ones:
+#' list(cols = named list of plain vectors, in order, with names anndata takes,
+#' kept, skipped, n = columns of the table kept, total = columns it has). `what` names
+#' the table in the report ("cell metadata", "colData"), `unit` what a row is.
+plain_columns <- function(df, n, what, unit = "cell", keep_slash = FALSE) {
   cols <- list()
   kept <- character(0)
   skipped <- character(0)
-  cn <- names(md)
+  cn <- names(df)
+  n_kept <- 0L
   for (i in seq_along(cn)) {
-    out <- obs_column(md[[i]], cn[i], nrow(md))
+    out <- obs_column(df[[i]], cn[i], n, unit)
     if (is.character(out$why)) {
-      skipped <- c(skipped, sprintf("cell metadata column %s: %s", cn[i], out$why))
+      skipped <- c(skipped, sprintf("%s column %s: %s", what, cn[i], out$why))
       next
     }
+    n_kept <- n_kept + 1L
     cols <- c(cols, out$cols)
-    if (length(out$note)) kept <- c(kept, sprintf("cell metadata column %s: %s", cn[i], paste(out$note, collapse = "; ")))
+    if (length(out$note)) kept <- c(kept, sprintf("%s column %s: %s", what, cn[i], paste(out$note, collapse = "; ")))
     if (length(out$left_out)) {
-      skipped <- c(skipped, sprintf("cell metadata column %s: %s", cn[i], paste(out$left_out, collapse = "; ")))
+      skipped <- c(skipped, sprintf("%s column %s: %s", what, cn[i], paste(out$left_out, collapse = "; ")))
     }
   }
-
-  keys <- names(cols)
-  # anndata reserves _index; an empty or repeated name is not a column name
-  keys[is.na(keys) | !nzchar(keys)] <- paste0("column_", which(is.na(keys) | !nzchar(keys)))
-  keys[keys == "_index"] <- "_index_"
-  keys <- make.unique(keys, sep = "_")
-  df <- data.frame(row.names = rownames(md))
-  for (k in seq_along(cols)) df[[keys[k]]] <- cols[[k]]
-  list(df = df, kept = kept, skipped = skipped)
+  names(cols) <- column_keys(names(cols), keep_slash)
+  list(cols = cols, kept = kept, skipped = skipped, n = n_kept, total = length(cn))
 }
 
-#' One meta.data column as list(cols = named list of plain vectors, note = what was
-#' changed, left_out = parts of a nested table left out), or list(why = the reason the
-#' whole column is left out).
-obs_column <- function(v, nm, n) {
-  one <- function(x, note = NULL) list(cols = stats::setNames(list(x), nm), note = note)
+#' Column names anndata can store: it reserves _index and nests a name at "/" (made
+#' "_" unless `keep_slash`); an empty or repeated name is not a column name.
+column_keys <- function(keys, keep_slash = FALSE) {
+  if (length(keys) == 0) return(character(0))
+  keys[is.na(keys) | !nzchar(keys)] <- paste0("column_", which(is.na(keys) | !nzchar(keys)))
+  keys[keys == "_index"] <- "_index_"
+  if (!keep_slash) keys <- gsub("/", "_", keys, fixed = TRUE)
+  make.unique(keys, sep = "_")
+}
 
-  if (is.data.frame(v)) {  # a nested table: its columns as nm.child
-    if (nrow(v) != n) return(list(why = "a nested table whose rows are not the cells"))
+#' One column as list(cols = named list of plain vectors, note = what was changed,
+#' left_out = parts of a nested table left out), or list(why = the reason the whole
+#' column is left out). `n` rows, each one `unit` (a cell, a gene).
+obs_column <- function(v, nm, n, unit = "cell") {
+  one <- function(x, note = NULL) list(cols = stats::setNames(list(x), nm), note = note)
+  units <- paste0(unit, "s")
+
+  # Bioconductor's containers (colData / rowData): a run-length column as its values,
+  # a list of vectors (CharacterList, IntegerList, SimpleList) as a list column
+  if (methods::is(v, "Rle")) v <- S4Vectors::decode(v)
+  if (methods::is(v, "AtomicList") || identical(class(v)[1], "SimpleList")) v <- as.list(v)
+
+  if (is.data.frame(v) || methods::is(v, "DataFrame")) {  # a nested table: its columns as nm.child
+    if (nrow(v) != n) return(list(why = sprintf("a nested table whose rows are not the %s", units)))
     out <- list(); notes <- character(0); left_out <- character(0)
-    for (j in seq_along(v)) {
+    for (j in seq_along(names(v))) {
       sub_nm <- paste0(nm, ".", names(v)[j])
-      sub <- obs_column(v[[j]], sub_nm, n)
+      sub <- obs_column(v[[j]], sub_nm, n, unit)
       if (is.character(sub$why)) {
         left_out <- c(left_out, sprintf("%s left out (%s)", sub_nm, sub$why))
         next
@@ -737,7 +762,7 @@ obs_column <- function(v, nm, n) {
                 left_out = left_out))
   }
   if (!is.null(dim(v)) && length(dim(v)) == 2) {  # a matrix column: one column per matrix column
-    if (nrow(v) != n) return(list(why = "a matrix whose rows are not the cells"))
+    if (nrow(v) != n) return(list(why = sprintf("a matrix whose rows are not the %s", units)))
     if (ncol(v) > MAX_MATRIX_COLUMN) {
       return(list(why = sprintf("a matrix of %s columns in one column (more than %d)", fmt_n(ncol(v)), MAX_MATRIX_COLUMN)))
     }
@@ -745,17 +770,17 @@ obs_column <- function(v, nm, n) {
     sub_names <- colnames(m)
     if (is.null(sub_names) || anyNA(sub_names) || !all(nzchar(sub_names))) sub_names <- as.character(seq_len(ncol(m)))
     df <- stats::setNames(lapply(seq_len(ncol(m)), function(j) m[, j]), sub_names)
-    res <- obs_column(structure(df, class = "data.frame", row.names = seq_len(n)), nm, n)
+    res <- obs_column(structure(df, class = "data.frame", row.names = seq_len(n)), nm, n, unit)
     if (!is.null(res$note)) res$note[1] <- sprintf("a matrix in one column, kept as %s", paste(names(res$cols), collapse = ", "))
     return(res)
   }
   if (!is.null(dim(v))) return(list(why = sprintf("an array of %d dimensions in one column", length(dim(v)))))
-  if (length(v) != n) return(list(why = "its length does not match the cells"))
+  if (length(v) != n) return(list(why = sprintf("its length does not match the %s", units)))
   # before the list check: a POSIXlt date is a list
   if (inherits(v, c("Date", "POSIXt"))) return(one(as.character(v)))
   if (inherits(v, "difftime")) return(one(as.numeric(v)))
   if (isS4(v)) return(list(why = sprintf("a %s, not a plain column", class(v)[1])))
-  if (is.list(v)) return(obs_list_column(v, nm, n))
+  if (is.list(v)) return(obs_list_column(v, nm, n, unit))
 
   if (is.factor(v)) {
     lv <- levels(v)
@@ -765,7 +790,7 @@ obs_column <- function(v, nm, n) {
   }
   if (is.logical(v)) {
     if (!anyNA(v)) return(one(as.vector(v)))
-    # pandas has no missing TRUE / FALSE: a category, as convert_sce.R writes it
+    # pandas has no missing TRUE / FALSE: a category
     return(one(factor(ifelse(v, "TRUE", "FALSE"), levels = c("FALSE", "TRUE"))))
   }
   if (is.integer(v)) return(one(if (anyNA(v)) as.numeric(v) else as.vector(v)))
@@ -779,12 +804,12 @@ obs_column <- function(v, nm, n) {
 #' A list column. One value or none per cell: those values as a plain column, empty
 #' cells missing. Several values per cell: joined with "; ". Anything else, or no value
 #' in any cell, is left out.
-obs_list_column <- function(v, nm, n) {
+obs_list_column <- function(v, nm, n, unit = "cell") {
   lens <- lengths(v)
-  if (all(lens == 0)) return(list(why = "a list column with no value in any cell"))
+  if (all(lens == 0)) return(list(why = sprintf("a list column with no value in any %s", unit)))
   plain <- vapply(v, function(e) is.null(e) || (is.atomic(e) && is.null(dim(e)) && !isS4(e)), logical(1))
   if (!all(plain)) {
-    return(list(why = sprintf("a list of %s values, not one value per cell", class(v[!plain][[1]])[1])))
+    return(list(why = sprintf("a list of %s values, not one value per %s", class(v[!plain][[1]])[1], unit)))
   }
   text <- function(e) as.character(e)  # a factor's labels, not its codes
   if (all(lens <= 1)) {
@@ -800,14 +825,14 @@ obs_list_column <- function(v, nm, n) {
       out <- rep(NA_character_, n)
       out[has] <- vapply(vals, text, character(1))
     }
-    res <- obs_column(out, nm, n)
-    res$note <- "a list column with one value per cell, kept as a plain column"
+    res <- obs_column(out, nm, n, unit)
+    res$note <- sprintf("a list column with one value per %s, kept as a plain column", unit)
     return(res)
   }
   joined <- vapply(v, function(e) if (length(e) == 0) NA_character_ else paste(text(e), collapse = "; "),
                    character(1))
-  res <- obs_column(unname(joined), nm, n)
-  res$note <- sprintf("a list column with up to %d values per cell, kept as text joined with \"; \"", max(lens))
+  res <- obs_column(unname(joined), nm, n, unit)
+  res$note <- sprintf("a list column with up to %d values per %s, kept as text joined with \"; \"", max(lens), unit)
   res
 }
 
