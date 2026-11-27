@@ -559,6 +559,8 @@ def _bounds(stats: dict[str, tuple[float, float]], t: Thresholds, ceiling: float
         mt = min(bound, ceiling) if ceiling is not None else bound
     out["max_pct_mt"] = mt if mt is not None and math.isfinite(mt) else None
     out["skipped"] = skipped
+    if "pct_mt" in skipped and math.isfinite(stats["pct_mt"][0]):
+        out["pct_mt_median"] = stats["pct_mt"][0]  # for the floor (``apply_pct_mt_floor``)
     return out
 
 
@@ -570,6 +572,10 @@ def _recorded_bounds(row: dict) -> dict:
         out["min_genes"] = row["min_genes_mad"]
     if "max_pct_mt_mad" in row:  # likewise the % mito floor
         out["max_pct_mt"] = row["max_pct_mt_mad"]
+    # A MAD-0 sample's median, by which the floor is its bound (since v0.86). A record from
+    # before has none, so its samples keep the bound they were filtered by (the ceiling).
+    if row.get("pct_mt_median") is not None:
+        out["pct_mt_median"] = row["pct_mt_median"]
     return out
 
 
@@ -598,10 +604,22 @@ def apply_pct_mt_floor(row: dict, pct: np.ndarray, floor: float, ceiling: float 
     """Raise ``row``'s % mito bound (``max_pct_mt``, the MAD bound under the ceiling) to
     ``floor`` (never above the ceiling) and say which bound applies (``max_pct_mt_by`` "mad"
     or "floor") and how many cells the floor keeps that the MAD bound removes
-    (``n_pct_mt_floor``). ``pct``: % mito of the cells the row judges."""
+    (``n_pct_mt_floor``). ``pct``: % mito of the cells the row judges. A sample whose MAD is
+    0 has no MAD bound; the floor is its bound when its median is under the floor (below)."""
     own = row.get("max_pct_mt")
     row.update(max_pct_mt_mad=own, max_pct_mt_by="mad", n_pct_mt_floor=0)
     target = float(floor) if ceiling is None else min(float(floor), float(ceiling))
+    flat = row.get("pct_mt_median")  # there only when the MAD is 0 (``_bounds``)
+    if flat is not None and flat < target:
+        # A MAD of 0 with the median under the floor (half the sample's nuclei at 0% mito): the
+        # MAD bound has collapsed onto the median, which is what the floor is for, so the floor
+        # is the bound. It used to count as "no bound" and the sample took the ceiling: of 27
+        # lung nuclei libraries 20 were cut at 2-4.4% and 7 at 20%, so a nucleus was kept or
+        # removed by its library. ``n_pct_mt_flat``: the cells the floor removes here.
+        p = pct[np.isfinite(pct)]
+        over = p > target if own is None else (p > target) & (p <= own)
+        row.update(max_pct_mt=target, max_pct_mt_by="floor", n_pct_mt_flat=int(over.sum()))
+        return
     if own is None or own >= target:
         return
     p = pct[np.isfinite(pct)]
@@ -637,7 +655,7 @@ def mad_bounds(cells: dict, t: Thresholds, samples: Samples | None = None,
     log1p(genes) (and + ``t.mad_k`` MADs when ``t.mad_upper``), median +
     ``t.mad_k_mt`` MADs of % mito (capped by ``t.max_pct_mt``). Small samples and
     unlabelled cells take the pooled bounds; a MAD of 0 sets no bound (that metric
-    is listed in ``skipped``).
+    is listed in ``skipped``), except that % mito then takes the floor (``apply_pct_mt_floor``).
 
     ``recorded`` is ``recorded_filtering``'s output: a MAD run with the same
     settings already filtered these cells, and its thresholds are used again."""
@@ -664,7 +682,8 @@ def mad_bounds(cells: dict, t: Thresholds, samples: Samples | None = None,
             src = _recorded_bounds(r) if r is not None else pooled
             rows.append({"name": name, "n_cells": int(m.size),
                          "pooled": bool(r.get("pooled")) if r is not None else True,
-                         **{b: src.get(b) for b in _BOUNDS}, "skipped": src.get("skipped", [])})
+                         **{b: src.get(b) for b in _BOUNDS}, "skipped": src.get("skipped", []),
+                         **({"pct_mt_median": src["pct_mt_median"]} if "pct_mt_median" in src else {})})
     else:
         with np.errstate(invalid="ignore"):
             values = {key: np.log1p(_values(cells, key)) for key, _, _ in _MAD_METRICS}

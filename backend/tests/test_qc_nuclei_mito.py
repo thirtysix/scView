@@ -147,6 +147,97 @@ def test_a_run_recorded_before_the_floor_is_refiltered_without_it():
     assert mito_refilter.plan_params(b)[1].qc_pct_mt_floor == 3.0
 
 
+def _flat(a: ad.AnnData, sample: str, share: float = 0.6) -> ad.AnnData:
+    """``share`` of ``sample``'s cells at 0% mito: its median and MAD are both 0."""
+    idx = np.flatnonzero(a.obs["Donor"] == sample)
+    a.obs.iloc[idx[: int(share * idx.size)], a.obs.columns.get_loc("pct_counts_mt")] = 0.0
+    return a
+
+
+def _two_libraries() -> ad.AnnData:
+    """Two libraries of the same nuclei (most near 0% mito, every tenth at 2.5-8%); in
+    "flat" over half are at exactly 0%, so its median and MAD are 0."""
+    a = _cells({"flat": (0.05, 0.4), "nuc": (0.05, 0.4)}, seed=1)
+    rng = np.random.default_rng(5)
+    col = a.obs.columns.get_loc("pct_counts_mt")
+    for name in ("flat", "nuc"):
+        idx = np.flatnonzero(a.obs["Donor"] == name)[::10]
+        a.obs.iloc[idx, col] = rng.uniform(2.5, 8.0, idx.size)
+    a = _flat(a, "flat")
+    idx = np.flatnonzero(a.obs["Donor"] == "flat")[-40:]
+    a.obs.iloc[idx, col] = rng.uniform(2.5, 8.0, idx.size)
+    return a
+
+
+def test_a_sample_whose_mad_is_zero_takes_the_floor_not_the_ceiling():
+    # "flat": over half its nuclei at 0% mito (median 0, MAD 0), the rest up to a few %;
+    # "nuc": the same nuclei with a small spread. Both must be cut at the 2% floor.
+    a = _two_libraries()
+    cells = per_cell_qc(a)
+    pct = a.obs["pct_counts_mt"].to_numpy()
+    flat = (a.obs["Donor"] == "flat").to_numpy()
+    over = int((pct[flat] > 2.0).sum())
+    assert over > 20  # the sample does hold nuclei above the floor
+    on = qc_filter.preview(a, cells, Thresholds(mode="mad", max_pct_mt=20.0, pct_mt_floor=2.0))
+    row, other = _rows(on)["flat"], _rows(on)["nuc"]
+    assert "pct_mt" in row["skipped"] and row["pct_mt_median"] == 0.0
+    assert row["max_pct_mt"] == 2.0 and row["max_pct_mt_by"] == "floor"  # was 20.0, the ceiling
+    assert row["max_pct_mt_mad"] == 20.0 and row["n_pct_mt_flat"] == over and row["n_pct_mt_floor"] == 0
+    assert other["max_pct_mt"] == 2.0 and "n_pct_mt_flat" not in other
+    removed = on["by_criterion"]["max_pct_mt"]["n_removed"]
+    assert removed == over + int((pct[~flat] > 2.0).sum())  # one bound for both samples
+    assert "this floor set the bound in 2 of 2 samples" in qc_filter.applied_summary(on["mad"])
+    # With the floor off nothing changes: a MAD of 0 sets no bound, the ceiling applies.
+    off = qc_filter.preview(a, cells, Thresholds(mode="mad", max_pct_mt=20.0, pct_mt_floor=0.0))
+    assert _rows(off)["flat"]["max_pct_mt"] == 20.0 and "max_pct_mt_by" not in _rows(off)["flat"]
+    # A flat sample whose median is over the floor (every cell alike) keeps the ceiling.
+    b = _cells({"same": (5.0, 0.0), "nuc": (0.05, 0.4)}, seed=1)
+    same = _rows(qc_filter.preview(b, per_cell_qc(b), Thresholds(mode="mad", max_pct_mt=20.0, pct_mt_floor=2.0)))["same"]
+    assert same["max_pct_mt"] == 20.0 and same["max_pct_mt_by"] == "mad"
+
+
+def test_the_run_cuts_a_flat_sample_at_the_floor_and_a_rerun_and_the_replay_keep_it():
+    a = _two_libraries()
+    params = PipelineParams(min_cells=0, max_pct_mt=20.0, qc_sample_column="Donor")
+    out, res = run_pipeline(a.copy(), ["filtering"], params)
+    assert res.errors == {}
+    assert float(out.obs.loc[out.obs["Donor"] == "flat", "pct_counts_mt"].max()) <= 2.0
+    p = provenance.read_provenance(out)["history"][-1]["params"]
+    rec = {r["name"]: r for r in p["qc_thresholds"]["samples"]}["flat"]
+    assert rec["max_pct_mt"] == 2.0 and rec["max_pct_mt_by"] == "floor" and rec["n_removed"] == rec["n_pct_mt_flat"]
+    again, _ = run_pipeline(out.copy(), ["filtering"], params)  # reuses the record
+    assert again.n_obs == out.n_obs
+    assert {r["name"]: r for r in provenance.read_provenance(again)["history"][-1]["params"]
+            ["qc_thresholds"]["samples"]}["flat"]["max_pct_mt"] == 2.0
+    from scview.core.replay_script import build_script
+
+    assert "'max_pct_mt': 2.0" in build_script(out).replace('"', "'")
+
+
+def test_a_record_from_before_keeps_its_flat_samples_at_the_ceiling():
+    # Filtered by 0.85: the flat sample was cut at the ceiling, and its record has no median.
+    a = _two_libraries()
+    params = PipelineParams(min_cells=0, max_pct_mt=20.0, qc_sample_column="Donor")
+    out, _ = run_pipeline(a.copy(), ["filtering"], params)
+    hist = provenance.read_provenance(out)["history"]
+    old = json.loads(json.dumps(hist[-1]["params"]))
+    for r in old["qc_thresholds"]["samples"]:
+        if r["name"] == "flat":
+            for k in ("pct_mt_median", "n_pct_mt_flat"):
+                r.pop(k)
+            r.update(max_pct_mt=20.0, max_pct_mt_mad=20.0, max_pct_mt_by="mad")
+    b = a.copy()
+    provenance.record_step(b, step="filtering", tool="scview.qc_filter", params=old)
+    prev = qc_filter.preview(b, per_cell_qc(b), qc_filter.resolve_floor(b, Thresholds.from_params(params)),
+                             sample_column="Donor")
+    assert prev["mad"]["reused_from"] and _rows(prev)["flat"]["max_pct_mt"] == 20.0
+    assert _rows(prev)["nuc"]["max_pct_mt"] == 2.0
+    # and its replay script applies the recorded 20%
+    from scview.core.replay_script import build_script
+
+    assert "'max_pct_mt': 20.0" in build_script(b).replace('"', "'")
+
+
 def _register(dm, a: ad.AnnData, did: str) -> str:
     d = Path(dm.data_dir) / "uploads" / did
     d.mkdir(parents=True)
