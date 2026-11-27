@@ -58,6 +58,15 @@ def test_the_run_reply_carries_the_note():
 
     note = _single_sample_note(Stub())
     assert note and "2 (40 cells, 100% from s1" in note and "crosstab(leiden x sample)" in note
+    assert note.endswith("or correct for sample (Harmony) before clustering.")
+    # A dataset already corrected for that column is not told to correct for it.
+    from scview.core import provenance
+
+    provenance.record_step(a, step="batch_correction", tool="harmonypy", params={"batch_key": "sample"})
+    note = _single_sample_note(Stub())
+    assert "2 (40 cells, 100% from s1" in note and "before clustering" not in note
+    assert note.endswith("The dataset is already corrected for sample (Harmony), and the correction did not "
+                         "merge it: it may be cells only that sample has, or cells of low quality.")
 
 
 def _counts(obs: pd.DataFrame):

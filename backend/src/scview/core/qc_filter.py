@@ -1484,9 +1484,14 @@ def rate_test(removed: np.ndarray, sizes: np.ndarray, names: list[str]) -> dict 
     }
     if 0 < int(r.sum()) < int(n.sum()):
         chi2, p, dof, expected = chi2_contingency(np.vstack([r, n - r]))  # Yates for 2 x 2
-        out.update(p=float(p), statistic=round(float(chi2), 3), dof=int(dof),
+        # A statistic past ~1,420 underflows to p = 0.0 (11k nuclei, 28% vs 5% removed: 1,640),
+        # which read as a number; the smallest p given is 1e-300, as elsewhere (marker_randomness).
+        out.update(p=max(float(p), P_FLOOR), statistic=round(float(chi2), 3), dof=int(dof),
                    low_expected=bool((expected < 5).any()))
     return out
+
+
+P_FLOOR = 1e-300
 
 
 def _depends(test: dict | None) -> bool:

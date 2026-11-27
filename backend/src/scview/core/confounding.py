@@ -296,17 +296,23 @@ def single_sample_clusters(obs: pd.DataFrame, cluster_col: str, sample_col: str,
     return out
 
 
-def single_sample_note(found: list[dict], cluster_col: str, sample_col: str, n_samples: int) -> str | None:
-    """One sentence naming the clusters ``single_sample_clusters`` found, or None."""
+def single_sample_note(found: list[dict], cluster_col: str, sample_col: str, n_samples: int,
+                       corrected: bool = False) -> str | None:
+    """One sentence naming the clusters ``single_sample_clusters`` found, or None.
+    ``corrected``: the dataset's batch correction already used ``sample_col``, so the
+    advice is not to correct for it (a run that had just done so was told to)."""
     if not found:
         return None
     named = "; ".join(f"{r['cluster']} ({r['n_cells']:,} cells, {r['share']:.0%} from {r['sample']}, which is "
                       f"{r['sample_share_of_data']:.0%} of the data)" for r in found[:SINGLE_SAMPLE_LISTED])
     more = f" and {len(found) - SINGLE_SAMPLE_LISTED} more" if len(found) > SINGLE_SAMPLE_LISTED else ""
-    return (f"{len(found)} {cluster_col} cluster{'s are' if len(found) > 1 else ' is'} almost all one {sample_col} "
+    head = (f"{len(found)} {cluster_col} cluster{'s are' if len(found) > 1 else ' is'} almost all one {sample_col} "
             f"(of {n_samples} in all): {named}{more}. A cluster made of one sample is often a batch effect, not a "
-            f"cell type: check with crosstab({cluster_col} x {sample_col}), or correct for {sample_col} (Harmony) "
-            "before clustering.")
+            f"cell type: check with crosstab({cluster_col} x {sample_col})")
+    if corrected:
+        return (f"{head}. The dataset is already corrected for {sample_col} (Harmony), and the correction did not "
+                "merge it: it may be cells only that sample has, or cells of low quality.")
+    return f"{head}, or correct for {sample_col} (Harmony) before clustering."
 
 
 def single_sample_for(adata, cluster_col: str) -> dict | None:
@@ -323,4 +329,5 @@ def single_sample_for(adata, cluster_col: str) -> dict | None:
         return None
     n_samples = int(adata.obs[sample_col].nunique())
     return {"sample_column": sample_col, "n_samples": n_samples, "clusters": found,
-            "text": single_sample_note(found, cluster_col, sample_col, n_samples)}
+            "text": single_sample_note(found, cluster_col, sample_col, n_samples,
+                                       corrected=recorded_batch_key(adata) == sample_col)}
