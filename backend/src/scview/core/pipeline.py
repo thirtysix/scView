@@ -305,6 +305,19 @@ class PipelineResult:
         return asdict(self)
 
 
+class RunSaveError(RuntimeError):
+    """Every step ran but the result could not be written. Nothing was saved: the dataset
+    reopens as it was before the run."""
+
+
+def _save_failed(error: Exception) -> RunSaveError:
+    return RunSaveError(
+        "The run finished its steps, but the result could not be saved, so nothing was kept: the dataset "
+        f"is as it was before the run. What the save reported: {str(error).strip() or type(error).__name__}"
+        # anndata names the element in a note ("Error raised while writing key 'x' ... to /uns/y")
+        + "".join(f" ({str(n).strip()})" for n in getattr(error, "__notes__", ())[:1]))
+
+
 class StepSkipped(Exception):
     """A step with nothing to do on this dataset, e.g. too few signature genes.
 
@@ -2720,8 +2733,10 @@ def _finish_run(
             else:
                 write(adata, partial)
             os.replace(partial, output_path)
-        except BaseException:
+        except BaseException as e:
             Path(partial).unlink(missing_ok=True)
+            if isinstance(e, Exception) and not isinstance(e, (MemoryError, OSError, RunSaveError)):
+                raise _save_failed(e) from e  # not a bare "Incompatible object (Dataset) already exists"
             raise
         write_s = round(time.time() - tw, 2)
         result.output_path = output_path
