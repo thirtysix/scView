@@ -127,6 +127,7 @@ ADDITIVE_STEPS = frozenset({
     "spatial_domains", "spatial_niches", "nhood_enrichment", "co_occurrence",
     "atac_fragment_qc", "atac_differential", "atac_links", "atac_motif_enrichment", "atac_chromvar",
     "save_score", "remove_score",  # one per-cell score column (core/saved_scores.py)
+    "store_by_rows",  # the matrices' layout on disk only: no value changes (core/store_by_rows.py)
 })
 
 

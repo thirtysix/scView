@@ -111,6 +111,23 @@ export function conversionQuestion(message: string): string {
   return `${reason}\n\nRun it in large-dataset mode anyway? The dataset stays in that layout.`;
 }
 
+/** The words of the backend's refusal of a run that would go to large-dataset mode on a dataset
+ *  stored by columns (core/store_by_rows.py REFUSAL_PHRASE): the UI offers the rewrite there. */
+export const COLUMN_STORED_PHRASE = "store the dataset by rows first";
+
+export function isColumnStoredRefusal(message: string): boolean {
+  return message.includes(COLUMN_STORED_PHRASE);
+}
+
+/** That refusal where the offer itself cannot be shown (a run started from another panel). */
+export function columnStoredText(): string {
+  return (
+    "Not run: this dataset is stored by columns, and the run does not fit in memory, so it would use " +
+    "large-dataset mode, which reads cells in blocks and cannot read that layout. Open Data Assessment: beside " +
+    "Run it offers to store the dataset by rows (no value changes). Then run this again."
+  );
+}
+
 /** Run `call` without the yes to a conversion (`allow_large_mode` false, the backend's
  *  default); when the backend refuses because the run would convert the dataset, ask the
  *  user (`ask`, a confirm by default) and, on yes only, run it again allowing it. Every UI
@@ -140,6 +157,7 @@ export function declinedConversion(): string {
 
 export function runErrorText(e: unknown): string {
   const msg = errorMessage(e);
+  if (isColumnStoredRefusal(msg)) return columnStoredText();
   return isConversionRefusal(msg) ? declinedConversion() : msg;
 }
 

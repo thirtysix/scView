@@ -217,6 +217,16 @@ async def _store_by_rows(dm: DatasetManager, dataset_id: str, src: Path, filenam
     where = await asyncio.to_thread(csr_store.csc_in_file, current)
     if not where:
         return None
+    # The copy and the conversion's temporary files against the free disk, before anything is
+    # written: short of it the dataset stays as uploaded (valid, and offered the rewrite later).
+    from scview.core import store_by_rows
+
+    try:
+        store_by_rows.check_disk(dm.data_dir, await asyncio.to_thread(store_by_rows.file_disk_need, current),
+                                 "Storing this upload by rows")
+    except store_by_rows.NoDiskSpace as e:
+        logger.warning("Matrices of %s left column-stored: %s", filename, e)
+        return {"matrices": [], "left_column_stored": where, "note": str(e)}
     made_dir = not out_dir.exists()
     out_dir.mkdir(parents=True, exist_ok=True)
     partial = out_dir / f".{src.name}.csr.partial"

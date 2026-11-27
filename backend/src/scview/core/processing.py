@@ -148,6 +148,15 @@ async def _make_run_room(dm: DatasetManager, dataset_id: str, adaptor: AnnDataAd
                 preflight.step_times, dm, dataset_id, steps, params, control.mode.chunked)
         except Exception as e:  # never block a run on the estimate itself
             logger.warning("No step times for %s: %s", dataset_id, e)
+        if control.mode.chunked and large_run.large_info(adaptor.h5ad_path) is None:
+            from scview.core import store_by_rows
+
+            # A column-stored matrix cannot be read in blocks of cells: said before the
+            # conversion is asked about, with the one action that unblocks it.
+            blocked = await asyncio.to_thread(store_by_rows.blocks_large_mode, adaptor.h5ad_path)
+            if blocked:
+                raise HTTPException(status_code=409, detail=await asyncio.to_thread(
+                    store_by_rows.refusal, dm, dataset_id, control.mode.reason, blocked))
         if control.mode.chunked and not control.allow_large and large_run.large_info(
                 adaptor.h5ad_path) is None:
             from scview.core import large_mode

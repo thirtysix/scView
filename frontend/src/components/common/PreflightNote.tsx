@@ -14,6 +14,7 @@ import { FAST_LEIDEN, FULL_LEIDEN } from "@/lib/fastLeiden";
 import type { Umap3dSetting } from "@/lib/umap3d";
 import { FastLeidenInfo } from "./FastLeidenInfo";
 import { HoverTip } from "./InfoTip";
+import { StoreByRowsOffer } from "./StoreByRowsOffer";
 
 const GB = 1024 ** 3;
 const gb = (bytes: number) => (bytes / GB >= 10 ? (bytes / GB).toFixed(0) : (bytes / GB).toFixed(1));
@@ -256,6 +257,8 @@ export function PreflightRunNote({
   onLeidenIterations,
   onUmap3d,
   onSkipDoublets,
+  onStoredByRows,
+  storeByRowsShownElsewhere = false,
 }: {
   datasetId: string;
   steps: string[];
@@ -264,11 +267,16 @@ export function PreflightRunNote({
   onLeidenIterations?: (iterations: number) => void;
   onUmap3d?: (setting: Umap3dSetting) => void;
   onSkipDoublets?: () => void;
+  /** After the offered store-by-rows has run from this note */
+  onStoredByRows?: () => void;
+  /** The same offer is on screen for a refused run: not shown twice */
+  storeByRowsShownElsewhere?: boolean;
 }) {
   const [verdict, setVerdict] = useState<PreflightVerdict | null>(null);
   const [leiden, setLeiden] = useState<LeidenChoice | null>(null);
   const [umap3d, setUmap3d] = useState<Umap3dChoice | null>(null);
   const [mode, setMode] = useState<RunMode | null>(null);
+  const [stored, setStored] = useState(0); // counts the rewrites done here: each refetches
   const key = steps.join(",");
   const paramKey = JSON.stringify(params ?? {});
 
@@ -303,13 +311,30 @@ export function PreflightRunNote({
       clearTimeout(timer);
       ctl.abort();
     };
-  }, [datasetId, key, paramKey, refreshKey]);
+  }, [datasetId, key, paramKey, refreshKey, stored]);
 
   if (!verdict) return null;
   return (
     <>
       <PreflightNote verdict={verdict} />
-      {mode && <ConversionNote mode={mode} onSkipDoublets={onSkipDoublets} />}
+      {/* Stored by columns: the run cannot go to large-dataset mode until it is stored by rows.
+          Once done the estimate is asked again, and the conversion note takes its place. */}
+      {mode?.by_columns ? (
+        !storeByRowsShownElsewhere && (
+          <StoreByRowsOffer
+            key={datasetId}
+            datasetId={datasetId}
+            plan={mode.by_columns}
+            doneText="Stored by rows. Run can start now."
+            onDone={() => {
+              onStoredByRows?.();
+              setStored((n) => n + 1);
+            }}
+          />
+        )
+      ) : (
+        mode && <ConversionNote mode={mode} onSkipDoublets={onSkipDoublets} />
+      )}
       {leiden && <FastLeidenOffer choice={leiden} onChange={onLeidenIterations} />}
       {umap3d && <Umap3dNote choice={umap3d} onChange={onUmap3d} />}
     </>

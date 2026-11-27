@@ -4559,6 +4559,13 @@ def _remove_score(p: dict, ctx: _Ctx) -> Snippet:
                            "# a saved score removed"])
 
 
+def _store_by_rows(p: dict, ctx: _Ctx) -> Snippet:
+    """The matrices' layout in scView's own file (core/store_by_rows.py): no value changed,
+    so the script has nothing to run and gives the same numbers with or without it."""
+    return Snippet(EXACT, ["# scView stored its copy of the matrices by rows (CSR) here: the same values, in",
+                           "# the same order. Nothing to run."])
+
+
 _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "ingest": _ingest,
     "integrate": _integrate,
@@ -4630,6 +4637,7 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "spatial_niches": _spatial_niches,
     "save_score": _save_score,
     "remove_score": _remove_score,
+    "store_by_rows": _store_by_rows,
     "atac_fragment_qc": _atac_fragment_qc,
     "run_errors": _run_errors,
 }

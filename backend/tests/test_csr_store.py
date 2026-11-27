@@ -18,7 +18,6 @@ import scipy.sparse as sp
 from anndata.io import read_elem
 
 from scview.core import csr_store, preflight
-from scview.core.dataset_manager import DatasetManager
 
 
 def _random_csc(n_obs: int, n_var: int, density: float, dtype, seed: int = 0) -> sp.csc_matrix:
@@ -305,56 +304,7 @@ def _library_dataset(data_dir: Path, did: str, a: ad.AnnData) -> Path:
     return path
 
 
-async def test_rewrite_dataset_writes_the_derived_file_and_leaves_the_upload(tmp_data_dir):
-    dm = DatasetManager(data_dir=str(tmp_data_dir))
-    upload = _library_dataset(tmp_data_dir, "d1", _dataset("csc"))
-    sent = upload.read_bytes()
-    adaptor = await dm.get_or_load_dataset("d1")
-    assert adaptor.adata.X.format == "csc"
-    out = await csr_store.rewrite_dataset_held(dm, "d1")
-    assert out["converted"] == ["X", "layers/counts", "raw/X"]
-    derived = tmp_data_dir / "derived" / "d1" / "old.h5ad"
-    assert out["target"] == str(derived) and out["source"] == str(upload)
-    assert upload.read_bytes() == sent
-    assert [p.name for p in derived.parent.iterdir()] == ["old.h5ad"]  # no partial, no temp folder
-    assert dm.get_dataset("d1") is None  # the cached CSC copy is dropped
-    again = await dm.get_or_load_dataset("d1")
-    assert again.h5ad_path == str(derived) and again.adata.X.format == "csr"
-    _assert_same_dataset(ad.read_h5ad(upload), again.adata)
-    # A second call has nothing to do and writes nothing.
-    stamp = derived.stat().st_mtime_ns
-    assert (await csr_store.rewrite_dataset_held(dm, "d1"))["converted"] == []
-    assert derived.stat().st_mtime_ns == stamp and dm.get_dataset("d1") is again
-
-
-async def test_rewrite_dataset_of_a_derived_file_survives_a_failed_write(tmp_data_dir, monkeypatch):
-    dm = DatasetManager(data_dir=str(tmp_data_dir))
-    _library_dataset(tmp_data_dir, "d2", _dataset("csr"))
-    derived = tmp_data_dir / "derived" / "d2" / "old.h5ad"
-    derived.parent.mkdir(parents=True)
-    _dataset("csc", seed=9).write_h5ad(derived)
-    before = derived.read_bytes()
-
-    def boom(*a, **k):
-        raise OSError("disk full")
-
-    monkeypatch.setattr(csr_store, "convert", boom)
-    with pytest.raises(OSError, match="disk full"):
-        await csr_store.rewrite_dataset_held(dm, "d2")
-    assert derived.read_bytes() == before and [p.name for p in derived.parent.iterdir()] == ["old.h5ad"]
-    monkeypatch.undo()
-    out = await csr_store.rewrite_dataset_held(dm, "d2")
-    assert out["source"] == out["target"] == str(derived)
-    _assert_same_dataset(_dataset("csc", seed=9), ad.read_h5ad(derived))
-    assert csr_store.csc_in_file(derived) == []
-
-
-def test_rewrite_dataset_is_only_called_inside_an_edit():
-    """Nothing in the app calls it yet; whoever does must go through ``rewrite_dataset_held``."""
-    src = Path(csr_store.__file__).parents[1]
-    callers = [p.relative_to(src).as_posix() for p in src.rglob("*.py")
-               if "rewrite_dataset(" in p.read_text() and p.name != "csr_store.py"]
-    assert callers == []
+# A dataset already in the library is rewritten only when asked: tests/test_store_by_rows.py.
 
 
 # ---------------------------------------------------------------------------

@@ -51,6 +51,10 @@ async def lifespan(app: FastAPI):
     from scview.dependencies import get_ingest_session_manager
 
     get_ingest_session_manager().sweep_expired()
+    # What a backend killed while storing a dataset by rows left behind (core/store_by_rows.py).
+    from scview.core import store_by_rows
+
+    store_by_rows.sweep(data_dir)
 
     # Fetch MSigDB gene sets in the background on first start (~45 MB), so
     # startup isn't held up and an offline machine still comes up.
