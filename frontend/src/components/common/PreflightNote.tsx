@@ -258,6 +258,7 @@ export function PreflightRunNote({
   onUmap3d,
   onSkipDoublets,
   onStoredByRows,
+  storeByRowsShownElsewhere = false,
 }: {
   datasetId: string;
   steps: string[];
@@ -268,6 +269,8 @@ export function PreflightRunNote({
   onSkipDoublets?: () => void;
   /** After the offered store-by-rows has run from this note */
   onStoredByRows?: () => void;
+  /** The same offer is on screen for a refused run: not shown twice */
+  storeByRowsShownElsewhere?: boolean;
 }) {
   const [verdict, setVerdict] = useState<PreflightVerdict | null>(null);
   const [leiden, setLeiden] = useState<LeidenChoice | null>(null);
@@ -317,16 +320,18 @@ export function PreflightRunNote({
       {/* Stored by columns: the run cannot go to large-dataset mode until it is stored by rows.
           Once done the estimate is asked again, and the conversion note takes its place. */}
       {mode?.by_columns ? (
-        <StoreByRowsOffer
-          key={datasetId}
-          datasetId={datasetId}
-          plan={mode.by_columns}
-          doneText="Stored by rows. Run can start now."
-          onDone={() => {
-            onStoredByRows?.();
-            setStored((n) => n + 1);
-          }}
-        />
+        !storeByRowsShownElsewhere && (
+          <StoreByRowsOffer
+            key={datasetId}
+            datasetId={datasetId}
+            plan={mode.by_columns}
+            doneText="Stored by rows. Run can start now."
+            onDone={() => {
+              onStoredByRows?.();
+              setStored((n) => n + 1);
+            }}
+          />
+        )
       ) : (
         mode && <ConversionNote mode={mode} onSkipDoublets={onSkipDoublets} />
       )}

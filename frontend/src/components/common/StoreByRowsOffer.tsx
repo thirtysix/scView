@@ -97,7 +97,7 @@ export function StoreByRowsOffer({
         </div>
       ) : (
         <p className="mt-1.5">
-          <Help id="storage.by-rows">
+          <Help id="storage.by-rows" side="below">
             <button
               type="button"
               onClick={start}

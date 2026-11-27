@@ -55,15 +55,15 @@ LARGE_MODE_READS = ("X", "layers/counts", "raw/X")
 PART = ".byrows.part"
 GB = 1024**3
 
-# The new file against the one it is made from: measured 1.15 (gzip: 0.468 -> 0.540 GB; the
+# The new file against the one it is made from: measured 1.16 (gzip: 0.468 -> 0.545 GB; the
 # row pointers and each cell's gene numbers compress less well than a gene's cell numbers) and
 # 1.00 (uncompressed) on 73,260 x 10,237.
 OUT_SHARE = 1.25
 DISK_MARGIN = 1.1
 DISK_FLOOR = 256 * 1024**2  # left free whatever the estimate
-# Seconds per stored value on 2 cores, by how the source's values are stored (see
-# ``tests/test_store_by_rows.py`` for the measured runs these come from).
-SECONDS_PER_VALUE = {True: 1.7e-7, False: 0.45e-7}
+# Seconds per stored value on 2 cores, by whether the source's values are compressed. Measured
+# on 73,260 x 10,237 (X and .raw, 186M values in all): gzip 38.2 s, uncompressed 7.7 s.
+SECONDS_PER_VALUE = {True: 2.0e-7, False: 0.45e-7}
 SECONDS_FLOOR = 2.0
 
 
@@ -72,9 +72,11 @@ class NoDiskSpace(RuntimeError):
 
     def __init__(self, need: int, free: int, what: str = "Storing this dataset by rows") -> None:
         self.need, self.free = int(need), int(free)
+        # The copy alone would fit: it is the floor that does not.
+        floor = f" (scView leaves {DISK_FLOOR / GB:.2f} GB free)" if need <= free else ""
         super().__init__(
             f"{what} writes a second copy of it: that needs about {_gb(need)} GB of disk and "
-            f"{_gb(free)} GB is free. Free some disk space, then try again.")
+            f"{_gb(free)} GB is free{floor}. Free some disk space, then try again.")
 
 
 def _gb(n: int | float) -> str:
@@ -179,12 +181,13 @@ def plan(dm, dataset_id: str) -> dict:
         "seconds": round(seconds),
         "disk_bytes": need,
         "disk_free_bytes": free,
+        "disk_floor_bytes": DISK_FLOOR,  # left free whatever the need
         "enough_disk": not todo or need + DISK_FLOOR <= free,
         "memory_bytes": max((csr_store.working_bytes(t.src) for t in todo), default=0),
     }
     if todo:
-        out["text"] = (f"about {_seconds_text(seconds)}, {_gb(need)} GB of disk "
-                       f"({_gb(free)} GB free)")
+        out["cost"] = f"about {_seconds_text(seconds)} and {_gb(need)} GB of disk"
+        out["text"] = f"about {_seconds_text(seconds)}, {_gb(need)} GB of disk ({_gb(free)} GB free)"
     return out
 
 
@@ -198,8 +201,7 @@ def refusal(dm, dataset_id: str, reason: str, blocked: list[str]) -> str:
     """The sentence a run gets when it would go to large-dataset mode on a column-stored
     dataset: why, and the one action that unblocks it (with its cost)."""
     p = plan(dm, dataset_id)
-    cost = (f" (about {_seconds_text(p['seconds'])} and {_gb(p['disk_bytes'])} GB of disk; no value changes)"
-            if p["files"] else "")
+    cost = f" ({p['cost']}; no value changes)" if p.get("cost") else ""
     return (f"{reason} That mode reads the matrix in blocks of cells, and this dataset's is stored "
             f"by columns ({', '.join(blocked)}). Nothing was run: {REFUSAL_PHRASE}{cost}, then run "
             "it again. Data Assessment offers it beside Run; an agent calls the tool "

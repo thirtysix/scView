@@ -42,7 +42,7 @@ async def test_a_run_that_would_go_to_large_mode_names_the_tool(client, dataset_
     steps = ["qc_metrics", "normalization", "log_transform"]
     text = await _call("run_pipeline", {"dataset_id": "old", "steps": steps, "params": {"chunked": "on"}}, error=True)
     assert "Not run:" in text and "stored by columns (X, raw/X)" in text
-    assert "store_by_rows(dataset_id) first" in text and "no value changes" in text
+    assert "store_by_rows(dataset_id) first (about 5 s and 0." in text and "GB of disk; no value changes)" in text
     assert "allow_large_mode" not in text  # allowing the conversion would not help
     # With the yes to the conversion the run itself is refused, in the same words.
     r = await _call("run_pipeline", {"dataset_id": "old", "steps": steps, "params": {"chunked": "on"},

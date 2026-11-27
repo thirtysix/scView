@@ -41,7 +41,7 @@ async def storage(dataset_id: str, dm: DatasetManager = Depends(get_dataset_mana
     """The dataset's column-stored matrices (``column_stored``, [] when stored by rows or
     dense), the ones large-dataset mode cannot read (``blocks_large_mode``), and the cost of
     storing it by rows: ``seconds``, ``disk_bytes`` against ``disk_free_bytes``
-    (``enough_disk``), ``memory_bytes``, and ``text`` saying them. Reads file headers only."""
+    (``enough_disk``), ``memory_bytes``, and ``cost`` / ``text`` saying them. Reads file headers only."""
     _known(dm, dataset_id)
     return await asyncio.to_thread(store_by_rows.plan, dm, dataset_id)
 

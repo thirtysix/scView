@@ -234,6 +234,16 @@ describe("PreflightRunNote and a dataset stored by columns", () => {
     expect(screen.queryByTestId("conversion-note")).toBeNull();
   });
 
+  it("is not shown twice while a refused run shows the same offer", async () => {
+    api.getRunPreflight.mockResolvedValue({
+      dataset_id: "d1", steps: [], verdict: verdict("tight"), mode: { ...converts, by_columns: plan },
+    });
+    render(<PreflightRunNote datasetId="d1" steps={["pca"]} params={null} storeByRowsShownElsewhere />);
+    await waitFor(() => expect(screen.getByText(/About 3.1 GB more than now/)).toBeInTheDocument());
+    expect(screen.queryByTestId("store-by-rows-offer")).toBeNull();
+    expect(screen.queryByTestId("conversion-note")).toBeNull();
+  });
+
   it("nothing blocked (in memory, or stored by rows): no offer", async () => {
     api.getRunPreflight.mockResolvedValue({ dataset_id: "d1", steps: [], verdict: verdict("fits"), mode: { chunked: false } });
     const first = render(<PreflightRunNote datasetId="d1" steps={["pca"]} params={null} />);

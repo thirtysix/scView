@@ -14,6 +14,8 @@ export interface StoragePlan {
   seconds: number;
   disk_bytes: number;
   disk_free_bytes: number;
+  /** Disk scView leaves free whatever the need */
+  disk_floor_bytes?: number;
   enough_disk: boolean;
   memory_bytes: number;
   /** "about 30 s, 1.7 GB of disk (508 GB free)"; missing when there is nothing to do */
@@ -74,7 +76,14 @@ export function storeByRowsLabel(plan: Pick<StoragePlan, "seconds" | "disk_bytes
 }
 
 /** Why the rewrite cannot start, or null: the disk is short (both numbers). */
-export function shortDiskText(plan: Pick<StoragePlan, "enough_disk" | "disk_bytes" | "disk_free_bytes">): string | null {
+export function shortDiskText(
+  plan: Pick<StoragePlan, "enough_disk" | "disk_bytes" | "disk_free_bytes" | "disk_floor_bytes">,
+): string | null {
   if (plan.enough_disk) return null;
-  return `It writes a second copy: that needs about ${gb(plan.disk_bytes)} GB of disk and ${gb(plan.disk_free_bytes)} GB is free. Free some disk space first.`;
+  // The copy alone would fit: it is the disk left free that does not.
+  const floor =
+    plan.disk_bytes <= plan.disk_free_bytes && plan.disk_floor_bytes
+      ? ` (scView leaves ${(plan.disk_floor_bytes / GB).toFixed(2)} GB free)`
+      : "";
+  return `It writes a second copy: that needs about ${gb(plan.disk_bytes)} GB of disk and ${gb(plan.disk_free_bytes)} GB is free${floor}. Free some disk space first.`;
 }

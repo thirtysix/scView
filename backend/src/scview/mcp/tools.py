@@ -835,7 +835,7 @@ async def _refuse_conversion(dataset_id: str, steps: list[str], p: dict[str, Any
         raise ToolError(
             f"Not run: {mode.get('reason')} That mode reads cells in blocks, and this dataset's matrix is "
             f"stored by columns ({', '.join(by_columns.get('blocks_large_mode') or [])}). Call "
-            f"store_by_rows(dataset_id) first ({by_columns.get('text')}; no value changes), then run this again.")
+            f"store_by_rows(dataset_id) first ({by_columns.get('cost')}; no value changes), then run this again.")
     if mode.get("converts"):
         skip = (mode.get("without_doublets") or {}).get("text")
         raise ToolError(

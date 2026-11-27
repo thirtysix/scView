@@ -1341,6 +1341,7 @@ export function DataAssessmentPanel() {
                   params={flattenStepParams(STEP_ORDER.filter((s) => selectedSteps.has(s.key)).map((s) => s.key), stepParams)}
                   onLeidenIterations={(n) => setStepParam("clustering", "leiden_iterations", n)}
                   onUmap3d={(v) => setStepParam("embeddings", "umap_3d", v)}
+                  storeByRowsShownElsewhere={blockedRun != null}
                   onSkipDoublets={() =>
                     setSelectedSteps((prev) => {
                       const next = new Set(prev);

@@ -202,7 +202,8 @@ def test_the_disk_need_counts_each_new_file_and_the_temporary_files(tmp_data_dir
     with pytest.raises(store_by_rows.NoDiskSpace, match=r"about 6\.0 GB of disk and 5\.0 GB is free"):
         store_by_rows.check_disk(tmp_data_dir, 6 * 2**30)
     store_by_rows.check_disk(tmp_data_dir, 4 * 2**30)
-    with pytest.raises(store_by_rows.NoDiskSpace):  # the floor left free
+    # The copy alone would fit, the floor left free does not: said, so the two numbers make sense.
+    with pytest.raises(store_by_rows.NoDiskSpace, match=r"5\.0 GB of disk and 5\.0 GB is free \(scView leaves 0\.25 GB free\)"):
         store_by_rows.check_disk(tmp_data_dir, 5 * 2**30 - 1)
 
 

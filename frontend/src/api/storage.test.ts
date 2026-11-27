@@ -25,6 +25,11 @@ describe("store by rows: the offer's words", () => {
     expect(shortDiskText({ enough_disk: false, disk_bytes: 1.7 * GB, disk_free_bytes: 0.7 * GB })).toBe(
       "It writes a second copy: that needs about 1.7 GB of disk and 0.7 GB is free. Free some disk space first.",
     );
+    expect(
+      shortDiskText({ enough_disk: false, disk_bytes: 0.2 * GB, disk_free_bytes: 0.4 * GB, disk_floor_bytes: 0.25 * GB }),
+    ).toBe(
+      "It writes a second copy: that needs about 0.2 GB of disk and 0.4 GB is free (scView leaves 0.25 GB free). Free some disk space first.",
+    );
   });
 });
 
