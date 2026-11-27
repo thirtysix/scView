@@ -87,9 +87,11 @@ from scview.core.pipeline import (
     ALL_STEPS,
     ALL_GENES_RECORD,
     HVG_FLAVORS,
+    QC_NEEDS_COUNTS,
     SAVED_STATUSES,
     PipelineParams,
     PipelineResult,
+    RunSaveError,
     StepNotApplicable,
     StepSkipped,
     _cancelled_during,
@@ -101,6 +103,7 @@ from scview.core.pipeline import (
     _record_errors,
     record_skip,
     _record_pipeline_step,
+    _save_failed,
     _REGRESS_PEARSON,
     _skip_if_blocked,
     _step_failed,
@@ -1017,19 +1020,42 @@ class LargeRun:
         clear_processing(self.light)
         logger.info("Reset to counts (%d cells, %d genes)", self.light.n_obs, self.light.n_vars)
 
-    def _qc_metrics(self) -> None:
+    def _qc_metrics(self) -> dict[str, Any] | None:
         light = self.light
-        lc = chunked.LazyCounts(X=self.x.X, obs=light.obs, var=light.var, source="X",
-                                path=str(self.path), index_dtype=self.x.index_dtype)
+        m, where = self.qc_counts()
+        var = pd.DataFrame(index=m.names) if where is not None else light.var
+        lc = chunked.LazyCounts(X=m.X, obs=light.obs, var=var, source=where or "X",
+                                path=str(self.path), index_dtype=m.index_dtype)
         self._label = "QC metrics"
         obs, var = chunked.qc_metrics(lc)
+        if where is not None:  # the counts' own genes: the per-gene columns go to X's genes
+            var = var.reindex(light.var_names)
+            var["mt"] = chunked.mito_mask(light.var_names)
         for c in obs.columns:
             light.obs[c] = obs[c].to_numpy()
         for c in var.columns:
             light.var[c] = var[c].to_numpy()
-        logger.info("QC metrics: median genes/cell=%d, median counts/cell=%d",
+        logger.info("QC metrics (%s): median genes/cell=%d, median counts/cell=%d", where or "X",
                     int(light.obs["n_genes_by_counts"].median()),
                     int(light.obs["total_counts"].median()))
+        return {"input": where} if where is not None else None
+
+    def qc_counts(self) -> tuple[_Mat, str | None]:
+        """The matrix the QC metrics are counted on (``pipeline._qc_matrix``): X unless it
+        holds processed values, then the counts layer (a large dataset's counts file), then
+        .raw."""
+        if _holds_counts(self.x) or self._empty_x():
+            return self.x, None
+        if _holds_counts(self.layer):
+            return self.layer, "layers['counts']"
+        if _holds_counts(self.raw):
+            return self.raw, ".raw"
+        raise StepSkipped(QC_NEEDS_COUNTS)
+
+    def _empty_x(self) -> bool:
+        """No value in X's first rows (``pipeline._holds_processed_values``: not processed)."""
+        s = self.x.sample()
+        return (s.nnz if sp.issparse(s) else int(np.count_nonzero(s))) == 0
 
     @contextlib.contextmanager
     def _rows(self, m: _Mat) -> Iterator[Any]:
@@ -1413,12 +1439,37 @@ def _n_groups(light: ad.AnnData) -> int | None:
     return None
 
 
+def _whole(block):
+    return block
+
+
+class _Blocks:
+    """A run's matrix (dask, one chunk per row block) as the readers that take a matrix by
+    row blocks expect it (``anndata_adaptor._row_sums``, ``marker_specificity._group_sums``):
+    ``row_blocks`` yields (first row, block) in order, a few blocks in memory at a time."""
+
+    def __init__(self, X) -> None:
+        self.X = X
+        self.shape = X.shape
+        self.dtype = X.dtype
+
+    def row_blocks(self):
+        start = 0
+        for block in chunked._each_block(self.X, _whole):
+            yield start, block
+            start += block.shape[0]
+
+    def __getitem__(self, key):  # the first rows, to judge the values
+        return self.X[key].compute()
+
+
 class _Backend:
     """What ``pipeline.large_backend`` asks for: the matrix reads of the steps that run
     the pipeline's own functions on the matrix-free copy."""
 
     def __init__(self, run: LargeRun) -> None:
         self.run = run
+        self._qc_cells: dict | None = None
 
     def rank_genes_groups(self, adata, groupby: str, key_added: str | None = None,
                           groups: Any = "all") -> None:
@@ -1444,6 +1495,37 @@ class _Backend:
         run._label = "Cell cycle scores"
         large_scores.score_genes_cell_cycle(adata, run.lognorm(), means, s_genes=s_genes,
                                             g2m_genes=g2m_genes, dense=run.dense)
+
+    def qc_cells(self, adata) -> dict:
+        """Per-cell QC for cluster QC (``anndata_adaptor.per_cell_qc`` with the ribosomal,
+        haemoglobin and MALAT1 shares, as in memory): the core metrics from obs, the shares
+        from the counts on disk in one pass by blocks. Kept for the step: the annotator asks twice."""
+        from scview.core.anndata_adaptor import per_cell_qc
+
+        if self._qc_cells is None:
+            run = self.run
+            run.write_matrices()
+            try:
+                counts, _ = run.find_counts()
+            except ValueError:  # no counts kept: what obs holds (no shares, as the viewer has it)
+                try:
+                    self._qc_cells = per_cell_qc(adata, ribo=False, counts=(None, adata.var_names))
+                except (AttributeError, TypeError) as e:
+                    raise ValueError("the dataset keeps no counts and its cell table has no QC metrics: "
+                                     "run the QC metrics step first") from e
+            else:
+                run._label = "Cluster QC"
+                self._qc_cells = per_cell_qc(adata, ribo=True, counts=(_Blocks(counts.X), adata.var_names))
+        return self._qc_cells
+
+    def gene_columns(self, genes):
+        """A few genes of X (log-normalised) as a cells x genes block, from the gene store."""
+        return self.run.store().genes(list(genes))
+
+    def ranked_matrix(self, adata):
+        """(X log-normalised on disk as row blocks, its gene names): the matrix this run's
+        markers are ranked on, for the per-group sums of the label qualifiers."""
+        return _Blocks(self.run.lognorm()), adata.var_names
 
     def celltypist(self, adata, model, groupby: str):
         run = self.run
@@ -1682,6 +1764,10 @@ def _finish(run: LargeRun, params: PipelineParams, result: PipelineResult, t0: f
             failed = ", ".join(s.replace("_", " ") for s in result.errors)
             _halted(result, ("stopped", f"Nothing was saved: {failed} failed. {e} The dataset "
                                         "is as it was before the run."))
+        except (MemoryError, OSError, RunSaveError):
+            raise
+        except Exception as e:  # as in memory: said in words, not anndata's bare error
+            raise _save_failed(e) from e
         else:
             write_s = round(time.time() - tw, 2)
             result.output_path = str(run.output)

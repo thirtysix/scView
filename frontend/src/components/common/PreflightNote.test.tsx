@@ -217,6 +217,46 @@ describe("PreflightRunNote and fast Leiden", () => {
   });
 });
 
+describe("PreflightRunNote and a dataset stored by columns", () => {
+  const plan = {
+    dataset_id: "d1", column_stored: ["X"], blocks_large_mode: ["X"], files: 1, seconds: 32,
+    disk_bytes: 1.7 * GB, disk_free_bytes: 508 * GB, enough_disk: true, memory_bytes: 0.4 * GB,
+  };
+  const converts = { chunked: true, converts: true, turns_off: ["sub-clustering"] };
+
+  it("a large-mode run it blocks: the store-by-rows offer, in place of the conversion note", async () => {
+    api.getRunPreflight.mockResolvedValue({
+      dataset_id: "d1", steps: [], verdict: verdict("tight"), mode: { ...converts, by_columns: plan },
+    });
+    render(<PreflightRunNote datasetId="d1" steps={["pca"]} params={null} />);
+    expect(await screen.findByTestId("store-by-rows-offer")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Store this dataset by rows (about 30 s, 1.7 GB of disk)" })).toBeEnabled();
+    expect(screen.queryByTestId("conversion-note")).toBeNull();
+  });
+
+  it("is not shown twice while a refused run shows the same offer", async () => {
+    api.getRunPreflight.mockResolvedValue({
+      dataset_id: "d1", steps: [], verdict: verdict("tight"), mode: { ...converts, by_columns: plan },
+    });
+    render(<PreflightRunNote datasetId="d1" steps={["pca"]} params={null} storeByRowsShownElsewhere />);
+    await waitFor(() => expect(screen.getByText(/About 3.1 GB more than now/)).toBeInTheDocument());
+    expect(screen.queryByTestId("store-by-rows-offer")).toBeNull();
+    expect(screen.queryByTestId("conversion-note")).toBeNull();
+  });
+
+  it("nothing blocked (in memory, or stored by rows): no offer", async () => {
+    api.getRunPreflight.mockResolvedValue({ dataset_id: "d1", steps: [], verdict: verdict("fits"), mode: { chunked: false } });
+    const first = render(<PreflightRunNote datasetId="d1" steps={["pca"]} params={null} />);
+    await waitFor(() => expect(screen.getByText(/About 3.1 GB more than now/)).toBeInTheDocument());
+    expect(screen.queryByTestId("store-by-rows-offer")).toBeNull();
+    first.unmount();
+    api.getRunPreflight.mockResolvedValue({ dataset_id: "d1", steps: [], verdict: verdict("tight"), mode: converts });
+    render(<PreflightRunNote datasetId="d1" steps={["pca"]} params={null} />);
+    expect(await screen.findByTestId("conversion-note")).toBeInTheDocument();
+    expect(screen.queryByTestId("store-by-rows-offer")).toBeNull();
+  });
+});
+
 describe("PreflightIngestNotes", () => {
   it("an .rds not converted yet: the converter's estimate first, then opening it", async () => {
     api.getIngestPreflight.mockResolvedValue({
@@ -239,6 +279,24 @@ describe("PreflightIngestNotes", () => {
     expect(tip).toContain("Estimated from the size of the R object once decompressed.");
     expect(tip).toContain("(the R converter's limit)");
     expect(tip).not.toContain("read from the file's header");
+  });
+
+  it("an R object converted already: its estimate is labelled as the converted file's", async () => {
+    api.getIngestPreflight.mockResolvedValue({
+      session_id: "s1",
+      units: [
+        { label: "A", format: "anndata", verdict: verdict("fits", { sentence: "A fits." }) },
+        {
+          label: "obj", format: "seurat", converted: true,
+          verdict: verdict("fits", { sentence: "2,000 cells x 3,000 genes: Loading takes 0.4 GB." }),
+        },
+      ],
+      merge: null,
+    });
+    render(<PreflightIngestNotes sessionId="s1" />);
+    await waitFor(() => expect(screen.getByText(/2,000 cells x 3,000 genes/)).toBeInTheDocument());
+    expect(screen.getByText("obj, converted:")).toBeInTheDocument();
+    expect(screen.queryByText(/once converted/)).toBeNull();
   });
 
   it("one note per sample, labelled when there are several, plus the merge", async () => {

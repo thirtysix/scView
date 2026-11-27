@@ -307,6 +307,11 @@ export function QcFilterSummary({
             {preview.grid_note}
           </p>
         )}
+        {preview.not_counts_note && (
+          <p className="text-[11px] leading-relaxed text-amber-700" data-testid="qc-not-counts-note">
+            {preview.not_counts_note}
+          </p>
+        )}
         {preview.tissue_cells_note && (
           <p className="text-[11px] leading-relaxed text-slate-600" data-testid="qc-tissue-cells-note">
             {preview.tissue_cells_note}

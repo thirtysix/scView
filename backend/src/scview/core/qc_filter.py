@@ -281,6 +281,37 @@ BIN_MIN_COUNTS = 1.0
 _FIXED_DEFAULT_MIN_GENES = 200.0
 
 
+# Cells looked at by ``not_counts_note`` (one obs column's first values: no matrix read).
+_NOT_COUNTS_SAMPLE = 5_000
+
+
+def not_counts_note(adata) -> str | None:
+    """Why the obs QC columns cannot be trusted when scView's QC metrics step wrote them
+    from an X that did not hold counts (before v0.86 the step summed X whatever it held: a
+    log-normalised public import got "total counts" 5 times the real ones). The rule is
+    cheap and reads no matrix: the step is in the history and ``total_counts`` holds
+    fractions, which sums of counts never do. None otherwise; nothing is recomputed."""
+    from scview.core import provenance
+
+    obs = adata.obs
+    if "total_counts" not in obs.columns or "n_genes_by_counts" not in obs.columns:
+        return None
+    try:
+        history = provenance.read_provenance(adata).get("history") or []
+        if not any(h.get("step") == "qc_metrics" for h in history):
+            return None
+        values = np.asarray(obs["total_counts"].to_numpy()[:_NOT_COUNTS_SAMPLE], dtype=np.float64)
+    except Exception:  # noqa: BLE001 - an odd column or history: no claim
+        return None
+    values = values[np.isfinite(values)]
+    if values.size == 0 or np.all(np.mod(values, 1) == 0):
+        return None
+    return ("The QC columns (total_counts, pct_counts_mt) were not computed from counts: the QC "
+            "metrics step ran when X held normalised or scaled values, so the numbers and the cells "
+            "removed here are off. Run the QC metrics step again: it now reads the counts kept "
+            "beside X, and says so when there are none.")
+
+
 def grid_note(unit: str) -> str:
     example = ("on a human cortex section, 40% of the spots of layer 3 and 37% of layer 1"
                if unit == "spot" else
@@ -559,6 +590,8 @@ def _bounds(stats: dict[str, tuple[float, float]], t: Thresholds, ceiling: float
         mt = min(bound, ceiling) if ceiling is not None else bound
     out["max_pct_mt"] = mt if mt is not None and math.isfinite(mt) else None
     out["skipped"] = skipped
+    if "pct_mt" in skipped and math.isfinite(stats["pct_mt"][0]):
+        out["pct_mt_median"] = stats["pct_mt"][0]  # for the floor (``apply_pct_mt_floor``)
     return out
 
 
@@ -570,6 +603,10 @@ def _recorded_bounds(row: dict) -> dict:
         out["min_genes"] = row["min_genes_mad"]
     if "max_pct_mt_mad" in row:  # likewise the % mito floor
         out["max_pct_mt"] = row["max_pct_mt_mad"]
+    # A MAD-0 sample's median, by which the floor is its bound (since v0.86). A record from
+    # before has none, so its samples keep the bound they were filtered by (the ceiling).
+    if row.get("pct_mt_median") is not None:
+        out["pct_mt_median"] = row["pct_mt_median"]
     return out
 
 
@@ -598,10 +635,22 @@ def apply_pct_mt_floor(row: dict, pct: np.ndarray, floor: float, ceiling: float 
     """Raise ``row``'s % mito bound (``max_pct_mt``, the MAD bound under the ceiling) to
     ``floor`` (never above the ceiling) and say which bound applies (``max_pct_mt_by`` "mad"
     or "floor") and how many cells the floor keeps that the MAD bound removes
-    (``n_pct_mt_floor``). ``pct``: % mito of the cells the row judges."""
+    (``n_pct_mt_floor``). ``pct``: % mito of the cells the row judges. A sample whose MAD is
+    0 has no MAD bound; the floor is its bound when its median is under the floor (below)."""
     own = row.get("max_pct_mt")
     row.update(max_pct_mt_mad=own, max_pct_mt_by="mad", n_pct_mt_floor=0)
     target = float(floor) if ceiling is None else min(float(floor), float(ceiling))
+    flat = row.get("pct_mt_median")  # there only when the MAD is 0 (``_bounds``)
+    if flat is not None and flat < target:
+        # A MAD of 0 with the median under the floor (half the sample's nuclei at 0% mito): the
+        # MAD bound has collapsed onto the median, which is what the floor is for, so the floor
+        # is the bound. It used to count as "no bound" and the sample took the ceiling: of 27
+        # lung nuclei libraries 20 were cut at 2-4.4% and 7 at 20%, so a nucleus was kept or
+        # removed by its library. ``n_pct_mt_flat``: the cells the floor removes here.
+        p = pct[np.isfinite(pct)]
+        over = p > target if own is None else (p > target) & (p <= own)
+        row.update(max_pct_mt=target, max_pct_mt_by="floor", n_pct_mt_flat=int(over.sum()))
+        return
     if own is None or own >= target:
         return
     p = pct[np.isfinite(pct)]
@@ -637,7 +686,7 @@ def mad_bounds(cells: dict, t: Thresholds, samples: Samples | None = None,
     log1p(genes) (and + ``t.mad_k`` MADs when ``t.mad_upper``), median +
     ``t.mad_k_mt`` MADs of % mito (capped by ``t.max_pct_mt``). Small samples and
     unlabelled cells take the pooled bounds; a MAD of 0 sets no bound (that metric
-    is listed in ``skipped``).
+    is listed in ``skipped``), except that % mito then takes the floor (``apply_pct_mt_floor``).
 
     ``recorded`` is ``recorded_filtering``'s output: a MAD run with the same
     settings already filtered these cells, and its thresholds are used again."""
@@ -664,7 +713,8 @@ def mad_bounds(cells: dict, t: Thresholds, samples: Samples | None = None,
             src = _recorded_bounds(r) if r is not None else pooled
             rows.append({"name": name, "n_cells": int(m.size),
                          "pooled": bool(r.get("pooled")) if r is not None else True,
-                         **{b: src.get(b) for b in _BOUNDS}, "skipped": src.get("skipped", [])})
+                         **{b: src.get(b) for b in _BOUNDS}, "skipped": src.get("skipped", []),
+                         **({"pct_mt_median": src["pct_mt_median"]} if "pct_mt_median" in src else {})})
     else:
         with np.errstate(invalid="ignore"):
             values = {key: np.log1p(_values(cells, key)) for key, _, _ in _MAD_METRICS}
@@ -1465,9 +1515,14 @@ def rate_test(removed: np.ndarray, sizes: np.ndarray, names: list[str]) -> dict 
     }
     if 0 < int(r.sum()) < int(n.sum()):
         chi2, p, dof, expected = chi2_contingency(np.vstack([r, n - r]))  # Yates for 2 x 2
-        out.update(p=float(p), statistic=round(float(chi2), 3), dof=int(dof),
+        # A statistic past ~1,420 underflows to p = 0.0 (11k nuclei, 28% vs 5% removed: 1,640),
+        # which read as a number; the smallest p given is 1e-300, as elsewhere (marker_randomness).
+        out.update(p=max(float(p), P_FLOOR), statistic=round(float(chi2), 3), dof=int(dof),
                    low_expected=bool((expected < 5).any()))
     return out
+
+
+P_FLOOR = 1e-300
 
 
 def _depends(test: dict | None) -> bool:

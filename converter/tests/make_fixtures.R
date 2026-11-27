@@ -118,11 +118,84 @@ expected$sce_full <- list(
                     flag = c("FALSE", "TRUE"), batch_rle = c("b1", "b2")),
   ordered = list("stage"),
   n_missing = list(donor = 1, flag = sum(is.na(cd$flag)), n_int_na = 1, score = 1),
-  obs_absent = list("ranges", "listcol"),
+  obs_absent = list("ranges"),
   var_columns = list("Symbol", "biotype", "a_b", "_index_"),
   uns_metadata = list("study", "params", "table"),
-  report_skipped = list("ranges", "listcol", "ERCC", "colPairs SNN", "metadata$fn"),
-  report_kept = list("protein modality", "hashtag counts", "sizeFactor", "colLabels", "percentVar")
+  report_skipped = list("colData column ranges: a IRanges, not a plain column", "ERCC", "colPairs SNN",
+                        "metadata$fn"),
+  report_kept = list("protein modality", "hashtag counts", "sizeFactor", "colLabels", "percentVar",
+                     "colData column listcol: a list column with one value per cell",
+                     "colData column qc: a nested table, kept as qc.sum, qc.detected",
+                     "cell metadata (colData): 13 of 14 columns as obs")
+)
+
+# ---- 1b. colData / rowData columns pandas cannot take as they are -----------
+# The same columns as the Seurat fixture 11f, through the same code (convert.R
+# plain_columns), plus Bioconductor's own containers. Before, every list, matrix and
+# S4 column was left out; now each is a plain column, or left out with a note.
+n_o <- 12
+m1b <- sparse_counts(10, n_o, 1); dimnames(m1b) <- list(paste0("g", 1:10), paste0("c", 1:n_o))
+so <- SingleCellExperiment(assays = list(counts = m1b))
+od <- colData(so)
+od$empty_list <- I(vector("list", n_o))                       # a list of NULLs
+od$one_each <- I(as.list(rep(c("LineA", "LineB"), 6)))         # one value per cell
+od$one_number <- I(lapply(1:n_o, function(i) if (i == 2) NULL else i / 2))
+od$some_each <- I(lapply(1:n_o, function(i) switch(i %% 3 + 1, NULL, "LineA", c("LineA", "LineB"))))
+od$tables <- I(lapply(1:n_o, function(i) data.frame(a = i)))   # not one value per cell
+od$char_list <- IRanges::CharacterList(lapply(1:n_o, function(i) rep("DonorA", i %% 2 + 1)))
+od$na_level <- factor(rep(c("DonorA", NA), 6), exclude = NULL)
+od$stamp <- as.POSIXct("2023-01-02 03:04:05", tz = "UTC") + 0:11
+od$day <- as.Date("2023-01-02") + 0:11
+od$flag <- rep(c(TRUE, NA, FALSE), 4)
+od$count <- c(NA_integer_, 2:12)
+od$score <- S4Vectors::DataFrame(                              # a nested table of S4 columns
+  a = S4Vectors::Rle(1:12), b = S4Vectors::Rle(rep(c("x", "y"), each = 6)),
+  where = IRanges::IRanges(start = 1:12, width = 5))
+od$pair <- matrix(as.numeric(1:24), n_o, 2, dimnames = list(NULL, c("u", "v")))
+od$wide <- matrix(0, n_o, 60)
+od$ranges <- IRanges::IRanges(start = 1:12, width = 5)         # an S4 object, not a column
+od[["_index"]] <- paste0("id", 1:n_o)
+colData(so) <- od
+ord <- rowData(so)
+ord$aliases <- IRanges::CharacterList(lapply(1:10, function(i) sprintf("alias%d", seq_len(i %% 3))))
+ord$stats <- S4Vectors::DataFrame(mean = Matrix::rowMeans(m1b), n = S4Vectors::Rle(1:10))
+ord$n_na <- c(NA_integer_, 2:10)
+ord$where <- IRanges::IRanges(start = 1:10, width = 5)
+rowData(so) <- ord
+rds(so, "sce_odd_columns")
+expected$sce_odd_columns <- list(
+  n_obs = n_o, n_vars = 10, x = "counts", x_sum = sum(m1b), x_format = "csr_matrix",
+  layers = structure(list(), names = character(0)),
+  obs_dtypes = list(one_each = "category", one_number = "float64", some_each = "category",
+                    char_list = "category", na_level = "category", stamp = "category", day = "category",
+                    flag = "category", count = "float64", score.a = "int32", score.b = "category",
+                    pair.u = "float64", pair.v = "float64", `_index_` = "category"),
+  categories = list(one_each = c("LineA", "LineB"), na_level = I("DonorA"), flag = c("FALSE", "TRUE"),
+                    char_list = c("DonorA", "DonorA; DonorA")),
+  n_missing = list(one_number = 1, some_each = 4, na_level = 6, flag = 4, count = 1),
+  obs_head = list(one_number = list(0.5, NA, 1.5), some_each = list("LineA", "LineA; LineB", NA),
+                  day = list("2023-01-02", "2023-01-03"),
+                  stamp = list("2023-01-02 03:04:05", "2023-01-02 03:04:06"), flag = list("TRUE", NA, "FALSE"),
+                  count = list(NA, 2), pair.v = list(13, 14), score.b = list("x", "x")),
+  obs_absent = c("empty_list", "tables", "wide", "ranges", "score.where"),
+  var_columns = list("aliases", "stats.mean", "stats.n", "n_na"),
+  var_absent = list("where"),
+  var_head = list(aliases = list("alias1", "alias1; alias2", NA), n_na = list(NA, 2)),
+  report_skipped = c("colData column empty_list: a list column with no value in any cell",
+                     "colData column tables: a list of data.frame values, not one value per cell",
+                     "colData column wide: a matrix of 60 columns in one column (more than 50)",
+                     "colData column ranges: a IRanges, not a plain column",
+                     "colData column score: score.where left out (a IRanges, not a plain column)",
+                     "rowData column where: a IRanges, not a plain column"),
+  report_kept = c("colData column one_each: a list column with one value per cell, kept as a plain column",
+                  "colData column some_each: a list column with up to 2 values per cell, kept as text joined",
+                  "colData column char_list: a list column with up to 2 values per cell",
+                  "colData column score: a nested table, kept as score.a, score.b",
+                  "colData column pair: a matrix in one column, kept as pair.u, pair.v",
+                  "cell metadata (colData): 12 of 16 columns as obs",
+                  "rowData column aliases: a list column with up to 2 values per gene",
+                  "rowData column stats: a nested table, kept as stats.mean, stats.n",
+                  "gene metadata (rowData): 3 of 4 columns as var")
 )
 
 # ---- 2. counts only, dense integers, no cell names, Ensembl row names ------
@@ -390,6 +463,9 @@ if (requireNamespace("SeuratObject", quietly = TRUE)) {
   md$score <- data.frame(a = 1:12, b = rep(c("x", "y"), 6))   # a nested table
   md$pair <- matrix(as.numeric(1:24), 12, 2, dimnames = list(NULL, c("u", "v")))
   md[["_index"]] <- paste0("id", 1:12)
+  md[["a/b"]] <- 12:1                                         # the name stays, stored escaped (a%2fb)
+  md[["a"]] <- 1:12                                           # beside "a/b": failed the conversion
+  md[["pct%2fx"]] <- 0.5                                      # a name that reads as an escape
   sm@meta.data <- md
   stopifnot(!inherits(sm[["RNA"]], "Assay5"))
   options(old_opt)
@@ -400,7 +476,8 @@ if (requireNamespace("SeuratObject", quietly = TRUE)) {
     obs_dtypes = list(one_each = "category", some_each = "category", na_level = "category",
                       stamp = "object", day = "object", flag = "category", count = "float64",
                       score.a = "int32", score.b = "category", pair.u = "float64", pair.v = "float64",
-                      `_index_` = "object", nCount_RNA = "float64"),
+                      `_index_` = "object", `a%2fb` = "int32", a = "int32", `pct%252fx` = "float64",
+                      nCount_RNA = "float64"),
     categories = list(one_each = c("LineA", "LineB"), na_level = I("DonorA"), flag = c("FALSE", "TRUE")),
     n_missing = list(some_each = 4, na_level = 6, flag = 4, count = 1),
     # NA: a missing value (JSON null)

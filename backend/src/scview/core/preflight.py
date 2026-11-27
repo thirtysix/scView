@@ -110,6 +110,16 @@ _STR_BYTES = 64
 # ---------------------------------------------------------------------------
 
 
+def shown_name(where: str) -> str:
+    """A matrix or obsm name as the user typed it: a header read from a file has the stored
+    key, which holds a "/" escaped (core/h5_names.py: "layers/norm%2falt" is the layer
+    "norm/alt"). ``where`` itself stays the stored path (it addresses the file)."""
+    from scview.core import h5_names
+
+    head, sep, name = where.partition("/")
+    return f"{head}/{h5_names.unescape(name)}" if sep and head == "layers" else h5_names.unescape(where)
+
+
 @dataclass
 class Matrix:
     """One cells x genes matrix (X, a layer, .raw) as it will sit in memory."""
@@ -139,6 +149,7 @@ class Matrix:
 
     def to_dict(self) -> dict:
         d = asdict(self)
+        d["where"] = shown_name(self.where)
         d["bytes"] = self.nbytes
         return d
 
@@ -260,6 +271,8 @@ def _n_columns(node) -> int:
 def _read_h5ad(path: Path) -> Header:
     import h5py
 
+    from scview.core import h5_names
+
     h = Header("h5ad")
     with h5py.File(path, "r") as f:
         obs = f.get("obs")
@@ -299,8 +312,9 @@ def _read_h5ad(path: Path) -> Header:
             # on the first rows of each dense one (paul15: 2 ms).
             for mm in h.matrices:
                 mm.nonzero = _h5_head_nonzero(raw_x if mm.where == "raw/X" else f[mm.where], mm.n_cells)
-        for key in f.get("obsm", {}):
-            node = f["obsm"][key]
+        for stored in f.get("obsm", {}):
+            node = f["obsm"][stored]
+            key = h5_names.unescape(stored)  # as typed: "X_umap%2falt" is the layout "X_umap/alt"
             if isinstance(node, h5py.Dataset):
                 h.obsm[key] = [int(x) for x in node.shape]
             else:  # a DataFrame (protein counts) or a sparse matrix
@@ -2858,7 +2872,11 @@ def session_preflight(mgr, sid: str, dm) -> dict:
     opts = mgr.get_options(sid)
     avail = available_memory()
     cached = cached_others(dm)
-    loadable = [u for u in bundle.units if u.format != UnitFormat.unknown and u.complete]
+    staged = [u for u in bundle.units if u.format != UnitFormat.unknown and u.complete]
+    # An R object converted already ("Convert now") is estimated as the commit reads it:
+    # from the header of the .h5ad it became, not from the R object's stream.
+    loadable = mgr.as_converted(sid, staged)
+    was_r = {u.label for u in staged if u.format == UnitFormat.seurat}
     # Too large to read whole: the commit reads and saves the matrices in blocks.
     try:
         choice = streamed.choose(loadable, opts.streamed, opts.genes_in_rows) if loadable else None
@@ -2866,8 +2884,6 @@ def session_preflight(mgr, sid: str, dm) -> dict:
         choice = None
     blocks = bool(choice and choice.streamed)
     # R objects not converted yet: the converter's own estimate too (its memory asked once).
-    converted = {c["label"] for c in mgr.get_state(sid).get("converted", [])} if any(
-        u.format == UnitFormat.seurat for u in loadable) else set()
     conv_mem: list = []
     units, residents, peaks, secs = [], [], [], [0.0, 0.0]
     for u in loadable:
@@ -2898,8 +2914,10 @@ def session_preflight(mgr, sid: str, dm) -> dict:
                       "load": {"resident_bytes": est.resident_bytes, "peak_bytes": est.peak_bytes,
                                "peak_stage": est.peak_stage, "seconds": list(est.seconds)},
                       "streamed": blocks, "verdict": v})
-        if u.format == UnitFormat.seurat and u.label not in converted:
+        if u.format == UnitFormat.seurat:
             units[-1]["converter"] = _converter_verdict(mgr, u.files[0].path, conv_mem)
+        elif u.label in was_r:
+            units[-1].update(format=UnitFormat.seurat.value, converted=True)
         residents.append(est.resident_bytes)
         peaks.append(est.peak_bytes)
         secs = [secs[0] + est.seconds[0], secs[1] + est.seconds[1]]

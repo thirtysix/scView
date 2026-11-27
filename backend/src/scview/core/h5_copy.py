@@ -73,16 +73,20 @@ def repoint(src: h5py.Group | h5py.Dataset, dst: h5py.Group | h5py.Dataset) -> i
     return n
 
 
-def compact_copy(src_path, dst_path, leave_out=()) -> None:
+def compact_copy(src_path, dst_path, leave_out=(), create: dict | None = None) -> None:
     """A new file ``dst_path`` with everything of ``src_path`` but the paths in
-    ``leave_out`` (a top-level name, "obs", or one level down, "uns/markers"), for the caller
+    ``leave_out`` (a top-level name, "obs", or one level down: "uns/markers", or a pair
+    ``("uns", name)`` for a name as typed, which may hold "/": ``h5_names``), for the caller
     to write anew. Unlike a file copy followed by ``del``, nothing of the left-out elements
     stays in the file: HDF5 does not give a deleted element's space back, so a label edit
     saved that way grew the file by the size of obs each time (0.545 -> 0.563 -> 0.575 GB
-    over two edits). Stored chunks are copied as they are (no decompression)."""
-    skip = {str(p).strip("/") for p in leave_out}
+    over two edits). Stored chunks are copied as they are (no decompression). ``create``:
+    ``h5py.File`` keywords for the new file (a large dataset's free-space settings)."""
+    from scview.core import h5_names
+
+    skip = {h5_names.path(*p) if isinstance(p, tuple) else str(p).strip("/") for p in leave_out}
     partly = {p.split("/", 1)[0] for p in skip if "/" in p}
-    with h5py.File(src_path, "r") as fi, h5py.File(dst_path, "w") as fo:
+    with h5py.File(src_path, "r") as fi, h5py.File(dst_path, "w", **(create or {})) as fo:
         for k, v in fi.attrs.items():
             fo.attrs[k] = v
         for key in fi.keys():

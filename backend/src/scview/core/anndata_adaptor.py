@@ -19,7 +19,7 @@ import scipy.sparse as sp
 
 from scview.core import (
     category_order, expression_range, haemoglobin, large_layout, large_mode, marker_specificity,
-    protein, scaling, spatial,
+    protein, request_pins, scaling, spatial,
 )
 from scview.core import gene_store as gene_store_mod
 from scview.core import uns_history
@@ -440,6 +440,7 @@ class AnnDataAdaptor:
                 protein.adopt_obsm(mem)  # as an in-memory open does
                 spatial.adopt(mem)
                 self._adata = mem
+                request_pins.let_go(self)  # the request that reads it in is done with the file
                 self._retire(adata)
                 logger.info("Read %s into memory (%d x %d)", self.h5ad_path, mem.n_obs, mem.n_vars)
             return self._adata
@@ -721,6 +722,11 @@ class AnnDataAdaptor:
             "metrics": metrics,
             "scatter": scatter,
         }
+        from scview.core.qc_filter import not_counts_note
+
+        note = not_counts_note(self.adata)  # obs QC columns an old QC metrics step took from a processed X
+        if note:
+            result["not_counts_note"] = note
         self._qc_cache = result
         return result
 

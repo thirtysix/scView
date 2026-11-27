@@ -551,6 +551,10 @@ export interface MadSampleBounds {
   max_pct_mt_mad?: number | null;
   max_pct_mt_by?: "mad" | "floor";
   n_pct_mt_floor?: number;
+  /** Set when the sample's % mito MAD is 0 (its median): the floor is then its bound */
+  pct_mt_median?: number;
+  /** Cells that floor removes in such a sample */
+  n_pct_mt_flat?: number;
 }
 
 /** MAD mode's per-sample thresholds (backend qc_filter.MadBounds.to_dict). */
@@ -669,6 +673,8 @@ export interface FilterPreview {
   grid_note?: string;
   /** Visium HD segmented cells under one % mito rule: why to look at per-type bounds */
   tissue_cells_note?: string;
+  /** The obs QC columns were written from an X that did not hold counts (an older QC metrics step) */
+  not_counts_note?: string;
   n_cells: number;
   n_removed: number;
   n_kept: number;

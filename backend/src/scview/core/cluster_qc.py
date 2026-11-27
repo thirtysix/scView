@@ -355,14 +355,16 @@ def default_grouping(adata) -> str | None:
 
 
 def cluster_qc(
-    adata, groupby: str | None = None, cells: dict | Callable[[], dict] | None = None
+    adata, groupby: str | None = None, cells: dict | Callable[[], dict] | None = None,
+    gene_columns: Callable | None = None,
 ) -> ClusterQCReport:
     """Per-cluster QC summary + flags for ``groupby`` (default: the active clustering).
 
     ``cells`` are the per-cell QC arrays (``AnnDataAdaptor.qc_per_cell``), or a
     function returning them that is only called once the column checks out; they
-    are computed here when not given. Raises ``ValueError`` for a column that is
-    not a usable grouping."""
+    are computed here when not given. ``gene_columns`` (genes -> cells x genes block) reads
+    the few genes the report needs when ``adata`` holds no matrix (a large-dataset run).
+    Raises ``ValueError`` for a column that is not a usable grouping."""
     n = int(adata.n_obs)
     column = groupby or default_grouping(adata)
     if not column:
@@ -460,7 +462,7 @@ def cluster_qc(
             typical["hb"] = float(np.nanmedian(medians.loc[others, "hb"]))
     # Red-cell genes besides haemoglobin detected in the clusters' own cells: when every
     # cluster is red-cell lineage, markers cannot show it and their haemoglobin is their own.
-    lineage = haemoglobin.lineage_detected(adata, labels.astype(str).to_numpy(), others) \
+    lineage = haemoglobin.lineage_detected(adata, labels.astype(str).to_numpy(), others, gene_columns) \
         if "hb" in medians and others else None
     z: dict[str, pd.Series] = {}
     if len(order) >= MIN_GROUPS:

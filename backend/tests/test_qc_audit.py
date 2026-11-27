@@ -370,3 +370,11 @@ def test_the_copilot_cites_what_the_filtering_step_removed(tmp_path):
     assert "In B, Max % mito removes 100% of drug cells" in fact.evidence
     assert f"[{qc_filter.GROUNDING_TAG}]" in context
     assert resolve_tag("qc:removal", [s.ref for s in sources]) == [qc_filter.GROUNDING_TAG]
+
+
+def test_a_p_too_small_for_a_float_is_not_given_as_zero():
+    # as 11,341 nuclei of one type, 28% removed in one condition and 5% in the other (chi-square 1,640)
+    test = qc_filter.rate_test(np.array([4000, 300]), np.array([8000, 8000]), ["a", "b"])
+    assert test["statistic"] > 1600 and test["p"] == qc_filter.P_FLOOR == 1e-300
+    small = qc_filter.rate_test(np.array([50, 20]), np.array([500, 500]), ["a", "b"])
+    assert 1e-300 < small["p"] < 0.01  # an ordinary p is untouched

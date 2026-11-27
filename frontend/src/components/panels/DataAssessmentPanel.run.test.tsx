@@ -220,6 +220,55 @@ describe("DataAssessmentPanel run progress: watchdog, Cancel, outcome", () => {
     expect(screen.queryByText(REFUSAL)).toBeNull();
   });
 
+  it("a run refused for the column-stored matrix: the offer, then the same run again", async () => {
+    const COLUMN_STORED =
+      "In memory the run needs about 2.2 GB more at its peak, so it runs in large-dataset mode. That mode reads " +
+      "the matrix in blocks of cells, and this dataset's is stored by columns (X, raw/X). Nothing was run: store " +
+      "the dataset by rows first (about 30 s and 1.7 GB of disk; no value changes), then run it again.";
+    const rewrite = controlledStream();
+    const second = controlledStream();
+    const confirm = vi.fn<(question: string) => boolean>(() => true);
+    vi.stubGlobal("confirm", confirm);
+    fetchSpy.mockImplementation(async (url: string) => {
+      if (String(url).endsWith("/storage/by-rows")) return rewrite.response;
+      return fetchSpy.mock.calls.filter((c) => String(c[0]).endsWith("/run-stream")).length === 1
+        ? stream.response
+        : second.response;
+    });
+    apiFetch.mockImplementation(async (path: string) => {
+      if (path.endsWith("/assessment")) return assessment();
+      if (path.endsWith("/storage"))
+        return { dataset_id: "d1", column_stored: ["X"], blocks_large_mode: ["X"], files: 1, seconds: 32,
+                 disk_bytes: 1.7 * 1024 ** 3, disk_free_bytes: 9e11, enough_disk: true, memory_bytes: 1 };
+      if (path.includes("/qc/doublets")) return { suggestion: null };
+      return DATASET;
+    });
+    await startRun();
+    const body = (call: number) => JSON.parse(String((fetchSpy.mock.calls[call]?.[1] as RequestInit).body));
+    stream.send("error", { error: COLUMN_STORED });
+    stream.close();
+    const offer = await screen.findByRole("button", { name: /Store this dataset by rows \(about 30 s, 1\.7 GB of disk\)/ });
+    expect(confirm).not.toHaveBeenCalled(); // not the conversion question: that would not help
+    expect(screen.queryByText(COLUMN_STORED)).toBeNull(); // the offer, not the API's sentence
+    expect(fetchSpy).toHaveBeenCalledTimes(1); // nothing rewritten without the click
+    fireEvent.click(offer);
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
+    expect(String(fetchSpy.mock.calls[1]?.[0])).toMatch(/\/datasets\/d1\/storage\/by-rows$/);
+    rewrite.send("progress", { done: 5, total: 10 });
+    expect(await screen.findByText(/Storing by rows: 50%/)).toBeTruthy();
+    rewrite.send("result", { converted: ["X"], seconds: 30, bytes_before: 1, bytes_after: 2 });
+    rewrite.send("complete", {});
+    rewrite.close();
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(3)); // the same run, again
+    expect(String(fetchSpy.mock.calls[2]?.[0])).toMatch(/\/assessment\/run-stream$/);
+    expect(body(2).steps).toEqual(body(0).steps);
+    expect(body(2).allow_large_mode).toBe(false);
+    second.send("complete", { ...RESULT, steps_run: ["qc_metrics", "doublet_detection"], status: "complete" });
+    second.close();
+    expect(await screen.findByText(/Pipeline completed in 1s/)).toBeTruthy();
+    expect(screen.queryByTestId("store-by-rows-offer")).toBeNull();
+  });
+
   it("on no, nothing runs and the refusal stays on screen", async () => {
     const confirm = vi.fn<(question: string) => boolean>(() => false);
     vi.stubGlobal("confirm", confirm);

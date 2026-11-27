@@ -165,6 +165,26 @@ describe("the % mito floor", () => {
       "% mito floor 2%: it set the bound in 1 of 2 samples (their own was lower, as in nuclei) and kept 1,163 cells.");
   });
 
+  it("a sample whose MAD is 0 shows the floor as its bound, and what that removes", () => {
+    const flat: MadThresholds = {
+      ...floored,
+      samples: [
+        floored.samples[1]!,
+        { ...MAD.samples[0]!, name: "flat", skipped: ["pct_mt"], max_pct_mt: 2, max_pct_mt_mad: 20,
+          max_pct_mt_by: "floor", n_pct_mt_floor: 0, pct_mt_median: 0, n_pct_mt_flat: 831 },
+      ],
+    };
+    render(<SampleThresholds mad={flat} />);
+    const table = screen.getByRole("table", { name: "Thresholds per sample" });
+    expect(within(table).getAllByText("(floor)")).toHaveLength(2);
+    expect(within(table).getByTitle(
+      "Its MAD is 0 (median 0% mito: most cells alike), so it has no bound of its own and the % mito floor of 2% applies. That removes 831 cells.",
+    )).toBeInTheDocument();
+    expect(screen.getByTestId("mito-floor")).toHaveTextContent(
+      "% mito floor 2%: it set the bound in 1 of 2 samples (their own was lower, as in nuclei) and kept 1,163 cells; " +
+      "it is the bound in 1 of 2 samples whose MAD is 0 (no bound of their own) and removes 831 cells there.");
+  });
+
   it("is silent when the floor set no bound, and is sent only when set", () => {
     expect(mitoFloorSummary({ ...floored, samples: [floored.samples[0]!] })).toBeNull();
     expect(mitoFloorSummary(MAD)).toBeNull();

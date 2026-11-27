@@ -1,3 +1,4 @@
+import type { StoragePlan } from "@/api/storage";
 import { apiFetch } from "./client";
 
 /** How a load or a run compares with the memory scView has free (core/preflight.py). */
@@ -95,6 +96,9 @@ export interface RunMode {
   turns_off?: string[];
   /** Only the doublet step pushes the run out of memory: without it, it fits */
   without_doublets?: { fits_in_memory: boolean; text: string };
+  /** The dataset is stored by columns, which large-dataset mode cannot read: the run would be
+   *  refused until it is stored by rows (the offered rewrite and its cost) */
+  by_columns?: StoragePlan;
 }
 
 export interface RunPreflight {
@@ -115,6 +119,8 @@ export interface UnitPreflight {
   verdict: PreflightVerdict;
   /** An R object not converted yet: the R converter's memory for it (core/conversion_preflight.py) */
   converter?: PreflightVerdict | null;
+  /** An R object converted already: the estimate is from the header of the .h5ad it became */
+  converted?: boolean;
 }
 
 export interface IngestPreflight {

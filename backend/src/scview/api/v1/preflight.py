@@ -117,4 +117,13 @@ async def dataset_preflight(
                                          overrides)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' has no data file.")
+    mode = result.get("mode") if isinstance(result, dict) else None
+    if isinstance(mode, dict) and mode.get("converts"):
+        # Large-dataset mode cannot read a column-stored matrix: the run would be refused
+        # (core/processing.py). Said here with the offered rewrite's cost (core/store_by_rows.py).
+        from scview.core import store_by_rows
+
+        plan = await asyncio.to_thread(store_by_rows.plan, dm, dataset_id)
+        if plan["blocks_large_mode"]:
+            mode["by_columns"] = plan
     return result

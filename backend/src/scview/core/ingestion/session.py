@@ -297,6 +297,16 @@ class IngestSessionManager:
             "conversion_error": data.get("conversion_error"),
         }
 
+    def as_converted(self, sid: str, units: list[IngestUnit]) -> list[IngestUnit]:
+        """``units`` with each R object converted already (still matching its staged
+        file) as the .h5ad it became, the way the commit reads it; the others as they
+        are. For estimates made before the commit (``preflight.session_preflight``)."""
+        if not any(u.format == UnitFormat.seurat for u in units):
+            return units
+        done = _valid_conversions(self._bundle(sid), self._read_session(sid))
+        return [_as_converted(u, done) if u.format == UnitFormat.seurat and u.label in done
+                else u for u in units]
+
     def _converting(self, sid: str) -> dict | None:
         """The R object being converted now: its file, which of how many, and the
         converter's latest stage (``progress``); None when none is (a record left behind

@@ -2244,10 +2244,31 @@ if "counts" in adata.layers or adata.raw is not None:
 
 
 def _qc_metrics(p: dict, ctx: _Ctx) -> Snippet:
-    return Snippet(EXACT, _block('''
+    counts = _QC_INPUT.get(p.get("input"))
+    if counts is None:  # X (every recipe before v0.86, whatever X held)
+        return Snippet(EXACT, _block('''
 adata.var["mt"] = adata.var_names.str.startswith("MT-") | adata.var_names.str.startswith("mt-")
 sc.pp.calculate_qc_metrics(adata, qc_vars=["mt"], percent_top=None, log1p=False, inplace=True)
 '''))
+    matrix, names = counts
+    return Snippet(EXACT, _block(f'''
+# X held processed values: the QC metrics are counted on the counts in {p["input"]}.
+adata.var["mt"] = adata.var_names.str.startswith("MT-") | adata.var_names.str.startswith("mt-")
+qc_counted = ad.AnnData({matrix}, obs=pd.DataFrame(index=adata.obs_names), var=pd.DataFrame(index={names}))
+qc_counted.var["mt"] = qc_counted.var_names.str.startswith("MT-") | qc_counted.var_names.str.startswith("mt-")
+sc.pp.calculate_qc_metrics(qc_counted, qc_vars=["mt"], percent_top=None, log1p=False, inplace=True)
+for c in qc_counted.obs.columns:
+    adata.obs[c] = qc_counted.obs[c].to_numpy()
+qc_per_gene = qc_counted.var.drop(columns="mt").reindex(adata.var_names)
+for c in qc_per_gene.columns:
+    adata.var[c] = qc_per_gene[c].to_numpy()
+del qc_counted, qc_per_gene
+'''))
+
+
+# Where the QC metrics step counted (its recorded ``input``; none: X): (matrix, gene names).
+_QC_INPUT = {"layers['counts']": ('adata.layers["counts"]', "adata.var_names"),
+             ".raw": ("adata.raw.X", "adata.raw.var_names")}
 
 
 # Where the doublet step took the counts from (its recorded ``input``; none: X).
@@ -4559,6 +4580,13 @@ def _remove_score(p: dict, ctx: _Ctx) -> Snippet:
                            "# a saved score removed"])
 
 
+def _store_by_rows(p: dict, ctx: _Ctx) -> Snippet:
+    """The matrices' layout in scView's own file (core/store_by_rows.py): no value changed,
+    so the script has nothing to run and gives the same numbers with or without it."""
+    return Snippet(EXACT, ["# scView stored its copy of the matrices by rows (CSR) here: the same values, in",
+                           "# the same order. Nothing to run."])
+
+
 _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "ingest": _ingest,
     "integrate": _integrate,
@@ -4630,6 +4658,7 @@ _STEP_CODE: dict[str, Callable[[dict, _Ctx], Snippet]] = {
     "spatial_niches": _spatial_niches,
     "save_score": _save_score,
     "remove_score": _remove_score,
+    "store_by_rows": _store_by_rows,
     "atac_fragment_qc": _atac_fragment_qc,
     "run_errors": _run_errors,
 }
@@ -4690,9 +4719,30 @@ if "highly_variable" in adata.var.columns:
 for col in adata.obs.columns:
     if str(col).startswith("scview_") and adata.obs[col].dtype.name == "category":
         print(f"{col}: {adata.obs[col].nunique()} groups")
+# HDF5 reads "/" in a key as a path, so a name holding one ("T/NK") is stored as "T%2fNK",
+# as scView stores it. The values (the labels in a column) are never changed.
+renamed = h5_safe_names(adata)
+if renamed:
+    print('stored with "/" written as %2f:', ", ".join(repr(n) for n in dict.fromkeys(renamed)))
 adata.write_h5ad(OUTPUT)
 print("written", OUTPUT)
 '''
+
+
+def _h5_names_helper() -> str:
+    """core/h5_names.py's name escape, copied so the script's output has the names
+    scView's own file has (and its save cannot fail on a label like "T/NK")."""
+    import inspect
+
+    from scview.core import h5_names
+
+    lines = [f"{name} = {_lit(getattr(h5_names, name))}" for name in h5_names.REPLAY_CONSTANTS]
+    for obj in h5_names.REPLAY_CODE:
+        lines += ["", "", inspect.getsource(obj).rstrip("\n")]
+    return "\n".join(lines) + "\n"
+
+
+_HELPERS["h5_names"] = _h5_names_helper()  # always written, before the save (not in _HELPER_ORDER)
 
 
 def _steps(adata) -> list[dict]:
@@ -4806,5 +4856,6 @@ def build_script(adata, *, dataset_id: str = "", dataset_name: str = "",
     out += ["", "", "adata = read_input(INPUT)", 'print(f"read {adata.n_obs:,} cells x '
             '{adata.n_vars:,} genes")']
     out += body
+    out += ["", ""] + _HELPERS["h5_names"].strip("\n").splitlines() + [""]
     out += [""] + _SUMMARY.strip("\n").splitlines()
     return "\n".join(out) + "\n"

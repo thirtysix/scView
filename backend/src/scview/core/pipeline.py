@@ -305,6 +305,19 @@ class PipelineResult:
         return asdict(self)
 
 
+class RunSaveError(RuntimeError):
+    """Every step ran but the result could not be written. Nothing was saved: the dataset
+    reopens as it was before the run."""
+
+
+def _save_failed(error: Exception) -> RunSaveError:
+    return RunSaveError(
+        "The run finished its steps, but the result could not be saved, so nothing was kept: the dataset "
+        f"is as it was before the run. What the save reported: {str(error).strip() or type(error).__name__}"
+        # anndata names the element in a note ("Error raised while writing key 'x' ... to /uns/y")
+        + "".join(f" ({str(n).strip()})" for n in getattr(error, "__notes__", ())[:1]))
+
+
 class StepSkipped(Exception):
     """A step with nothing to do on this dataset, e.g. too few signature genes.
 
@@ -493,15 +506,56 @@ def clear_processing(adata: ad.AnnData) -> None:
         drop_columns(adata, scview_cols)  # their labels may name other cells next time
 
 
-def _run_qc_metrics(adata: ad.AnnData, params: PipelineParams) -> None:
-    """Calculate QC metrics including mitochondrial gene percentage."""
+# The QC metrics step on a dataset without counts: nothing is written (the columns would be
+# sums of log or scaled values that read as counts).
+QC_NEEDS_COUNTS = ("QC metrics need raw counts: X holds processed values and there is no counts "
+                   "layer or counts in .raw. No QC columns were written.")
+
+
+def qc_input_note(where: str) -> str:
+    """The run's note when the QC metrics came from the counts beside X."""
+    return f"X holds processed values: the QC metrics were counted on the counts in {where}."
+
+
+def _qc_matrix(adata: ad.AnnData):
+    """(matrix, gene names, where from) the QC metrics are counted on: X, or the counts
+    beside a processed X (``_doublet_counts``; where: "layers['counts']" / ".raw", None for
+    X). A public import often has the authors' log-normalised X with counts in .raw: summed
+    as it was, its "total counts" had a median of 6,628 where the counts give 1,382."""
+    if not _holds_processed_values(adata.X):
+        return adata.X, adata.var_names, None
+    counts = _doublet_counts(adata)
+    if counts is None:
+        raise StepSkipped(QC_NEEDS_COUNTS)
+    return counts
+
+
+def _run_qc_metrics(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any] | None:
+    """Calculate QC metrics including mitochondrial gene percentage, always from counts:
+    X, or ``layers['counts']`` / ``.raw`` when X holds processed values (recorded as
+    ``input``; .raw's own genes count, and the per-gene columns are given to X's genes).
+    Without counts anywhere the step is skipped and writes nothing."""
+    M, names, where = _qc_matrix(adata)
     adata.var["mt"] = adata.var_names.str.startswith("MT-") | adata.var_names.str.startswith("mt-")
-    sc.pp.calculate_qc_metrics(adata, qc_vars=["mt"], percent_top=None, log1p=False, inplace=True)
+    if where is None:
+        sc.pp.calculate_qc_metrics(adata, qc_vars=["mt"], percent_top=None, log1p=False, inplace=True)
+    else:
+        names = pd.Index(names)
+        counted = ad.AnnData(M, obs=pd.DataFrame(index=adata.obs_names),
+                             var=pd.DataFrame({"mt": names.str.startswith("MT-") | names.str.startswith("mt-")},
+                                              index=names))
+        sc.pp.calculate_qc_metrics(counted, qc_vars=["mt"], percent_top=None, log1p=False, inplace=True)
+        for c in counted.obs.columns:
+            adata.obs[c] = counted.obs[c].to_numpy()
+        per_gene = counted.var.drop(columns="mt").reindex(adata.var_names)
+        for c in per_gene.columns:
+            adata.var[c] = per_gene[c].to_numpy()
     logger.info(
-        "QC metrics: median genes/cell=%d, median counts/cell=%d",
+        "QC metrics (%s): median genes/cell=%d, median counts/cell=%d", where or "X",
         int(adata.obs["n_genes_by_counts"].median()),
         int(adata.obs["total_counts"].median()),
     )
+    return {"input": where} if where is not None else None
 
 
 def _holds_processed_values(M) -> bool:
@@ -2034,17 +2088,55 @@ UNCHECKED_TO_AI = "llm_damaged_unchecked_to_ai"
 _QC_NOTE_FLAGS = ("low_quality", "high_mito", "low_genes", "low_malat1", "doublet_rich", "doublet_like")
 
 
+# The annotator's own checks that could not run in this annotation ({check: why}), for the
+# step's record and the run's result: a check that fails must not fail the annotation, but a
+# log line alone told the user nothing (a large run lost all three, QA round 9).
+_CHECKS_SKIPPED: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar(
+    "scview_annotation_checks_skipped", default=None)
+CHECKS_SKIPPED = "annotation_checks_skipped"
+CHECK_QC_NOTES = "QC notes for the model"
+CHECK_DAMAGED = "damaged-cluster check"
+CHECK_RANDOM = "random-marker check"
+CHECK_QUALIFIERS = "label qualifiers"
+
+
+def check_skipped(what: str, exc: BaseException | str) -> None:
+    """Note that the check ``what`` did not run (``_CHECKS_SKIPPED``)."""
+    held = _CHECKS_SKIPPED.get()
+    if held is not None:
+        why = str(exc).strip() or type(exc).__name__
+        held[what] = why if len(why) <= 200 else why[:197] + "..."
+
+
+def checks_skipped_text(skipped: dict[str, str]) -> str:
+    """The sentence the run's result shows for checks that did not run."""
+    parts = "; ".join(f"{what} ({why})" for what, why in skipped.items())
+    return (f"Not run in this annotation: {parts}. The labels were made without "
+            f"{'it' if len(skipped) == 1 else 'them'}: look at cluster QC before trusting a label.")
+
+
+def _annotation_cluster_qc(adata: ad.AnnData, groupby: str):
+    """Cluster QC for the annotator. A large-dataset run's copy has no matrix: its per-cell
+    QC comes from obs and, for the shares the QC step does not store (ribosomal,
+    haemoglobin, MALAT1), from the counts on disk by blocks, as in memory."""
+    from scview.core import cluster_qc
+
+    backend = _LARGE.get()
+    if backend is not None:
+        return cluster_qc.cluster_qc(adata, groupby, backend.qc_cells(adata), backend.gene_columns)
+    return cluster_qc.cluster_qc(adata, groupby)
+
+
 def _annotation_qc_notes(adata: ad.AnnData, groupby: str) -> dict[str, str]:
     """{cluster: short QC note} for the clusters cluster QC flags as damaged cells or
     doublets, with the numbers against the typical cluster. The marker list leaves
     mitochondrial genes out, so without it the annotator cannot see high mito.
     Best effort: {} when cluster QC cannot run."""
-    from scview.core import cluster_qc
-
     try:
-        report = cluster_qc.cluster_qc(adata, groupby)
+        report = _annotation_cluster_qc(adata, groupby)
     except Exception as exc:
-        logger.info("Annotation QC notes skipped: %s", exc)
+        logger.warning("Annotation QC notes skipped: %s", exc, exc_info=True)
+        check_skipped(CHECK_QC_NOTES, exc)
         return {}
     t = report.typical
     out: dict[str, str] = {}
@@ -2085,7 +2177,7 @@ def _annotation_decided(adata: ad.AnnData, groupby: str, marker_map: dict[str, l
     labelled "Unidentified" here too until v0.75.0 (user decision 2026-11-12): disease and injury
     states that the databases lack (kidney PT_VCAM1) were hidden that way, and cluster QC catches
     most junk. Best effort: a check that cannot run decides nothing."""
-    from scview.core import cluster_qc, marker_randomness
+    from scview.core import marker_randomness
 
     # Fetched first where missing and allowed (worker thread): the high-mito exception reads the type.
     # None (download off or failed): the check skips, and damaged clusters go to the AI.
@@ -2093,12 +2185,14 @@ def _annotation_decided(adata: ad.AnnData, groupby: str, marker_map: dict[str, l
     try:
         check = marker_randomness.check(adata, marker_map, db=db, tissue=tissue)  # types of the tissue only
     except Exception as exc:
-        logger.info("Random-marker check skipped: %s", exc)
+        logger.warning("Random-marker check skipped: %s", exc, exc_info=True)
+        check_skipped(CHECK_RANDOM, exc)
         check = marker_randomness.RandomCheck(skipped="check failed")
     try:
-        report = cluster_qc.cluster_qc(adata, groupby)
+        report = _annotation_cluster_qc(adata, groupby)
     except Exception as exc:
-        logger.info("Damaged-cluster check skipped: %s", exc)
+        logger.warning("Damaged-cluster check skipped: %s", exc, exc_info=True)
+        check_skipped(CHECK_DAMAGED, exc)
         report = None
     return decide_clusters(check, report, marker_map)
 
@@ -2323,6 +2417,18 @@ def _run_cell_type_annotation(
     if fell_back:
         logger.warning("Annotation: %s", fell_back)
 
+    skipped: dict[str, str] = {}
+    held = _CHECKS_SKIPPED.set(skipped)
+    try:
+        return _annotate(adata, params, method, fell_back, groupby, target, skipped)
+    finally:
+        _CHECKS_SKIPPED.reset(held)
+
+
+def _annotate(adata: ad.AnnData, params: PipelineParams, method: str, fell_back: str | None,
+              groupby: str, target: str, skipped: dict[str, str]) -> dict[str, Any]:
+    """``_run_cell_type_annotation`` once the method, clustering and column are settled;
+    ``skipped`` fills with the checks that could not run (``check_skipped``)."""
     fit: dict[str, Any] | None = None
     if method == "celltypist":
         fit = _annotate_celltypist(adata, params, groupby, target)
@@ -2352,7 +2458,10 @@ def _run_cell_type_annotation(
     # <target>_qualified beside it (core/label_qualifiers.py).
     from scview.core import label_qualifiers
 
-    qual = label_qualifiers.apply(adata, groupby, target) if groupby else {}
+    backend = _LARGE.get()  # a large run: the matrix the markers were ranked on, read by blocks
+    qual = label_qualifiers.apply(adata, groupby, target,
+                                  matrix=backend.ranked_matrix(adata) if backend is not None else None,
+                                  on_failure=lambda exc: check_skipped(CHECK_QUALIFIERS, exc)) if groupby else {}
     if not groupby:
         label_qualifiers.drop(adata, target)
     # Recorded with the step: the column written (so a later run may write it again), the
@@ -2361,6 +2470,7 @@ def _run_cell_type_annotation(
     ran = {"annotation_method": method, "annotation_method_requested": params.annotation_method,
            "annotation_fallback_note": fell_back} if fell_back else {}
     return {**{k: v for k, v in (fit or {}).items() if k != "model"}, **qual, **ran,
+            **({CHECKS_SKIPPED: dict(skipped)} if skipped else {}),
             "annotation_target": target,
             **({"annotation_overwrite": True} if params.annotation_overwrite else {})}
 
@@ -2487,8 +2597,13 @@ _PEARSON_TOOLS = {
 
 def _note_caution(result: PipelineResult, step: str, ret: Any) -> None:
     """A step's recorded note the run's result shows beside it (``PipelineResult.cautions``)."""
-    if isinstance(ret, dict) and ret.get("annotation_fallback_note"):
-        result.cautions[step] = str(ret["annotation_fallback_note"])
+    if isinstance(ret, dict) and (ret.get("annotation_fallback_note") or ret.get(CHECKS_SKIPPED)):
+        parts = [str(ret["annotation_fallback_note"])] if ret.get("annotation_fallback_note") else []
+        if ret.get(CHECKS_SKIPPED):  # the annotator's own checks that could not run
+            parts.append(checks_skipped_text(ret[CHECKS_SKIPPED]))
+        result.cautions[step] = " ".join(parts)
+    if step == "qc_metrics" and isinstance(ret, dict) and ret.get("input"):
+        result.cautions[step] = qc_input_note(str(ret["input"]))
     if isinstance(ret, dict) and (ret.get("qc_nuclei_note") or ret.get("from_original")):
         if ret.get("from_original"):  # reset from the original upload: the cells it brought back
             text = (f"Started from the {ret.get('n_original', 0):,} cells as uploaded "
@@ -2720,8 +2835,10 @@ def _finish_run(
             else:
                 write(adata, partial)
             os.replace(partial, output_path)
-        except BaseException:
+        except BaseException as e:
             Path(partial).unlink(missing_ok=True)
+            if isinstance(e, Exception) and not isinstance(e, (MemoryError, OSError, RunSaveError)):
+                raise _save_failed(e) from e  # not a bare "Incompatible object (Dataset) already exists"
             raise
         write_s = round(time.time() - tw, 2)
         result.output_path = output_path

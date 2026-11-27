@@ -89,6 +89,10 @@ const pctText = (v: number) => String(+v.toFixed(2));
 /** Which % mito bound applies to a row, in words: its own, or the floor and what that kept. */
 export function mitoBoundNote(row: MadRow, floor: number | undefined): string | undefined {
   if (!floor || row.max_pct_mt_by !== "floor") return undefined;
+  if (row.pct_mt_median != null) {
+    // MAD 0: no bound of its own, so the floor is the bound (it removes cells here, it keeps none)
+    return `Its MAD is 0 (median ${pctText(row.pct_mt_median)}% mito: most cells alike), so it has no bound of its own and the % mito floor of ${pctText(floor)}% applies. That removes ${(row.n_pct_mt_flat ?? 0).toLocaleString()} cells.`;
+  }
   const own = row.max_pct_mt_mad == null ? "none" : `${pctText(row.max_pct_mt_mad)}%`;
   return `The % mito floor of ${pctText(floor)}% applies: its own bound is ${own}. The floor keeps ${(row.n_pct_mt_floor ?? 0).toLocaleString()} cells that bound removes.`;
 }
@@ -100,9 +104,23 @@ export function mitoFloorSummary(mad: MadThresholds): string | null {
   const rows: MadRow[] = mad.column ? mad.samples : [mad.pooled];
   const set = rows.filter((r) => r.max_pct_mt_by === "floor");
   if (!set.length) return null;
-  const kept = set.reduce((n, r) => n + (r.n_pct_mt_floor ?? 0), 0);
-  const where = mad.column ? `in ${set.length} of ${rows.length} samples` : "here";
-  return `% mito floor ${pctText(floor)}%: it set the bound ${where} (their own was lower, as in nuclei) and kept ${kept.toLocaleString()} cells.`;
+  // Two ways to the floor: a bound of its own below it (the floor keeps cells), or a MAD of 0
+  // and so no bound of its own (the floor removes cells the 20% ceiling would have kept).
+  const flat = set.filter((r) => r.pct_mt_median != null);
+  const low = set.filter((r) => r.pct_mt_median == null);
+  const of = (n: number) => (mad.column ? `in ${n} of ${rows.length} samples` : "here");
+  const parts: string[] = [];
+  if (low.length) {
+    const kept = low.reduce((n, r) => n + (r.n_pct_mt_floor ?? 0), 0);
+    parts.push(`it set the bound ${of(low.length)} (their own was lower, as in nuclei) and kept ${kept.toLocaleString()} cells`);
+  }
+  if (flat.length) {
+    const cut = flat.reduce((n, r) => n + (r.n_pct_mt_flat ?? 0), 0);
+    parts.push(mad.column
+      ? `it is the bound ${of(flat.length)} whose MAD is 0 (no bound of their own) and removes ${cut.toLocaleString()} cells there`
+      : `it is the bound here, as the MAD is 0 (no bound from it), and removes ${cut.toLocaleString()} cells`);
+  }
+  return `% mito floor ${pctText(floor)}%: ${parts.join("; ")}.`;
 }
 
 /** MAD mode: each sample's bounds and what they remove, in the samples' own order. */
@@ -170,7 +188,7 @@ export function SampleThresholds({ mad }: { mad: MadThresholds }) {
                 {s.min_genes_by === "floor" && <span className="text-slate-400"> (floor)</span>}
               </td>
               {hasMt && (
-                <td className="text-right" title={skipped(s, "pct_mt") ?? mitoBoundNote(s, mad.pct_mt_floor)}>
+                <td className="text-right" title={mitoBoundNote(s, mad.pct_mt_floor) ?? skipped(s, "pct_mt")}>
                   {s.max_pct_mt === null ? "any" : `< ${bound(s.max_pct_mt, 1)}`}
                   {s.max_pct_mt_by === "floor" && <span className="text-slate-400"> (floor)</span>}
                 </td>

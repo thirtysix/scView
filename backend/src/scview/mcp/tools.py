@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import functools
 import gzip
 import io
 import json
@@ -25,6 +26,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import TextContent, ToolAnnotations
 from pydantic import Field
 
+from scview.core import request_pins
 from scview.core.cell_filter import CellFilter
 from scview.core.marker_names import HOW_TEXT
 from scview.mcp import api, compact, jobs, params, plots
@@ -625,7 +627,8 @@ async def qc_filter_preview(
     n = clamp(limit)
     out = {"dataset_id": dataset_id, **pick(d, "n_cells", "n_removed", "n_kept", "fraction_removed",
                                             "thresholds", "has_mt", "by_criterion", "warnings", "doublets",
-                                            "grid_note", "tissue_cells_note", "atac_qc")}
+                                            "grid_note", "tissue_cells_note", "not_counts_note",
+                                            "atac_qc")}
     if d.get("mito_types"):
         out["mito_types"] = d["mito_types"]
     samples = d.get("samples") or {}
@@ -830,6 +833,12 @@ async def _refuse_conversion(dataset_id: str, steps: list[str], p: dict[str, Any
     """A ToolError when the run would convert the dataset (preflight, by the run's own rule:
     ``large_run.mode_rule``), naming what that turns off and how to allow it."""
     mode = (await _get(f"{_ds(dataset_id)}/preflight", **_preflight_query(steps, p))).get("mode") or {}
+    by_columns = mode.get("by_columns")
+    if by_columns:  # large-dataset mode cannot read it: the run would be refused either way
+        raise ToolError(
+            f"Not run: {mode.get('reason')} That mode reads cells in blocks, and this dataset's matrix is "
+            f"stored by columns ({', '.join(by_columns.get('blocks_large_mode') or [])}). Call "
+            f"store_by_rows(dataset_id) first ({by_columns.get('cost')}; no value changes), then run this again.")
     if mode.get("converts"):
         skip = (mode.get("without_doublets") or {}).get("text")
         raise ToolError(
@@ -2115,6 +2124,18 @@ async def get_result(
     return dumps(out, _max_chars(limit))
 
 
+def _own_reads(fn: Callable) -> Callable:
+    """For a tool that reads the dataset itself (``_adaptor``) rather than through a route:
+    no HTTP request holds its files, so the tool call is given a request's scope
+    (``core/request_pins.py``): the dataset stays readable until the tool returns."""
+    @functools.wraps(fn)
+    async def scoped(*args: Any, **kwargs: Any) -> Any:
+        with request_pins.scope():
+            return await fn(*args, **kwargs)
+
+    return scoped
+
+
 async def _adaptor(dataset_id: str):
     dm = api.dataset_manager()
     await _get(_ds(dataset_id))  # a 404 / not-ready error as the route words it
@@ -2125,6 +2146,7 @@ async def _adaptor(dataset_id: str):
 
 
 @tool(READ)
+@_own_reads
 async def plot(
     dataset_id: DatasetId,
     kind: Annotated[Literal["embedding", "violin", "dotplot", "coverage", "phase"], Field(description=(

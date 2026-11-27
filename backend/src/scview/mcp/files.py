@@ -25,8 +25,8 @@ from pydantic import Field
 
 from scview.mcp import api, jobs
 from scview.mcp.compact import dumps, pick
-from scview.mcp.spatial import NEXT, _body
-from scview.mcp.tools import READ, WRITE, DatasetId, _line, _post, tool
+from scview.mcp.spatial import NEXT, _body, _result, _started
+from scview.mcp.tools import READ, WRITE, DatasetId, _ds, _get, _line, _post, tool
 
 MAX_FILES = 2000  # a folder with more is not one experiment
 _CHUNK = 4 * 1024 * 1024
@@ -334,3 +334,40 @@ async def import_labels(
         out["next"] = (f"crosstab the new column against a known one to check it; set_labels edits it; "
                        f"colour by '{r.get('column')}' in the UI")
     return dumps(out)
+
+
+# --- how a dataset's matrices are stored ---------------------------------------------------------
+
+def _storage_line(event: str, data: Any) -> str | None:
+    if event == "progress" and isinstance(data, dict) and data.get("total"):
+        return f"{100 * data['done'] // data['total']}% of the stored values written by rows"
+    return _line(event, data)
+
+
+@tool(WRITE)
+async def store_by_rows(
+    dataset_id: DatasetId,
+    dry_run: Annotated[bool, Field(description=(
+        "True: only say which matrices are column-stored, whether that blocks large-dataset mode, and what "
+        "storing them by rows costs (seconds, disk needed and free, memory); write nothing."))] = False,
+) -> str:
+    """Store a dataset's column-stored (CSC) matrices by rows (CSR): same values, dtype and order, the
+    original upload untouched, recorded in the recipe. Only a dataset uploaded or converted before
+    v0.85 has such matrices, and it matters in one place: a run that does not fit in memory goes to
+    large-dataset mode, which reads cells in blocks and refuses a column-stored matrix (run_pipeline
+    says so and names this tool). It does not lower the memory marker genes or cell-level DE need.
+    Refused when the disk is short (the message names the GB needed and free) or a run is working on
+    the dataset. A job: waits up to 20 s and answers with what was converted, else returns job_id."""
+    plan = await _get(f"{_ds(dataset_id)}/storage")
+    if dry_run or not plan.get("files"):
+        if not plan.get("files"):
+            plan["note"] = "Nothing is column-stored in this dataset: there is nothing to do."
+        return dumps(plan)
+
+    def finish(job: jobs.Job) -> dict[str, Any]:
+        return {"dataset_id": dataset_id, **pick(_result(job), "converted", "seconds", "bytes_before", "bytes_after"),
+                "note": "Stored by rows. A run refused for the column-stored matrix can be started again."}
+
+    job = jobs.new("store_by_rows", dataset_id, f"{_ds(dataset_id)}/storage/by-rows", {},
+                   progress_line=_storage_line, finish=finish)
+    return await _started(job, 50)

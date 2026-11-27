@@ -6,7 +6,9 @@
 ## The backend (core/rds_export.py) writes the staging h5ad with a fixed layout:
 ##   X              log-normalised values (absent when there are none)
 ##   layers/counts  raw counts (absent when there are none)
-##   obs, var       cell and gene tables (unique names; categoricals in level order)
+##   obs, var       cell and gene tables (unique names; categoricals in level order).
+##                  A column name holding "/" is stored escaped ("CD4%2fCD8",
+##                  core/h5_names.py): read back as typed (h5_unescape, convert.R)
 ##   obsm/X_*       layouts with all their columns; varm/PCs the PCA loadings
 ##   uns/scview_rexport  JSON: provenance, colours, cluster column, PCA variance,
 ##                  protein names, what the backend left out
@@ -167,7 +169,7 @@ build_and_save <- function(input_path, output_path, format, progress) {
   for (key in py_chr(py$scv_keys(input_path, "obsm"))) {
     m <- py_num(py$scv_dense(input_path, paste0("obsm/", key)))
     if (length(dim(m)) != 2 || nrow(m) != length(cells)) next
-    emb[[key]] <- m
+    emb[[h5_unescape(key)]] <- m
   }
   pcs <- NULL
   if (py_lgl(py$scv_has(input_path, "varm/PCs"))) {
@@ -260,7 +262,7 @@ read_frame <- function(py, path, key) {
   for (k in seq_len(n) - 1L) {
     col <- reticulate::py_get_item(cols, k)
     g <- function(name) reticulate::py_to_r(reticulate::py_get_item(col, name))
-    name <- g("name")
+    name <- h5_unescape(g("name"))  # as typed: "CD4%2fCD8" is the column "CD4/CD8"
     kind <- g("kind")
     val <- switch(kind,
       factor = {
@@ -411,6 +413,8 @@ build_sce <- function(counts, data, obs, var, emb, pcs, protein, meta, rpt) {
   } else {
     note(rpt, "skipped", "no log-normalised values: run scuttle::logNormCounts() in R")
   }
+  obs <- sce_columns(obs, "colData", rpt)
+  var <- sce_columns(var, "rowData", rpt)
   sce <- SingleCellExperiment::SingleCellExperiment(
     assays = assays,
     colData = S4Vectors::DataFrame(obs, check.names = FALSE),
@@ -456,6 +460,20 @@ build_sce <- function(counts, data, obs, var, emb, pcs, protein, meta, rpt) {
   S4Vectors::metadata(sce)$scview <- scview_misc(meta)
   note(rpt, "kept", "provenance (scView version, dataset, recorded steps) in metadata(sce)$scview")
   sce
+}
+
+#' colData / rowData column names: a "/" becomes "_" (as the SCE import names them,
+#' convert_sce.R), said in the report; a Seurat object keeps the name as typed.
+sce_columns <- function(df, what, rpt) {
+  old <- colnames(df)
+  if (!any(grepl("/", old, fixed = TRUE))) return(df)
+  new <- make.unique(gsub("/", "_", old, fixed = TRUE), sep = "_")
+  for (k in which(new != old)) {
+    note(rpt, "kept", "%s column '%s' named '%s' ('/' is not used in a SingleCellExperiment column name)",
+         what, old[k], new[k])
+  }
+  colnames(df) <- new
+  df
 }
 
 # ---------------------------------------------------------------------------

@@ -72,6 +72,7 @@ from scview.api.v1 import (
     atac,
     spot_deconvolution,
     transcripts,
+    storage,
     subset,
 )
 
@@ -79,6 +80,7 @@ api_router = APIRouter(prefix="/api/v1")
 
 api_router.include_router(datasets.router, tags=["datasets"])
 api_router.include_router(subset.router, tags=["datasets"])
+api_router.include_router(storage.router, tags=["datasets"])
 api_router.include_router(embeddings.router, tags=["embeddings"])
 api_router.include_router(metadata.router, tags=["metadata"])
 api_router.include_router(expression.router, tags=["expression"])
