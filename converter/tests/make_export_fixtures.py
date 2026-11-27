@@ -50,6 +50,11 @@ obs["n_genes"] = (counts > 0).sum(1).astype(np.int64)
 score = rng.normal(size=n)
 score[4] = np.nan
 obs["score"] = score
+# A column "CD4/CD8" as the backend stores it (core/h5_names.py), beside a column "CD4",
+# and one whose name only looks escaped
+obs["CD4%2fCD8"] = pd.Categorical(["T/NK" if i % 2 else "T" for i in range(n)], categories=["T", "T/NK"])
+obs["CD4"] = np.arange(n, dtype=np.int64)
+obs["pct%252fx"] = 0.5
 var = pd.DataFrame(index=genes)
 var["highly_variable"] = np.arange(g) < 12
 var["means"] = logn.mean(0)

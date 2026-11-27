@@ -85,9 +85,18 @@ check(any(grepl("connectivities", unlist(s$res$report$skipped))), "Seurat: repor
 fm <- obj[["RNA"]][[]]
 check("highly_variable" %in% colnames(fm), "Seurat: var columns as feature metadata")
 
+# names stored escaped in the staging file reach R as typed
+check(all(c("CD4/CD8", "CD4", "pct%2fx") %in% colnames(md)) && !any(grepl("%2fCD8", colnames(md), fixed = TRUE)),
+      "Seurat: a column stored 'CD4%2fCD8' is meta.data column 'CD4/CD8'")
+check(identical(levels(md[["CD4/CD8"]]), c("T", "T/NK")) && identical(md$CD4[1:3], 0:2),
+      "Seurat: 'CD4/CD8' keeps its levels (T, T/NK) beside the column 'CD4'")
+
 # ---- the same object back through the import -------------------------------
 back <- convert_rds_to_h5ad(s$rds, file.path(out, "export_full_seurat_back.h5ad"))
 check(isTRUE(back$success), "Seurat -> import: converts back to h5ad")
+back_cols <- py_chr(export_py()$scv_keys(file.path(out, "export_full_seurat_back.h5ad"), "obs"))
+check(all(c("CD4%2fCD8", "CD4", "pct%252fx") %in% back_cols),
+      "Seurat -> import: 'CD4/CD8' is stored escaped again (one key, beside 'CD4')")
 
 # ---- SingleCellExperiment, full ----------------------------------------------
 x <- run("export_full.h5ad", "sce")
@@ -97,6 +106,10 @@ check(identical(assayNames(sce), c("counts", "logcounts")), "SCE: assays counts,
 check(near(sum(counts(sce)), exp$counts_sum) && near(sum(logcounts(sce)), exp$logn_sum), "SCE: assay sums")
 check(identical(rownames(sce)[1], "Gene_0"), "SCE: gene names unchanged")
 check(identical(levels(sce$leiden), exp$leiden_levels) && is.logical(sce$is_stim), "SCE: colData kinds")
+check(all(c("CD4_CD8", "CD4", "pct%2fx") %in% colnames(colData(sce))) &&
+        identical(levels(sce$CD4_CD8), c("T", "T/NK")), "SCE: 'CD4/CD8' is colData column 'CD4_CD8'")
+check(any(grepl("'CD4/CD8' named 'CD4_CD8'", unlist(x$res$report$kept), fixed = TRUE)),
+      "SCE: report says the column was renamed")
 check(identical(reducedDimNames(sce), c("PCA", "UMAP", "UMAP_3D")), "SCE: reducedDims PCA, UMAP, UMAP_3D")
 pc <- reducedDim(sce, "PCA")
 check(near(pc[8, 4], exp$pca_cell7_dim3) && near(attr(pc, "percentVar")[1], 30) &&
@@ -119,6 +132,20 @@ bad <- export_h5ad_to_rds(file.path(out, "export_full.h5ad"), file.path(out, "x.
 check(!isTRUE(bad$success) && grepl("Unknown format", bad$error), "unknown format refused")
 missing <- export_h5ad_to_rds(file.path(out, "nope.h5ad"), file.path(out, "x.rds"), "seurat")
 check(!isTRUE(missing$success) && grepl("not found", missing$error), "missing input refused")
+
+# ---- the name escape, against the list the Python side wrote -----------------
+# tests/fixtures/h5_names.json: [name, stored key] pairs from core/h5_names.py `escape`
+# (backend/tests/test_h5_names.py checks the file is what the backend gives).
+pairs <- jsonlite::fromJSON(file.path(here, "fixtures", "h5_names.json"), simplifyVector = FALSE)$pairs
+typed <- vapply(pairs, function(p) p[[1]], character(1))
+stored <- vapply(pairs, function(p) p[[2]], character(1))
+check(length(typed) >= 40, sprintf("name escape: %d pairs read", length(typed)))
+bad <- which(h5_unescape(stored) != typed)
+check(length(bad) == 0, sprintf("name escape: h5_unescape gives every name back%s",
+                                if (length(bad)) paste0(" (not: ", paste(stored[bad], collapse = ", "), ")") else ""))
+bad <- which(h5_escape(typed) != stored)
+check(length(bad) == 0, sprintf("name escape: h5_escape gives the backend's key%s",
+                                if (length(bad)) paste0(" (not: ", paste(typed[bad], collapse = ", "), ")") else ""))
 
 cat(sprintf("[export] %d failed\n", length(failures)))
 if (length(failures)) quit(status = 1)

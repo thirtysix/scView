@@ -91,6 +91,7 @@ from scview.core.pipeline import (
     SAVED_STATUSES,
     PipelineParams,
     PipelineResult,
+    RunSaveError,
     StepNotApplicable,
     StepSkipped,
     _cancelled_during,
@@ -102,6 +103,7 @@ from scview.core.pipeline import (
     _record_errors,
     record_skip,
     _record_pipeline_step,
+    _save_failed,
     _REGRESS_PEARSON,
     _skip_if_blocked,
     _step_failed,
@@ -1762,6 +1764,10 @@ def _finish(run: LargeRun, params: PipelineParams, result: PipelineResult, t0: f
             failed = ", ".join(s.replace("_", " ") for s in result.errors)
             _halted(result, ("stopped", f"Nothing was saved: {failed} failed. {e} The dataset "
                                         "is as it was before the run."))
+        except (MemoryError, OSError, RunSaveError):
+            raise
+        except Exception as e:  # as in memory: said in words, not anndata's bare error
+            raise _save_failed(e) from e
         else:
             write_s = round(time.time() - tw, 2)
             result.output_path = str(run.output)

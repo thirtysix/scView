@@ -463,7 +463,9 @@ if (requireNamespace("SeuratObject", quietly = TRUE)) {
   md$score <- data.frame(a = 1:12, b = rep(c("x", "y"), 6))   # a nested table
   md$pair <- matrix(as.numeric(1:24), 12, 2, dimnames = list(NULL, c("u", "v")))
   md[["_index"]] <- paste0("id", 1:12)
-  md[["a/b"]] <- 12:1                                         # the name stays as it is
+  md[["a/b"]] <- 12:1                                         # the name stays, stored escaped (a%2fb)
+  md[["a"]] <- 1:12                                           # beside "a/b": failed the conversion
+  md[["pct%2fx"]] <- 0.5                                      # a name that reads as an escape
   sm@meta.data <- md
   stopifnot(!inherits(sm[["RNA"]], "Assay5"))
   options(old_opt)
@@ -474,7 +476,8 @@ if (requireNamespace("SeuratObject", quietly = TRUE)) {
     obs_dtypes = list(one_each = "category", some_each = "category", na_level = "category",
                       stamp = "object", day = "object", flag = "category", count = "float64",
                       score.a = "int32", score.b = "category", pair.u = "float64", pair.v = "float64",
-                      `_index_` = "object", `a/b` = "int32", nCount_RNA = "float64"),
+                      `_index_` = "object", `a%2fb` = "int32", a = "int32", `pct%252fx` = "float64",
+                      nCount_RNA = "float64"),
     categories = list(one_each = c("LineA", "LineB"), na_level = I("DonorA"), flag = c("FALSE", "TRUE")),
     n_missing = list(some_each = 4, na_level = 6, flag = 4, count = 1),
     # NA: a missing value (JSON null)
