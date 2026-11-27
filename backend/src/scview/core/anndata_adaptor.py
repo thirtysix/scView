@@ -721,6 +721,11 @@ class AnnDataAdaptor:
             "metrics": metrics,
             "scatter": scatter,
         }
+        from scview.core.qc_filter import not_counts_note
+
+        note = not_counts_note(self.adata)  # obs QC columns an old QC metrics step took from a processed X
+        if note:
+            result["not_counts_note"] = note
         self._qc_cache = result
         return result
 

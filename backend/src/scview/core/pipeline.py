@@ -506,15 +506,56 @@ def clear_processing(adata: ad.AnnData) -> None:
         drop_columns(adata, scview_cols)  # their labels may name other cells next time
 
 
-def _run_qc_metrics(adata: ad.AnnData, params: PipelineParams) -> None:
-    """Calculate QC metrics including mitochondrial gene percentage."""
+# The QC metrics step on a dataset without counts: nothing is written (the columns would be
+# sums of log or scaled values that read as counts).
+QC_NEEDS_COUNTS = ("QC metrics need raw counts: X holds processed values and there is no counts "
+                   "layer or counts in .raw. No QC columns were written.")
+
+
+def qc_input_note(where: str) -> str:
+    """The run's note when the QC metrics came from the counts beside X."""
+    return f"X holds processed values: the QC metrics were counted on the counts in {where}."
+
+
+def _qc_matrix(adata: ad.AnnData):
+    """(matrix, gene names, where from) the QC metrics are counted on: X, or the counts
+    beside a processed X (``_doublet_counts``; where: "layers['counts']" / ".raw", None for
+    X). A public import often has the authors' log-normalised X with counts in .raw: summed
+    as it was, its "total counts" had a median of 6,628 where the counts give 1,382."""
+    if not _holds_processed_values(adata.X):
+        return adata.X, adata.var_names, None
+    counts = _doublet_counts(adata)
+    if counts is None:
+        raise StepSkipped(QC_NEEDS_COUNTS)
+    return counts
+
+
+def _run_qc_metrics(adata: ad.AnnData, params: PipelineParams) -> dict[str, Any] | None:
+    """Calculate QC metrics including mitochondrial gene percentage, always from counts:
+    X, or ``layers['counts']`` / ``.raw`` when X holds processed values (recorded as
+    ``input``; .raw's own genes count, and the per-gene columns are given to X's genes).
+    Without counts anywhere the step is skipped and writes nothing."""
+    M, names, where = _qc_matrix(adata)
     adata.var["mt"] = adata.var_names.str.startswith("MT-") | adata.var_names.str.startswith("mt-")
-    sc.pp.calculate_qc_metrics(adata, qc_vars=["mt"], percent_top=None, log1p=False, inplace=True)
+    if where is None:
+        sc.pp.calculate_qc_metrics(adata, qc_vars=["mt"], percent_top=None, log1p=False, inplace=True)
+    else:
+        names = pd.Index(names)
+        counted = ad.AnnData(M, obs=pd.DataFrame(index=adata.obs_names),
+                             var=pd.DataFrame({"mt": names.str.startswith("MT-") | names.str.startswith("mt-")},
+                                              index=names))
+        sc.pp.calculate_qc_metrics(counted, qc_vars=["mt"], percent_top=None, log1p=False, inplace=True)
+        for c in counted.obs.columns:
+            adata.obs[c] = counted.obs[c].to_numpy()
+        per_gene = counted.var.drop(columns="mt").reindex(adata.var_names)
+        for c in per_gene.columns:
+            adata.var[c] = per_gene[c].to_numpy()
     logger.info(
-        "QC metrics: median genes/cell=%d, median counts/cell=%d",
+        "QC metrics (%s): median genes/cell=%d, median counts/cell=%d", where or "X",
         int(adata.obs["n_genes_by_counts"].median()),
         int(adata.obs["total_counts"].median()),
     )
+    return {"input": where} if where is not None else None
 
 
 def _holds_processed_values(M) -> bool:
@@ -2561,6 +2602,8 @@ def _note_caution(result: PipelineResult, step: str, ret: Any) -> None:
         if ret.get(CHECKS_SKIPPED):  # the annotator's own checks that could not run
             parts.append(checks_skipped_text(ret[CHECKS_SKIPPED]))
         result.cautions[step] = " ".join(parts)
+    if step == "qc_metrics" and isinstance(ret, dict) and ret.get("input"):
+        result.cautions[step] = qc_input_note(str(ret["input"]))
     if isinstance(ret, dict) and (ret.get("qc_nuclei_note") or ret.get("from_original")):
         if ret.get("from_original"):  # reset from the original upload: the cells it brought back
             text = (f"Started from the {ret.get('n_original', 0):,} cells as uploaded "

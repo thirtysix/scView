@@ -450,6 +450,9 @@ async def get_filter_preview(
         note = qc_filter.tissue_cells_note(adaptor.adata, t, cells)
         if note:
             out["tissue_cells_note"] = note
+        note = qc_filter.not_counts_note(adaptor.adata)
+        if note:
+            out["not_counts_note"] = note
         return out
 
     try:

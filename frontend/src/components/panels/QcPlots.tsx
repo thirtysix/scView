@@ -38,6 +38,8 @@ interface QcResponse {
   computed_on_demand: boolean;
   /** False when the dataset has no MT- genes: % mito can't be measured (older backends omit it). */
   has_mt?: boolean;
+  /** The obs QC columns were written from an X that did not hold counts (an older QC metrics step). */
+  not_counts_note?: string;
   metrics: Record<string, QcMetric>;
   scatter: {
     x: number[];
@@ -504,6 +506,11 @@ export function QcPlots({
             : ""}
         </span>
       </div>
+      {data.not_counts_note && (
+        <p className="text-[11px] leading-relaxed text-amber-700" data-testid="qc-plots-not-counts-note">
+          {data.not_counts_note}
+        </p>
+      )}
       <div className="flex items-center gap-2 text-[11px] text-slate-500">
         <label htmlFor="qc-group-by" className="font-medium">
           Group by

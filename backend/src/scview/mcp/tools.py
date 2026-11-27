@@ -625,7 +625,8 @@ async def qc_filter_preview(
     n = clamp(limit)
     out = {"dataset_id": dataset_id, **pick(d, "n_cells", "n_removed", "n_kept", "fraction_removed",
                                             "thresholds", "has_mt", "by_criterion", "warnings", "doublets",
-                                            "grid_note", "tissue_cells_note", "atac_qc")}
+                                            "grid_note", "tissue_cells_note", "not_counts_note",
+                                            "atac_qc")}
     if d.get("mito_types"):
         out["mito_types"] = d["mito_types"]
     samples = d.get("samples") or {}

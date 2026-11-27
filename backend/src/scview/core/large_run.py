@@ -87,6 +87,7 @@ from scview.core.pipeline import (
     ALL_STEPS,
     ALL_GENES_RECORD,
     HVG_FLAVORS,
+    QC_NEEDS_COUNTS,
     SAVED_STATUSES,
     PipelineParams,
     PipelineResult,
@@ -1017,19 +1018,42 @@ class LargeRun:
         clear_processing(self.light)
         logger.info("Reset to counts (%d cells, %d genes)", self.light.n_obs, self.light.n_vars)
 
-    def _qc_metrics(self) -> None:
+    def _qc_metrics(self) -> dict[str, Any] | None:
         light = self.light
-        lc = chunked.LazyCounts(X=self.x.X, obs=light.obs, var=light.var, source="X",
-                                path=str(self.path), index_dtype=self.x.index_dtype)
+        m, where = self.qc_counts()
+        var = pd.DataFrame(index=m.names) if where is not None else light.var
+        lc = chunked.LazyCounts(X=m.X, obs=light.obs, var=var, source=where or "X",
+                                path=str(self.path), index_dtype=m.index_dtype)
         self._label = "QC metrics"
         obs, var = chunked.qc_metrics(lc)
+        if where is not None:  # the counts' own genes: the per-gene columns go to X's genes
+            var = var.reindex(light.var_names)
+            var["mt"] = chunked.mito_mask(light.var_names)
         for c in obs.columns:
             light.obs[c] = obs[c].to_numpy()
         for c in var.columns:
             light.var[c] = var[c].to_numpy()
-        logger.info("QC metrics: median genes/cell=%d, median counts/cell=%d",
+        logger.info("QC metrics (%s): median genes/cell=%d, median counts/cell=%d", where or "X",
                     int(light.obs["n_genes_by_counts"].median()),
                     int(light.obs["total_counts"].median()))
+        return {"input": where} if where is not None else None
+
+    def qc_counts(self) -> tuple[_Mat, str | None]:
+        """The matrix the QC metrics are counted on (``pipeline._qc_matrix``): X unless it
+        holds processed values, then the counts layer (a large dataset's counts file), then
+        .raw."""
+        if _holds_counts(self.x) or self._empty_x():
+            return self.x, None
+        if _holds_counts(self.layer):
+            return self.layer, "layers['counts']"
+        if _holds_counts(self.raw):
+            return self.raw, ".raw"
+        raise StepSkipped(QC_NEEDS_COUNTS)
+
+    def _empty_x(self) -> bool:
+        """No value in X's first rows (``pipeline._holds_processed_values``: not processed)."""
+        s = self.x.sample()
+        return (s.nnz if sp.issparse(s) else int(np.count_nonzero(s))) == 0
 
     @contextlib.contextmanager
     def _rows(self, m: _Mat) -> Iterator[Any]:

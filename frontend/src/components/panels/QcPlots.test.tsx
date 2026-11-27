@@ -76,6 +76,18 @@ describe("QcPlots group by", () => {
     expect(screen.getByRole("option", { name: /fine \(70 groups: over 50/ })).toBeDisabled();
   });
 
+  it("says when the QC columns were not computed from counts, and only then", async () => {
+    getQcByGroup.mockResolvedValue(byGroup("Donor", "donor", ["d1", "d2"]));
+    const first = render(<QcPlots datasetId="d1" />);
+    await screen.findByText(/the donor \/ sample column/);
+    expect(screen.queryByTestId("qc-plots-not-counts-note")).toBeNull();
+    first.unmount();
+
+    apiFetch.mockResolvedValue({ ...POOLED, not_counts_note: "The QC columns were not computed from counts." });
+    render(<QcPlots datasetId="d1" />);
+    expect((await screen.findByTestId("qc-plots-not-counts-note")).textContent).toMatch(/not computed from counts/);
+  });
+
   it("goes back to pooled cells on None, and asks for a column the user picks", async () => {
     getQcByGroup.mockResolvedValue(byGroup("Donor", "donor", ["d1", "d2"]));
     render(<QcPlots datasetId="d1" />);

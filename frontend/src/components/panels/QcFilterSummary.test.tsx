@@ -288,6 +288,19 @@ describe("QcFilterSummary in MAD mode", () => {
     expect(screen.getByText(/of \d[\d,]* bins/)).toBeTruthy();
   });
 
+  it("says when the QC columns were not computed from counts", async () => {
+    getFilterPreview.mockResolvedValue({ ...preview(0), not_counts_note: "The QC columns were not computed from counts." });
+    render(<QcFilterSummary datasetId="d" thresholds={T} onChange={vi.fn()} />);
+    expect((await screen.findByTestId("qc-not-counts-note")).textContent).toMatch(/not computed from counts/);
+  });
+
+  it("shows no counts note when the preview carries none", async () => {
+    getFilterPreview.mockResolvedValue(preview(0));
+    render(<QcFilterSummary datasetId="d" thresholds={T} onChange={vi.fn()} />);
+    await screen.findByTestId("qc-loss-summary");
+    expect(screen.queryByTestId("qc-not-counts-note")).toBeNull();
+  });
+
   it("shows the tissue cells note beside the % mito control", async () => {
     getFilterPreview.mockResolvedValue({ ...preview(0), tissue_cells_note: "Cell types in tissue differ widely in % mito." });
     render(<QcFilterSummary datasetId="d" thresholds={T} onChange={vi.fn()} />);

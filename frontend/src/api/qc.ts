@@ -673,6 +673,8 @@ export interface FilterPreview {
   grid_note?: string;
   /** Visium HD segmented cells under one % mito rule: why to look at per-type bounds */
   tissue_cells_note?: string;
+  /** The obs QC columns were written from an X that did not hold counts (an older QC metrics step) */
+  not_counts_note?: string;
   n_cells: number;
   n_removed: number;
   n_kept: number;
