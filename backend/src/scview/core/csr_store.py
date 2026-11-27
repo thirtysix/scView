@@ -64,10 +64,13 @@ def is_csc(node) -> bool:
 
 
 def matrices(f: h5py.Group) -> list[tuple[str, h5py.Group | h5py.Dataset]]:
-    """The cells x genes matrices of an h5ad: X, each layer, ``.raw``'s X."""
+    """The cells x genes matrices of an h5ad: X, each layer (named as typed: a "/" in a
+    layer's name is stored escaped, core/h5_names.py), ``.raw``'s X."""
+    from scview.core import h5_names
+
     out = [("X", f["X"])] if "X" in f else []
     if isinstance(f.get("layers"), h5py.Group):
-        out += [(f"layers/{k}", f["layers"][k]) for k in f["layers"].keys()]
+        out += [(f"layers/{h5_names.unescape(k)}", f["layers"][k]) for k in f["layers"].keys()]
     raw = f.get("raw")
     if isinstance(raw, h5py.Group) and "X" in raw:
         out.append(("raw/X", raw["X"]))

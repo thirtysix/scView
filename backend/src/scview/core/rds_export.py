@@ -46,7 +46,7 @@ import scipy.sparse as sp
 
 from scview.core import cell_ontology as co
 from scview.core import cellxgene_export as cx
-from scview.core import conversion
+from scview.core import conversion, uns_keys
 
 logger = logging.getLogger(__name__)
 
@@ -117,26 +117,34 @@ def _n_values(m: cx.Matrix | None) -> int:
         return int(np.prod(m.shape))
 
 
-def _r_obs(adata) -> tuple[pd.DataFrame, list[str], int]:
+def r_column(col: Any, fmt: str) -> str:
+    """An obs column's name in the R object. A Seurat meta.data column keeps a "/" (as the
+    import keeps it, converter/convert.R): the staging file stores it escaped
+    (core/h5_names.py) and export_rds.R reads it back as typed. A SingleCellExperiment's
+    takes "_" for it, as its import does."""
+    return str(col) if fmt == "seurat" else str(col).replace("/", "_")
+
+
+def _r_obs(adata, fmt: str = "sce") -> tuple[pd.DataFrame, list[str], int]:
     """Cell table for R: categoricals keep their level order (factors), text becomes a
     factor, true/false stays logical, numbers stay numbers."""
-    obs, notes, _left, renamed = cx.clean_obs(adata.obs, None)
+    obs, notes, _left, renamed = cx.clean_obs(adata.obs, None, keep_slash=fmt == "seurat")
     for col in adata.obs.columns:
         s = adata.obs[col]
         if pd.api.types.is_bool_dtype(s) and not s.isna().any():
-            obs[str(col).replace("/", "_")] = s.to_numpy(dtype=bool)
+            obs[r_column(col, fmt)] = s.to_numpy(dtype=bool)
         elif pd.api.types.is_extension_array_dtype(s) and pd.api.types.is_numeric_dtype(s):
-            obs[str(col).replace("/", "_")] = s.to_numpy(dtype=np.float64, na_value=np.nan)
+            obs[r_column(col, fmt)] = s.to_numpy(dtype=np.float64, na_value=np.nan)
     return obs, notes, renamed
 
 
-def _ontology_columns(adata, obs: pd.DataFrame) -> list[str]:
+def _ontology_columns(adata, obs: pd.DataFrame, fmt: str = "sce") -> list[str]:
     """Each label column's Cell Ontology mapping (uns scview_label_terms) as a per-cell
     ``<column>_ontology_term_id`` column in ``obs`` (CELLxGENE's naming); "unknown"
     stays as written, labels without a term are NA. Returns the columns added."""
     added = []
     for col in co.mapped_columns(adata):
-        name = f"{str(col).replace('/', '_')}_ontology_term_id"
+        name = f"{r_column(col, fmt)}_ontology_term_id"
         if name in obs.columns:
             continue
         ids = adata.obs[col].astype(str).map(co.stored(adata, col))
@@ -213,9 +221,9 @@ def plan(adaptor, fmt: str, dataset_name: str = "", dataset_id: str = "") -> Pla
     var_src = adata.raw.var if (x is not None and x.where == ".raw" and adata.raw is not None) else adata.var
     var, vnotes, _ = cx.symbol_var(var_src)
     notes += vnotes
-    obs, onotes, _ = _r_obs(adata)
+    obs, onotes, _ = _r_obs(adata, fmt)
     notes += onotes
-    terms = _ontology_columns(adata, obs)
+    terms = _ontology_columns(adata, obs, fmt)
     if terms:
         notes.append("Cell Ontology terms you chose travel as cell metadata: "
                      + ", ".join(terms) + " (labels without a term are NA).")
@@ -232,7 +240,7 @@ def plan(adaptor, fmt: str, dataset_name: str = "", dataset_id: str = "") -> Pla
             notes.append("The PCA loadings do not match the PCA's genes and components; left out.")
 
     protein = _protein(adata)
-    colors = cx._colors(adata.uns, obs, {str(c).replace("/", "_"): str(c) for c in adata.obs.columns})
+    colors = cx._colors(adata.uns, obs, {r_column(c, fmt): str(c) for c in adata.obs.columns})
     cluster = adaptor.active_clustering_column() if hasattr(adaptor, "active_clustering_column") else None
     hv = ([str(g) for g, keep in zip(var.index, var_src["highly_variable"].to_numpy()) if keep]
           if "highly_variable" in var_src.columns and var_src["highly_variable"].dtype == bool else [])
@@ -249,7 +257,8 @@ def plan(adaptor, fmt: str, dataset_name: str = "", dataset_id: str = "") -> Pla
                    if not (counts is not None and counts.key == f"layers/{k}")],
         "obsp": [str(k) for k in adata.obsp.keys()],
         "varm": [str(k) for k in adata.varm.keys() if not (k == "PCs" and pcs is not None)],
-        "uns": sorted(str(k) for k in adata.uns.keys() if k not in used_uns),
+        # listed as typed: a marker table's key holds its column's "/" as "%2F" (core/uns_keys.py)
+        "uns": sorted(uns_keys.decode(str(k)) for k in adata.uns.keys() if k not in used_uns),
     }
     reasons = {
         "obsp": "neighbour graphs (rebuild with FindNeighbors / scran::buildSNNGraph)",

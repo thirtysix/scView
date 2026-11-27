@@ -281,6 +281,37 @@ BIN_MIN_COUNTS = 1.0
 _FIXED_DEFAULT_MIN_GENES = 200.0
 
 
+# Cells looked at by ``not_counts_note`` (one obs column's first values: no matrix read).
+_NOT_COUNTS_SAMPLE = 5_000
+
+
+def not_counts_note(adata) -> str | None:
+    """Why the obs QC columns cannot be trusted when scView's QC metrics step wrote them
+    from an X that did not hold counts (before v0.86 the step summed X whatever it held: a
+    log-normalised public import got "total counts" 5 times the real ones). The rule is
+    cheap and reads no matrix: the step is in the history and ``total_counts`` holds
+    fractions, which sums of counts never do. None otherwise; nothing is recomputed."""
+    from scview.core import provenance
+
+    obs = adata.obs
+    if "total_counts" not in obs.columns or "n_genes_by_counts" not in obs.columns:
+        return None
+    try:
+        history = provenance.read_provenance(adata).get("history") or []
+        if not any(h.get("step") == "qc_metrics" for h in history):
+            return None
+        values = np.asarray(obs["total_counts"].to_numpy()[:_NOT_COUNTS_SAMPLE], dtype=np.float64)
+    except Exception:  # noqa: BLE001 - an odd column or history: no claim
+        return None
+    values = values[np.isfinite(values)]
+    if values.size == 0 or np.all(np.mod(values, 1) == 0):
+        return None
+    return ("The QC columns (total_counts, pct_counts_mt) were not computed from counts: the QC "
+            "metrics step ran when X held normalised or scaled values, so the numbers and the cells "
+            "removed here are off. Run the QC metrics step again: it now reads the counts kept "
+            "beside X, and says so when there are none.")
+
+
 def grid_note(unit: str) -> str:
     example = ("on a human cortex section, 40% of the spots of layer 3 and 37% of layer 1"
                if unit == "spot" else

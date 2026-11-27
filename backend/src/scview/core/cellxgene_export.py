@@ -41,7 +41,7 @@ import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 
-from scview.core import large_layout, large_mode
+from scview.core import large_layout, large_mode, uns_keys
 
 # CELLxGENE Discover dataset schema the readiness report follows:
 # https://github.com/chanzuckerberg/single-cell-curation/blob/main/schema/5.3.0/schema.md
@@ -188,10 +188,12 @@ def _unique(index: pd.Index) -> tuple[pd.Index, int]:
     return new, int((new != idx).sum())
 
 
-def clean_obs(obs: pd.DataFrame, columns: list[str] | None) -> tuple[pd.DataFrame, list[str], list[str], int]:
+def clean_obs(obs: pd.DataFrame, columns: list[str] | None,
+              keep_slash: bool = False) -> tuple[pd.DataFrame, list[str], list[str], int]:
     """(obs to export, notes, columns left out, cell names made unique). Text and
     true/false columns become categoricals with text categories; a '/' in a column name
-    (a path separator in h5ad and zarr) becomes '_'."""
+    (a path separator in h5ad and zarr) becomes '_', unless ``keep_slash`` (a Seurat
+    object takes the name as typed: its staging file stores it escaped, core/h5_names.py)."""
     if columns is None:
         keep = list(obs.columns)
     else:
@@ -204,7 +206,7 @@ def clean_obs(obs: pd.DataFrame, columns: list[str] | None) -> tuple[pd.DataFram
     out = pd.DataFrame(index=obs.index)
     for col in keep:
         s = obs[col]
-        name = str(col).replace("/", "_")
+        name = str(col) if keep_slash else str(col).replace("/", "_")
         if name != str(col):
             notes.append(f"Column '{col}' renamed '{name}' ('/' is not allowed in a column name).")
         if isinstance(s.dtype, pd.CategoricalDtype):
@@ -429,7 +431,8 @@ def plan(adaptor, opts: Options) -> Plan:
     elif opts.include_raw and counts is x:
         notes.append("X holds the raw counts already, so the file has no separate .raw.")
     dropped = {
-        "uns": sorted(str(k) for k in adata.uns.keys() if k not in colors),
+        # listed as typed: a marker table's key holds its column's "/" as "%2F" (core/uns_keys.py)
+        "uns": sorted(uns_keys.decode(str(k)) for k in adata.uns.keys() if k not in colors),
         "obsm": obsm_dropped,
         "layers": [str(k) for k in adata.layers.keys()],
         "obsp": [str(k) for k in adata.obsp.keys()],

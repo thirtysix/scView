@@ -8,8 +8,11 @@ already a dataset ("Incompatible object (Dataset) already exists"). A "/" key in
 
 from __future__ import annotations
 
+import json
+import os
 import subprocess
 import sys
+from pathlib import Path
 
 import anndata as ad
 import h5py
@@ -31,6 +34,31 @@ def test_escape_round_trip_and_one_key(name):
     assert "/" not in key and key not in ("", ".")
     if not h5_names.needs_escape(name):
         assert key == name
+
+
+# The converter's R copy of the escape (converter/convert.R ``h5_escape`` / ``h5_unescape``)
+# is tested against this list (converter/tests/export_fixtures.R reads the file).
+R_FIXTURE = Path(__file__).resolve().parents[2] / "converter" / "tests" / "fixtures" / "h5_names.json"
+R_NAMES = ODD + ["T", "plain name", "pct_counts_mt", "a.b", "a\\b", "CD4/CD8", "T%252fNK", "%2f%2f", "%25/",
+                 "%/2f", "/25", "a%00", "%2e.", "..%2e", "%%2f", "%2", "25%2f", "nCount_RNA", "percent.mt"]
+
+
+def r_fixture() -> dict:
+    return {"about": "name, key stored in the h5ad: backend/src/scview/core/h5_names.py escape(); "
+                     "written by backend/tests/test_h5_names.py (SCVIEW_WRITE_FIXTURES=1), read by "
+                     "converter/tests/export_fixtures.R",
+            "pairs": [[n, h5_names.escape(n)] for n in R_NAMES]}
+
+
+@pytest.mark.skipif(not R_FIXTURE.parent.is_dir(), reason="the converter folder is not beside the backend")
+def test_the_converter_fixture_is_what_escape_gives():
+    """The R side decodes with its own small function: both are held to one list, so a
+    change of the rule here fails until the list (and with it the R tests) follow."""
+    if os.environ.get("SCVIEW_WRITE_FIXTURES"):
+        R_FIXTURE.write_text(json.dumps(r_fixture(), indent=1, ensure_ascii=False) + "\n")
+    assert json.loads(R_FIXTURE.read_text()) == r_fixture()
+    for name, key in r_fixture()["pairs"]:
+        assert h5_names.unescape(key) == name
 
 
 def test_escape_is_one_to_one():

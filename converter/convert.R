@@ -722,13 +722,37 @@ plain_columns <- function(df, n, what, unit = "cell", keep_slash = FALSE) {
 }
 
 #' Column names anndata can store: it reserves _index and nests a name at "/" (made
-#' "_" unless `keep_slash`); an empty or repeated name is not a column name.
+#' "_" unless `keep_slash`); an empty or repeated name is not a column name. A "/"
+#' that stays is stored escaped (`h5_escape`), as scView stores it.
 column_keys <- function(keys, keep_slash = FALSE) {
   if (length(keys) == 0) return(character(0))
   keys[is.na(keys) | !nzchar(keys)] <- paste0("column_", which(is.na(keys) | !nzchar(keys)))
   keys[keys == "_index"] <- "_index_"
   if (!keep_slash) keys <- gsub("/", "_", keys, fixed = TRUE)
-  make.unique(keys, sep = "_")
+  h5_escape(make.unique(keys, sep = "_"))
+}
+
+#' The key a name is stored under in an h5ad, as scView's backend writes it
+#' (backend/src/scview/core/h5_names.py `escape`; the two are tested against one list,
+#' tests/fixtures/h5_names.json): HDF5 reads "/" as a path, so "CD4/CD8" is stored
+#' "CD4%2fCD8", a "%" that would read as an escape "%25", "." "%2e". Before this a
+#' meta.data column "a/b" beside a column "a" failed the conversion.
+h5_escape <- function(names) {
+  out <- gsub("%(?=25|2f|2e|00)", "%25", names, perl = TRUE)
+  out <- gsub("/", "%2f", out, fixed = TRUE)
+  out[!is.na(names) & names == "."] <- "%2e"
+  out[!is.na(names) & names == ""] <- "%00"
+  out
+}
+
+#' The name a stored key stands for (`h5_escape` undone; h5_names.py `unescape`): what
+#' export_rds.R gives the columns of a staging file, so a name reaches R as typed.
+h5_unescape <- function(keys) {
+  out <- gsub("%2f", "/", keys, fixed = TRUE)
+  out <- gsub("%25(?=25|2f|2e|00)", "%", out, perl = TRUE)
+  out[!is.na(keys) & keys == "%2e"] <- "."
+  out[!is.na(keys) & keys == "%00"] <- ""
+  out
 }
 
 #' One column as list(cols = named list of plain vectors, note = what was changed,

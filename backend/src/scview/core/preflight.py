@@ -110,6 +110,16 @@ _STR_BYTES = 64
 # ---------------------------------------------------------------------------
 
 
+def shown_name(where: str) -> str:
+    """A matrix or obsm name as the user typed it: a header read from a file has the stored
+    key, which holds a "/" escaped (core/h5_names.py: "layers/norm%2falt" is the layer
+    "norm/alt"). ``where`` itself stays the stored path (it addresses the file)."""
+    from scview.core import h5_names
+
+    head, sep, name = where.partition("/")
+    return f"{head}/{h5_names.unescape(name)}" if sep and head == "layers" else h5_names.unescape(where)
+
+
 @dataclass
 class Matrix:
     """One cells x genes matrix (X, a layer, .raw) as it will sit in memory."""
@@ -139,6 +149,7 @@ class Matrix:
 
     def to_dict(self) -> dict:
         d = asdict(self)
+        d["where"] = shown_name(self.where)
         d["bytes"] = self.nbytes
         return d
 
@@ -260,6 +271,8 @@ def _n_columns(node) -> int:
 def _read_h5ad(path: Path) -> Header:
     import h5py
 
+    from scview.core import h5_names
+
     h = Header("h5ad")
     with h5py.File(path, "r") as f:
         obs = f.get("obs")
@@ -299,8 +312,9 @@ def _read_h5ad(path: Path) -> Header:
             # on the first rows of each dense one (paul15: 2 ms).
             for mm in h.matrices:
                 mm.nonzero = _h5_head_nonzero(raw_x if mm.where == "raw/X" else f[mm.where], mm.n_cells)
-        for key in f.get("obsm", {}):
-            node = f["obsm"][key]
+        for stored in f.get("obsm", {}):
+            node = f["obsm"][stored]
+            key = h5_names.unescape(stored)  # as typed: "X_umap%2falt" is the layout "X_umap/alt"
             if isinstance(node, h5py.Dataset):
                 h.obsm[key] = [int(x) for x in node.shape]
             else:  # a DataFrame (protein counts) or a sparse matrix
