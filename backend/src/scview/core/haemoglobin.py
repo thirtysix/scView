@@ -111,7 +111,7 @@ def erythroid_markers(adata, column: str) -> dict[str, list[str]] | None:
     return {g: [x for x in genes if x.upper() in wanted] for g, genes in top.items()}
 
 
-def lineage_detected(adata, labels, groups) -> dict[str, float] | None:
+def lineage_detected(adata, labels, groups, gene_columns=None) -> dict[str, float] | None:
     """Per group: the share of its cells that detect at least ``MIN_ERYTHROID_MARKERS``
     red-cell genes besides haemoglobin (``ERYTHROID_GENES``), in the counts (or .raw, or
     X). None when the dataset is backed (a column read would read the whole file) or has
@@ -120,17 +120,23 @@ def lineage_detected(adata, labels, groups) -> dict[str, float] | None:
     Markers compare a cluster with the others, so when EVERY cluster is red-cell lineage
     (Pijuan-Sala's erythroid cells: blood progenitors to Erythroid3) no cluster has
     red-cell markers, and their own haemoglobin read as ambient RNA in all of them. Ambient
-    RNA carries haemoglobin above all, and hardly any of these genes."""
-    if getattr(adata, "isbacked", False):
-        return None
-    from scview.core.anndata_adaptor import _counts_matrix
+    RNA carries haemoglobin above all, and hardly any of these genes.
 
-    M, names = _counts_matrix(adata)
+    ``gene_columns``: genes -> their cells x genes block, when ``adata`` holds no matrix (a
+    large-dataset run reads them from its gene store of X: a value above 0 is a count above 0)."""
+    if gene_columns is None and getattr(adata, "isbacked", False):
+        return None
+    if gene_columns is not None:
+        M, names = None, adata.var_names
+    else:
+        from scview.core.anndata_adaptor import _counts_matrix
+
+        M, names = _counts_matrix(adata)
     genes = match_genes(ERYTHROID_GENES, names, ERYTHROID_ALIASES)
     if len(genes) < MIN_ERYTHROID_MARKERS:
         return None
     cols = pd.Index(names).get_indexer(genes)
-    sub = M[:, cols]
+    sub = gene_columns(genes) if gene_columns is not None else M[:, cols]
     hits = np.asarray((sub > 0).sum(axis=1)).ravel() if hasattr(sub, "toarray") \
         else (np.asarray(sub) > 0).sum(axis=1)
     has = hits >= MIN_ERYTHROID_MARKERS

@@ -168,12 +168,15 @@ def drop(adata, target: str) -> None:
     adata.uns.pop(record_key(target), None)
 
 
-def apply(adata, groupby: str, target: str) -> dict[str, Any]:
+def apply(adata, groupby: str, target: str, matrix=None, on_failure=None) -> dict[str, Any]:
     """Write ``<target>_qualified`` and its record for the clusters of ``groupby``.
 
     Returns what the step records ({} when nothing was qualified). Any earlier
     qualifier column of ``target`` is dropped first: its comparisons named other
-    labels. Best effort: a failure is logged and leaves no column."""
+    labels. Best effort: a failure is logged, leaves no column and is handed to
+    ``on_failure`` (the annotation step says so in its result). ``matrix``: (the matrix
+    the markers were ranked on, its gene names) when ``adata`` holds none (a large-dataset
+    run: its X on disk, read by blocks)."""
     drop(adata, target)
     try:
         labels = cluster_labels(adata, groupby, target)
@@ -189,7 +192,7 @@ def apply(adata, groupby: str, target: str) -> dict[str, Any]:
         rgg = adata.uns.get(key) if key else None
         if rgg is None:
             return {}
-        X, var_names = _ranked_matrix(adata, rgg)
+        X, var_names = matrix if matrix is not None else _ranked_matrix(adata, rgg)
         groups = list(labels)
         codes = pd.Categorical(adata.obs[groupby].astype(str).to_numpy(), categories=groups).codes.astype(np.int64)
         sums, detected = _group_sums(X, codes, len(groups))
@@ -197,6 +200,8 @@ def apply(adata, groupby: str, target: str) -> dict[str, Any]:
         found = qualifiers(sums, detected, sizes, np.asarray(var_names).astype(str), groups, todo)
     except Exception as exc:  # never fail the annotation for a qualifier
         logger.warning("Label qualifiers for '%s' failed: %s", target, exc)
+        if on_failure is not None:
+            on_failure(exc)
         return {}
     shown = {g: qualified_label(labels[g], found.get(g)) for g in labels}
     n_q = sum(bool(text(e)) for e in found.values())

@@ -165,16 +165,51 @@ export async function streamEvents(
   if (!complete) throw new Error(`${what} stopped before it finished.`);
 }
 
-/** Save one resolution's clusters as its scview_<method>_r<res> column (once). */
-export function keepResolution(
+export interface KeepResult {
+  column: string;
+  created: boolean;
+  n_clusters: number;
+  /** The sweep's own labels were saved: nothing was clustered again */
+  reused?: boolean;
+}
+
+/** First event of a keep: whether the resolution has to be clustered again before it is saved. */
+export interface KeepStart {
+  resolution: number;
+  method: string;
+  /** The column is there already */
+  exists: boolean;
+  /** The sweep's labels are still held (or the column exists): no clustering, a short save */
+  reused: boolean;
+  n_cells: number;
+}
+
+/**
+ * Save one resolution's clusters as its scview_<method>_r<res> column (once). Streamed:
+ * when the sweep's labels are no longer held the resolution is clustered again (minutes
+ * on a large dataset), and `onStart` says so before the wait.
+ */
+export async function keepResolution(
   datasetId: string,
   resolution: number,
   method?: string,
-): Promise<{ column: string; created: boolean; n_clusters: number }> {
-  return apiFetch(`/datasets/${datasetId}/clustering/keep`, {
-    method: "POST",
-    body: JSON.stringify({ resolution, method }),
-  });
+  onStart?: (s: KeepStart) => void,
+): Promise<KeepResult> {
+  let result: KeepResult | null = null;
+  await streamEvents(
+    `/datasets/${datasetId}/clustering/keep-stream`,
+    { resolution, method },
+    (event, data) => {
+      if (event === "start") onStart?.(data as KeepStart);
+    },
+    "Keeping the resolution",
+    undefined,
+    (data) => {
+      result = data as KeepResult;
+    },
+  );
+  if (!result) throw new Error("Keeping the resolution stopped before it finished.");
+  return result;
 }
 
 export interface SubclusterResult {

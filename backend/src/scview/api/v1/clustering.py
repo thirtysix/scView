@@ -3,7 +3,8 @@ variable-gene sensitivity check (``core/hvg_sensitivity.py``).
 
 ``GET /clustering/sweep`` says whether a sweep can run and with what defaults;
 ``POST /clustering/sweep`` streams one SSE ``result`` per resolution, then the
-clustering tree across them, without changing the dataset;``POST /clustering/keep`` saves one resolution's labels.
+clustering tree across them, without changing the dataset;``POST /clustering/keep`` saves one resolution's labels
+(the sweep's own while it holds them; ``/clustering/keep-stream`` is the same as a stream, for the UI).
 ``/clustering/hvg-sensitivity`` (GET, POST, POST ``/keep``) does the same for
 re-clustering under other variable-gene settings. ``GET /clustering/distances``
 gives the distances between a column's groups in the graph's PC space
@@ -219,6 +220,47 @@ async def keep_resolution(
             # The cached dataset is the edited one and now matches the file.
             dm.saved_in_place(dataset_id, adaptor, output_path)
         return result
+
+
+@router.post("/datasets/{dataset_id}/clustering/keep-stream")
+async def keep_resolution_stream(
+    dataset_id: str,
+    body: KeepRequest,
+    dm: DatasetManager = Depends(get_dataset_manager),
+):
+    """``/clustering/keep`` as a stream, for the UI: keeping a resolution whose labels the
+    sweep no longer holds (the server restarted, the graph was remade, or no sweep ran)
+    clusters it again, minutes on a large dataset, and a response silent that long is cut
+    by the proxy. Events: ``start`` (``reused``: the sweep's labels are used, nothing is
+    clustered; ``exists``: the column is there already), then ``complete`` (the plain
+    route's reply) or ``error``; keep-alive comments in between."""
+    adaptor = await _adata(dm, dataset_id)
+    adata = adaptor.adata
+    method = _method(adata, body.method)
+    try:
+        resolution = rs.clean_resolutions([body.resolution])[0]
+    except rs.SweepError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    async def events():
+        try:
+            exists = rs.existing_column(adata, method, resolution) is not None
+            reused = exists or await asyncio.to_thread(rs.swept, adata, method, resolution) is not None
+            yield _sse("start", {"resolution": resolution, "method": method, "exists": exists,
+                                 "reused": bool(reused), "n_cells": int(adata.n_obs)})
+            result = await keep_resolution(dataset_id, KeepRequest(resolution=resolution, method=method), dm)
+            yield _sse("complete", result)
+        except HTTPException as exc:
+            yield _sse("error", {"error": str(exc.detail)})
+        except Exception as exc:  # noqa: BLE001 - surface to the client, keep the server up
+            logger.error("Keeping resolution %s failed for %s: %s", resolution, dataset_id, exc, exc_info=True)
+            yield _sse("error", {"error": f"Could not save the clustering: {exc!s}"})
+
+    return StreamingResponse(
+        keepalive(events()),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/datasets/{dataset_id}/clustering/subcluster")

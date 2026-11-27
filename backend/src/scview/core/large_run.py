@@ -1413,12 +1413,37 @@ def _n_groups(light: ad.AnnData) -> int | None:
     return None
 
 
+def _whole(block):
+    return block
+
+
+class _Blocks:
+    """A run's matrix (dask, one chunk per row block) as the readers that take a matrix by
+    row blocks expect it (``anndata_adaptor._row_sums``, ``marker_specificity._group_sums``):
+    ``row_blocks`` yields (first row, block) in order, a few blocks in memory at a time."""
+
+    def __init__(self, X) -> None:
+        self.X = X
+        self.shape = X.shape
+        self.dtype = X.dtype
+
+    def row_blocks(self):
+        start = 0
+        for block in chunked._each_block(self.X, _whole):
+            yield start, block
+            start += block.shape[0]
+
+    def __getitem__(self, key):  # the first rows, to judge the values
+        return self.X[key].compute()
+
+
 class _Backend:
     """What ``pipeline.large_backend`` asks for: the matrix reads of the steps that run
     the pipeline's own functions on the matrix-free copy."""
 
     def __init__(self, run: LargeRun) -> None:
         self.run = run
+        self._qc_cells: dict | None = None
 
     def rank_genes_groups(self, adata, groupby: str, key_added: str | None = None,
                           groups: Any = "all") -> None:
@@ -1444,6 +1469,37 @@ class _Backend:
         run._label = "Cell cycle scores"
         large_scores.score_genes_cell_cycle(adata, run.lognorm(), means, s_genes=s_genes,
                                             g2m_genes=g2m_genes, dense=run.dense)
+
+    def qc_cells(self, adata) -> dict:
+        """Per-cell QC for cluster QC (``anndata_adaptor.per_cell_qc`` with the ribosomal,
+        haemoglobin and MALAT1 shares, as in memory): the core metrics from obs, the shares
+        from the counts on disk in one pass by blocks. Kept for the step: the annotator asks twice."""
+        from scview.core.anndata_adaptor import per_cell_qc
+
+        if self._qc_cells is None:
+            run = self.run
+            run.write_matrices()
+            try:
+                counts, _ = run.find_counts()
+            except ValueError:  # no counts kept: what obs holds (no shares, as the viewer has it)
+                try:
+                    self._qc_cells = per_cell_qc(adata, ribo=False, counts=(None, adata.var_names))
+                except (AttributeError, TypeError) as e:
+                    raise ValueError("the dataset keeps no counts and its cell table has no QC metrics: "
+                                     "run the QC metrics step first") from e
+            else:
+                run._label = "Cluster QC"
+                self._qc_cells = per_cell_qc(adata, ribo=True, counts=(_Blocks(counts.X), adata.var_names))
+        return self._qc_cells
+
+    def gene_columns(self, genes):
+        """A few genes of X (log-normalised) as a cells x genes block, from the gene store."""
+        return self.run.store().genes(list(genes))
+
+    def ranked_matrix(self, adata):
+        """(X log-normalised on disk as row blocks, its gene names): the matrix this run's
+        markers are ranked on, for the per-group sums of the label qualifiers."""
+        return _Blocks(self.run.lognorm()), adata.var_names
 
     def celltypist(self, adata, model, groupby: str):
         run = self.run

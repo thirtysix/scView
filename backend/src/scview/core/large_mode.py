@@ -676,17 +676,147 @@ def _open_for_write(path: str | Path, tries: int = 20, wait: float = 0.25) -> tu
 
 
 def _replace(group: h5py.Group, key: str, value: Any) -> None:
-    """``group[key] = value`` as anndata writes it: written under a temporary name and
-    swapped in, so a failure leaves the old entry."""
+    """``group[key] = value`` as anndata writes it. The old entry is deleted FIRST: within
+    one open of the file HDF5 hands a deleted entry's space to what is written next, so the
+    new entry goes where the old one was (written after it, each replaced entry stayed in
+    the file for good). The journal keeps the write all or nothing either way."""
     from anndata.io import write_elem
 
-    tmp = f"{key}.__scview_new"
-    if tmp in group:
-        del group[tmp]
-    write_elem(group, tmp, value)
     if key in group:
         del group[key]
-    group.move(tmp, key)
+    write_elem(group, key, value)
+
+
+def _same_column(old, new) -> bool:
+    """Whether a stored obs column equals the one in memory, category order included."""
+    import pandas as pd
+
+    old_cat, new_cat = isinstance(old.dtype, pd.CategoricalDtype), isinstance(new.dtype, pd.CategoricalDtype)
+    if old_cat or new_cat:
+        return bool(old_cat and new_cat and old.cat.ordered == new.cat.ordered
+                    and len(old.cat.categories) == len(new.cat.categories)
+                    and old.cat.categories.equals(new.cat.categories)
+                    and np.array_equal(old.cat.codes.to_numpy(), new.cat.codes.to_numpy()))
+    return old.dtype == new.dtype and bool(old.equals(new))
+
+
+def _write_table(f: h5py.File, key: str, frame) -> None:
+    """``f[key]`` (obs or var) brought to ``frame``: only the columns that differ from the
+    stored ones are written (deleted first, ``_replace``), the cell names and every other
+    column stay where they are. A label edit changes one column; writing the whole table
+    for it left the old table in the file each time (8 MB per edit at 116k cells), and the
+    cell names' space is never handed back even within one open of the file. A table not
+    stored as anndata's current dataframe, or with other row names, is replaced whole."""
+    from anndata.io import read_elem, write_elem
+
+    group = f.get(key)
+    index_key = frame.index.name if frame.index.name is not None else "_index"
+    names = [str(c) for c in frame.columns]
+    plain = (isinstance(group, h5py.Group) and group.attrs.get("encoding-type") == "dataframe"
+             and group.attrs.get("encoding-version") == "0.2.0" and group.attrs.get("_index") == index_key
+             and frame.columns.is_unique and "_index" not in names and index_key not in names)
+    stored = None
+    if plain:
+        try:
+            stored = read_elem(group)
+        except Exception:  # noqa: BLE001 - a table anndata cannot read back is written whole
+            stored = None
+    if stored is None or not names or not stored.index.equals(frame.index):
+        _replace(f, key, frame)
+        return
+    for name in [c for c in stored.columns if c not in frame.columns]:
+        del group[name]
+    for name, column in frame.items():
+        if name in stored.columns and _same_column(stored[name], column):
+            continue
+        if name in group:
+            del group[name]
+        write_elem(group, str(name), column._values)
+    if [str(c) for c in stored.columns] != names:
+        group.attrs["column-order"] = names
+
+
+# ---------------------------------------------------------------------------
+# Compaction: the space in-place edits leave behind
+#
+# Deleting first and writing only what changed keeps most edits the size of the file, but
+# not all: HDF5 never hands back the space of text (cell names, gene names in a marker
+# table) and forgets every hole when the file is closed. So the file still creeps up, by a
+# marker table's gene names per rename. Once it has grown by ``compaction_threshold`` since
+# it was last whole, the edit that crossed it copies the file without the holes
+# (``h5_copy.compact_copy``: stored chunks as they are, about 1 GB/s) and swaps the copy in.
+# A kill during the copy leaves the dataset's own file untouched and a ``.part`` file that
+# the next compaction or ``stray_sidecars`` removes.
+COMPACT_SIZE_ATTR = "scview_compact_size"  # root attribute: the file's size when it last had no holes
+COMPACT_SHARE = 0.2
+COMPACT_MIN_BYTES = 64 * MiB
+COMPACT_MAX_BYTES = 2048 * MiB
+
+
+def compaction_threshold(base: int) -> int:
+    """Growth past ``base`` (the size without holes) at which the file is compacted: a
+    fifth of the file, at least 64 MB (a copy is not worth less), at most 2 GB."""
+    return int(min(max(COMPACT_SHARE * base, COMPACT_MIN_BYTES), COMPACT_MAX_BYTES))
+
+
+def reclaimable(path: str | Path) -> int:
+    """Bytes the h5ad has grown by since it was last whole (an upper bound on its holes);
+    0 for a file no in-place edit has stamped yet."""
+    try:
+        with h5py.File(path, "r") as f:
+            base = f.attrs.get(COMPACT_SIZE_ATTR)
+    except (OSError, ValueError):
+        return 0
+    return 0 if base is None else max(0, os.path.getsize(path) - int(base))
+
+
+def _compact_partial(path: Path) -> Path:
+    return path.with_name(f".{path.name}.compact.part")
+
+
+def compact(path: str | Path, *, force: bool = False) -> dict | None:
+    """Copy the h5ad without its holes and swap the copy in, when it has grown past
+    ``compaction_threshold`` (or ``force``). The caller holds the dataset's file lock with
+    the backing file closed (``write_in_place``). Returns what it did, or None when nothing
+    was due. With too little free disk for the copy it does nothing and says so."""
+    from scview.core import h5_copy
+
+    path = Path(path)
+    size = path.stat().st_size
+    with h5py.File(path, "r") as f:
+        base = f.attrs.get(COMPACT_SIZE_ATTR)
+        strategy, persist, _ = f.id.get_create_plist().get_file_space_strategy()
+    base = size if base is None else int(base)
+    if not force and size - base < compaction_threshold(base):
+        return None
+    # A run makes the h5ad with its free-space manager kept in the file (large_run.H5AD_CREATE),
+    # so a later edit finds the holes an earlier one left: the copy must be made the same way.
+    create = {"fs_strategy": "fsm", "fs_persist": True} if (
+        persist and strategy == h5py.h5f.FSPACE_STRATEGY_FSM_AGGR) else None
+    partial = _compact_partial(path)
+    partial.unlink(missing_ok=True)  # a copy a crash left unfinished
+    free = shutil.disk_usage(path.parent).free
+    if free < size:  # the copy is at most the file's size
+        logger.warning("Not compacting %s (%.0f MB, about %.0f MB of it holes): %.0f MB of disk free, "
+                       "the copy needs up to %.0f MB", path, size / MiB, (size - base) / MiB, free / MiB, size / MiB)
+        return {"compacted": False, "reason": "disk", "size": size, "free": free}
+    start = time.monotonic()
+    try:
+        h5_copy.compact_copy(path, partial, create=create)
+        _hook("compacting")
+        with h5py.File(partial, "r+") as f:
+            f.attrs[COMPACT_SIZE_ATTR] = np.int64(partial.stat().st_size)
+        with open(partial, "rb") as fh:
+            os.fsync(fh.fileno())
+        partial.chmod(path.stat().st_mode & 0o777)
+        os.replace(partial, path)
+        _fsync_dir(path)
+    finally:
+        partial.unlink(missing_ok=True)
+    after = path.stat().st_size
+    took = time.monotonic() - start
+    logger.info("Compacted %s: %.0f -> %.0f MB in %.1f s", path, size / MiB, after / MiB, took)
+    return {"compacted": True, "before": size, "after": after, "seconds": took}
 
 
 def write_in_place(adata, path: str | Path, lock: threading.RLock, *, obs: bool = True,
@@ -697,8 +827,9 @@ def write_in_place(adata, path: str | Path, lock: threading.RLock, *, obs: bool 
     backing file is closed (HDF5 opens a file for writing only once nothing in the
     process reads it), written, and opened again; reads of X wait meanwhile.
 
-    HDF5 does not give the space of a replaced entry back, so the file grows by the
-    size of obs at each edit (an export writes a compact copy)."""
+    Only the obs columns that changed are written (``_write_table``), each entry where
+    the one it replaces was (``_replace``); what still accumulates is copied away once it
+    passes ``compaction_threshold`` (``compact``), here, before the file is opened again."""
     fm = adata.file
     with lock:
         fm.close()
@@ -709,9 +840,11 @@ def write_in_place(adata, path: str | Path, lock: threading.RLock, *, obs: bool 
                     frame = adata.obs
                     if frame.index.name is not None and frame.index.name in frame.columns:
                         frame.index.name = None
-                    _replace(f, "obs", frame)
+                    _write_table(f, "obs", frame)
                 if var:
-                    _replace(f, "var", adata.var)
+                    _write_table(f, "var", adata.var)
+                if COMPACT_SIZE_ATTR not in f.attrs:  # first edit: the file as a run wrote it
+                    f.attrs[COMPACT_SIZE_ATTR] = np.int64(raw.orig)
                 if "uns" not in f:
                     from anndata.io import write_elem
 
@@ -752,6 +885,10 @@ def write_in_place(adata, path: str | Path, lock: threading.RLock, *, obs: bool 
                 if f.id.valid:
                     f.close()
                 raw.close()  # rolls back a write that did not commit
+            try:
+                compact(path)
+            except Exception:  # noqa: BLE001 - the edit is saved; the file is only larger than it need be
+                logger.warning("Could not compact %s", path, exc_info=True)
         finally:
             fm.open()
 

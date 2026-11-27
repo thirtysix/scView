@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 import scanpy as sc
 
-from scview.core import provenance
+from scview.core import leiden, provenance
 from scview.core import resolution_sweep as rs
 from scview.core.pipeline import PipelineParams, _run_clustering
 
@@ -120,7 +120,7 @@ def test_keep_saves_the_column_once_without_changing_the_active_clustering():
     a = _adata()
     a.uns["scview_active_clustering"] = "leiden"
     res = rs.keep(a, "leiden", 0.6)
-    assert res == {"column": "scview_leiden_r0.6", "created": True,
+    assert res == {"column": "scview_leiden_r0.6", "created": True, "reused": False,
                    "n_clusters": a.obs["scview_leiden_r0.6"].nunique()}
     assert a.uns["scview_active_clustering"] == "leiden"
     step = provenance.read_provenance(a)["history"][-1]
@@ -128,6 +128,62 @@ def test_keep_saves_the_column_once_without_changing_the_active_clustering():
     assert step["params"]["clustering_resolution"] == 0.6
     assert rs.keep(a, "leiden", 0.6)["created"] is False
     assert len(provenance.read_provenance(a)["history"]) == 1
+
+
+@pytest.fixture(autouse=True)
+def no_swept():
+    """Each test starts with no sweep's labels held."""
+    rs._swept.clear()
+    yield
+    rs._swept.clear()
+
+
+@pytest.mark.parametrize("method", ["leiden", "louvain"])
+def test_keep_after_a_sweep_reuses_its_labels_and_they_are_the_clustering_s(method, monkeypatch, no_swept):
+    a = _adata()
+    expected = {r: rs.cluster(a, method, r) for r in (0.4, 1.0)}
+    rs.sweep(a, [0.4, 1.0], method)
+    calls = []
+    real = rs.cluster
+    monkeypatch.setattr(rs, "cluster", lambda *args, **kw: calls.append(args[2]) or real(*args, **kw))
+    res = rs.keep(a, method, 1.0)
+    assert calls == []  # not clustered again (116k cells: 400 s on a plain POST)
+    assert res["created"] is True and res["reused"] is True
+    col = a.obs[rs.column_name(method, 1.0)]
+    assert list(col) == list(expected[1.0]) and list(col.cat.categories) == list(expected[1.0].categories)
+    assert res["n_clusters"] == len(expected[1.0].categories)
+    # a resolution the sweep did not make is clustered here, and gives the pipeline's labels too
+    res = rs.keep(a, method, 0.7)
+    assert calls == [0.7] and res["reused"] is False
+    # a sweep run again shows the labels it holds without clustering them again
+    calls.clear()
+    rs.sweep(a, [0.4], method)
+    assert calls == []
+
+
+def test_swept_labels_are_not_used_once_the_graph_or_the_passes_changed(monkeypatch, no_swept):
+    a = _adata()
+    rs.sweep(a, [1.0], "leiden")
+    assert rs.swept(a, "leiden", 1.0) is not None
+    b = a.copy()  # the same graph in another object (the dataset reloaded): still the sweep's
+    assert rs.swept(b, "leiden", 1.0) is not None
+    assert rs.swept(a, "leiden", 1.0, n_iterations=2 if leiden.recorded_iterations(a) != 2 else -1) is None
+    assert rs.swept(a, "louvain", 1.0) is None and rs.swept(a, "leiden", 0.9) is None
+    g = a.obsp["connectivities"].copy()
+    g.data[0] *= 0.5  # the neighbours step ran again
+    a.obsp["connectivities"] = g
+    assert rs.swept(a, "leiden", 1.0) is None
+    calls = []
+    real = rs.cluster
+    monkeypatch.setattr(rs, "cluster", lambda *args, **kw: calls.append(args[2]) or real(*args, **kw))
+    assert rs.keep(a, "leiden", 1.0)["reused"] is False and calls == [1.0]
+
+
+def test_only_the_last_sweeps_labels_are_held(no_swept, monkeypatch):
+    monkeypatch.setattr(rs, "SWEPT_KEPT", 2)
+    a = _adata()
+    rs.sweep(a, [0.3, 0.5, 0.9], "leiden")
+    assert len(rs._swept) == 2 and rs.swept(a, "leiden", 0.3) is None and rs.swept(a, "leiden", 0.9) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -227,3 +283,39 @@ def test_a_resolution_with_a_column_is_shown_as_that_column():
     rows = list(rs.iter_sweep(a, [0.5], "leiden"))[1:]
     assert rows[0]["exists"] and rows[0]["n_clusters"] == 3
     assert rs.keep(a, "leiden", 0.5)["n_clusters"] == rows[0]["n_clusters"]
+
+
+async def test_keep_stream_says_whether_it_clusters_and_ends_with_the_plain_reply(client, dataset_manager,
+                                                                                 monkeypatch, no_swept):
+    did = _register(dataset_manager, _adata())
+    r = await client.post(f"{API}/datasets/{did}/clustering/sweep", json={"resolutions": [0.8]})
+    assert r.status_code == 200
+    calls = []
+    real = rs.cluster
+    monkeypatch.setattr(rs, "cluster", lambda *args, **kw: calls.append(args[2]) or real(*args, **kw))
+    r = await client.post(f"{API}/datasets/{did}/clustering/keep-stream", json={"resolution": 0.8})
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/event-stream")
+    events = _events(r.text)
+    assert [e for e, _ in events] == ["start", "complete"]
+    assert events[0][1] == {"resolution": 0.8, "method": "leiden", "exists": False, "reused": True, "n_cells": 400}
+    assert events[1][1]["column"] == "scview_leiden_r0.8" and events[1][1]["reused"] is True and calls == []
+    derived = ad.read_h5ad(Path(dataset_manager.data_dir) / "derived" / did / "data.h5ad")
+    assert "scview_leiden_r0.8" in derived.obs
+    # no sweep made 0.5: it is clustered, and the start event says so before the wait
+    r = await client.post(f"{API}/datasets/{did}/clustering/keep-stream", json={"resolution": 0.5})
+    events = _events(r.text)
+    assert events[0][1]["reused"] is False and events[1][1]["created"] is True and calls == [0.5]
+    # kept already: nothing to do
+    events = _events((await client.post(f"{API}/datasets/{did}/clustering/keep-stream", json={"resolution": 0.5})).text)
+    assert events[0][1]["exists"] is True and events[1][1]["created"] is False
+    r = await client.post(f"{API}/datasets/{did}/clustering/keep-stream", json={"resolution": 0.5, "method": "x"})
+    assert r.status_code == 400
+    r = await client.post(f"{API}/datasets/nope/clustering/keep-stream", json={"resolution": 0.5})
+    assert r.status_code == 404
+
+
+async def test_keep_stream_reports_a_failure_as_an_error_event(client, dataset_manager, no_swept):
+    did = _register(dataset_manager, _adata(graph=False))
+    r = await client.post(f"{API}/datasets/{did}/clustering/keep-stream", json={"resolution": 0.5})
+    events = _events(r.text)
+    assert events[-1][0] == "error" and "neighbour graph" in events[-1][1]["error"]
