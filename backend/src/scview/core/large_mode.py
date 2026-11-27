@@ -680,12 +680,14 @@ def _replace(group: h5py.Group, key: str, value: Any) -> None:
     swapped in, so a failure leaves the old entry."""
     from anndata.io import write_elem
 
+    from scview.core import h5_names
+
+    name, key = key, h5_names.stored(key)  # a name holding "/" is one key (h5_names)
     tmp = f"{key}.__scview_new"
     if tmp in group:
         del group[tmp]
     write_elem(group, tmp, value)
-    if key in group:
-        del group[key]
+    h5_names.drop(group, name)
     group.move(tmp, key)
 
 
@@ -717,14 +719,16 @@ def write_in_place(adata, path: str | Path, lock: threading.RLock, *, obs: bool 
 
                     write_elem(f, "uns", {})
                 group = f["uns"]
+                from scview.core import h5_names
+
                 for key in uns_removed:
-                    if key in group and key not in adata.uns:
-                        del group[key]
+                    if key not in adata.uns:
+                        h5_names.drop(group, key)
                 for key in uns_keys:
                     if key in adata.uns:
                         _replace(group, key, adata.uns[key])
-                    elif key in group:
-                        del group[key]
+                    else:
+                        h5_names.drop(group, key)
                 keys = list(obsm_keys)
                 if keys and "obsm" not in f:
                     from anndata.io import write_elem
@@ -733,8 +737,8 @@ def write_in_place(adata, path: str | Path, lock: threading.RLock, *, obs: bool 
                 for key in keys:
                     if key in adata.obsm:
                         _replace(f["obsm"], key, adata.obsm[key])
-                    elif key in f["obsm"]:
-                        del f["obsm"][key]
+                    else:
+                        h5_names.drop(f["obsm"], key)
                 graphs = list(obsp_keys)
                 if graphs and "obsp" not in f:
                     from anndata.io import write_elem
@@ -743,8 +747,8 @@ def write_in_place(adata, path: str | Path, lock: threading.RLock, *, obs: bool 
                 for key in graphs:
                     if key in adata.obsp:
                         _replace(f["obsp"], key, adata.obsp[key])
-                    elif key in f["obsp"]:
-                        del f["obsp"][key]
+                    else:
+                        h5_names.drop(f["obsp"], key)
                 _hook("writing")
                 f.close()  # HDF5 writes out what it held: into the journaled file
                 raw.commit()

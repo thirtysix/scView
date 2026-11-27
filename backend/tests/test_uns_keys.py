@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 import scanpy as sc
 
+from scview.core import h5_names
 from scview.core import uns_keys as k
 from scview.core.anndata_adaptor import AnnDataAdaptor
 from scview.core.ora_background import cache_is_current, meta_key, write_meta
@@ -87,7 +88,7 @@ def test_file_saved_with_raw_slash_keys_is_repaired_on_load(tmp_path):
     write_meta(a, "ct", "B", background_n=12, n_genes=5)  # an unaffected sidecar
     a.uns[f"ora_meta__ct__{TCM}"] = a.uns[meta_key("ct", "B")]
     path = tmp_path / "old.h5ad"
-    with warnings.catch_warnings():
+    with warnings.catch_warnings(), h5_names.plain():  # as written before names were escaped
         warnings.simplefilter("ignore", FutureWarning)
         a.write_h5ad(path)
     assert "enrichment__ct__Tcm" in ad.read_h5ad(path).uns, "the bug this repairs"

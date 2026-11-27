@@ -250,14 +250,14 @@ def write_derived(
         import h5py
         from anndata.io import write_elem
 
-        from scview.core import h5_copy
+        from scview.core import h5_copy, h5_names
 
         # Everything the edit did not touch is copied into a new file and the rest written
         # beside it: deleting from a file copy left each old obs in it (``compact_copy``).
         gone = [k for k in uns_before if k not in adata.uns]
         try:
             with h5py.File(source_path, "r") as f:
-                in_file = {g: set(f[g].keys()) if g in f else set() for g in ("uns", "obsm", "obsp")}
+                in_file = {g: set(h5_names.names(f[g])) if g in f else set() for g in ("uns", "obsm", "obsp")}
             fresh_uns = [k for k, v in adata.uns.items()
                          # From another file (source_unchanged), also what the dataset gained in
                          # memory since it was read (as a full write would save it).
@@ -266,8 +266,8 @@ def write_derived(
                 obsm_keys = [*(obsm_keys or ()), *(k for k in adata.obsm if k not in in_file["obsm"])]
             obsm_keys, obsp_keys = list(dict.fromkeys(obsm_keys or ())), list(dict.fromkeys(obsp_keys or ()))
             h5_copy.compact_copy(source_path, partial, [
-                "obs", *(["var"] if var else []), *(f"uns/{k}" for k in (*gone, *fresh_uns)),
-                *(f"obsm/{k}" for k in obsm_keys), *(f"obsp/{k}" for k in obsp_keys)])
+                "obs", *(["var"] if var else []), *(("uns", k) for k in (*gone, *fresh_uns)),
+                *(("obsm", k) for k in obsm_keys), *(("obsp", k) for k in obsp_keys)])
             with h5py.File(partial, "a") as f:
                 write_elem(f, "obs", adata.obs)
                 if var:
@@ -278,7 +278,7 @@ def write_derived(
                         write_elem(f, name, {})
                     for key in keys:
                         if key in held:
-                            write_elem(f[name], key, held[key])
+                            h5_names.write_elem(f[name], key, held[key])  # a key may hold "/"
         except Exception:
             if os.path.exists(partial):
                 os.remove(partial)
