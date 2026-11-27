@@ -66,6 +66,24 @@ def test_twenty_label_edits_do_not_grow_the_file(counts, tmp_path):
     adata.file.close()
 
 
+def test_an_embedding_written_again_takes_the_place_of_the_old_one(counts, tmp_path):
+    # obsm / obsp writes of the other large-mode steps (a kept layout, WNN, saved scores)
+    path = make_large(tmp_path / "ds", counts, gene_store_too=False)
+    adata = ad.read_h5ad(path, backed="r")
+    lock, rng = threading.RLock(), np.random.default_rng(4)
+    sizes = []
+    for _ in range(10):
+        adata.obsm["X_mine"] = rng.normal(size=(N, 10)).astype(np.float32)
+        large_mode.write_in_place(adata, path, lock, obs=False, obsm_keys=["X_mine"])
+        sizes.append(path.stat().st_size)
+    one = N * 10 * 4
+    assert sizes[-1] - sizes[0] < one // 2, sizes  # was 9 x 0.8 MB: each old array stayed in the file
+    back = ad.read_h5ad(path, backed="r")
+    assert np.array_equal(back.obsm["X_mine"], adata.obsm["X_mine"])
+    back.file.close()
+    adata.file.close()
+
+
 def test_only_the_changed_columns_are_written(counts, tmp_path):
     path = make_large(tmp_path / "ds", counts, gene_store_too=False)
     adata = ad.read_h5ad(path, backed="r")
