@@ -241,6 +241,24 @@ describe("PreflightIngestNotes", () => {
     expect(tip).not.toContain("read from the file's header");
   });
 
+  it("an R object converted already: its estimate is labelled as the converted file's", async () => {
+    api.getIngestPreflight.mockResolvedValue({
+      session_id: "s1",
+      units: [
+        { label: "A", format: "anndata", verdict: verdict("fits", { sentence: "A fits." }) },
+        {
+          label: "obj", format: "seurat", converted: true,
+          verdict: verdict("fits", { sentence: "2,000 cells x 3,000 genes: Loading takes 0.4 GB." }),
+        },
+      ],
+      merge: null,
+    });
+    render(<PreflightIngestNotes sessionId="s1" />);
+    await waitFor(() => expect(screen.getByText(/2,000 cells x 3,000 genes/)).toBeInTheDocument());
+    expect(screen.getByText("obj, converted:")).toBeInTheDocument();
+    expect(screen.queryByText(/once converted/)).toBeNull();
+  });
+
   it("one note per sample, labelled when there are several, plus the merge", async () => {
     api.getIngestPreflight.mockResolvedValue({
       session_id: "s1",

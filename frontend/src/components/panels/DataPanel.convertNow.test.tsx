@@ -23,7 +23,11 @@ vi.mock("@/api/datasets", () => ({
   listDatasets: vi.fn().mockResolvedValue([]),
 }));
 vi.mock("@/components/panels/DatasetLibrary", () => ({ DatasetLibrary: () => null }));
-vi.mock("@/components/common/PreflightNote", () => ({ PreflightIngestNotes: () => null }));
+vi.mock("@/components/common/PreflightNote", () => ({
+  PreflightIngestNotes: ({ refreshKey }: { refreshKey?: string }) => (
+    <div data-testid="ingest-estimate" data-key={refreshKey} />
+  ),
+}));
 
 import { DataPanel } from "./DataPanel";
 
@@ -90,6 +94,7 @@ describe("DataPanel: Convert now", () => {
     expect(getMergePlan).toHaveBeenCalledTimes(1);
     expect(screen.getByText(/the merge plan then includes it/)).toBeTruthy();
 
+    const keyBefore = screen.getByTestId("ingest-estimate").getAttribute("data-key");
     getMergePlan.mockResolvedValue(plan(["obj", "a"]));
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Convert now" })); });
     expect(convertIngestSession).toHaveBeenCalledWith("s");
@@ -100,6 +105,8 @@ describe("DataPanel: Convert now", () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
     expect(getMergePlan).toHaveBeenCalledTimes(2); // refetched once converted
     expect(screen.queryByTestId("convert-now")).toBeNull(); // nothing left to convert
+    // the memory estimate is fetched again: it now reads the converted file
+    expect(screen.getByTestId("ingest-estimate").getAttribute("data-key")).not.toBe(keyBefore);
     expect(screen.getByText("R object (.rds: Seurat, SingleCellExperiment), converted")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Create dataset" })).not.toBeDisabled();
   });

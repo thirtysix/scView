@@ -331,6 +331,39 @@ async def test_convert_now_puts_the_r_object_in_the_merge_plan(mgr, monkeypatch)
     assert len(seen) == 1
 
 
+async def test_preflight_reads_the_converted_file_once_it_is_there(mgr, dm, monkeypatch):
+    """Before "Convert now" the R object's load estimate comes from its stream (a guess
+    here: not an R file); after, from the header of the .h5ad the converter wrote."""
+    from scview.core import conversion_preflight, preflight
+
+    monkeypatch.setattr(conversion_preflight, "converter_memory",
+                        lambda url: conversion_preflight.ConverterMemory(None, None, False))
+    sid = _rds_session(mgr)
+    before = next(u for u in preflight.session_preflight(mgr, sid, dm)["units"]
+                  if u["format"] == "seurat")
+    assert before["header"]["guess"] and before["header"]["n_cells"] is None
+    assert "converter" in before and "converted" not in before
+    _fake_converter(monkeypatch, [], mgr, sid, n_obs=7)
+    mgr.start_conversion(sid)
+    await mgr._tasks[sid]
+    body = preflight.session_preflight(mgr, sid, dm)
+    after = next(u for u in body["units"] if u["format"] == "seurat")
+    assert after["label"] == before["label"] and after["converted"] is True
+    assert "converter" not in after
+    h = after["header"]
+    assert h["format"] == "h5ad" and not h["guess"]
+    assert (h["n_cells"], h["n_genes"]) == (7, 4)
+    assert after["verdict"]["sentence"].startswith("7 cells x 4 genes: Loading takes ")
+    assert after["load"]["peak_bytes"] != before["load"]["peak_bytes"]
+    # the merge counts the converted file too
+    assert body["merge"]["sentence"].startswith("Merging the 2 samples")
+    # a file staged again with other content is an R object not converted once more
+    (mgr.files_dir(sid) / "obj.rds").write_bytes(b"RDX3 another object, longer")
+    again = next(u for u in preflight.session_preflight(mgr, sid, dm)["units"]
+                 if u["format"] == "seurat")
+    assert again["header"]["guess"] and "converted" not in again
+
+
 async def test_commit_reuses_a_conversion(data_dir, dm, monkeypatch):
     from scview.core import provenance
 
