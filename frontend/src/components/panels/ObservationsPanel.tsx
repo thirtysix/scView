@@ -368,7 +368,7 @@ export function ObservationsPanel() {
         title: { text: percent ? "% of cells" : "Count", font: { size: 12, color: "#64748b" } },
         tickfont: { size: 11, color: "#64748b" },
         gridcolor: "#f1f5f9",
-        ...(percent ? { range: [0, 100] } : {}),
+        ...(percent ? { range: [0, 100] as [number, number] } : {}),
       },
       // A split axis takes two rows of labels plus its title, which a legend
       // under the plot would overlap: put it on the right instead.

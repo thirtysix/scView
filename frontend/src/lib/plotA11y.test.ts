@@ -5,7 +5,7 @@ import { plotAriaLabel, plotTable, TABLE_MAX_POINTS } from "./plotA11y";
 const layout: Partial<Layout> = {
   title: { text: "<b>Cells</b> per group" },
   xaxis: { title: { text: "Group" } },
-  yaxis: { title: "Cells" as unknown as Partial<Layout["yaxis"]["title"]> },
+  yaxis: { title: "Cells" as unknown as NonNullable<Layout["yaxis"]>["title"] },
 };
 
 describe("plotAriaLabel", () => {

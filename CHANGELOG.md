@@ -6,6 +6,17 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+### Security
+- Frontend dependencies with open advisories updated: jsPDF 3.0.4 to 4.2.1 and plotly.js 3.3.1 to 4.3.1 (which
+  brings maplibre-gl 6.20.0 and probe-image-size 7.5.0). `npm audit --omit=dev` now reports nothing. The
+  maplibre-gl and probe-image-size code was never part of scView's browser bundle.
+
+### Changed
+- The frontend builds on Node 22 (plotly.js 4 requires it); Dockerfile and CI moved from Node 20.
+- plotly.js is now a declared dependency; the unused plotly.js-dist-min is removed.
+- The annotation cross-check Sankey is laid out by plotly.js 4 (nodes fill the height, links in a different
+  order). Angled axis labels sit slightly closer to the axis. Other plots draw as before.
+
 ## [0.86.0] - 2026-11-27
 
 A dataset stored by columns can be stored by rows where a run needs it, every request keeps the dataset it reads

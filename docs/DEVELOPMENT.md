@@ -6,7 +6,7 @@
 
 - Docker Desktop (v20.10+) with Docker Compose v2
 - 8 GB+ RAM allocated to Docker
-- Optional: Python 3.11+ and Node.js 20+ for local development without Docker
+- Optional: Python 3.11+ and Node.js 22+ for local development without Docker
 
 ### Quick Start
 

@@ -40,7 +40,7 @@ export function histogramFigure(
   values: (number | null)[],
   note?: { low?: number; high?: number },
 ): { data: Data[]; layout: Partial<Layout> } {
-  const shapes: Partial<Layout["shapes"][number]>[] = [];
+  const shapes: Partial<NonNullable<Layout["shapes"]>[number]>[] = [];
   for (const x of [note?.low, note?.high]) {
     if (x !== undefined) {
       shapes.push({ type: "line", x0: x, x1: x, yref: "paper", y0: 0, y1: 1, line: { color: "#94a3b8", width: 1, dash: "dot" } });
@@ -216,7 +216,7 @@ export function coverageFigure(cov: Coverage, colorOf: ColorOf, links?: ArcsInVi
     },
   };
   const ymax = cov.ymax > 0 ? cov.ymax * 1.05 : 1;
-  const annotations: Partial<Layout["annotations"][number]>[] = [];
+  const annotations: Partial<NonNullable<Layout["annotations"]>[number]>[] = [];
   cov.tracks.forEach((t, i) => {
     const top = 1 - i * rowShare;
     layout[yKey(i)] = {
@@ -241,7 +241,7 @@ export function coverageFigure(cov: Coverage, colorOf: ColorOf, links?: ArcsInVi
     anchor: "x",
   };
   const row = yRef(n);
-  const shapes: Partial<Layout["shapes"][number]>[] = cov.peaks.map((p) => ({
+  const shapes: Partial<NonNullable<Layout["shapes"]>[number]>[] = cov.peaks.map((p) => ({
     type: "rect", xref: "x", yref: row as "y", x0: p.start, x1: p.end, y0: 0.82, y1: 1,
     fillcolor: "#475569", line: { width: 0 },
   }));

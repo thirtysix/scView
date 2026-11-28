@@ -202,7 +202,7 @@ export function ProgramsSubtab({ onUsage, activeIndex, groupByColumn, setGroupBy
                 legend: { orientation: "h", y: 1.15, font: { size: 9 } },
                 xaxis: { title: { text: "k", font: { size: 10 } }, tickfont: { size: 9 }, dtick: 5 },
                 yaxis: { title: { text: "silhouette", font: { size: 9 } }, tickfont: { size: 9 } },
-                yaxis2: { overlaying: "y", side: "right", tickfont: { size: 9 }, title: { text: "rel. error", font: { size: 9 } } },
+                yaxis2: { overlaying: "y", tickmode: "auto", side: "right", tickfont: { size: 9 }, title: { text: "rel. error", font: { size: 9 } } },
               }}
               config={plotConfig("programs_k_sweep")}
               style={{ width: "100%", height: "100%" }}

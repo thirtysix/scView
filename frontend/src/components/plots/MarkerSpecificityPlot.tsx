@@ -86,7 +86,7 @@ export function MarkerSpecificityPlot({ markers, name, onGeneClick, height = 240
     () => ({
       xaxis: {
         title: { text: "log2 fold change", font: { size: 10, color: "#64748b" } },
-        range: [xMin, xMax],
+        range: [xMin, xMax] as [number, number],
         zeroline: true,
         zerolinecolor: "#e2e8f0",
         tickfont: { size: 9, color: "#64748b" },
@@ -94,7 +94,7 @@ export function MarkerSpecificityPlot({ markers, name, onGeneClick, height = 240
       },
       yaxis: {
         title: { text: "tau (specificity)", font: { size: 10, color: "#64748b" } },
-        range: [-0.03, 1.05],
+        range: [-0.03, 1.05] as [number, number],
         tickfont: { size: 9, color: "#64748b" },
         gridcolor: "#f1f5f9",
       },
