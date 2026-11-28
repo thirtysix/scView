@@ -189,7 +189,7 @@ export function proteinShiftTraces(rows: ProteinCheckRow[], protein: string): Da
       hovertemplate: `%{x}, replicate %{customdata[0]}: %{y:+.2f} (%{customdata[1]} cells)<extra></extra>`,
     });
   // All guide cells, one trace per kind so the legend says what each colour means.
-  const kinds: [string, (r: ProteinCheckRow) => boolean, string, string][] = [
+  const kinds: [string, (r: ProteinCheckRow) => boolean, string, "circle" | "circle-open"][] = [
     ["All cells: shift counts", (r) => r.significant && !r.flag, SIG, "circle"],
     ["All cells: no RNA KO class", (r) => r.flag, FLAG, "circle"],
     ["All cells: does not count", (r) => !r.significant, NOT_SIG, "circle-open"],

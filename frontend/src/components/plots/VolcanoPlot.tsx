@@ -177,7 +177,7 @@ export function VolcanoPlot({ genes, fcThreshold, pThreshold, onGeneClick, yMode
       title: { text: "", font: { size: 12 } },
       xaxis: {
         title: { text: "log2 fold-change", font: { size: 11, color: "#64748b" } },
-        range: [-xMax, xMax],
+        range: [-xMax, xMax] as [number, number],
         zeroline: true,
         zerolinecolor: "#e2e8f0",
         tickfont: { size: 10, color: "#64748b" },
@@ -188,7 +188,7 @@ export function VolcanoPlot({ genes, fcThreshold, pThreshold, onGeneClick, yMode
           text: byCoef ? "logistic regression coefficient" : "-log10(adj. P)",
           font: { size: 11, color: "#64748b" },
         },
-        range: [yMin, yMax],
+        range: [yMin, yMax] as [number, number],
         tickfont: { size: 10, color: "#64748b" },
         gridcolor: "#f1f5f9",
       },

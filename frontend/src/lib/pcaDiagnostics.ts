@@ -71,6 +71,8 @@ export function elbowLayout(d: Available): Partial<Layout> {
       title: { text: "cumulative %", font: { size: 10, color: POSITIVE_COLOR } },
       tickfont: { size: 9, color: POSITIVE_COLOR },
       overlaying: "y",
+      // plotly 4 defaults an overlaying axis to "sync" (ticks at 25.7, 51.5, 77.2)
+      tickmode: "auto",
       side: "right",
       rangemode: "tozero",
       showgrid: false,

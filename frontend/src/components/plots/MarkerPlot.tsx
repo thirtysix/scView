@@ -361,7 +361,7 @@ export function MarkerPlot({
             hoverinfo: "text" as const,
             showlegend: false,
             marker: {
-              symbol: "circle-open",
+              symbol: "circle-open" as const,
               size: hollow.map((p) => Math.max(dotSize(fraction[p.r]![p.c]!), 5)),
               color: "#94a3b8",
               line: { width: 1.5 },

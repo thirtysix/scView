@@ -58,7 +58,7 @@ export function useCompositionSelection(
       name: selectionName(n),
       customdata: bars.map((b, i) => [s.counts[i]!, s.shares[i]!, barLabel(b)]),
       hovertemplate: "%{customdata[2]}<br>selected: %{customdata[0]:,} cells (%{customdata[1]:.1f}% of the bar)<extra></extra>",
-      marker: { symbol: "diamond", size: 10, color: SELECTION_COLOR, line: { color: "white", width: 1 } },
+      marker: { symbol: "diamond" as const, size: 10, color: SELECTION_COLOR, line: { color: "white", width: 1 } },
     };
   }, [selected, rowCodes, facetCodes, bars, facetColumn, rowOrder, facetOrder, percent, x]);
 }

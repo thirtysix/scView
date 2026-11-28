@@ -6,6 +6,27 @@ All notable changes to scView are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.86.1] - 2026-11-28
+
+Dependency updates that clear the open npm advisories. No change in what scView computes or shows, apart from
+the two drawing differences listed under Changed.
+
+### Security
+- Frontend dependencies with open advisories updated: jsPDF 3.0.4 to 4.2.1 and plotly.js 3.3.1 to 4.3.1 (which
+  brings maplibre-gl 6.20.0 and probe-image-size 7.5.0). `npm audit --omit=dev` now reports nothing. The
+  maplibre-gl and probe-image-size code was never part of scView's browser bundle.
+- Development and test packages updated as well: vitest 2.1.9 to 5.1.2, typescript-eslint to 8.74 and vite
+  6.4.1 to 6.4.6. `npm audit` with development packages included now reports nothing (21 before). These
+  packages are not part of the browser bundle.
+
+### Changed
+- The frontend builds on Node 22 (plotly.js 4 requires it); Dockerfile and CI moved from Node 20.
+- plotly.js is now a declared dependency; the unused plotly.js-dist-min is removed.
+- The annotation cross-check Sankey is laid out by plotly.js 4 (nodes fill the height, links in a different
+  order). Angled axis labels sit slightly closer to the axis. Other plots draw as before: 50 plots compared
+  pixel for pixel between the two plotly.js versions in the light and dark themes (communication, gene
+  programs, copy number, composition, Milo, velocity, ATAC QC and coverage tracks), none differed.
+
 ## [0.86.0] - 2026-11-27
 
 A dataset stored by columns can be stored by rows where a run needs it, every request keeps the dataset it reads
